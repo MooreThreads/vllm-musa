@@ -11,7 +11,13 @@ from vllm.model_executor.layers.fused_moe.fused_moe import (
     _get_config_quant_dtype,
     try_get_optimal_moe_config,
 )
-from vllm.model_executor.layers.fused_moe.utils import disable_inplace
+from vllm.model_executor.layers.fused_moe.moe_align_block_size import (
+    moe_align_block_size,
+)
+from vllm.model_executor.layers.fused_moe.utils import (
+    disable_inplace,
+    moe_kernel_quantize_input,
+)
 from vllm.model_executor.layers.quantization.utils.mxfp4_utils import dequant_mxfp4
 from vllm.model_executor.layers.quantization.utils.mxfp6_utils import dequant_mxfp6
 from vllm.model_executor.layers.quantization.utils.ocp_mx_utils import OCP_MX_Scheme
@@ -121,10 +127,8 @@ def fused_experts_impl(
     if global_num_experts == -1:
         global_num_experts = E
     top_k_num = topk_ids.size(1)
-    # We execute the fused_moe kernel in chunks to circumvent this issue:
-    # https://github.com/vllm-project/vllm/issues/5938
-    CHUNK_SIZE = envs.VLLM_FUSED_MOE_CHUNK_SIZE
-    M = min(num_tokens, CHUNK_SIZE)
+
+    M = num_tokens
 
     config_dtype = _get_config_dtype_str(
         use_fp8_w8a8=use_fp8_w8a8,
@@ -216,64 +220,78 @@ def fused_experts_impl(
             w2_scale = None
         else:
             raise NotImplementedError(f"Unsupported ocp_mx_scheme={ocp_mx_scheme}")
-
-    for chunk in range((num_tokens // CHUNK_SIZE) + 1):
-        begin_chunk_idx, end_chunk_idx = (
-            chunk * CHUNK_SIZE,
-            min((chunk + 1) * CHUNK_SIZE, num_tokens),
+        
+    qhidden_states, a1q_scale = moe_kernel_quantize_input(
+        A=hidden_states,
+        A_scale=a1_scale,
+        quant_dtype=quant_dtype,
+        per_act_token_quant=per_channel_quant,
+        block_shape=block_shape,
+        ocp_mx_scheme=ocp_mx_scheme,
+    )
+    # SPARSITY_FACTOR is a heuristic margin ensuring num_tokens * top_k
+    # activates only a small fraction of total experts
+    SPARSITY_FACTOR = 4
+    # block quantized code path is not implemented yet.
+    naive_block_assignment = (
+        expert_map is None
+        and num_tokens * top_k_num * SPARSITY_FACTOR <= global_num_experts
+        and not (
+            (use_int8_w8a16 or use_int4_w4a16)
+            and block_shape is not None
+            and block_shape[1] > 0
         )
-        curr_hidden_states = hidden_states[begin_chunk_idx:end_chunk_idx]
-        tokens_in_chunk, _ = curr_hidden_states.size()
+    )
 
-        if tokens_in_chunk == 0:
-            break
+    if not naive_block_assignment:
+        sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(
+            topk_ids,
+            config["BLOCK_SIZE_M"],
+            global_num_experts,
+            expert_map,
+            ignore_invalid_experts=True,
+        )
+    else:
+        max_num_tokens_padded = topk_ids.numel() * config["BLOCK_SIZE_M"]
+        expert_ids = topk_ids.view(-1)
+        num_tokens_post_padded = torch.empty(
+            (1), dtype=torch.int32, device=topk_ids.device
+        )
+        num_tokens_post_padded.fill_(max_num_tokens_padded)
+        sorted_token_ids = None
 
-        if tokens_in_chunk < CHUNK_SIZE and chunk > 0:
-            # Adjust the intermediate cache size and config for the last
-            # chunk. Note that in most cases we only have one chunk
-            # so the cache size and config are already set correctly and
-            # do not need to be adjusted.
-            intermediate_cache1 = intermediate_cache1[:tokens_in_chunk]
-            intermediate_cache2 = intermediate_cache2[
-                : tokens_in_chunk * topk_ids.size(1)
-            ]
-            intermediate_cache3 = intermediate_cache3[:tokens_in_chunk]
-            config = get_config_func(tokens_in_chunk)
-
-        curr_topk_ids = topk_ids[begin_chunk_idx:end_chunk_idx]
-        curr_topk_weights = topk_weights[begin_chunk_idx:end_chunk_idx]
-        # ==================== MUSA ADAPTATION ====================
-        musa_ops.musa_fused_gemv_moe(
-            curr_hidden_states,
+    # ==================== MUSA ADAPTATION ====================
+    musa_ops.musa_fused_gemv_moe(
+            qhidden_states,
             w1,
             intermediate_cache2,
             None,
             w1_scale,
-            curr_topk_weights,
-            curr_topk_ids,
+            topk_weights,
+            sorted_token_ids,
             apply_router_weight_on_input,
             topk_ids.shape[1],
             use_int4_w4a16,
             use_swigelu=True,
         )
-        musa_ops.musa_fused_gemv_moe(
+    musa_ops.musa_fused_gemv_moe(
             intermediate_cache2,
             w2,
             intermediate_cache3,
             None,
             w2_scale,
-            curr_topk_weights,
-            curr_topk_ids,
+            topk_weights,
+            sorted_token_ids,
             not apply_router_weight_on_input,
             1,
             use_int4_w4a16,
             use_swigelu=False,
         )
-        # ========================== END ==========================
-        ops.moe_sum(
-            intermediate_cache3.view(*intermediate_cache3.size()),
-            out_hidden_states[begin_chunk_idx:end_chunk_idx],
-        )
+    # ========================== END ==========================
+    ops.moe_sum(
+        intermediate_cache3.view(*intermediate_cache3.size()),
+        out_hidden_states,
+    )
 
     return out_hidden_states
 

@@ -84,7 +84,7 @@ class _RepoInfo:
 _VLLM_REPO = _RepoInfo(
     name="vllm",
     git_repository="https://github.com/vllm-project/vllm.git",
-    git_tag="v0.17.0",
+    git_tag="v0.18.0",
     git_shallow=False,
 )
 
@@ -176,6 +176,11 @@ CSRC_TEXT_PATCHES = {
     str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh"): [
         {
             '#include "../../../../attention/attention_dtypes.h"': '#include "../../../../attention_musa/attention_dtypes.h"'
+        }
+    ],
+    str(_VLLM_REPO.source_dir / "csrc/quantization/fp4/nvfp4_utils.cuh"): [
+        {
+            '#include "../../cuda_vec_utils.cuh"': '#include "../../../csrc_musa/cuda_vec_utils.cuh"'
         }
     ],
     str(_VLLM_REPO.source_dir / "csrc/moe/moe_align_sum_kernels.cu"): [
