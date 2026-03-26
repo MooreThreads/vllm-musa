@@ -80,14 +80,6 @@ AttributeError("'AnnAssign' object has no attribute 'targets'")
 - Add platform check for CUDA-specific MUSA_VISIBLE_DEVICES behavior
 - Enable MUSA's custom_allreduce backend
 
-### vllm__model_executor__layers__fused_moe__deep_gemm_moe.patch.py
-
-**Target:** `vllm.model_executor.layers.fused_moe.deep_gemm_moe`
-
-**Issue:** DeepGemm's alignment constraints may differ from vLLM's expectations
-
-**Fix:** Replace assertion with debug warning to allow more flexible configurations
-
 ### vllm__model_executor__layers__quantization__fp8.patch.py
 
 **Target:** `vllm.model_executor.layers.quantization.fp8`
@@ -168,7 +160,6 @@ Some patches are version-specific and will be automatically skipped if the targe
 | `vllm__v1__worker__gpu_worker` | ✅ Applied |
 | `vllm__distributed__device_communicators__all2all` | ✅ Applied |
 | `vllm__distributed__device_communicators__custom_all_reduce` | ✅ Applied |
-| `vllm__model_executor__layers__fused_moe__deep_gemm_moe` | ✅ Applied |
 | `vllm__model_executor__layers__quantization__fp8` | ✅ Applied |
 | `vllm__model_executor__layers__quantization__utils__fp8_utils` | ✅ Applied |
 | `vllm__profiler__wrapper` | ✅ Applied |

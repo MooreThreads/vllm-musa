@@ -15,4 +15,9 @@ PATCHES = [
         "current_platform.is_device_capability(90)",
         "current_platform.is_device_capability(31)",
     ),
+    # Patch get_mk_alignment_for_contiguous_layout to support musa deepep
+    (
+        "mk_align_size = _get_mk_alignment_for_contiguous_layout_impl()",
+        "mk_align_size = 128",
+    ),
 ]
