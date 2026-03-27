@@ -80,6 +80,14 @@ AttributeError("'AnnAssign' object has no attribute 'targets'")
 - Add platform check for CUDA-specific MUSA_VISIBLE_DEVICES behavior
 - Enable MUSA's custom_allreduce backend
 
+### vllm__model_executor__layers__fused_moe__deep_gemm_moe.patch.py
+
+**Target:** `vllm.model_executor.layers.fused_moe.deep_gemm_moe.DeepGemmExperts`
+
+**Issue:** The `m_grouped_fp8_gemm_nt_contiguous` function requires `a2q_scale` tensor to be contiguous on MUSA
+
+**Fix:** Add `a2q_scale.contiguous()` before calling `m_grouped_fp8_gemm_nt_contiguous`
+
 ### vllm__model_executor__layers__quantization__fp8.patch.py
 
 **Target:** `vllm.model_executor.layers.quantization.fp8`
