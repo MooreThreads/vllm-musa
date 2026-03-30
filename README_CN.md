@@ -1,39 +1,47 @@
-<div align="center">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-dark.png">
+    <img src="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-light.png" alt="vLLM" width="30%">
+  </picture>
+</p>
 
-# vLLM MUSA 平台插件
+<h2 align="center">
+摩尔线程 MUSA 的 vLLM 硬件插件
+</h2>
 
-**在摩尔线程 GPU 上无缝运行 vLLM**
+<p align="center">
+  <a href="README.md">English</a> | 中文
+</p>
 
-[English](README.md) | 中文
-
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-
-</div>
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python 3.9+"></a>
+</p>
 
 ---
 
-一个 vLLM 平台插件，支持在[摩尔线程](https://www.mthreads.com/) (MUSA) GPU 上运行 [vLLM](https://github.com/vllm-project/vllm)，提供完整的功能支持。
+## 关于
 
-## 概述
+摩尔线程 MUSA 的 vLLM 硬件插件将[摩尔线程](https://www.mthreads.com/) (MUSA) GPU 与 [vLLM](https://docs.vllm.ai/en/latest/) 集成，以实现高性能大语言模型推理。该插件遵循 [[RFC]: Hardware pluggable](https://github.com/vllm-project/vllm/issues/11162) 和 [[RFC]: Enhancing vLLM Plugin Architecture](https://github.com/vllm-project/vllm/issues/19161) 设计原则，为摩尔线程 MUSA 硬件提供模块化接口。
 
-本插件通过以下组件为 vLLM 提供 MUSA（元计算统一系统架构）支持：
+本插件基于以下核心组件：
 
 - **[torchada](https://github.com/MooreThreads/torchada)**：CUDA→MUSA 兼容层 — 无需修改代码即可在 MUSA 上运行 CUDA 代码
-- **[mthreads-ml-py](https://github.com/MooreThreads/mthreads-ml-py)**：摩尔线程管理库 (MTML) Python 绑定，用于设备查询
+- **[mthreads-ml-py](https://github.com/MooreThreads/mthreads-ml-py)**：摩尔线程管理库 (MTML) Python 绑定，用于设备管理和查询
 - **[MATE](https://github.com/MooreThreads/mate)**：MUSA AI 张量引擎 — 针对 MUSA 架构优化的高性能 LLM 推理库
+- **[torch_musa](https://github.com/MooreThreads/torch_musa)**：摩尔线程 (MUSA) GPU 的 PyTorch 后端 — 为 PyTorch 提供原生 MUSA 设备支持
 
 ## 环境要求
 
 - **Python**：3.9 或更高版本
-- **vLLM**：作为依赖项安装
-- **硬件**：安装了 MUSA 工具包的摩尔线程 GPU
+- **硬件**：安装了 MUSA 工具包的摩尔线程 (MUSA) GPU
 - **依赖项**：
   - [torchada](https://github.com/MooreThreads/torchada) — CUDA→MUSA 兼容层
   - [mthreads-ml-py](https://github.com/MooreThreads/mthreads-ml-py) — MTML Python 绑定 (pymtml)
   - [MATE](https://github.com/MooreThreads/mate) — MUSA AI 张量引擎
+  - [torch_musa](https://github.com/MooreThreads/torch_musa) — MUSA GPU 的 PyTorch 后端
 
-## 安装
+## 快速上手
 
 ### 支持的版本
 
@@ -45,39 +53,42 @@
 
 ### 从源码安装
 
-```bash
-# 克隆仓库
-git clone https://github.com/MooreThreads/vllm-musa.git
-cd vllm-musa
+1. 克隆仓库：
 
-# 标准安装（安装 vLLM MUSA 和 vLLM）
-pip install . --no-build-isolation -v
+    ```bash
+    git clone https://github.com/MooreThreads/vllm-musa.git
+    cd vllm-musa
+    ```
 
-# 或可编辑安装（用于开发）
-pip install -e . --no-build-isolation -v
-```
+2. 安装摩尔线程 MUSA 的 vLLM 硬件插件：
 
-## 验证安装
+    ```bash
+    # 标准安装（安装 vLLM MUSA 插件和 vLLM）
+    pip install . --no-build-isolation -v
 
-安装后，验证插件是否正常工作：
+    # 或可编辑安装（用于开发）
+    pip install -e . --no-build-isolation -v
+    ```
 
-```bash
-# 检查插件注册
-python -c "from vllm_musa import musa_platform_plugin; print('插件加载成功')"
+3. 验证安装：
 
-# 检查 MTML 设备管理
-python -c "from vllm_musa.musa import mtml_available; print(f'MTML 可用: {mtml_available}')"
-```
+    ```bash
+    # 检查插件注册
+    python -c "from vllm_musa import musa_platform_plugin; print('插件加载成功')"
 
-## 环境变量
+    # 检查 MTML 设备管理
+    python -c "from vllm_musa.musa import mtml_available; print(f'MTML 可用: {mtml_available}')"
+    ```
+
+### 环境变量
 
 | 变量 | 描述 |
 |------|------|
 | `MUSA_VISIBLE_DEVICES` | 控制可见的 MUSA 设备（类似于 `CUDA_VISIBLE_DEVICES`） |
 | `VLLM_WORKER_MULTIPROC_METHOD=spawn` | 多进程 worker 推荐设置 |
-| `VLLM_MUSA_CUSTOM_OP_USE_NATIVE` | 使用 vLLM 自定义算子的原生实现（默认：False） |
+| `VLLM_MUSA_CUSTOM_OP_USE_NATIVE` | 使用 vLLM 自定义算子的原生实现（默认：`False`） |
 
-## 快速开始
+## 使用方法
 
 安装后，插件会被 vLLM **自动检测**。直接像往常一样运行 vLLM 即可：
 
@@ -150,15 +161,13 @@ vllm-musa/
     └── test_patches.py         # 补丁系统测试
 ```
 
-## 补丁
+## 运行时补丁
 
-本插件包含用于 vLLM 兼容性的运行时补丁。详情请参阅 [patches/README.md](vllm_musa/patches/README.md)。
+本插件包含运行时补丁以确保与上游 vLLM 的兼容性。有关补丁机制的详情，请参阅 [patches/README.md](vllm_musa/patches/README.md)。
 
 ## 贡献
 
-欢迎贡献！提交前请设置 pre-commit hooks 以确保代码质量：
-
-### 设置 Pre-commit Hooks
+我们欢迎并重视任何形式的贡献与协作。提交前请设置 pre-commit hooks 以确保代码质量：
 
 ```bash
 # 安装 pre-commit
@@ -179,34 +188,18 @@ pre-commit run --all-files
 - 拼写检查（codespell）
 - 常见问题（合并冲突、调试语句、大文件等）
 
-### 手动检查
+也可以手动运行检查：
 
 ```bash
-# 对所有文件运行 pre-commit hooks
-make pre-commit
-
-# 运行测试
-make test
-
-# 运行覆盖率测试
-make test-cov
+make pre-commit    # 对所有文件运行 pre-commit hooks
+make test          # 运行测试
+make test-cov      # 运行覆盖率测试
 ```
 
-## 问题反馈
+## 联系我们
 
-提交 Bug 时，请附上环境信息以帮助我们定位问题。运行以下命令并将输出粘贴到 Issue 中：
-
-```bash
-vllm_collect_env
-```
-
-也可以作为 Python 模块运行：
-
-```bash
-python -m vllm_musa.collect_env
-```
-
-该命令会输出系统信息、MUSA 驱动/SDK 版本、GPU 详情、PyTorch 和 vLLM 版本以及相关环境变量。
+- 如有技术问题或功能需求，请通过 GitHub [Issues](https://github.com/MooreThreads/vllm-musa/issues) 提交。
+- 提交 Bug 时，请运行 `vllm_collect_env`（或 `python -m vllm_musa.collect_env`）并将输出粘贴到 Issue 中，以帮助我们定位问题。
 
 ## 相关项目
 

@@ -1,39 +1,47 @@
-<div align="center">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-dark.png">
+    <img src="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-light.png" alt="vLLM" width="30%">
+  </picture>
+</p>
 
-# vLLM MUSA Platform Plugin
+<h2 align="center">
+vLLM Hardware Plugin for Moore Threads MUSA
+</h2>
 
-**Run vLLM on Moore Threads GPUs with seamless integration**
+<p align="center">
+  English | <a href="README_CN.md">中文</a>
+</p>
 
-English | [中文](README_CN.md)
-
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-
-</div>
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python 3.9+"></a>
+</p>
 
 ---
 
-A vLLM platform plugin that enables running [vLLM](https://github.com/vllm-project/vllm) on [Moore Threads](https://www.mthreads.com/) (MUSA) GPUs with full feature support.
+## About
 
-## Overview
+The vLLM Hardware Plugin for Moore Threads MUSA integrates [Moore Threads](https://www.mthreads.com/) (MUSA) GPUs with [vLLM](https://docs.vllm.ai/en/latest/) to enable high-performance large language model inference. It follows the [[RFC]: Hardware pluggable](https://github.com/vllm-project/vllm/issues/11162) and [[RFC]: Enhancing vLLM Plugin Architecture](https://github.com/vllm-project/vllm/issues/19161) principles, providing a modular interface for Moore Threads MUSA hardware.
 
-This plugin provides MUSA (Meta-computing Unified System Architecture) support for vLLM through:
+The plugin leverages the following key components:
 
 - **[torchada](https://github.com/MooreThreads/torchada)**: CUDA→MUSA compatibility layer for PyTorch — run CUDA code on MUSA with zero code changes
-- **[mthreads-ml-py](https://github.com/MooreThreads/mthreads-ml-py)**: Moore Threads Management Library (MTML) Python bindings for device queries
+- **[mthreads-ml-py](https://github.com/MooreThreads/mthreads-ml-py)**: Moore Threads Management Library (MTML) Python bindings for device management and queries
 - **[MATE](https://github.com/MooreThreads/mate)**: MUSA AI Tensor Engine — high-performance computing library optimized for LLM inference on MUSA architecture
+- **[torch_musa](https://github.com/MooreThreads/torch_musa)**: PyTorch backend for Moore Threads (MUSA) GPUs — extends PyTorch with native MUSA device support
 
 ## Requirements
 
 - **Python**: 3.9 or higher
-- **vLLM**: Installed as a dependency
-- **Hardware**: Moore Threads GPU with MUSA toolkit installed
+- **Hardware**: Moore Threads (MUSA) GPU with MUSA toolkit installed
 - **Dependencies**:
   - [torchada](https://github.com/MooreThreads/torchada) — CUDA→MUSA compatibility layer
   - [mthreads-ml-py](https://github.com/MooreThreads/mthreads-ml-py) — MTML Python bindings (pymtml)
   - [MATE](https://github.com/MooreThreads/mate) — MUSA AI Tensor Engine
+  - [torch_musa](https://github.com/MooreThreads/torch_musa) — PyTorch backend for MUSA GPUs
 
-## Installation
+## Getting Started
 
 ### Supported Versions
 
@@ -45,39 +53,42 @@ This plugin provides MUSA (Meta-computing Unified System Architecture) support f
 
 ### Install from Source
 
-```bash
-# Clone the repository
-git clone https://github.com/MooreThreads/vllm-musa.git
-cd vllm-musa
+1. Clone the repository:
 
-# Standard installation (installs vLLM MUSA and vLLM)
-pip install . --no-build-isolation -v
+    ```bash
+    git clone https://github.com/MooreThreads/vllm-musa.git
+    cd vllm-musa
+    ```
 
-# Or editable installation for development
-pip install -e . --no-build-isolation -v
-```
+2. Install vLLM Hardware Plugin for Moore Threads MUSA:
 
-## Verification
+    ```bash
+    # Standard installation (installs vLLM MUSA plugin and vLLM)
+    pip install . --no-build-isolation -v
 
-After installation, verify the plugin is working:
+    # Or editable installation for development
+    pip install -e . --no-build-isolation -v
+    ```
 
-```bash
-# Check plugin registration
-python -c "from vllm_musa import musa_platform_plugin; print('Plugin loaded successfully')"
+3. Verify the installation:
 
-# Check MTML device management
-python -c "from vllm_musa.musa import mtml_available; print(f'MTML available: {mtml_available}')"
-```
+    ```bash
+    # Check plugin registration
+    python -c "from vllm_musa import musa_platform_plugin; print('Plugin loaded successfully')"
 
-## Environment Variables
+    # Check MTML device management
+    python -c "from vllm_musa.musa import mtml_available; print(f'MTML available: {mtml_available}')"
+    ```
+
+### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `MUSA_VISIBLE_DEVICES` | Control which MUSA devices are visible (similar to `CUDA_VISIBLE_DEVICES`) |
 | `VLLM_WORKER_MULTIPROC_METHOD=spawn` | Recommended for multi-process workers |
-| `VLLM_MUSA_CUSTOM_OP_USE_NATIVE` | Use vLLM custom ops native implementation (default: False) |
+| `VLLM_MUSA_CUSTOM_OP_USE_NATIVE` | Use vLLM custom ops native implementation (default: `False`) |
 
-## Quick Start
+## Usage
 
 Once installed, the plugin is **automatically detected** by vLLM. Simply run vLLM as usual:
 
@@ -150,15 +161,13 @@ vllm-musa/
     └── test_patches.py         # Patch system tests
 ```
 
-## Patches
+## Runtime Patches
 
-The plugin includes runtime patches for vLLM compatibility. See [patches/README.md](vllm_musa/patches/README.md) for details on the patching mechanism.
+The plugin includes runtime patches to ensure compatibility with upstream vLLM. For details on the patching mechanism, see [patches/README.md](vllm_musa/patches/README.md).
 
 ## Contributing
 
-Contributions are welcome! Please set up pre-commit hooks to ensure code quality before submitting:
-
-### Setting Up Pre-commit Hooks
+We welcome and value any contributions and collaborations. Please set up pre-commit hooks to ensure code quality before submitting:
 
 ```bash
 # Install pre-commit
@@ -179,34 +188,18 @@ Once installed, the hooks will automatically run on every commit, checking for:
 - Spelling errors (codespell)
 - Common issues (merge conflicts, debug statements, large files, etc.)
 
-### Manual Checks
+You can also run checks manually:
 
 ```bash
-# Run pre-commit hooks on all files
-make pre-commit
-
-# Run tests
-make test
-
-# Run tests with coverage
-make test-cov
+make pre-commit    # Run pre-commit hooks on all files
+make test          # Run tests
+make test-cov      # Run tests with coverage
 ```
 
-## Reporting Issues
+## Contact Us
 
-When reporting a bug, please include your environment information to help us diagnose the problem. Run the following command and paste the output in your issue:
-
-```bash
-vllm_collect_env
-```
-
-You can also run it as a Python module:
-
-```bash
-python -m vllm_musa.collect_env
-```
-
-This will print system info, MUSA driver/SDK versions, GPU details, PyTorch and vLLM versions, and relevant environment variables.
+- For technical questions and feature requests, please use GitHub [Issues](https://github.com/MooreThreads/vllm-musa/issues).
+- When reporting a bug, please include your environment information by running `vllm_collect_env` (or `python -m vllm_musa.collect_env`) and pasting the output in your issue.
 
 ## Related Projects
 
