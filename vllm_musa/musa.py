@@ -462,7 +462,7 @@ class MtmlMUSAPlatform(MUSAPlatformBase):
     @with_mtml_context
     def get_device_capability(cls, device_id: int = 0) -> DeviceCapability | None:
         try:
-            # XXX (MUSA): CUDA uses physical device ids( cls.device_id_to_physical_device_id(device_id) ), 
+            # XXX (MUSA): CUDA uses physical device ids (cls.device_id_to_physical_device_id(device_id)), 
             # but torch.musa.get_device_capability uses logical device ids when MUSA_VISIBLE_DEVICES is set. 
             # Since pymtml doesn't do remapping, so we can only use device_id here.
             handle = pynvml.nvmlDeviceGetHandleByIndex(device_id)
