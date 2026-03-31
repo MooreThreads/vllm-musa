@@ -84,14 +84,19 @@ Once installed, the plugin is **automatically detected** by vLLM. Simply run vLL
 ```python
 from vllm import LLM, SamplingParams
 
-# vLLM will automatically use the MUSA platform
-llm = LLM(model="your-model-path", trust_remote_code=True)
+def start():
+  # vLLM will automatically use the MUSA platform
+  llm = LLM(model="your-model-path", trust_remote_code=True)
 
-sampling_params = SamplingParams(temperature=0.7, top_p=0.9, max_tokens=100)
-outputs = llm.generate(["Hello, how are you?"], sampling_params)
+  sampling_params = SamplingParams(temperature=0.7, top_p=0.9, max_tokens=100)
+  outputs = llm.generate(["Hello, how are you?"], sampling_params)
 
-for output in outputs:
-    print(output.outputs[0].text)
+  for output in outputs:
+      print(output.outputs[0].text)
+
+
+if __name__ == '__main__':
+  start()
 ```
 
 ### OpenAI-Compatible Server
