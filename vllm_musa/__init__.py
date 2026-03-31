@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 # to work correctly - it patches torch.cuda to redirect to MUSA.
 try:
     import torchada  # noqa: F401
+    # XXX(MUSA): Remove once #JIRA MTAI-2652 fixed
+    import torch
+    torch.accelerator = torch.musa
 
     _torchada_available = True
 except ImportError:
