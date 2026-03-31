@@ -97,7 +97,7 @@ def mock_torch():
 @pytest.fixture
 def reset_musa_state():
     """Fixture to reset global MUSA platform state between tests."""
-    import vllm_musa.musa as musa_module
+    import vllm_musa.platform as musa_module
 
     # Store original values
     original_cache_ops = musa_module._musa_cache_ops_registered

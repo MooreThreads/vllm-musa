@@ -66,7 +66,7 @@ pip install -e . --no-build-isolation -v
 python -c "from vllm_musa import musa_platform_plugin; print('插件加载成功')"
 
 # 检查 MTML 设备管理
-python -c "from vllm_musa.musa import mtml_available; print(f'MTML 可用: {mtml_available}')"
+python -c "from vllm_musa.platform import mtml_available; print(f'MTML 可用: {mtml_available}')"
 ```
 
 ## 环境变量

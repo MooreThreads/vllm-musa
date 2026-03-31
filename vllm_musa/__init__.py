@@ -59,13 +59,13 @@ def musa_platform_plugin() -> str | None:
         import torchada
 
         if torchada.is_musa_platform():
-            return "vllm_musa.musa.MUSAPlatform"
+            return "vllm_musa.platform.MUSAPlatform"
 
     # Fallback: check if torch_musa is available
     try:
         import torch_musa  # noqa: F401
 
-        return "vllm_musa.musa.MUSAPlatform"
+        return "vllm_musa.platform.MUSAPlatform"
     except ImportError:
         pass
 
@@ -142,7 +142,7 @@ def collect_env() -> None:
 def __getattr__(name: str):
     """Lazy import module components."""
     if name == "MUSAPlatform":
-        from .musa import MUSAPlatform
+        from .platform import MUSAPlatform
 
         return MUSAPlatform
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
