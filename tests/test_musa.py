@@ -272,7 +272,11 @@ class TestPlatformSelection:
 
     def test_musa_platform_is_one_of_two_options(self):
         """Test that MUSAPlatform is either MtmlMUSAPlatform or NonMtmlMUSAPlatform."""
-        from vllm_musa.platform import MtmlMUSAPlatform, MUSAPlatform, NonMtmlMUSAPlatform
+        from vllm_musa.platform import (
+            MtmlMUSAPlatform,
+            MUSAPlatform,
+            NonMtmlMUSAPlatform,
+        )
 
         assert MUSAPlatform in (MtmlMUSAPlatform, NonMtmlMUSAPlatform)
 
