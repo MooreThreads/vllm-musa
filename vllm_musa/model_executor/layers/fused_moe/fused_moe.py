@@ -4,7 +4,6 @@
 import functools
 
 import torch
-import vllm.envs as envs
 from vllm import _custom_ops as ops
 from vllm.model_executor.layers.fused_moe.config import _get_config_dtype_str
 from vllm.model_executor.layers.fused_moe.fused_moe import (
@@ -220,7 +219,7 @@ def fused_experts_impl(
             w2_scale = None
         else:
             raise NotImplementedError(f"Unsupported ocp_mx_scheme={ocp_mx_scheme}")
-        
+
     qhidden_states, a1q_scale = moe_kernel_quantize_input(
         A=hidden_states,
         A_scale=a1_scale,
@@ -262,31 +261,31 @@ def fused_experts_impl(
 
     # ==================== MUSA ADAPTATION ====================
     musa_ops.musa_fused_gemv_moe(
-            qhidden_states,
-            w1,
-            intermediate_cache2,
-            None,
-            w1_scale,
-            topk_weights,
-            sorted_token_ids,
-            apply_router_weight_on_input,
-            topk_ids.shape[1],
-            use_int4_w4a16,
-            use_swigelu=True,
-        )
+        qhidden_states,
+        w1,
+        intermediate_cache2,
+        None,
+        w1_scale,
+        topk_weights,
+        sorted_token_ids,
+        apply_router_weight_on_input,
+        topk_ids.shape[1],
+        use_int4_w4a16,
+        use_swigelu=True,
+    )
     musa_ops.musa_fused_gemv_moe(
-            intermediate_cache2,
-            w2,
-            intermediate_cache3,
-            None,
-            w2_scale,
-            topk_weights,
-            sorted_token_ids,
-            not apply_router_weight_on_input,
-            1,
-            use_int4_w4a16,
-            use_swigelu=False,
-        )
+        intermediate_cache2,
+        w2,
+        intermediate_cache3,
+        None,
+        w2_scale,
+        topk_weights,
+        sorted_token_ids,
+        not apply_router_weight_on_input,
+        1,
+        use_int4_w4a16,
+        use_swigelu=False,
+    )
     # ========================== END ==========================
     ops.moe_sum(
         intermediate_cache3.view(*intermediate_cache3.size()),

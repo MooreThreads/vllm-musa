@@ -29,7 +29,7 @@ PATCHES = [
     ),
     # Patch torch.accelerator.set_device_index to current_platform.set_device
     (
-        'torch.accelerator.set_device_index(self.device)',
-        'current_platform.set_device(self.device)'
-    )
+        "torch.accelerator.set_device_index(self.device)",
+        "current_platform.set_device(self.device)",
+    ),
 ]

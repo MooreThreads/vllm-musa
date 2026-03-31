@@ -136,8 +136,6 @@ def run_and_return_first_line(run_lambda, command):
     return out.split("\n")[0]
 
 
-
-
 def get_gcc_version(run_lambda):
     return run_and_parse_first_match(run_lambda, "gcc --version", r"gcc (.*)")
 
@@ -200,9 +198,6 @@ def get_musa_sdk_version(run_lambda):
             return "\n".join(lines)
         except Exception:
             pass
-
-
-
 
 
 def get_vllm_version():
@@ -360,7 +355,6 @@ def get_pip_packages(run_lambda, patterns=None):
     return pip_version, out
 
 
-
 def is_xnnpack_available():
     if TORCH_AVAILABLE:
         import torch.backends.xnnpack
@@ -406,6 +400,7 @@ def _get_musa_available():
         return "N/A"
     try:
         import torch_musa  # noqa: F401
+
         return str(torch.musa.is_available())
     except ImportError:
         pass
@@ -416,6 +411,7 @@ def _get_musa_compiled_version():
     """Get the MUSA version used to build PyTorch (torch_musa)."""
     try:
         import torch_musa
+
         return getattr(torch_musa, "__version__", "N/A")
     except ImportError:
         return "N/A"
@@ -540,7 +536,6 @@ env_info_fmt += """
 """.strip()
 
 
-
 def pretty_str(envinfo):
     def replace_nones(dct, replacement="Could not collect"):
         for key in dct.keys():
@@ -591,14 +586,11 @@ def pretty_str(envinfo):
     if TORCH_AVAILABLE:
         try:
             import torch_musa  # noqa: F401
+
             musa_available = torch.musa.is_available()
         except ImportError:
             pass
-    if (
-        TORCH_AVAILABLE
-        and not musa_available
-        and all_dynamic_musa_fields_missing
-    ):
+    if TORCH_AVAILABLE and not musa_available and all_dynamic_musa_fields_missing:
         for field in all_musa_fields:
             mutable_dict[field] = "No MUSA"
         if envinfo.musa_compiled_version is None:

@@ -17,7 +17,6 @@ from vllm.model_executor.layers.attention.mla_attention import (
     FlashInferPrefillMetadata,
     MLAAttentionImpl,
     MLACommonMetadata,
-    MLACommonMetadataBuilder,
     MLACommonPrefillMetadata,
     dynamic_per_batched_tensor_quant,
     has_flashinfer,
@@ -35,7 +34,6 @@ from vllm.model_executor.layers.linear import (
 from vllm.platforms import current_platform
 from vllm.v1.attention.backend import AttentionLayer
 from vllm.v1.attention.backends.fa_utils import get_flash_attn_version
-from vllm.v1.attention.ops.common import cp_lse_ag_out_rs
 from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
 
 try:

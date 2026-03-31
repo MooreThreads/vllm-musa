@@ -12,26 +12,27 @@ import zmq
 import zmq.asyncio
 from vllm.config import VllmConfig
 from vllm.distributed.kv_transfer.kv_connector.utils import (
-    TpKVTopology,
     EngineId,
+    TpKVTopology,
     get_current_attn_backend,
 )
-from vllm.distributed.kv_transfer.kv_connector.v1.mooncake.mooncake_utils import MooncakeBootstrapServer
 from vllm.distributed.kv_transfer.kv_connector.v1.mooncake.mooncake_connector import (
-    ReqId,
-    TransferId, 
-    SendBlockMeta,
     MooncakeXferMetadata,
     MooncakeXferResponse,
+    ReqId,
+    SendBlockMeta,
+    TransferId,
     _async_loop,
-    should_launch_bootstrap_server,
     get_mooncake_bootstrap_addr,
+    should_launch_bootstrap_server,
 )
-
+from vllm.distributed.kv_transfer.kv_connector.v1.mooncake.mooncake_utils import (
+    MooncakeBootstrapServer,
+)
 from vllm.distributed.parallel_state import (
+    get_pp_group,
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
-    get_pp_group,
 )
 from vllm.logger import init_logger
 from vllm.utils.network_utils import get_ip
@@ -64,6 +65,7 @@ def get_rdma_devices():
 
     return device_list
 
+
 def __init__(self, vllm_config: VllmConfig, engine_id: str):
     logger.info("Initializing Mooncake Transfer Engine worker %s", engine_id)
 
@@ -91,9 +93,7 @@ def __init__(self, vllm_config: VllmConfig, engine_id: str):
     protocol = kv_transfer_config.kv_connector_extra_config.get(  # type: ignore[union-attr]
         "mooncake_protocol", "rdma"
     )
-    logger.info(
-        "The Mooncake Transfer Engine is using %s as its protocol.", protocol
-    )
+    logger.info("The Mooncake Transfer Engine is using %s as its protocol.", protocol)
     ret_value = self.engine.initialize(self.hostname, "P2PHANDSHAKE", protocol, "")
     if ret_value != 0:
         raise RuntimeError("Mooncake Transfer Engine initialization failed.")
