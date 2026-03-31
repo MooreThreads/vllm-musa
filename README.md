@@ -140,7 +140,7 @@ vllm-musa/
 ├── docs/                       # Additional documentation
 ├── vllm_musa/                  # Main package
 │   ├── __init__.py             # Plugin entry point
-│   ├── musa.py                 # MUSA platform implementation
+│   ├── platform.py             # MUSA platform implementation
 │   └── patches/                # Runtime compatibility patches
 │       ├── __init__.py         # Patch application logic
 │       └── *.patch.py          # Individual patch files

@@ -140,7 +140,7 @@ vllm-musa/
 ├── docs/                       # 附加文档
 ├── vllm_musa/                  # 主包
 │   ├── __init__.py             # 插件入口
-│   ├── musa.py                 # MUSA 平台实现
+│   ├── platform.py             # MUSA 平台实现
 │   └── patches/                # 运行时兼容性补丁
 │       ├── __init__.py         # 补丁应用逻辑
 │       └── *.patch.py          # 单独的补丁文件
