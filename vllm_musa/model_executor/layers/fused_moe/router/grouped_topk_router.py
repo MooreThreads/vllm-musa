@@ -1,0 +1,178 @@
+import math
+
+import torch
+from mate import moe_fused_gate as mate_moe_fused_gate
+from vllm.model_executor.layers.batch_invariant import (
+    vllm_is_batch_invariant,
+)
+from vllm.model_executor.layers.fused_moe.router.grouped_topk_router import (
+    fused_topk,
+    fused_topk_bias,
+)
+from vllm.model_executor.utils import maybe_disable_graph_partition
+from vllm.platforms import current_platform
+
+
+def _compute_routing(
+    self,
+    hidden_states: torch.Tensor,
+    router_logits: torch.Tensor,
+    indices_type: torch.dtype | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute routing using grouped top-k."""
+
+    def valid_grouping() -> bool:
+        # Check if num_experts is greater than num_expert_group
+        # and is divisible by num_expert_group
+        num_experts = router_logits.shape[-1]
+        if num_experts <= self.num_expert_group:
+            return False
+        return num_experts % self.num_expert_group == 0
+
+    if not valid_grouping():
+        if self.e_score_correction_bias is not None:
+            topk_weights, topk_ids = fused_topk_bias(
+                hidden_states=hidden_states,
+                gating_output=router_logits,
+                e_score_correction_bias=self.e_score_correction_bias.data,
+                topk=self.top_k,
+                renormalize=self.renormalize,
+            )
+            if self.routed_scaling_factor != 1.0:
+                topk_weights *= self.routed_scaling_factor
+        else:
+            topk_weights, topk_ids, token_expert_indices = fused_topk(
+                hidden_states=hidden_states,
+                gating_output=router_logits,
+                topk=self.top_k,
+                renormalize=self.renormalize,
+                indices_type=indices_type,
+            )
+        return topk_weights, topk_ids
+    # ==================== MUSA ADAPTATION ====================
+    topk_weights, topk_ids = grouped_topk(
+        hidden_states=hidden_states,
+        gating_output=router_logits,
+        topk=self.top_k,
+        renormalize=self.renormalize,
+        num_expert_group=self.num_expert_group,
+        topk_group=self.topk_group,
+        scoring_func=self.scoring_func,
+        routed_scaling_factor=self.routed_scaling_factor,
+        e_score_correction_bias=self.e_score_correction_bias,
+        num_fused_shared_experts=self.num_fused_shared_experts,
+    )
+    # ========================== END ==========================
+
+    return topk_weights, topk_ids
+
+
+def is_power_of_two(n):
+    return n > 0 and math.log2(n).is_integer()
+
+
+@torch.compile(
+    dynamic=True,
+    backend=current_platform.simple_compile_backend,
+    options=maybe_disable_graph_partition(current_platform.simple_compile_backend),
+)
+def grouped_topk(
+    hidden_states: torch.Tensor,
+    gating_output: torch.Tensor,
+    topk: int,
+    renormalize: bool,
+    num_expert_group: int = 0,
+    topk_group: int = 0,
+    scoring_func: str = "softmax",
+    routed_scaling_factor: float = 1.0,
+    e_score_correction_bias: torch.Tensor | None = None,
+    num_fused_shared_experts: int = 0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    # XXX (MUSA): Fixed the issue of incorrect accuracy when enabling graph on s5000 with the biased_grouped_topk
+    # For detailed problem description, please refer to JIRA#686
+    # ==================== MUSA ADAPTATION ====================
+    if hidden_states.dtype != torch.float32:
+        hidden_states = hidden_states.to(dtype=torch.float32)
+    if gating_output.dtype != torch.float32:
+        gating_output = gating_output.to(dtype=torch.float32)
+    # ========================== END ==========================
+    if (
+        gating_output.shape[1] // num_expert_group <= 32
+        or (
+            num_expert_group == 1 and gating_output.shape[1] in {160, 256, 384}
+        )  # XXX (MUSA): will support more cases in the future
+    ) and is_power_of_two(e_score_correction_bias.shape[0]):
+        apply_routed_scaling_factor_on_output = routed_scaling_factor != 1.0
+        topk_weights, topk_ids = mate_moe_fused_gate(
+            gating_output,
+            e_score_correction_bias,
+            num_expert_group,
+            topk_group,
+            topk,
+            num_fused_shared_experts,
+            routed_scaling_factor if routed_scaling_factor is not None else 1.0,
+            renormalize,
+            apply_routed_scaling_factor_on_output,
+        )
+
+        return topk_weights, topk_ids
+
+    assert hidden_states.size(0) == gating_output.size(0), "Number of tokens mismatch"
+
+    if scoring_func == "softmax":
+        scores = torch.softmax(gating_output, dim=-1)
+    elif scoring_func == "sigmoid":
+        scores = gating_output.sigmoid()
+    else:
+        raise ValueError(f"Unsupported scoring function: {scoring_func}")
+
+    num_token = scores.size(0)
+    if e_score_correction_bias is not None:
+        # Store original scores before applying correction bias. We use biased
+        # scores for expert selection but original scores for routing weights
+        original_scores = scores
+        scores = scores + e_score_correction_bias.unsqueeze(0)
+        group_scores = (
+            scores.view(num_token, num_expert_group, -1).topk(2, dim=-1)[0].sum(dim=-1)
+        )
+    else:
+        group_scores = (
+            scores.view(num_token, num_expert_group, -1).max(dim=-1).values
+        )  # [n, n_group]
+
+    # For batch invariance, use sorted=True to ensure deterministic expert selection
+    use_sorted = vllm_is_batch_invariant()
+    group_idx = torch.topk(group_scores, k=topk_group, dim=-1, sorted=use_sorted)[
+        1
+    ]  # [n, top_k_group]
+    group_mask = torch.zeros_like(group_scores)  # [n, n_group]
+    group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
+    score_mask = (
+        group_mask.unsqueeze(-1)
+        .expand(num_token, num_expert_group, scores.size(-1) // num_expert_group)
+        .reshape(num_token, -1)
+    )  # [n, e]
+    tmp_scores = scores.masked_fill(~score_mask.bool(), float("-inf"))  # [n, e]
+
+    if e_score_correction_bias is not None:
+        topk_ids = torch.topk(tmp_scores, k=topk, dim=-1, sorted=use_sorted)[1]
+        # Use original unbiased scores for the routing weights
+        topk_weights = original_scores.gather(1, topk_ids)
+    else:
+        topk_weights, topk_ids = torch.topk(
+            tmp_scores, k=topk, dim=-1, sorted=use_sorted
+        )
+
+    if renormalize:
+        topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
+
+    if routed_scaling_factor != 1.0:
+        topk_weights = topk_weights * routed_scaling_factor
+    return topk_weights.to(torch.float32), topk_ids.to(torch.int32)
+
+
+import vllm.model_executor.layers.fused_moe.router.grouped_topk_router
+
+vllm.model_executor.layers.fused_moe.router.grouped_topk_router.GroupedTopKRouter._compute_routing = (
+    _compute_routing
+)
