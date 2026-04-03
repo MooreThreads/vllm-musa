@@ -1,7 +1,6 @@
 import math
 
 import torch
-from mate import moe_fused_gate as mate_moe_fused_gate
 from vllm.model_executor.layers.batch_invariant import (
     vllm_is_batch_invariant,
 )
@@ -11,6 +10,15 @@ from vllm.model_executor.layers.fused_moe.router.grouped_topk_router import (
 )
 from vllm.model_executor.utils import maybe_disable_graph_partition
 from vllm.platforms import current_platform
+
+try:
+    from mate import moe_fused_gate as mate_moe_fused_gate
+
+    is_fused_gate = True
+except ImportError as e:
+    raise ImportError(
+        "Musa platform requires MATE to be installed. Please install mate first."
+    ) from e
 
 
 def _compute_routing(
@@ -97,11 +105,18 @@ def grouped_topk(
         gating_output = gating_output.to(dtype=torch.float32)
     # ========================== END ==========================
     if (
-        gating_output.shape[1] // num_expert_group <= 32
-        or (
-            num_expert_group == 1 and gating_output.shape[1] in {160, 256, 384}
-        )  # XXX (MUSA): will support more cases in the future
-    ) and is_power_of_two(e_score_correction_bias.shape[0]):
+        is_fused_gate
+        and (
+            gating_output.shape[1] // num_expert_group <= 32
+            or (
+                num_expert_group == 1 and gating_output.shape[1] in {160, 256, 384}
+            )  # XXX (MUSA): will support more cases in the future
+        )
+        and (
+            e_score_correction_bias is not None
+            and is_power_of_two(e_score_correction_bias.shape[0])
+        )
+    ):
         apply_routed_scaling_factor_on_output = routed_scaling_factor != 1.0
         topk_weights, topk_ids = mate_moe_fused_gate(
             gating_output,
