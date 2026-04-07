@@ -103,7 +103,7 @@ def grouped_topk(
         hidden_states = hidden_states.to(dtype=torch.float32)
     if gating_output.dtype != torch.float32:
         gating_output = gating_output.to(dtype=torch.float32)
-    # ========================== END ==========================
+
     if (
         is_fused_gate
         and (
@@ -131,6 +131,7 @@ def grouped_topk(
         )
 
         return topk_weights, topk_ids
+    # ========================== END ==========================
 
     assert hidden_states.size(0) == gating_output.size(0), "Number of tokens mismatch"
 
