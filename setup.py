@@ -404,24 +404,6 @@ class _CustomBuildExt(BuildExtension):
                 print(f"Error applying file override {file_path}: {e}")
 
     @staticmethod
-    def _apply_directory_overrides(repo_path):
-        """Copy local MUSA-specific directories to third-party vLLM csrc."""
-        local_csrc = Path(root) / "csrc"
-        vllm_csrc = Path(repo_path) / "csrc"
-
-        # Copy attention_musa directory
-        attention_musa_src = local_csrc / "attention_musa"
-        attention_musa_dst = vllm_csrc / "attention_musa"
-
-        if attention_musa_src.exists():
-            print(f"Copying MUSA attention directory: attention_musa")
-            if attention_musa_dst.exists():
-                shutil.rmtree(attention_musa_dst)
-            shutil.copytree(attention_musa_src, attention_musa_dst)
-        else:
-            print(f"Warning: attention_musa directory not found in local csrc/")
-
-    @staticmethod
     def _apply_text_patches():
         """Apply inline text replacements to upstream source files."""
         for file_path, replacement_rules in CSRC_TEXT_PATCHES.items():
@@ -475,7 +457,6 @@ class _CustomBuildExt(BuildExtension):
         _ensure_numpy_compatible()
 
         self._apply_file_overrides(_VLLM_REPO.source_dir)
-        self._apply_directory_overrides(_VLLM_REPO.source_dir)
         self._apply_text_patches()
 
         super().run()

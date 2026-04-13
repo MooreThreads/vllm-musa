@@ -28,7 +28,7 @@ classifiers = [
 dependencies = [
     "torch",
     "torch_musa",
-    "torchada>=0.1.44",
+    "torchada>=0.1.49",
     "mate",
     "mthreads-ml-py>=2.2.11",
     "numpy<2.0",
