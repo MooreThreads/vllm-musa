@@ -469,7 +469,7 @@ setup(
     # Force these dependencies even with --no-build-isolation
     # (pyproject.toml dependencies aren't processed with --no-build-isolation)
     install_requires=[
-        "torchada>=0.1.44",
+        "torchada>=0.1.49",
         "mthreads-ml-py>=2.2.11",
         "numpy<2",
         "openai>=2.24.0",
