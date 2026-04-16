@@ -26,3 +26,9 @@ class MTGPUWorker(Worker):
             distributed_init_method=distributed_init_method,
             is_driver_worker=is_driver_worker,
         )
+
+    def execute_dummy_batch(self) -> None:
+        self.model_runner._dummy_run(
+            self.model_runner.uniform_decode_query_len,
+            uniform_decode=True,
+        )
