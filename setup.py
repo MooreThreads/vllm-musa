@@ -3,6 +3,7 @@
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -68,6 +69,32 @@ def develop_dynamic_library(package_name, source_dir="./"):
 
     except PackageNotFoundError:
         print(f"vLLM is not installed '{package_name}'")
+
+
+def get_mcc_version():
+    try:
+        proc = subprocess.run(["musa_version_query"], capture_output=True, text=True)
+
+        if proc.returncode != 0:
+            print(f"Warning: musa_version_query failed (exit code: {proc.returncode}")
+            return None
+
+        mcc_version = re.search(
+            r'mcc:\s*\{[^}]*"version":\s*"([^"]+)"', proc.stdout, re.DOTALL
+        )
+
+        if mcc_version:
+            return mcc_version.group(1)
+        else:
+            print(
+                f"Warning: failed to get MUSA version, which may cause installation failure"
+            )
+            return None
+    except Exception as e:
+        print(
+            f"Warning: failed to get MUSA version, which may cause installation failure: {e}"
+        )
+        return None
 
 
 class _RepoInfo:
@@ -273,6 +300,13 @@ MCC_FLAGS = [
     "-fno-strict-aliasing",
     "-DUSE_MUSA",
 ]
+
+mcc_version = get_mcc_version()
+if mcc_version:
+    if tuple(map(int, mcc_version.split("."))) > (5, 0, 0):
+        # Disable automatic vectorization optimization.
+        # After mtcc implements vectorization length restrictions, this option can be removed.
+        MCC_FLAGS += ["-mllvm", "-vectorize-slp=false"]
 
 if MTGPU_TARGET == "mp_31":
     MCC_FLAGS.append("-DENABLE_FP8")
