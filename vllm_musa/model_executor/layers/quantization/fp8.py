@@ -1,5 +1,6 @@
 import torch
 from vllm.model_executor.layers.fused_moe import FusedMoE, fused_experts
+from vllm.utils.torch_utils import is_torch_equal_or_newer
 
 
 def apply(
@@ -11,13 +12,14 @@ def apply(
     shared_experts_input: torch.Tensor | None = None,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     if layer.ep_size != None and layer.ep_size <= 1:
+        is_inplace = not is_torch_equal_or_newer("2.9")
         return fused_experts(
             hidden_states=x,
             w1=layer.w13_weight,
             w2=layer.w2_weight,
             topk_weights=topk_weights,
             topk_ids=topk_ids,
-            inplace=True,
+            inplace=is_inplace,
             activation=layer.activation,
             global_num_experts=layer.global_num_experts,
             apply_router_weight_on_input=layer.apply_router_weight_on_input,
