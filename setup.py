@@ -11,6 +11,7 @@ from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
 import torch
+from packaging import version
 
 
 def _ensure_numpy_compatible():
@@ -73,7 +74,9 @@ def develop_dynamic_library(package_name, source_dir="./"):
 
 def get_mcc_version():
     try:
-        proc = subprocess.run(["musa_version_query"], capture_output=True, text=True)
+        proc = subprocess.run(
+            ["musa_version_query"], capture_output=True, text=True, timeout=5
+        )
 
         if proc.returncode != 0:
             print(f"Warning: musa_version_query failed (exit code: {proc.returncode}")
@@ -303,10 +306,16 @@ MCC_FLAGS = [
 
 mcc_version = get_mcc_version()
 if mcc_version:
-    if tuple(map(int, mcc_version.split("."))) > (5, 0, 0):
-        # Disable automatic vectorization optimization.
-        # After mtcc implements vectorization length restrictions, this option can be removed.
-        MCC_FLAGS += ["-mllvm", "-vectorize-slp=false"]
+    try:
+        # mcc_version can be compared normally for types 5.1.0, 5.1.0-rc1, v5.1.0, etc
+        if version.parse(mcc_version) > version.parse("5.0.0"):
+            # Disable automatic vectorization optimization.
+            # After mtcc implements vectorization length restrictions, this option can be removed.
+            MCC_FLAGS += ["-mllvm", "-vectorize-slp=false"]
+    except Exception as e:
+        print(
+            f"Warning: failed to get MUSA version, which may cause installation failure: {e}"
+        )
 
 if MTGPU_TARGET == "mp_31":
     MCC_FLAGS.append("-DENABLE_FP8")
