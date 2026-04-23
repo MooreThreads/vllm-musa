@@ -168,7 +168,6 @@ VLLM_CSRC_SOURCES = [
 
 VLLM_MUSA_CSRC_SOURCES = [
     "csrc/musa/torch_bindings.cpp",
-    "csrc/musa/fp8/scaled_mm.cpp",
     "csrc/musa/gemv.mu",
 ]
 

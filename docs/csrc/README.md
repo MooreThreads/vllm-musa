@@ -10,7 +10,6 @@ Custom operators written for MTGPU, registered via `torch::library` under `_C_mu
 
 | Operator | Description |
 |---|---|
-| `mudnn_w8a8_scaled_mm` | W8A8 scaled matrix multiplication using muDNN |
 | `musa_fused_gemv` | Fused GEMV |
 | `musa_fused_gemv_moe` | Fused GEMV for Mixture-of-Experts routing |
 

@@ -5,11 +5,6 @@
 
 #include <vector>
 
-void mudnn_w8a8_scaled_mm(torch::Tensor& c, torch::Tensor const& a,
-  torch::Tensor const& b, torch::Tensor const& a_scales,
-  torch::Tensor const& b_scales,
-  std::optional<torch::Tensor> const& bias);
-
 void musa_fused_gemv_moe(
     torch::Tensor &A,
     torch::Tensor &B,

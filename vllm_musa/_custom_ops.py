@@ -8,26 +8,6 @@ except ImportError as e:
     logging.error("Failed to import from vllm._C: %r", e)
 
 
-def musa_w8a8_scaled_mm(
-    a: torch.Tensor,
-    b: torch.Tensor,
-    scale_a: torch.Tensor,
-    scale_b: torch.Tensor,
-    out_dtype: torch.dtype,
-    bias: torch.Tensor = None,
-) -> torch.Tensor:
-    assert b.shape[0] % 16 == 0 and b.shape[1] % 16 == 0
-    assert out_dtype is torch.bfloat16 or out_dtype is torch.float16
-    assert bias is None or bias.shape[0] == b.shape[1] and bias.dtype == out_dtype
-
-    m = a.shape[0]
-    n = b.shape[0]
-
-    out = torch.empty((m, n), dtype=out_dtype, device=a.device)
-    torch.ops._C_musa_ops.mudnn_w8a8_scaled_mm(out, a, b, scale_a, scale_b, bias)
-    return out
-
-
 def musa_fused_gemv_moe(
     A: torch.Tensor,
     B: torch.Tensor,
