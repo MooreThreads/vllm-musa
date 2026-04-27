@@ -67,4 +67,4 @@ Registers a Mooncake-based KV connector (`mooncake_connector.py`) for disaggrega
 
 ### `_custom_ops.py` – Python Wrappers for C++ Ops
 
-Thin Python wrappers around the native operators registered in `csrc/` (e.g., `musa_w8a8_scaled_mm`, fused GEMV variants).
+Thin Python wrappers around the native operators registered in `csrc/` (e.g., `musa_fused_gemv_moe`, fused gemv moe variants).
