@@ -202,6 +202,7 @@ CSRC_TEXT_PATCHES = {
     ],
     str(_VLLM_REPO.source_dir / "csrc/torch_bindings.cpp"): [
         {"": '#include "torch_musa/csrc/aten/musa/MUSAContext.h"'},
+        {"#ifndef USE_ROCM": "#ifndef USE_MUSA"},
     ],
     str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh"): [
         {
@@ -433,6 +434,11 @@ class _CustomBuildExt(BuildExtension):
         else:
             subprocess.check_call(["git", "fetch", "--all"], cwd=repo_path)
             subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
+        # XXX (MUSA): Implement this in a more appropriate way
+        subprocess.check_call(
+            ["sed", "-i", "/torch\\.float4_e2m1fn_x2/s/^/#/", "vllm/ir/tolerances.py"],
+            cwd=repo_path,
+        )
 
     @staticmethod
     def _install_vllm(repo_path):

@@ -44,7 +44,7 @@ The plugin leverages the following key components:
 
 | vLLM Version | PyTorch Version | Engine  | Status       |
 |--------------|-----------------|---------|--------------|
-| 0.17.0       | 2.7.1           | V1 only | ✅ Supported |
+| v0.20.0       | 2.7.1           | V1 only | ✅ Supported |
 
 > **Note**: This plugin uses vLLM's V1 engine architecture. V0 engine is not supported.
 

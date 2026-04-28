@@ -162,7 +162,7 @@ AttributeError("'AnnAssign' object has no attribute 'targets'")
 
 Some patches are version-specific and will be automatically skipped if the target module doesn't exist:
 
-| Patch | vLLM 0.17.0x |
+| Patch | vLLM v0.20.0x |
 |-------|-------------|
 | `vllm__v1__sample__ops__topk_topp_triton` | ✅ Applied |
 | `vllm__v1__worker__gpu_worker` | ✅ Applied |
