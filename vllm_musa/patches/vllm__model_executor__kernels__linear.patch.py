@@ -3,12 +3,12 @@
 
 _MUSA_FP8_FALLBACK = """    platform_kernels = possible_kernels.get(current_platform._enum)
     if platform_kernels is None and current_platform.is_musa():
-        from vllm_musa.fp8_linear import (
-            MUSAFp8BlockScaledMMLinearKernel,
+        from vllm_musa.model_executor.kernels.linear.scaled_mm.deep_gemm import (
+            MUSADeepGemmFp8BlockScaledMMKernel,
         )
 
         if possible_kernels is _POSSIBLE_FP8_BLOCK_KERNELS:
-            platform_kernels = [MUSAFp8BlockScaledMMLinearKernel]
+            platform_kernels = [MUSADeepGemmFp8BlockScaledMMKernel]
 
     if platform_kernels is None:
         raise ValueError(

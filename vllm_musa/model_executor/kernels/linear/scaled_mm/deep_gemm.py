@@ -21,7 +21,7 @@ from vllm_musa.model_executor.layers.quantization.utils.fp8_utils import (
 )
 
 
-class MUSAFp8BlockScaledMMLinearKernel(Fp8BlockScaledMMLinearKernel):
+class MUSADeepGemmFp8BlockScaledMMKernel(Fp8BlockScaledMMLinearKernel):
     apply_input_quant: ClassVar[bool] = False
 
     def __init__(self, config: FP8ScaledMMLinearLayerConfig):
