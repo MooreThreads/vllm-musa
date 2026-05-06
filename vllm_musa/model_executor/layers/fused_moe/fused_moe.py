@@ -247,40 +247,38 @@ def fused_experts_impl(
 
         curr_topk_ids = topk_ids[begin_chunk_idx:end_chunk_idx]
         curr_topk_weights = topk_weights[begin_chunk_idx:end_chunk_idx]
-        # ========================== END ==========================
 
-    # ==================== MUSA ADAPTATION ====================
-    musa_ops.musa_fused_gemv_moe(
-        curr_hidden_states,
-        w1,
-        intermediate_cache2,
-        None,
-        w1_scale,
-        curr_topk_weights,
-        curr_topk_ids,
-        apply_router_weight_on_input,
-        topk_ids.shape[1],
-        use_int4_w4a16,
-        use_swigelu=True,
-    )
-    musa_ops.musa_fused_gemv_moe(
-        intermediate_cache2,
-        w2,
-        intermediate_cache3,
-        None,
-        w2_scale,
-        curr_topk_weights,
-        curr_topk_ids,
-        not apply_router_weight_on_input,
-        1,
-        use_int4_w4a16,
-        use_swigelu=False,
-    )
-    # ========================== END ==========================
-    ops.moe_sum(
-        intermediate_cache3.view(*intermediate_cache3.size()),
-        out_hidden_states,
-    )
+        musa_ops.musa_fused_gemv_moe(
+            curr_hidden_states,
+            w1,
+            intermediate_cache2,
+            None,
+            w1_scale,
+            curr_topk_weights,
+            curr_topk_ids,
+            apply_router_weight_on_input,
+            topk_ids.shape[1],
+            use_int4_w4a16,
+            use_swigelu=True,
+        )
+        musa_ops.musa_fused_gemv_moe(
+            intermediate_cache2,
+            w2,
+            intermediate_cache3,
+            None,
+            w2_scale,
+            curr_topk_weights,
+            curr_topk_ids,
+            not apply_router_weight_on_input,
+            1,
+            use_int4_w4a16,
+            use_swigelu=False,
+        )
+        # ========================== END ====================
+        ops.moe_sum(
+            intermediate_cache3.view(*intermediate_cache3.size()),
+            out_hidden_states,
+        )
 
     return out_hidden_states
 
