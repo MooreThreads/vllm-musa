@@ -167,6 +167,10 @@ VLLM_CSRC_SOURCES = [
 VLLM_MUSA_CSRC_SOURCES = [
     "csrc/musa/torch_bindings.cpp",
     "csrc/musa/gemv.mu",
+    # The version used here is 0.18.0, located at csrc/quantization/w8a8/fp8.
+    # While in version 0.20.0, it is located at csrc/libtorch_stable/quantization/w8a8/fp8.
+    # The per_token_group_quant relies on torch version 2.11 in 0.20.0, which is not supported by the current musa.
+    "csrc/musa/quantization/per_token_group_quant.cu",
 ]
 
 VLLM_MOE_CSRC_SOURCES = [

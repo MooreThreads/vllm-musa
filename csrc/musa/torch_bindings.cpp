@@ -21,6 +21,15 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
       "bool use_int4_w4a16, bool use_swigelu, bool use_rms_norm, Tensor? gamma,"
       "float eps) -> ()");
   musa_ops.impl("musa_fused_gemv", torch::kMUSA, &musa_fused_gemv);
+
+  musa_ops.def(
+      "per_token_group_fp8_quant(Tensor input, Tensor! output_q, Tensor! "
+      "output_s, "
+      "int group_size, float eps, float fp8_min, float fp8_max, bool "
+      "scale_ue8m0, bool dummy_is_scale_transposed, bool dummy_is_tma_aligned "
+      ") -> ()");
+  musa_ops.impl("per_token_group_fp8_quant", torch::kMUSA,
+           &per_token_group_quant_fp8);
 #endif
 }
 
