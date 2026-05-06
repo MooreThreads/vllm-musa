@@ -104,6 +104,10 @@ def per_token_group_quant_fp8(
 
     # TRITON FALLBACK
     # musa currently does not support triton fallback.
+    raise NotImplementedError(
+        f"per_token_group_fp8_quant is not supported for platform: {current_platform} or input is not contiguous. "
+        "MUSA Triton fallback is currently not supported."
+    )
 
 
 import vllm.model_executor.layers.quantization.utils.fp8_utils
