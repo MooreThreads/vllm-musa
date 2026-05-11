@@ -34,7 +34,6 @@ if is_flash_attn_varlen_func_available():
         flash_attn_varlen_func,
         get_scheduler_metadata,
         reshape_and_cache_flash,
-        flash_attn_with_kvcache,
     )
 
 from vllm.config import (
@@ -828,72 +827,37 @@ class FlashAttentionImpl(AttentionImpl):
                 )
 
                 # ==================== MUSA ADAPTATION ====================
-                # MATE's MHA requires explicit handling of decode and prefill
-                # Decode requests use flash_attn_with_kvcache (attend to KV cache)
-                # Prefill requests use flash_attn_varlen_func (use actual K/V tensors)
-                num_decodes = attn_metadata.num_decodes
-                num_decode_tokens = attn_metadata.num_decode_tokens
-                num_prefills = attn_metadata.num_prefills
-                num_prefill_tokens = attn_metadata.num_prefill_tokens
-
-                # Process decode requests first (tokens are ordered: [decode, prefill])
-                if num_decodes > 0:
-                    decode_descale_shape = (num_decodes, self.num_kv_heads)
-                    decode_output = flash_attn_with_kvcache(
-                        q=query[:num_decode_tokens].view(
-                            -1, self.num_heads, self.head_size
-                        ),
-                        k_cache=key_cache,
-                        v_cache=value_cache,
-                        page_table=attn_metadata.decode_block_table,
-                        cache_seqlens=attn_metadata.decode_seq_lens,
-                        cu_seqlens_q=attn_metadata.decode_query_start_loc,
-                        max_seqlen_q=1,  # Decode always has query_len=1 per request
-                        softmax_scale=self.scale,
-                        causal=attn_metadata.causal,
-                        window_size=sliding_window_size,
-                        softcap=self.logits_soft_cap,
-                        k_descale=layer._k_scale.expand(decode_descale_shape),
-                        v_descale=layer._v_scale.expand(decode_descale_shape),
-                        num_splits=attn_metadata.max_num_splits,
-                    )
-                    # MATE returns output already flattened: [num_tokens, num_heads * head_size]
-                    # Just copy directly without reshaping
-                    output[:num_decode_tokens] = decode_output
-
-                # Process prefill requests after decode
-                if num_prefills > 0:
-                    prefill_start = num_decode_tokens
-                    prefill_end = num_actual_tokens
-
-                    prefill_descale_shape = (num_prefills, self.num_kv_heads)
-                    prefill_output = flash_attn_varlen_func(
-                        q=query[prefill_start:prefill_end].view(
-                            -1, self.num_heads, self.head_size
-                        ),
-                        k=key[prefill_start:prefill_end]
-                        .view(-1, self.num_kv_heads, self.head_size)
-                        .to(query.dtype),
-                        v=value[prefill_start:prefill_end]
-                        .view(-1, self.num_kv_heads, self.head_size)
-                        .to(query.dtype),
-                        cu_seqlens_q=attn_metadata.prefill_query_start_loc,
-                        cu_seqlens_k=attn_metadata.prefill_query_start_loc,
-                        max_seqlen_q=attn_metadata.prefill_max_seq_len,
-                        max_seqlen_k=attn_metadata.prefill_max_seq_len,
-                        softmax_scale=self.scale,
-                        causal=attn_metadata.causal,
-                        window_size=sliding_window_size,
-                        softcap=self.logits_soft_cap,
-                        # Note: MATE's API does not support fa_version parameter
-                        q_descale=layer._q_scale.expand(prefill_descale_shape),
-                        k_descale=layer._k_scale.expand(prefill_descale_shape),
-                        v_descale=layer._v_scale.expand(prefill_descale_shape),
-                        num_splits=attn_metadata.max_num_splits,
-                    )
-                    # MATE returns output already flattened: [num_tokens, num_heads * head_size]
-                    # Just copy directly without reshaping
-                    output[prefill_start:prefill_end] = prefill_output
+                # Use MATE's varlen paged-cache path for target-model attention.
+                # Speculative decoding can send more than one query token per
+                # request (bonus + draft verification tokens), so splitting all
+                # decode requests through flash_attn_with_kvcache corrupts the
+                # verifier logits. The varlen path matches vLLM upstream and
+                # handles query_start_loc/max_query_len directly.
+                flash_attn_varlen_func(
+                    q=query[:num_actual_tokens].view(
+                        -1, self.num_heads, self.head_size
+                    ),
+                    k=key_cache,
+                    v=value_cache,
+                    out=output[:num_actual_tokens].view(
+                        -1, self.num_heads, self.head_size
+                    ),
+                    cu_seqlens_q=cu_seqlens_q,
+                    max_seqlen_q=max_seqlen_q,
+                    seqused_k=seqused_k,
+                    max_seqlen_k=max_seqlen_k,
+                    softmax_scale=self.scale,
+                    causal=attn_metadata.causal,
+                    window_size=sliding_window_size,
+                    block_table=block_table,
+                    softcap=self.logits_soft_cap,
+                    scheduler_metadata=scheduler_metadata,
+                    q_descale=q_descale,
+                    k_descale=k_descale,
+                    v_descale=v_descale,
+                    num_splits=attn_metadata.max_num_splits,
+                    s_aux=self.sinks,
+                )
                 # ========================== END ==========================
 
                 return output
