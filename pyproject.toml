@@ -34,7 +34,7 @@ dependencies = [
     "mthreads-ml-py>=2.2.11",
     "numpy<2.0",
     "openai>=2.24.0",
-    "transformers==4.57.1",
+    "transformers==5.5.3",
 ]
 
 [project.optional-dependencies]
