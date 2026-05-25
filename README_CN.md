@@ -84,6 +84,7 @@
 | `MUSA_VISIBLE_DEVICES` | 控制可见的 MUSA 设备（类似于 `CUDA_VISIBLE_DEVICES`） |
 | `VLLM_WORKER_MULTIPROC_METHOD=spawn` | 多进程 worker 推荐设置 |
 | `VLLM_MUSA_CUSTOM_OP_USE_NATIVE` | 使用 vLLM 自定义算子的原生实现（默认：`False`） |
+| `VLLM_MUSA_WORKER_TERMINATION_TIMEOUT_S` | 控制 vLLM v1 worker 关闭超时时间（默认： `4s`） |
 
 ## 使用方法
 

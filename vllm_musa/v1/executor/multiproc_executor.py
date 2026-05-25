@@ -53,14 +53,15 @@ def _ensure_worker_termination(worker_procs: list[Any]) -> None:
     # Give processes time to clean themselves up properly first
     logger.debug("Worker Termination: allow workers to gracefully shutdown")
     # ==================== MUSA ADAPTATION ====================
-    if wait_for_termination(active_procs(), _musa_worker_termination_timeout_s()):
+    timeout_s = _musa_worker_termination_timeout_s()
+    if wait_for_termination(active_procs(), timeout_s):
         return
 
     # Send SIGTERM if still running
     logger.debug("Worker Termination: workers still running sending SIGTERM")
     for p in active_procs():
         p.terminate()
-    if not wait_for_termination(active_procs(), _musa_worker_termination_timeout_s()):
+    if not wait_for_termination(active_procs(), timeout_s):
         # Send SIGKILL if still running
         logger.debug("Worker Termination: resorting to SIGKILL to take down workers")
         for p in active_procs():

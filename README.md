@@ -84,6 +84,7 @@ The plugin leverages the following key components:
 | `MUSA_VISIBLE_DEVICES` | Control which MUSA devices are visible (similar to `CUDA_VISIBLE_DEVICES`) |
 | `VLLM_WORKER_MULTIPROC_METHOD=spawn` | Recommended for multi-process workers |
 | `VLLM_MUSA_CUSTOM_OP_USE_NATIVE` | Use vLLM custom ops native implementation (default: `False`) |
+| `VLLM_MUSA_WORKER_TERMINATION_TIMEOUT_S` | Control vLLM v1 worker shutdown timeout (default: `4s`) |
 
 ## Usage
 
