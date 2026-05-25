@@ -35,6 +35,7 @@ dependencies = [
     "numpy<2.0",
     "openai>=2.24.0",
     "transformers==5.5.3",
+    "tilelang_musa>=0.1.8"
 ]
 
 [project.optional-dependencies]
