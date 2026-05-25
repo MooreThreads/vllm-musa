@@ -89,8 +89,9 @@ class TestMUSAPlatformBase:
 
     def test_supports_fp8_for_musa_3_1(self):
         """Test that FP8 is supported on MUSA capability 3.1."""
-        from vllm_musa.platform import MUSAPlatformBase
         from vllm.platforms.interface import DeviceCapability
+
+        from vllm_musa.platform import MUSAPlatformBase
 
         with patch.object(
             MUSAPlatformBase,
@@ -101,8 +102,9 @@ class TestMUSAPlatformBase:
 
     def test_supports_fp8_rejects_pre_3_1(self):
         """Test that pre-3.1 MUSA capability does not support FP8."""
-        from vllm_musa.platform import MUSAPlatformBase
         from vllm.platforms.interface import DeviceCapability
+
+        from vllm_musa.platform import MUSAPlatformBase
 
         with patch.object(
             MUSAPlatformBase,
@@ -177,7 +179,25 @@ class TestMUSAPlatformBase:
             device_capability=DeviceCapability(3, 1),
         )
 
-    def test_turboquant_rejects_k8v4_on_musa(self):
+    def test_turboquant_forces_fp8_e4b15_off_on_musa(self):
+        from vllm.v1.attention.backends import turboquant_attn
+        from vllm.v1.attention.ops import (
+            triton_turboquant_decode,
+            triton_turboquant_store,
+        )
+
+        import vllm_musa.v1.attention.backends.turboquant  # noqa: F401
+
+        assert triton_turboquant_decode._use_fp8_e4b15(0) == 0
+        assert triton_turboquant_store._use_fp8_e4b15(0) == 0
+        assert turboquant_attn._use_fp8_e4b15(0) == 0
+        assert (
+            triton_turboquant_store._use_fp8_e4b15
+            is triton_turboquant_decode._use_fp8_e4b15
+        )
+        assert turboquant_attn._use_fp8_e4b15 is triton_turboquant_decode._use_fp8_e4b15
+
+    def test_turboquant_supports_k8v4_on_musa(self):
         import torch
         from vllm.platforms.interface import DeviceCapability
 
@@ -196,8 +216,7 @@ class TestMUSAPlatformBase:
             device_capability=DeviceCapability(3, 1),
         )
 
-        assert reason is not None
-        assert "Triton float8 conversions" in reason
+        assert reason is None
 
 
 class TestNativeGemvSource:

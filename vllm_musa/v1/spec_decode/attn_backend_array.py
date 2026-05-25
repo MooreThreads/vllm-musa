@@ -17,8 +17,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
-import torch
-
 from .spec_info import EagleDraftBuffers
 
 
@@ -85,9 +83,13 @@ def build_per_step_attn_metadata_array(
             # (slot_mapping, seq_lens, max_seq_len), then build per-layer
             # metadata. The per-layer call returns a dict-shaped object
             # that the model reads via get_forward_context().
-            base_metadata.slot_mapping = buffers.slot_mapping_per_step[step_idx, :batch_size]
+            base_metadata.slot_mapping = buffers.slot_mapping_per_step[
+                step_idx, :batch_size
+            ]
             base_metadata.seq_lens = buffers.seq_lens_per_step[step_idx, :batch_size]
-            base_metadata.max_seq_len = int(getattr(base_metadata, "max_seq_len", 0)) + (1 if step_idx > 0 else 0)
+            base_metadata.max_seq_len = int(
+                getattr(base_metadata, "max_seq_len", 0)
+            ) + (1 if step_idx > 0 else 0)
             try:
                 _, per_layer = proposer.build_per_group_and_layer_attn_metadata(
                     base_metadata, draft_index=step_idx
@@ -124,7 +126,9 @@ def build_per_step_attn_metadata_array(
     # produce real `FlashAttentionMetadata` via the builder.
     metadata_array: list[Any] = []
     base_max_seq_len = int(getattr(base_metadata, "max_seq_len", 0))
-    base_max_model_len = int(getattr(base_metadata, "max_model_len", base_max_seq_len + buffers.num_steps))
+    base_max_model_len = int(
+        getattr(base_metadata, "max_model_len", base_max_seq_len + buffers.num_steps)
+    )
 
     # MUSA-0090 step 5l (2026-05-16): use vllm's first-party
     # `proposer.build_per_group_and_layer_attn_metadata(common_attn_metadata,
@@ -240,8 +244,12 @@ class StepMetadataIndexing:
         return cls(
             num_steps=len(metadata_array),
             base_max_seq_len=int(getattr(metadata_array[0], "max_seq_len", 0)),
-            per_step_max_seq_lens=[int(getattr(m, "max_seq_len", 0)) for m in metadata_array],
-            slot_mapping_data_ptrs=[int(m.slot_mapping.data_ptr()) for m in metadata_array],
+            per_step_max_seq_lens=[
+                int(getattr(m, "max_seq_len", 0)) for m in metadata_array
+            ],
+            slot_mapping_data_ptrs=[
+                int(m.slot_mapping.data_ptr()) for m in metadata_array
+            ],
             seq_lens_data_ptrs=[int(m.seq_lens.data_ptr()) for m in metadata_array],
         )
 
@@ -257,8 +265,7 @@ class StepMetadataIndexing:
             )
         if len(set(self.seq_lens_data_ptrs)) != self.num_steps:
             raise RuntimeError(
-                f"seq_lens views are not all distinct: "
-                f"{self.seq_lens_data_ptrs}"
+                f"seq_lens views are not all distinct: " f"{self.seq_lens_data_ptrs}"
             )
         # max_seq_lens should be monotonically non-decreasing across steps
         for i in range(1, self.num_steps):

@@ -60,7 +60,8 @@ try:
 except ImportError as exc:  # pragma: no cover
     _log.debug(
         "MUSA-0090 eagle patch: cannot import vllm.v1.spec_decode.eagle "
-        "(probably an unsupported vllm version). Skipping: %s", exc,
+        "(probably an unsupported vllm version). Skipping: %s",
+        exc,
     )
     EagleProposer = None  # type: ignore
 
@@ -120,11 +121,10 @@ def _maybe_init_runner(proposer, args, kwargs) -> None:
             hidden_size = int(proposer.model.config.hidden_size)
         except Exception:
             hidden_size = 4096  # M2.5 default; will surface in capture if wrong.
-        _log.warning(
-            "MUSA-0090: hidden_size probe fell back to %d", hidden_size
-        )
+        _log.warning("MUSA-0090: hidden_size probe fell back to %d", hidden_size)
 
     import torch
+
     device = getattr(proposer, "device", None) or torch.device("cuda")
 
     runner = EagleFullLoopRunner(
@@ -151,7 +151,9 @@ def _maybe_init_runner(proposer, args, kwargs) -> None:
     _log.info(
         "MUSA-0090: EagleFullLoopRunner installed (N=%d, capture_sizes=%s, "
         "hidden_size=%d, buffer_footprint=%.2f MiB)",
-        num_speculative_tokens, cudagraph_capture_sizes, hidden_size,
+        num_speculative_tokens,
+        cudagraph_capture_sizes,
+        hidden_size,
         runner.memory_footprint_bytes() / 1024 / 1024,
     )
 
@@ -168,6 +170,7 @@ def _make_dispatched_propose(_original_propose):
     """
 
     import os
+
     _RUNNER_ENABLED = os.environ.get("VLLM_MUSA_EAGLE_RUNNER", "0") == "1"
 
     def _musa_dispatched_propose(self, *args, **kwargs):
@@ -176,6 +179,7 @@ def _make_dispatched_propose(_original_propose):
         # Only dispatch on MUSA. On CUDA, fall through to the original.
         try:
             from vllm.platforms import current_platform
+
             if not current_platform.is_musa():
                 return _original_propose(self, *args, **kwargs)
         except Exception:
@@ -214,9 +218,7 @@ def _make_dispatched_propose(_original_propose):
                 else args[2]
             )
             next_token_ids = (
-                kwargs.get("next_token_ids")
-                if "next_token_ids" in kwargs
-                else args[3]
+                kwargs.get("next_token_ids") if "next_token_ids" in kwargs else args[3]
             )
             # token_indices_to_sample may be None (proposer computes from
             # query_start_loc) — that's fine; runner.replay() handles it.
@@ -231,9 +233,7 @@ def _make_dispatched_propose(_original_propose):
                 else args[5]
             )
         except (IndexError, KeyError):
-            _log.debug(
-                "MUSA-0090: propose() signature mismatch; fallback to original"
-            )
+            _log.debug("MUSA-0090: propose() signature mismatch; fallback to original")
             return _original_propose(self, *args, **kwargs)
 
         batch_size = int(next_token_ids.shape[0])
@@ -253,7 +253,8 @@ def _make_dispatched_propose(_original_propose):
         except Exception as exc:
             _log.warning(
                 "MUSA-0090: runner.replay failed (%s); falling back to "
-                "vLLM iterative path for this call", exc,
+                "vLLM iterative path for this call",
+                exc,
             )
             return _original_propose(self, *args, **kwargs)
 

@@ -25,7 +25,6 @@ from typing import Optional
 
 import torch
 import torch.distributed as dist
-
 from vllm.logger import init_logger
 
 # vllm.logger.init_logger returns a Logger with info_once / warning_once
@@ -101,9 +100,7 @@ class QuickAllReduce:
         # IPC handle exchange via the process group.
         try:
             my_handle: torch.Tensor = torch.ops._C_quick_ar.get_handle(self.fptr)
-            all_handles = [
-                torch.empty_like(my_handle) for _ in range(world_size)
-            ]
+            all_handles = [torch.empty_like(my_handle) for _ in range(world_size)]
             dist.all_gather(all_handles, my_handle, group=group)
             # Pass the full handle list (length == world_size). The C++
             # DeviceComms::open_ipc_handles asserts size() == world_size
@@ -115,7 +112,8 @@ class QuickAllReduce:
         except Exception as exc:
             logger.warning(
                 "MUSA-0088: QuickAllReduce IPC handle exchange failed "
-                "(%s); disabling.", exc,
+                "(%s); disabling.",
+                exc,
             )
             self.disabled = True
             self._safe_destroy()
@@ -140,7 +138,9 @@ class QuickAllReduce:
     ) -> Optional[torch.Tensor]:
         """vllm-upstream API alias: returns the all-reduced output tensor
         directly (in-place via a fresh output buffer)."""
-        return self.all_reduce(input_, output=None, quant_level=quant_level, cast_bf2half=cast_bf2half)
+        return self.all_reduce(
+            input_, output=None, quant_level=quant_level, cast_bf2half=cast_bf2half
+        )
 
     def all_reduce(
         self,

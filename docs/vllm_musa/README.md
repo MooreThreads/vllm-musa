@@ -63,7 +63,7 @@ Registers a Mooncake-based KV connector (`mooncake_connector.py`) for disaggrega
 
 - `v1/attention/backends/mla/` – FlashMLA attention backend (`MUSAFlashMLABackend`) with MLA-specific metadata and common utilities.
 - `v1/attention/backends/flash_attn.py` - FlashAttn attention backend (`MUSAFlashAttentionBackend`) with FLASH_ATTN functions.
-- `v1/attention/backends/turboquant.py` – TurboQuant KV-cache backend wrapper. The `turboquant_4bit_nc` preset is validated on MUSA; `turboquant_k8v4` is rejected because current MUSA Triton lacks the FP8 key-storage conversions used by upstream.
+- `v1/attention/backends/turboquant.py` – TurboQuant KV-cache backend wrapper. The `turboquant_k8v4`, `turboquant_4bit_nc`, `turboquant_k3v4_nc`, and `turboquant_3bit_nc` presets are supported on MUSA.
 - `v1/attention/ops/flashmla.py` – Low-level FlashMLA forward ops and capability detection.
 
 ### `_custom_ops.py` – Python Wrappers for C++ Ops

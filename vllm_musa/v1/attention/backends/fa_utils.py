@@ -13,6 +13,7 @@ if current_platform.is_musa():
         get_scheduler_metadata,
     )
     from vllm import _custom_ops as ops
+
     from vllm_musa import _custom_ops as musa_ops
     from vllm_musa.utils.environ import envs
 
@@ -60,10 +61,7 @@ if current_platform.is_musa():
             and key_cache.stride(2) == key_cache.shape[3]
             and value_cache.stride(2) == value_cache.shape[3]
             and key_cache.stride(1) == key_cache.shape[2] * key_cache.shape[3]
-            and (
-                value_cache.stride(1)
-                == value_cache.shape[2] * value_cache.shape[3]
-            )
+            and (value_cache.stride(1) == value_cache.shape[2] * value_cache.shape[3])
         )
 
     def reshape_and_cache_flash(

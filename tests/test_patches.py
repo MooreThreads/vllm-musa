@@ -271,7 +271,7 @@ class TestCompilationCachingPatch:
                 new_source = "\n".join(new for _, new in patches)
 
                 assert "GraphPickler, Options" in old_source
-                assert "getattr(_vllm_graph_pickler, \"Options\", None)" in new_source
+                assert 'getattr(_vllm_graph_pickler, "Options", None)' in new_source
                 assert "_musa_graph_pickler_dumps" in new_source
                 break
         else:
@@ -381,6 +381,7 @@ class TestMUSAFlashAttentionReshapeCache:
     def _load_fa_utils_with_musa_platform(self, monkeypatch, musa_ops_namespace):
         import vllm
         import vllm.platforms as vllm_platforms
+
         import vllm_musa
 
         monkeypatch.setenv("VLLM_MUSA_RESHAPE_CACHE_FLASH", "1")
@@ -402,9 +403,7 @@ class TestMUSAFlashAttentionReshapeCache:
         monkeypatch.setattr(vllm, "_custom_ops", vllm_ops, raising=False)
 
         musa_custom_ops = ModuleType("vllm_musa._custom_ops")
-        musa_custom_ops.musa_reshape_and_cache_flash_nhd = (
-            lambda *args, **kwargs: None
-        )
+        musa_custom_ops.musa_reshape_and_cache_flash_nhd = lambda *args, **kwargs: None
         monkeypatch.setitem(sys.modules, "vllm_musa._custom_ops", musa_custom_ops)
         monkeypatch.setattr(vllm_musa, "_custom_ops", musa_custom_ops, raising=False)
 
@@ -591,6 +590,7 @@ class TestMUSAPlatformDefaults:
 
     def test_tp4_disables_musa_cudagraph_capture(self):
         from vllm.config import CUDAGraphMode
+
         from vllm_musa.platform import MUSAPlatformBase
 
         vllm_config = self._make_vllm_config(
@@ -608,6 +608,7 @@ class TestMUSAPlatformDefaults:
 
     def test_tp2_keeps_musa_cudagraph_capture(self):
         from vllm.config import CUDAGraphMode
+
         from vllm_musa.platform import MUSAPlatformBase
 
         vllm_config = self._make_vllm_config(
@@ -684,9 +685,7 @@ class TestMUSAFusedMoEFP8Scales:
 class TestMUSAFp8MoEPadding:
     """Tests for MUSA FP8 MoE TP padding helpers."""
 
-    def test_musa_fp8_moe_tp_padding_rounds_partition_to_block_lcm(
-        self, monkeypatch
-    ):
+    def test_musa_fp8_moe_tp_padding_rounds_partition_to_block_lcm(self, monkeypatch):
         from vllm_musa.model_executor.layers.quantization import fp8 as musa_fp8
 
         monkeypatch.setattr(
@@ -697,8 +696,7 @@ class TestMUSAFp8MoEPadding:
         monkeypatch.setattr(
             musa_fp8,
             "_ORIGINAL_FP8_MOE_MAYBE_ROUNDUP_SIZES",
-            lambda self, hidden_size, intermediate_size_per_partition, act_dtype,
-            moe_parallel_config: (
+            lambda self, hidden_size, intermediate_size_per_partition, act_dtype, moe_parallel_config: (
                 hidden_size,
                 intermediate_size_per_partition,
             ),
@@ -741,14 +739,10 @@ class TestMUSAFp8MoEPadding:
 
         def fake_create_weights(self, layer, **kwargs):
             layer.w13_weight = SimpleNamespace(
-                data=torch.full((8,), 42, dtype=torch.uint8).view(
-                    torch.float8_e4m3fn
-                )
+                data=torch.full((8,), 42, dtype=torch.uint8).view(torch.float8_e4m3fn)
             )
             layer.w2_weight = SimpleNamespace(
-                data=torch.full((8,), 43, dtype=torch.uint8).view(
-                    torch.float8_e4m3fn
-                )
+                data=torch.full((8,), 43, dtype=torch.uint8).view(torch.float8_e4m3fn)
             )
 
         monkeypatch.setattr(
@@ -807,8 +801,7 @@ class TestScaledMMKernelPatch:
 
     def test_musa_swiglu_uses_custom_op_for_compile(self):
         source = (
-            Path(__file__).parents[1]
-            / "vllm_musa/model_executor/layers/activation.py"
+            Path(__file__).parents[1] / "vllm_musa/model_executor/layers/activation.py"
         ).read_text()
 
         assert "torch.ops.vllm.musa_swish_glu_op" in source
@@ -821,7 +814,9 @@ class TestScaledMMKernelPatch:
             MUSAPerTensorTorchFP8ScaledMMLinearKernel,
         )
 
-        assert MUSAPerTensorTorchFP8ScaledMMLinearKernel.get_output_padding(None) is None
+        assert (
+            MUSAPerTensorTorchFP8ScaledMMLinearKernel.get_output_padding(None) is None
+        )
 
     def test_musa_unquantized_gemm_materializes_plain_parameter_for_compile(self):
         source = (

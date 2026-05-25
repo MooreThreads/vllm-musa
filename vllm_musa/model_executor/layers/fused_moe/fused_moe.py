@@ -46,11 +46,7 @@ def _maybe_expand_fp8_moe_per_tensor_scale(
     [expert, output_block, input_block]. Static FP8 checkpoints store one
     weight scale per expert, so materialize the equivalent block view here.
     """
-    if (
-        scale is None
-        or weight.dtype != torch.float8_e4m3fn
-        or scale.dim() >= 3
-    ):
+    if scale is None or weight.dtype != torch.float8_e4m3fn or scale.dim() >= 3:
         return scale
 
     num_experts, output_size, input_size = weight.shape

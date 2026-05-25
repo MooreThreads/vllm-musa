@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -140,18 +140,34 @@ class EagleDraftBuffers:
         )
 
         return cls(
-            input_ids_per_step=torch.zeros((num_steps, max_bs), dtype=i32, device=device),
-            positions_per_step=torch.zeros((num_steps, max_bs), dtype=i64, device=device),
-            slot_mapping_per_step=torch.zeros((num_steps, max_bs), dtype=i64, device=device),
-            seq_lens_per_step=torch.zeros((num_steps, max_bs), dtype=i32, device=device),
+            input_ids_per_step=torch.zeros(
+                (num_steps, max_bs), dtype=i32, device=device
+            ),
+            positions_per_step=torch.zeros(
+                (num_steps, max_bs), dtype=i64, device=device
+            ),
+            slot_mapping_per_step=torch.zeros(
+                (num_steps, max_bs), dtype=i64, device=device
+            ),
+            seq_lens_per_step=torch.zeros(
+                (num_steps, max_bs), dtype=i32, device=device
+            ),
             hidden_states_per_step=torch.zeros(
                 (num_steps, max_bs, hidden_size), dtype=bf16, device=device
             ),
-            topk_p_per_step=torch.zeros((num_steps, max_bs, topk), dtype=f32, device=device),
-            topk_index_per_step=torch.zeros((num_steps, max_bs, topk), dtype=i32, device=device),
-            draft_token_ids_out=torch.zeros((max_bs, num_steps), dtype=i32, device=device),
+            topk_p_per_step=torch.zeros(
+                (num_steps, max_bs, topk), dtype=f32, device=device
+            ),
+            topk_index_per_step=torch.zeros(
+                (num_steps, max_bs, topk), dtype=i32, device=device
+            ),
+            draft_token_ids_out=torch.zeros(
+                (max_bs, num_steps), dtype=i32, device=device
+            ),
             bonus_token_ids_in=torch.zeros((max_bs,), dtype=i32, device=device),
-            target_hidden_states_in=torch.zeros((max_bs, hidden_size), dtype=bf16, device=device),
+            target_hidden_states_in=torch.zeros(
+                (max_bs, hidden_size), dtype=bf16, device=device
+            ),
             # MUSA-0090 step 5k: step-0 input metadata buffers.
             positions_in=torch.zeros((max_bs,), dtype=i64, device=device),
             slot_mapping_in=torch.zeros((max_bs,), dtype=i64, device=device),

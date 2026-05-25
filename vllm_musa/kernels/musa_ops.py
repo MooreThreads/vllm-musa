@@ -15,9 +15,9 @@ the pure-PyTorch native rms_norm. With the "musa" provider plus a
 priority override in `vllm_musa.platform`, the dispatcher / Inductor
 lowering picks the MUSA kernel.
 """
+
 import torch
 from torch import Tensor
-
 from vllm import ir
 from vllm.platforms import current_platform
 

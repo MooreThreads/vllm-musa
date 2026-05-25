@@ -128,9 +128,9 @@ def test_forward_with_dcp_runs_context_suffix_and_merge(monkeypatch):
         calls.append(kwargs)
         q = kwargs["q"]
         num_tokens, num_heads, head_size = q.shape
-        lse = torch.arange(
-            num_heads * num_tokens, dtype=q.dtype, device=q.device
-        ).view(num_heads, num_tokens)
+        lse = torch.arange(num_heads * num_tokens, dtype=q.dtype, device=q.device).view(
+            num_heads, num_tokens
+        )
         if num_heads == 4:
             out = torch.ones(
                 (num_tokens, num_heads, head_size), dtype=q.dtype, device=q.device
@@ -154,9 +154,7 @@ def test_forward_with_dcp_runs_context_suffix_and_merge(monkeypatch):
         return context_out[:, :2, :].contiguous(), context_lse[:, :2].contiguous()
 
     monkeypatch.setattr(flash_attn_module, "get_dcp_group", lambda: _FakeDCPGroup())
-    monkeypatch.setattr(
-        flash_attn_module, "merge_attn_states", fake_merge_attn_states
-    )
+    monkeypatch.setattr(flash_attn_module, "merge_attn_states", fake_merge_attn_states)
     monkeypatch.setattr(
         flash_attn_module,
         "flash_attn_varlen_func",

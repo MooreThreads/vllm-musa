@@ -13,9 +13,20 @@ from vllm.config.cache import CacheDType
 from vllm.platforms.interface import DeviceCapability
 from vllm.v1.attention.backends import turboquant_attn as _turboquant_attn
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
+from vllm.v1.attention.ops import triton_turboquant_decode as _turboquant_decode
+from vllm.v1.attention.ops import triton_turboquant_store as _turboquant_store
 
 from vllm_musa.v1.attention.backends import fa_utils as _musa_fa_utils
 
+
+def _musa_use_fp8_e4b15(device: int = 0) -> int:
+    # XXX (MUSA): The e4b15 dtype is supported in later Triton versions, please refer to JIRA#79331
+    return 0
+
+
+_turboquant_decode._use_fp8_e4b15 = _musa_use_fp8_e4b15
+_turboquant_store._use_fp8_e4b15 = _musa_use_fp8_e4b15
+_turboquant_attn._use_fp8_e4b15 = _musa_use_fp8_e4b15
 _turboquant_attn.get_flash_attn_version = _musa_fa_utils.get_flash_attn_version
 _turboquant_attn.is_flash_attn_varlen_func_available = (
     _musa_fa_utils.is_flash_attn_varlen_func_available
@@ -89,11 +100,6 @@ class MUSATurboQuantAttentionBackend(_turboquant_attn.TurboQuantAttentionBackend
             return "TurboQuant is not supported with attention sinks on MUSA"
         if use_sparse:
             return "TurboQuant is not supported for sparse attention on MUSA"
-        if kv_cache_dtype == "turboquant_k8v4":
-            return (
-                "TurboQuant k8v4 uses FP8 key storage, which requires Triton float8 "
-                "conversions that are not supported on MUSA"
-            )
         return super().supports_combination(
             head_size=head_size,
             dtype=dtype,

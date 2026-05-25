@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import torch
 
@@ -100,8 +100,11 @@ class EagleFullLoopRunner:
             "MUSA-0090 EagleFullLoopRunner: configured for "
             "num_speculative_tokens=%d, capture_sizes=%s, max_bs=%d, "
             "hidden_size=%d, topk=%d",
-            self.num_steps, self.capture_sizes, self.max_bs,
-            self.hidden_size, self.topk,
+            self.num_steps,
+            self.capture_sizes,
+            self.max_bs,
+            self.hidden_size,
+            self.topk,
         )
 
     # ---- dispatcher predicate ----
@@ -153,6 +156,7 @@ class EagleFullLoopRunner:
         pool = None
         try:
             from vllm.platforms import current_platform
+
             pool = current_platform.get_global_graph_pool()
         except Exception as exc:
             logger.warning(
@@ -188,13 +192,15 @@ class EagleFullLoopRunner:
                 logger.info(
                     "MUSA-0090 captured Eagle3 full-loop graph for bs=%d "
                     "(buffer footprint %.2f MiB)",
-                    bs, ctx.memory_footprint_bytes() / 1024 / 1024,
+                    bs,
+                    ctx.memory_footprint_bytes() / 1024 / 1024,
                 )
             except Exception as exc:
                 logger.exception(
                     "MUSA-0090 graph capture FAILED at bs=%d: %s. "
                     "Falling back to iterative path for this size.",
-                    bs, exc,
+                    bs,
+                    exc,
                 )
                 # Don't propagate — the patch will fall back to vLLM's
                 # iterative path when can_run(bs) returns False for this size.
@@ -221,9 +227,7 @@ class EagleFullLoopRunner:
         Phase 5: wrap and return context
         """
         if batch_size <= 0 or batch_size > self.max_bs:
-            raise ValueError(
-                f"batch_size {batch_size} out of range [1, {self.max_bs}]"
-            )
+            raise ValueError(f"batch_size {batch_size} out of range [1, {self.max_bs}]")
 
         # Phase 1: allocate buffers for this batch size.
         # block_table_tensor is held as a reference (not copied); we read it
@@ -332,7 +336,10 @@ class EagleFullLoopRunner:
         #
         #   # End of context manager = graph capture complete.
         graph = self._capture_n_step_loop(
-            buffers, attn_metadata_array, batch_size, pool,
+            buffers,
+            attn_metadata_array,
+            batch_size,
+            pool,
         )
 
         # Phase 5: wrap up and return.
@@ -349,11 +356,15 @@ class EagleFullLoopRunner:
     def replay(
         self,
         target_hidden_states: torch.Tensor,  # bf16 [bs, hidden_size] OR [num_tokens, hidden_size]
-        next_token_ids: torch.Tensor,        # int32 [bs] (the bonus from verify)
-        common_attn_metadata: Any,            # for assertion + step-0 metadata seeding
+        next_token_ids: torch.Tensor,  # int32 [bs] (the bonus from verify)
+        common_attn_metadata: Any,  # for assertion + step-0 metadata seeding
         batch_size: int,
-        target_positions: torch.Tensor | None = None,  # int64 [num_tokens] (the verify pass's positions)
-        token_indices_to_sample: torch.Tensor | None = None,  # int [bs] (idx in num_tokens of last token per seq)
+        target_positions: (
+            torch.Tensor | None
+        ) = None,  # int64 [num_tokens] (the verify pass's positions)
+        token_indices_to_sample: (
+            torch.Tensor | None
+        ) = None,  # int [bs] (idx in num_tokens of last token per seq)
     ) -> EagleFullLoopReplayResult:
         """Replay the captured graph for this batch size.
 
@@ -429,7 +440,10 @@ class EagleFullLoopRunner:
             target_hidden_states = self.proposer.model.combine_hidden_states(
                 target_hidden_states
             )
-        if target_hidden_states.dim() >= 1 and target_hidden_states.shape[0] != batch_size:
+        if (
+            target_hidden_states.dim() >= 1
+            and target_hidden_states.shape[0] != batch_size
+        ):
             selected_hidden = target_hidden_states[token_indices_to_sample]
         else:
             selected_hidden = target_hidden_states[:batch_size]
@@ -611,9 +625,11 @@ class EagleFullLoopRunner:
         statically-allocates everything ahead of time.
         """
         # Lazy imports to avoid pulling vLLM internals at module-load time.
-        from vllm.forward_context import set_forward_context
         from vllm.config import CUDAGraphMode
-        from vllm.v1.spec_decode.utils import eagle_step_update_slot_mapping_and_metadata
+        from vllm.forward_context import set_forward_context
+        from vllm.v1.spec_decode.utils import (
+            eagle_step_update_slot_mapping_and_metadata,
+        )
 
         proposer = self.proposer
         # Step-0 seed: copy the input carry-over into the per-step buffers.
@@ -705,9 +721,7 @@ class EagleFullLoopRunner:
             # Update state for step+1 if not the last step.
             if step + 1 < self.num_steps:
                 # Stage next step's input.
-                buffers.input_ids_per_step[step + 1, :batch_size].copy_(
-                    draft_token_ids
-                )
+                buffers.input_ids_per_step[step + 1, :batch_size].copy_(draft_token_ids)
                 buffers.hidden_states_per_step[step + 1, :batch_size].copy_(
                     next_hidden[:batch_size]
                 )

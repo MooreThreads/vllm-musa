@@ -69,7 +69,6 @@ def eagle_prepare_next_token_padded_kernel(
 
 
 import torch
-
 import vllm.v1.spec_decode.utils
 
 vllm.v1.spec_decode.utils.eagle_prepare_next_token_padded_kernel = (
@@ -88,6 +87,7 @@ vllm.v1.spec_decode.utils.eagle_prepare_next_token_padded_kernel = (
 #
 # Workaround: replace this function with an eager (no torch.compile) version.
 # The function does only 5-6 small tensor ops on small tensors — eager is fine.
+
 
 def _musa_update_num_computed_tokens_for_batch_change(
     num_computed_tokens: torch.Tensor,

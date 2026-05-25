@@ -136,9 +136,7 @@ def _musa_deepgemm_fp8_op(
     q_input, input_scale = per_token_group_quant_fp8(
         input,
         group_size=group_size,
-        column_major_scales=not _use_row_major_activation_scales(
-            use_deep_gemm_e8m0
-        ),
+        column_major_scales=not _use_row_major_activation_scales(use_deep_gemm_e8m0),
         use_ue8m0=use_deep_gemm_e8m0,
     )
     output = torch.empty(
