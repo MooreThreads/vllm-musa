@@ -249,6 +249,25 @@ def get_processor_min_p(processor: Any) -> torch.Tensor:
     return _squeeze_filter_tensor(min_p)
 
 
+def _call_topk_topp_sampler(
+    sampler: Any,
+    logprobs_mode: LogprobsMode,
+    logits: torch.Tensor,
+    generators: dict[int, torch.Generator],
+    top_k: torch.Tensor | None,
+    top_p: torch.Tensor | None,
+    min_p: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    original_logprobs_mode = sampler.logprobs_mode
+    sampler.logprobs_mode = logprobs_mode
+    try:
+        if min_p is None:
+            return sampler(logits, generators, top_k, top_p)
+        return sampler(logits, generators, top_k, top_p, min_p=min_p)
+    finally:
+        sampler.logprobs_mode = original_logprobs_mode
+
+
 def _sample(
     self: Any,
     logits: torch.Tensor,
@@ -288,14 +307,18 @@ def _sample(
         logits = processor.apply(logits)
 
     if musa_min_p is None:
-        random_sampled, processed_logprobs = self.topk_topp_sampler(
+        random_sampled, processed_logprobs = _call_topk_topp_sampler(
+            self.topk_topp_sampler,
+            logprobs_mode,
             logits,
             sampling_metadata.generators,
             sampling_metadata.top_k,
             sampling_metadata.top_p,
         )
     else:
-        random_sampled, processed_logprobs = self.topk_topp_sampler(
+        random_sampled, processed_logprobs = _call_topk_topp_sampler(
+            self.topk_topp_sampler,
+            logprobs_mode,
             logits,
             sampling_metadata.generators,
             sampling_metadata.top_k,
@@ -313,6 +336,29 @@ def _sample(
         out=greedy_sampled,
     )
     return sampled, processed_logprobs
+
+
+def _sampler_forward(
+    self: Any,
+    logits: torch.Tensor,
+    sampling_metadata: Any,
+    predict_bonus_token: bool = False,
+    logprobs_mode_override: LogprobsMode | None = None,
+) -> Any:
+    original_forward = vllm_sample_sampler.Sampler._musa_original_forward
+    if logprobs_mode_override is None:
+        return original_forward(
+            self, logits, sampling_metadata, predict_bonus_token, logprobs_mode_override
+        )
+
+    original_logprobs_mode = self.logprobs_mode
+    self.logprobs_mode = logprobs_mode_override
+    try:
+        return original_forward(
+            self, logits, sampling_metadata, predict_bonus_token, logprobs_mode_override
+        )
+    finally:
+        self.logprobs_mode = original_logprobs_mode
 
 
 def has_worker_user_seed(sampling_states: Any, idx_mapping_np: np.ndarray) -> bool:
@@ -458,6 +504,8 @@ def install_hooks() -> None:
     sample_cls = vllm_sample_sampler.Sampler
     if not getattr(sample_cls, "_musa_sampling_hooks_installed", False):
         sample_cls._musa_original_sample = sample_cls.sample
+        sample_cls._musa_original_forward = sample_cls.forward
+        sample_cls.forward = _sampler_forward
         sample_cls.sample = _sample
         sample_cls._musa_sampling_hooks_installed = True
 
