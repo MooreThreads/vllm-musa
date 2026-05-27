@@ -49,6 +49,31 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
       "float fp8_max) -> ()");
   musa_ops.impl("silu_and_mul_per_token_group_fp8_quant", torch::kMUSA,
                 &silu_and_mul_per_token_group_fp8_quant);
+  musa_ops.def(
+      "musa_top_k_top_p_sampling_from_probs(Tensor probs, Tensor output, Tensor? maybe_indices, Tensor? "
+      "maybe_top_k_arr, "
+      "float top_k_val, Tensor? maybe_top_p_arr, float top_p_val, bool deterministic, Generator? gen) -> ()");
+  musa_ops.impl("musa_top_k_top_p_sampling_from_probs", torch::kMUSA, &musa_top_k_top_p_sampling_from_probs);
+
+/*
+* From FlashInfer
+*/
+
+  musa_ops.def("top_k_renorm_probs(Tensor probs, Tensor! renorm_probs, Tensor? maybe_top_k_arr, int top_k_val) -> ()");
+  musa_ops.impl("top_k_renorm_probs", torch::kMUSA, &top_k_renorm_probs);
+
+  musa_ops.def("top_p_renorm_probs(Tensor probs, Tensor! renorm_probs, Tensor? maybe_top_p_arr, float top_p_val) -> ()");
+  musa_ops.impl("top_p_renorm_probs", torch::kMUSA, &top_p_renorm_probs);
+
+  musa_ops.def(
+      "min_p_sampling_from_probs(Tensor probs, Tensor output, Tensor? maybe_indices, Tensor? maybe_min_p_arr, float "
+      "min_p_val, bool deterministic, Generator? gen) -> ()");
+  musa_ops.impl("min_p_sampling_from_probs", torch::kMUSA, &min_p_sampling_from_probs);
+
+  musa_ops.def(
+      "top_p_sampling_from_probs(Tensor probs, Tensor output, Tensor? maybe_indices, Tensor? maybe_top_p_arr, "
+      "float top_p_val, bool deterministic, Generator? gen) -> ()");
+  musa_ops.impl("top_p_sampling_from_probs", torch::kMUSA, &top_p_sampling_from_probs);
 #endif
 }
 

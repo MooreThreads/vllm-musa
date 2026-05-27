@@ -56,3 +56,33 @@ void silu_and_mul_per_token_group_fp8_quant(
     torch::Tensor& output_q, torch::Tensor& output_s,
     int64_t group_size, double eps, double fp8_min,
     double fp8_max);
+
+void musa_top_k_top_p_sampling_from_probs(
+    at::Tensor probs,
+    at::Tensor output,
+    std::optional<at::Tensor> maybe_indices,
+    std::optional<at::Tensor> maybe_top_k_arr,
+    double top_k_val,
+    std::optional<at::Tensor> maybe_top_p_arr,
+    double top_p_val,
+    bool deterministic,
+    std::optional<at::Generator> gen_);
+
+    /*
+* From FlashInfer
+*/
+void min_p_sampling_from_probs(at::Tensor probs, at::Tensor output,
+                               std::optional<at::Tensor> maybe_indices,
+                               std::optional<at::Tensor> maybe_min_p_arr, double min_p_val,
+                               bool deterministic, std::optional<at::Generator> gen_);
+
+void top_p_sampling_from_probs(at::Tensor probs, at::Tensor output,
+                               std::optional<at::Tensor> maybe_indices,
+                               std::optional<at::Tensor> maybe_top_p_arr, double top_p_val,
+                               bool deterministic, std::optional<at::Generator> gen_);
+
+void top_p_renorm_probs(at::Tensor probs, at::Tensor renorm_probs,
+                        std::optional<at::Tensor> maybe_top_p_arr, double top_p_val);
+
+void top_k_renorm_probs(at::Tensor probs, at::Tensor renorm_probs,
+                        std::optional<at::Tensor> maybe_top_k_arr, int64_t top_k_val);

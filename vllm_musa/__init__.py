@@ -44,24 +44,6 @@ except ImportError:
 _patches_applied = False
 
 
-# MUSA-0087: register Inductor template heuristics for device_type='musa'
-# so compiled mm/bmm/addmm/baddbmm/scaled_mm ops use Triton autotune
-# instead of falling through to the empty fallback heuristic.
-# Default-OFF (Eagle3 TP=8 crash on M2.5); opt in for non-Eagle3 workloads
-# via VLLM_MUSA_ENABLE_INDUCTOR_HEURISTICS=1. Also silently no-ops on
-# old torch versions.
-try:
-    from vllm_musa._inductor import maybe_register_musa_template_heuristics
-
-    maybe_register_musa_template_heuristics()
-except Exception as _exc:  # pragma: no cover
-    logger.warning(
-        "MUSA-0087: failed to register Inductor template heuristics for "
-        "MUSA (%s); falling back to ATen path for compiled `mm` ops.",
-        _exc,
-    )
-
-
 ########### platform plugin ###########
 
 
@@ -91,6 +73,24 @@ def musa_platform_plugin() -> str | None:
         pass
 
     return None
+
+
+# MUSA-0087: register Inductor template heuristics for device_type='musa'
+# so compiled mm/bmm/addmm/baddbmm/scaled_mm ops use Triton autotune
+# instead of falling through to the empty fallback heuristic.
+# Default-OFF (Eagle3 TP=8 crash on M2.5); opt in for non-Eagle3 workloads
+# via VLLM_MUSA_ENABLE_INDUCTOR_HEURISTICS=1. Also silently no-ops on
+# old torch versions.
+try:
+    from vllm_musa._inductor import maybe_register_musa_template_heuristics
+
+    maybe_register_musa_template_heuristics()
+except Exception as _exc:  # pragma: no cover
+    logger.warning(
+        "MUSA-0087: failed to register Inductor template heuristics for "
+        "MUSA (%s); falling back to ATen path for compiled `mm` ops.",
+        _exc,
+    )
 
 
 ########### general plugins ###########

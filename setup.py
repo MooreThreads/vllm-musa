@@ -118,9 +118,18 @@ _VLLM_REPO = _RepoInfo(
     git_shallow=False,
 )
 
+_FLASHINFER_REPO = _RepoInfo(
+    name="flashinfer",
+    git_repository="https://github.com/flashinfer-ai/flashinfer.git",
+    git_tag="bc29697ba20b7e6bdb728ded98f04788e16ee021",
+    git_shallow=False,
+)
+
 INCLUDE_DIRS = [
     root / "csrc",
     root / _VLLM_REPO.source_dir / "csrc",
+    root / _FLASHINFER_REPO.source_dir / "include",
+    root / _FLASHINFER_REPO.source_dir / "csrc",
 ]
 
 # =============================================================================
@@ -174,6 +183,10 @@ VLLM_MUSA_CSRC_SOURCES = [
     # and depends on two header file from PyTorch 2.11's torch/headeronly/core/ScalarType.h and
     # torch/headeronly/util/Exception.h, which is not supported by the current musa.
     "csrc/musa/quantization/per_token_group_quant.cu",
+    "csrc/musa/sampler.mu",
+    str(_FLASHINFER_REPO.source_dir / "csrc/norm.cu"),
+    str(_FLASHINFER_REPO.source_dir / "csrc/renorm.cu"),
+    str(_FLASHINFER_REPO.source_dir / "csrc/sampling.cu"),
 ]
 
 VLLM_MOE_CSRC_SOURCES = [
@@ -441,11 +454,20 @@ class _CustomBuildExt(BuildExtension):
         else:
             subprocess.check_call(["git", "fetch", "--all"], cwd=repo_path)
             subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
-        # XXX (MUSA): Implement this in a more appropriate way
-        subprocess.check_call(
-            ["sed", "-i", "/torch\\.float4_e2m1fn_x2/s/^/#/", "vllm/ir/tolerances.py"],
-            cwd=repo_path,
-        )
+        # XXX (MUSA): Implement this in a more appropriate way.
+        # This patch only applies to the vendored vLLM tree; FlashInfer does not
+        # contain vllm/ir/tolerances.py.
+        tolerances_py = repo_path / "vllm/ir/tolerances.py"
+        if tolerances_py.exists():
+            subprocess.check_call(
+                [
+                    "sed",
+                    "-i",
+                    "/torch\\.float4_e2m1fn_x2/s/^/#/",
+                    str(tolerances_py.relative_to(repo_path)),
+                ],
+                cwd=repo_path,
+            )
 
     @staticmethod
     def _install_vllm(repo_path):
@@ -560,6 +582,12 @@ class _CustomBuildExt(BuildExtension):
                 _VLLM_REPO.git_repository,
                 _VLLM_REPO.git_tag,
                 _VLLM_REPO.git_shallow,
+            )
+            self._clone_and_checkout(
+                _FLASHINFER_REPO.source_dir,
+                _FLASHINFER_REPO.git_repository,
+                _FLASHINFER_REPO.git_tag,
+                _FLASHINFER_REPO.git_shallow,
             )
             print("Third-party repositories ready.")
 
