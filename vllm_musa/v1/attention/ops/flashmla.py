@@ -90,6 +90,21 @@ def is_flashmla_sparse_supported() -> tuple[bool, str | None]:
     return True, None
 
 
+def _coerce_flashmla_sched_meta(
+    tile_scheduler_metadata: FlashMLASchedMeta | torch.Tensor,
+    num_splits: torch.Tensor | None,
+) -> FlashMLASchedMeta:
+    if isinstance(tile_scheduler_metadata, FlashMLASchedMeta):
+        if num_splits is not None:
+            tile_scheduler_metadata.num_splits = num_splits
+        return tile_scheduler_metadata
+
+    return FlashMLASchedMeta(
+        tile_scheduler_metadata=tile_scheduler_metadata,
+        num_splits=num_splits,
+    )
+
+
 def get_mla_metadata(*args, **kwargs):
     flash_mla = _require_flashmla()
     return flash_mla.get_mla_metadata(*args, **kwargs)
@@ -128,7 +143,7 @@ def flash_mla_with_kvcache(
     block_table: torch.Tensor | None,
     cache_seqlens: torch.Tensor | None,
     head_dim_v: int,
-    tile_scheduler_metadata: FlashMLASchedMeta,
+    tile_scheduler_metadata: FlashMLASchedMeta | torch.Tensor,
     num_splits: torch.Tensor | None = None,
     softmax_scale: float | None = None,
     causal: bool = False,
@@ -142,14 +157,17 @@ def flash_mla_with_kvcache(
     out: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     flash_mla = _require_flashmla()
+    scheduler_metadata = _coerce_flashmla_sched_meta(
+        tile_scheduler_metadata, num_splits
+    )
     result, softmax_lse = flash_mla.flash_mla_with_kvcache(
         q=q,
         k_cache=k_cache,
         block_table=block_table,
         cache_seqlens=cache_seqlens,
         head_dim_v=head_dim_v,
-        tile_scheduler_metadata=tile_scheduler_metadata,
-        num_splits=num_splits,
+        tile_scheduler_metadata=scheduler_metadata,
+        num_splits=None,
         softmax_scale=softmax_scale,
         causal=causal,
         is_fp8_kvcache=is_fp8_kvcache,
@@ -173,12 +191,18 @@ def get_mla_metadata_dense_fp8(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if _flash_mla is None:
         _raise_flashmla_unavailable()
-    return get_mla_metadata(
+    scheduler_metadata, _ = get_mla_metadata(
         cache_seqlens,
         num_q_tokens_per_head_k,
         num_heads_k,
         is_fp8_kvcache=True,
     )
+    if (
+        scheduler_metadata.tile_scheduler_metadata is None
+        or scheduler_metadata.num_splits is None
+    ):
+        raise RuntimeError("FlashMLA FP8 decode metadata was not initialized.")
+    return scheduler_metadata.tile_scheduler_metadata, scheduler_metadata.num_splits
 
 
 def flash_mla_with_kvcache_fp8(

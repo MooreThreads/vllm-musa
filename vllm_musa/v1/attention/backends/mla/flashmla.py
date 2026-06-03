@@ -159,12 +159,20 @@ class FlashMLAMetadataBuilder(MLACommonMetadataBuilder[FlashMLAMetadata]):
         # we use the max but all should be the same due to uniform length requirement
         max_query_len = query_lens_cpu.max().item()
         num_q_tokens_per_head_k = max_query_len * self.num_q_heads // 1
-        tile_scheduler_metadata, num_splits = get_mla_metadata(
+        scheduler_metadata, _ = get_mla_metadata(
             seq_lens_device,
             num_q_tokens_per_head_k,
             1,  # MQA for the decode path
             is_fp8_kvcache=self.is_fp8_kvcache,
         )
+
+        # MUSA FlashMLA returns a FlashMLASchedMeta holder. Keep that holder as
+        # the public scheduler metadata and only swap its internal tensors when
+        # full cudagraphs need persistent buffers.
+        tile_scheduler_metadata = scheduler_metadata.tile_scheduler_metadata
+        num_splits = scheduler_metadata.num_splits
+        if tile_scheduler_metadata is None or num_splits is None:
+            raise RuntimeError("FlashMLA decode metadata was not initialized.")
 
         # TODO: we can disambiguate between decode and mixed-prefill decode here
         # so we can only use the persistent buffer if a cudagraph is actually
@@ -181,6 +189,7 @@ class FlashMLAMetadataBuilder(MLACommonMetadataBuilder[FlashMLAMetadata]):
             ]
             tile_scheduler_metadata_view.copy_(tile_scheduler_metadata)
             tile_scheduler_metadata = tile_scheduler_metadata_view
+            scheduler_metadata.tile_scheduler_metadata = tile_scheduler_metadata
 
             # Num splits is per-batch, varying size (batch_size,)
             n = num_splits.size(0)
@@ -194,10 +203,7 @@ class FlashMLAMetadataBuilder(MLACommonMetadataBuilder[FlashMLAMetadata]):
             self.cg_buf_num_splits[n:].fill_(num_splits[-1])
             num_splits = num_splits_view
 
-        scheduler_metadata = FlashMLASchedMeta(
-            tile_scheduler_metadata=tile_scheduler_metadata,
-            num_splits=num_splits,
-        )
+            scheduler_metadata.num_splits = num_splits
         return FlashMLADecodeMetadata(
             block_table=block_table_tensor,
             seq_lens=seq_lens_device,
@@ -275,10 +281,8 @@ class FlashMLAImpl(MLACommonImpl[FlashMLAMetadata]):
 
         num_decodes = attn_metadata.num_decodes
         q = reshape_query_for_spec_decode(q, num_decodes)
-        tile_scheduler_metadata = (
-            attn_metadata.decode.scheduler_metadata.tile_scheduler_metadata
-        )
-        num_splits = attn_metadata.decode.scheduler_metadata.num_splits
+        scheduler_metadata = attn_metadata.decode.scheduler_metadata
+
         if envs.VLLM_BATCH_INVARIANT:
             device = q.device
             dtype = torch.int32
@@ -306,14 +310,17 @@ class FlashMLAImpl(MLACommonImpl[FlashMLAMetadata]):
             # Non-split path ignores num_splits, but the API requires it:
             # zeros of length B+1
             num_splits = torch.zeros((B + 1,), dtype=dtype, device=device)
+            scheduler_metadata = FlashMLASchedMeta(
+                tile_scheduler_metadata=tile_scheduler_metadata,
+                num_splits=num_splits,
+            )
         o, lse = flash_mla_with_kvcache(
             q=q,
             k_cache=kv_c_and_k_pe_cache.unsqueeze(-2),  # Add head dim of 1
             block_table=attn_metadata.decode.block_table,
             cache_seqlens=attn_metadata.decode.seq_lens,
             head_dim_v=self.kv_lora_rank,
-            tile_scheduler_metadata=tile_scheduler_metadata,
-            num_splits=num_splits,
+            tile_scheduler_metadata=scheduler_metadata,
             softmax_scale=self.scale,
             causal=True,
         )

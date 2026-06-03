@@ -120,8 +120,18 @@ def apply(
     shared_experts_input: torch.Tensor | None = None,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     if layer.ep_size != None and layer.ep_size <= 1:
-        is_inplace = not is_torch_equal_or_newer("2.9")
-        return fused_experts(
+        # MUSA-3173: the legacy fused_experts() path only computes routed
+        # experts. For the no-overlap path used by DeepSeek-V2/V3 on MUSA, the
+        # MoE runner computes shared experts separately and combines them with
+        # this routed output. Only compute shared experts here when the runner
+        # explicitly delegated them to the quant method via MK overlap.
+        run_shared_in_quant_method = (
+            shared_experts is not None and self.mk_can_overlap_shared_experts
+        )
+        if run_shared_in_quant_method:
+            se_input = shared_experts_input if shared_experts_input is not None else x
+        is_inplace = (not is_torch_equal_or_newer("2.9")) and shared_experts is None
+        routed = fused_experts(
             hidden_states=x,
             w1=layer.w13_weight,
             w2=layer.w2_weight,
@@ -134,6 +144,9 @@ def apply(
             expert_map=layer.expert_map,
             quant_config=self.moe_quant_config,
         )
+        if not run_shared_in_quant_method:
+            return routed
+        return routed + shared_experts._layer(se_input)
     else:
         assert not self.is_monolithic
         assert self.moe_kernel is not None
