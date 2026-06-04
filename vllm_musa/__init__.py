@@ -224,50 +224,6 @@ def _patch_vllm_functorch_config() -> None:
     compiler_interface._get_vllm_functorch_config = get_existing_functorch_config
 
 
-def _patch_musa_batch_defaults() -> None:
-    """Keep MUSA on the non-H100 scheduler defaults.
-
-    vLLM v0.22 picks the high-memory defaults (16384 tokens / 1024 seqs) for
-    non-A100 GPUs with >=70 GiB memory. S5000 has that memory size, but mate
-    FA3 metadata kernels do not currently support the resulting warmup shape.
-    """
-    try:
-        from vllm.engine.arg_utils import EngineArgs
-        from vllm.usage.usage_lib import UsageContext
-    except Exception as e:
-        logger.debug("Skipping MUSA batch-defaults patch: %s", e)
-        return
-
-    original = EngineArgs.get_batch_defaults
-    if getattr(original, "_musa_batch_defaults_patched", False):
-        return
-
-    original_func = original.__func__
-
-    @classmethod
-    def get_musa_batch_defaults(cls, world_size: int):
-        try:
-            from vllm.platforms import current_platform
-
-            if current_platform.is_musa():
-                return (
-                    {
-                        UsageContext.LLM_CLASS: 8192,
-                        UsageContext.OPENAI_API_SERVER: 2048,
-                    },
-                    {
-                        UsageContext.LLM_CLASS: 256,
-                        UsageContext.OPENAI_API_SERVER: 256,
-                    },
-                )
-        except Exception:
-            pass
-        return original_func(cls, world_size)
-
-    get_musa_batch_defaults._musa_batch_defaults_patched = True
-    EngineArgs.get_batch_defaults = get_musa_batch_defaults
-
-
 def _register_patches() -> None:
     """Apply vLLM source patches for MUSA compatibility."""
     _apply_vllm_patches()
@@ -275,7 +231,6 @@ def _register_patches() -> None:
     _patch_inductor_config_patch()
     _patch_vllm_backend_call_options()
     _patch_vllm_functorch_config()
-    _patch_musa_batch_defaults()
 
 
 def _register_ops() -> None:
@@ -289,9 +244,7 @@ def _has_musa_rms_norm_kernel() -> bool:
 
         if not hasattr(torch.ops, "_C") or not hasattr(torch.ops._C, "rms_norm"):
             return False
-        return torch._C._dispatch_has_kernel_for_dispatch_key(
-            "_C::rms_norm", "MUSA"
-        )
+        return torch._C._dispatch_has_kernel_for_dispatch_key("_C::rms_norm", "MUSA")
     except Exception:
         return False
 
@@ -300,9 +253,8 @@ def _has_musa_rotary_embedding_kernel() -> bool:
     try:
         import torch
 
-        if (
-            not hasattr(torch.ops, "_C")
-            or not hasattr(torch.ops._C, "rotary_embedding")
+        if not hasattr(torch.ops, "_C") or not hasattr(
+            torch.ops._C, "rotary_embedding"
         ):
             return False
         return torch._C._dispatch_has_kernel_for_dispatch_key(
