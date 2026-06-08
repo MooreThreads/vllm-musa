@@ -68,6 +68,12 @@ Repository = "https://github.com/MooreThreads/vllm-musa"
 where = ["."]
 include = ["vllm_musa*"]
 
+[tool.setuptools.package-data]
+vllm_musa = [
+    "jit_kernel/csrc/*.h",
+    "jit_kernel/csrc/*/*.mu",
+]
+
 [tool.ruff]
 line-length = 88
 target-version = "py39"

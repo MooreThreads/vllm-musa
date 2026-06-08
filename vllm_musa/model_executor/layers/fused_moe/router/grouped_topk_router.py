@@ -1,13 +1,15 @@
 import math
 
 import torch
-from vllm import envs as envs
 from vllm.model_executor.layers.fused_moe.router.grouped_topk_router import (
     fused_topk,
     fused_topk_bias,
 )
 from vllm.model_executor.utils import maybe_disable_graph_partition
 from vllm.platforms import current_platform
+
+from vllm import envs as vllm_envs
+from vllm_musa.utils.environ import envs as musa_envs
 
 try:
     from mate import moe_fused_gate as mate_moe_fused_gate
@@ -17,6 +19,97 @@ except ImportError as e:
     raise ImportError(
         "MUSA platform requires MATE to be installed. Please install mate first."
     ) from e
+
+
+def _can_use_musa_jit_topk(
+    hidden_states: torch.Tensor,
+    gating_output: torch.Tensor,
+    topk: int,
+    correction_bias: torch.Tensor | None,
+) -> bool:
+    return (
+        musa_envs.VLLM_MUSA_ENABLE_JIT_TOPK.get()
+        and current_platform.is_musa()
+        and hidden_states.device == gating_output.device
+        and gating_output.device.type == "musa"
+        and hidden_states.dim() == 2
+        and gating_output.dim() == 2
+        and hidden_states.shape[0] == gating_output.shape[0]
+        and gating_output.is_contiguous()
+        and gating_output.dtype in (torch.float32, torch.float16, torch.bfloat16)
+        and 0 < topk <= gating_output.shape[1] <= 1024
+        and (
+            correction_bias is None
+            or (
+                correction_bias.device == gating_output.device
+                and correction_bias.dim() == 1
+                and correction_bias.shape[0] == gating_output.shape[1]
+                and correction_bias.dtype == torch.float32
+                and correction_bias.is_contiguous()
+            )
+        )
+    )
+
+
+def _maybe_import_musa_jit_topk():
+    try:
+        from vllm_musa.jit_kernel.csrc import topk as musa_jit_topk
+    except (ImportError, ModuleNotFoundError):
+        return None
+    return musa_jit_topk
+
+
+def _musa_jit_fused_topk(
+    hidden_states: torch.Tensor,
+    gating_output: torch.Tensor,
+    topk: int,
+    renormalize: bool,
+    indices_type: torch.dtype | None,
+    correction_bias: torch.Tensor | None = None,
+    scoring_func: str = "softmax",
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    if not _can_use_musa_jit_topk(hidden_states, gating_output, topk, correction_bias):
+        return None
+
+    musa_jit_topk = _maybe_import_musa_jit_topk()
+    if musa_jit_topk is None:
+        return None
+
+    topk_weights = torch.empty(
+        gating_output.shape[0],
+        topk,
+        dtype=torch.float32,
+        device=gating_output.device,
+    )
+    topk_ids = torch.empty(
+        gating_output.shape[0],
+        topk,
+        dtype=torch.int32,
+        device=gating_output.device,
+    )
+
+    if scoring_func == "softmax":
+        musa_jit_topk.topk_softmax(
+            topk_weights,
+            topk_ids,
+            gating_output,
+            renormalize,
+            correction_bias=correction_bias,
+        )
+    elif scoring_func == "sigmoid":
+        musa_jit_topk.topk_sigmoid(
+            topk_weights,
+            topk_ids,
+            gating_output,
+            renormalize,
+            correction_bias=correction_bias,
+        )
+    else:
+        return None
+
+    if indices_type is not None and topk_ids.dtype != indices_type:
+        topk_ids = topk_ids.to(indices_type)
+    return topk_weights, topk_ids
 
 
 def _compute_routing(
@@ -37,7 +130,23 @@ def _compute_routing(
         return num_experts % self.num_expert_group == 0
 
     if not valid_grouping():
+        scoring_func = getattr(self, "scoring_func", "softmax")
         if self.e_score_correction_bias is not None:
+            jit_result = _musa_jit_fused_topk(
+                hidden_states=hidden_states,
+                gating_output=router_logits,
+                topk=self.top_k,
+                renormalize=self.renormalize,
+                indices_type=indices_type,
+                correction_bias=self.e_score_correction_bias.data,
+                scoring_func=scoring_func,
+            )
+            if jit_result is not None:
+                topk_weights, topk_ids = jit_result
+                if self.routed_scaling_factor != 1.0:
+                    topk_weights *= self.routed_scaling_factor
+                return topk_weights, topk_ids
+
             topk_weights, topk_ids = fused_topk_bias(
                 hidden_states=hidden_states,
                 gating_output=router_logits,
@@ -48,6 +157,17 @@ def _compute_routing(
             if self.routed_scaling_factor != 1.0:
                 topk_weights *= self.routed_scaling_factor
         else:
+            jit_result = _musa_jit_fused_topk(
+                hidden_states=hidden_states,
+                gating_output=router_logits,
+                topk=self.top_k,
+                renormalize=self.renormalize,
+                indices_type=indices_type,
+                scoring_func=scoring_func,
+            )
+            if jit_result is not None:
+                return jit_result
+
             topk_weights, topk_ids, token_expert_indices = fused_topk(
                 hidden_states=hidden_states,
                 gating_output=router_logits,
@@ -156,7 +276,7 @@ def grouped_topk(
         )  # [n, n_group]
 
     # For batch invariance, use sorted=True to ensure deterministic expert selection
-    use_sorted = envs.VLLM_BATCH_INVARIANT
+    use_sorted = vllm_envs.VLLM_BATCH_INVARIANT
     group_idx = torch.topk(group_scores, k=topk_group, dim=-1, sorted=use_sorted)[
         1
     ]  # [n, top_k_group]

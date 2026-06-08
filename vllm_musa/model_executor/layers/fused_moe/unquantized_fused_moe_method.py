@@ -1,3 +1,5 @@
+import inspect
+
 import torch
 from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe import (
@@ -23,6 +25,10 @@ from vllm.model_executor.layers.fused_moe.modular_kernel import (
 
 logger = init_logger(__name__)
 from vllm.utils.torch_utils import is_torch_equal_or_newer
+
+_FUSED_EXPERTS_ACCEPTS_SHARED_EXPERTS = (
+    "shared_experts" in inspect.signature(fused_experts).parameters
+)
 
 
 @UnquantizedFusedMoEMethod.register_oot

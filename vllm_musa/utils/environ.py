@@ -79,9 +79,9 @@ class EnvField:
 class EnvBool(EnvField):
     def parse(self, value: str) -> bool:
         value = value.lower()
-        if value in ["true", "1", "yes", "y"]:
+        if value in ["true", "1", "yes", "y", "on"]:
             return True
-        if value in ["false", "0", "no", "n"]:
+        if value in ["false", "0", "no", "n", "off"]:
             return False
         raise ValueError(f'"{value}" is not a valid boolean value')
 
@@ -89,6 +89,8 @@ class EnvBool(EnvField):
 class Envs:
     VLLM_MUSA_CUSTOM_OP_USE_NATIVE = EnvBool(False)
     VLLM_MUSA_FUSED_ADD_RMSNORM = EnvBool(True)
+    VLLM_MUSA_ENABLE_JIT_TOPK = EnvBool(True)
+    VLLM_MUSA_SAMPLER_FAST_PATH = EnvBool(True)
     VLLM_MUSA_RESHAPE_CACHE_FLASH = EnvBool(True)
 
 

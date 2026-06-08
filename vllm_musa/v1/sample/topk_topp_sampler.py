@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import logging
-import os
 from typing import Any
 
 import numpy as np
@@ -15,6 +14,7 @@ from vllm.config.model import LogprobsMode
 from vllm.platforms import current_platform
 
 from vllm_musa import _custom_ops as _ops
+from vllm_musa.utils.environ import envs
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +22,7 @@ _SAMPLING_EPS = 1e-5
 
 
 def sampler_fast_path_enabled() -> bool:
-    value = os.environ.get("VLLM_MUSA_SAMPLER_FAST_PATH", "1")
-    return value.lower() not in ("0", "false", "no", "off")
+    return envs.VLLM_MUSA_SAMPLER_FAST_PATH.get()
 
 
 def is_musa_tensor(tensor: torch.Tensor) -> bool:
