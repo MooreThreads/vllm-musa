@@ -6,14 +6,6 @@
 #include <musa_bf16.h>
 #include <musa_fp16.h>
 
-#if defined(__MUSA_ARCH__)
-#define SGLANG_MUSA_ARCH __MUSA_ARCH__
-#else
-#define SGLANG_MUSA_ARCH 0
-#endif
-
-#define SGLANG_MUSA_ARCH_MP31 (SGLANG_MUSA_ARCH == 310)
-
 template <typename T> __device__ __forceinline__ float to_float(T value) {
   if constexpr (std::is_same_v<T, half>) {
     return __half2float(value);

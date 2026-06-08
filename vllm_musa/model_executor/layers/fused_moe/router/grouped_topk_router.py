@@ -166,7 +166,10 @@ def _compute_routing(
                 scoring_func=scoring_func,
             )
             if jit_result is not None:
-                return jit_result
+                topk_weights, topk_ids = jit_result
+                if self.routed_scaling_factor != 1.0:
+                    topk_weights *= self.routed_scaling_factor
+                return topk_weights, topk_ids
 
             topk_weights, topk_ids, token_expert_indices = fused_topk(
                 hidden_states=hidden_states,
@@ -175,6 +178,8 @@ def _compute_routing(
                 renormalize=self.renormalize,
                 indices_type=indices_type,
             )
+            if self.routed_scaling_factor != 1.0:
+                topk_weights *= self.routed_scaling_factor
         return topk_weights, topk_ids
     # ==================== MUSA ADAPTATION ====================
     topk_weights, topk_ids = grouped_topk(

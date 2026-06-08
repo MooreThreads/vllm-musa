@@ -36,7 +36,6 @@ class TestCustomOpsRuntimePatches:
         # the dflash fallback is now the vllm._custom_ops cat-6 object
         # patch; load + apply() it and assert it rebinds to the _shared helpers.
         import vllm
-
         from vllm_musa.patches import _get_patch_files, _load_patch_module, _shared
 
         vllm_ops = ModuleType("vllm._custom_ops")
@@ -136,7 +135,10 @@ class TestCompilationCompilerInterfacePatch:
             DummyCompilerInterface,
         )
         monkeypatch.setattr(
-            torch._functorch, "config", SimpleNamespace(existing_key=True), raising=False
+            torch._functorch,
+            "config",
+            SimpleNamespace(existing_key=True),
+            raising=False,
         )
 
         patch_file = next(
@@ -161,9 +163,9 @@ class TestMUSAFlashAttentionReshapeCache:
     """
 
     def _load_fa_utils_with_musa_platform(self, monkeypatch, musa_ops_namespace):
-        import vllm
         import vllm.platforms as vllm_platforms
 
+        import vllm
         import vllm_musa
 
         monkeypatch.setenv("VLLM_MUSA_RESHAPE_CACHE_FLASH", "1")
@@ -1034,6 +1036,7 @@ class TestScaledMMKernelPatch:
         assert "_musa_materializes_plain_parameter" in source
         assert "DisableTorchFunction" not in source
 
+
 class TestMUSAFP8ActivationQuant:
     """Tests for MUSA FP8 activation quantization helpers."""
 
@@ -1167,8 +1170,11 @@ class TestPatchManifest:
         # Source patches are applied at build time; the runtime report only ever
         # sees the object patches (side-effect) plus anomaly states.
         allowed_status = {
-            "side-effect", "load-failed", "misplaced-source-patch",
-            "error", "unknown",
+            "side-effect",
+            "load-failed",
+            "misplaced-source-patch",
+            "error",
+            "unknown",
         }
         allowed_kind = {"source-transform", "side-effect", "load-failed", "unknown"}
         for e in report:
@@ -1368,14 +1374,18 @@ class TestBuildTimeSeries:
         git("commit", "-q", "-m", "base")
         base = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
         # Build a patch that edits f.txt, capture it, then reset to base.
         target.write_text("line1\nCHANGED\n")
         git("commit", "-aqm", "change")
         patch_text = subprocess.run(
             ["git", "-C", str(repo), "format-patch", "-1", "--stdout"],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout
         git("reset", "-q", "--hard", base)
         patch_file = tmp_path / "0001-change.patch"
@@ -1391,3 +1401,65 @@ class TestBuildTimeSeries:
         assert ba.apply_patch(repo, patch_file) == "conflict"
 
 
+class TestMUSAGroupedTopKRouter:
+    def _router_stub(self, routed_scaling_factor: float = 2.0):
+        return SimpleNamespace(
+            num_expert_group=8,
+            e_score_correction_bias=None,
+            top_k=2,
+            renormalize=True,
+            scoring_func="softmax",
+            routed_scaling_factor=routed_scaling_factor,
+            topk_group=1,
+            num_fused_shared_experts=0,
+        )
+
+    def test_no_bias_jit_path_applies_routed_scaling_factor(self, monkeypatch):
+        import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router_mod
+
+        hidden_states = torch.zeros((2, 4), dtype=torch.float32)
+        router_logits = torch.zeros((2, 4), dtype=torch.float32)
+        base_weights = torch.tensor([[0.25, 0.75], [0.4, 0.6]], dtype=torch.float32)
+        topk_ids = torch.tensor([[1, 2], [0, 3]], dtype=torch.int32)
+
+        def fake_jit(**kwargs):
+            return base_weights.clone(), topk_ids.clone()
+
+        monkeypatch.setattr(router_mod, "_musa_jit_fused_topk", fake_jit)
+
+        weights, ids = router_mod._compute_routing(
+            self=self._router_stub(routed_scaling_factor=2.0),
+            hidden_states=hidden_states,
+            router_logits=router_logits,
+            indices_type=torch.int32,
+        )
+
+        assert torch.equal(ids, topk_ids)
+        assert torch.equal(weights, base_weights * 2.0)
+
+    def test_no_bias_fused_topk_fallback_applies_routed_scaling_factor(
+        self, monkeypatch
+    ):
+        import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router_mod
+
+        hidden_states = torch.zeros((2, 4), dtype=torch.float32)
+        router_logits = torch.zeros((2, 4), dtype=torch.float32)
+        base_weights = torch.tensor([[0.25, 0.75], [0.4, 0.6]], dtype=torch.float32)
+        topk_ids = torch.tensor([[1, 2], [0, 3]], dtype=torch.int32)
+        token_expert_indices = torch.empty_like(topk_ids)
+
+        def fake_fused_topk(**kwargs):
+            return base_weights.clone(), topk_ids.clone(), token_expert_indices
+
+        monkeypatch.setattr(router_mod, "_musa_jit_fused_topk", lambda **kwargs: None)
+        monkeypatch.setattr(router_mod, "fused_topk", fake_fused_topk)
+
+        weights, ids = router_mod._compute_routing(
+            self=self._router_stub(routed_scaling_factor=2.0),
+            hidden_states=hidden_states,
+            router_logits=router_logits,
+            indices_type=torch.int32,
+        )
+
+        assert torch.equal(ids, topk_ids)
+        assert torch.equal(weights, base_weights * 2.0)
