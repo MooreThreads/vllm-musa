@@ -445,6 +445,8 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
             self.compilation_config.cudagraph_mode.has_full_cudagraphs()
         )
         self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
+
+        self._sm_count = 60
         # ==================== MUSA ADAPTATION ====================
         self._cu_seqlens_k_buffer: torch.Tensor | None = None
         # ========================== END ==========================
@@ -552,12 +554,15 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
             # usage, because the intermediate buffers of size [num_splits,
             # num_heads, num_tokens, head_size] are allocated. Therefore,
             # we only set num_splits when using cuda graphs.
-            # MUSA: scale the captured KV-split count by decode batch size. A
-            # large decode batch already saturates the SMs, so the fixed
-            # capture-time split count over-partitions the KV (extra partial
-            # passes + a heavier combine) and slows decode; small batches still
-            # need splits to fill the SMs. splits = ceil(sms / (bs * kv_heads)).
-            _decode_bs = max(1, num_actual_tokens)
+            # MUSA: scale the captured KV-split count by the decode token count.
+            # A large decode batch already saturates the SMs, so a fixed split
+            # count over-partitions the KV (extra partial passes + a heavier
+            # combine) and slows decode; small batches still need splits to fill
+            # the SMs. Use decode tokens only (not decode+prefill) so a mixed
+            # step does not collapse the decode split count to 1. splits =
+            # ceil(sms / (decode_tokens * kv_heads)); equals the pure-decode
+            # capture value since there decode tokens == total tokens.
+            _decode_bs = max(1, num_decode_tokens)
             max_num_splits = max(
                 1,
                 min(
@@ -1073,6 +1078,11 @@ class FlashAttentionImpl(AttentionImpl):
                     # mubin TCE kernel instead of the slow paged FmhaFwd used for the
                     # whole batch when decode and prefill share a step.
                     decode_descale_shape = (num_decodes, self.num_kv_heads)
+                    # MUSA: no scheduler_metadata here. It is built for the full
+                    # num_reqs (decode+prefill) layout and does not match this
+                    # decode-only slice; a mixed step runs eager (never captured
+                    # under FULL_DECODE_ONLY), so the kernel builds its own
+                    # decode schedule.
                     output[:num_decode_tokens] = flash_attn_with_kvcache(
                         q=query[:num_decode_tokens].view(
                             -1, self.num_heads, self.head_size
