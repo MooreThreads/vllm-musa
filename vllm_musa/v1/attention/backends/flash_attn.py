@@ -149,7 +149,7 @@ class MUSAFlashAttentionBackend(AttentionBackend):
             # suffer from the NaN propagation problem described here:
             # https://github.com/Dao-AILab/flash-attention/issues/1974
             return [16, 32, 64]
-        return [MultipleOf(16)]
+        return [MultipleOf(64)]
 
     forward_includes_kv_cache_update: bool = False
 

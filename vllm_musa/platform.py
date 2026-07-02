@@ -603,26 +603,6 @@ class MUSAPlatformBase(Platform):
                         sparse_block_size,
                     )
 
-        # Dense FMHA (FLASH_ATTN) decode reads paged KV through mate's Fmha
-        # kernel, which has a fast TME (bulk tensor-engine) gather path that the
-        # kernel only selects when page_size == 64; any other page size forces a
-        # slower load-store-unit per-page gather (force_lsu_kv). Default the dense
-        # KV block size to 64 to take the TME path (parity with the FlashMLA branch
-        # above, which forces 64 for the same hardware reason). Opt out with
-        # VLLM_MUSA_FA_BLOCK_SIZE_64=0.
-        import os as _fa_os
-
-        if (
-            model_config is not None
-            and not model_config.use_mla
-            and cache_config is not None
-            and cache_config.block_size is not None
-            and cache_config.block_size % 64 != 0
-            and _fa_os.environ.get("VLLM_MUSA_FA_BLOCK_SIZE_64", "1") != "0"
-        ):
-            cache_config.block_size = 64
-            logger.info("Forcing kv cache block size to 64 for FMHA TME decode path.")
-
         scheduler_config = vllm_config.scheduler_config
         # Note: model_config may be None during testing
         if (
