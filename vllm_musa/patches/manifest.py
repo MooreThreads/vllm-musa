@@ -318,12 +318,6 @@ _SHADOW_MODULES = [
     ),
     (
         "5",
-        "vllm_musa/model_executor/layers/utils.py",
-        "vllm/model_executor/layers/utils.py",
-        "shadow (sim 0.04)",
-    ),
-    (
-        "5",
         "vllm_musa/model_executor/warmup/deep_gemm_warmup.py",
         "vllm/model_executor/warmup/deep_gemm_warmup.py",
         "shadow (sim 0.02)",
