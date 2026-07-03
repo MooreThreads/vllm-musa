@@ -619,35 +619,34 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def update_block_size_for_backend(cls, vllm_config: "VllmConfig") -> None:
-        # MUSA: default the KV page to 64 so paged FMHA/MLA decode takes the TME
-        # bulk-gather path instead of the per-page LSU gather. Mirrors the
-        # upstream selector but seeds the preference with 64 (not 16); backends
-        # that require another page (sparse MLA at 256) still resolve through
-        # get_preferred_block_size. Hybrid (mamba) models keep the upstream
-        # mamba-aligned selection.
+        # MUSA: 64 is the only optimal KV page here (paged FMHA/MLA decode takes
+        # the TME bulk-gather path). Let upstream pick and mamba-align the page
+        # first, then pin every non-hybrid backend that supports a 64 page to 64,
+        # whatever super() picked. A user --block-size and fixed-page kernels that
+        # cannot take 64 (sparse MLA at 256) are left as super() resolved them.
+        super().update_block_size_for_backend(vllm_config)
         model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
         if (
-            model_config is not None
-            and cache_config is not None
-            and not cache_config.user_specified_block_size
-            and not model_config.is_hybrid
+            model_config is None
+            or cache_config is None
+            or cache_config.user_specified_block_size
+            or model_config.is_hybrid
         ):
-            backend_cls = cls._find_non_ssm_backend(vllm_config)
-            if backend_cls is not None:
-                from vllm.config.vllm import set_current_vllm_config
+            return
+        backend_cls = cls._find_non_ssm_backend(vllm_config)
+        if backend_cls is None:
+            return
+        from vllm.config.vllm import set_current_vllm_config
 
-                with set_current_vllm_config(vllm_config):
-                    preferred = backend_cls.get_preferred_block_size(64)
-                if preferred != cache_config.block_size:
-                    logger.info(
-                        "Setting kv cache block size to %d for %s backend.",
-                        preferred,
-                        backend_cls.get_name(),
-                    )
-                cache_config.block_size = preferred
-                return
-        super().update_block_size_for_backend(vllm_config)
+        with set_current_vllm_config(vllm_config):
+            supports_64 = backend_cls.supports_block_size(64)
+        if supports_64 and cache_config.block_size != 64:
+            logger.info(
+                "[MUSA]Setting attention block size to 64 for %s backend.",
+                backend_cls.get_name(),
+            )
+            cache_config.block_size = 64
 
     @classmethod
     def get_current_memory_usage(
