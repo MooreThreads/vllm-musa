@@ -1035,6 +1035,82 @@ class TestMUSAPlatformDefaults:
 
         assert vllm_config.cache_config.block_size == 64
 
+    def test_update_block_size_for_backend_defaults_to_64_for_non_hybrid(
+        self, monkeypatch
+    ):
+        # The MUSA platform seeds a 64-element KV page for non-hybrid,
+        # non-user-specified configs so paged FMHA/MLA decode takes the TME
+        # bulk-gather path. Fixed-page kernels and explicit user overrides are
+        # preserved; hybrid models defer to the upstream mamba-aligned selection.
+        from types import SimpleNamespace
+
+        from vllm.v1.attention.backend import AttentionBackend, MultipleOf
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        class _MultipleOf16Backend(AttentionBackend):
+            @staticmethod
+            def get_supported_kernel_block_sizes():
+                return [MultipleOf(16)]
+
+            @staticmethod
+            def get_name():
+                return "STUB_M16"
+
+        class _FixedPage256Backend(AttentionBackend):
+            @staticmethod
+            def get_supported_kernel_block_sizes():
+                return [256]
+
+            @staticmethod
+            def get_name():
+                return "STUB_256"
+
+        def _cfg(*, is_hybrid=False, user_specified=False, block_size=16):
+            return SimpleNamespace(
+                model_config=SimpleNamespace(is_hybrid=is_hybrid),
+                cache_config=SimpleNamespace(
+                    block_size=block_size,
+                    user_specified_block_size=user_specified,
+                ),
+            )
+
+        def _use_backend(backend):
+            monkeypatch.setattr(
+                MUSAPlatformBase,
+                "_find_non_ssm_backend",
+                classmethod(lambda cls, vllm_config: backend),
+            )
+
+        # non-hybrid, default block size, kernel accepts multiples of 16 -> 64
+        _use_backend(_MultipleOf16Backend)
+        cfg = _cfg()
+        MUSAPlatformBase.update_block_size_for_backend(cfg)
+        assert cfg.cache_config.block_size == 64
+
+        # kernel that cannot take 64 keeps its own required page (256)
+        _use_backend(_FixedPage256Backend)
+        cfg = _cfg()
+        MUSAPlatformBase.update_block_size_for_backend(cfg)
+        assert cfg.cache_config.block_size == 256
+
+        # an explicit --block-size is never overridden
+        _use_backend(_MultipleOf16Backend)
+        cfg = _cfg(user_specified=True, block_size=32)
+        MUSAPlatformBase.update_block_size_for_backend(cfg)
+        assert cfg.cache_config.block_size == 32
+
+        # hybrid models are not forced to 64 (upstream mamba-aligned path)
+        monkeypatch.setattr(
+            MUSAPlatformBase,
+            "_align_hybrid_block_size",
+            classmethod(lambda cls, vllm_config, backend_cls: None),
+        )
+        _use_backend(_MultipleOf16Backend)
+        cfg = _cfg(is_hybrid=True)
+        MUSAPlatformBase.update_block_size_for_backend(cfg)
+        assert cfg.cache_config.block_size == 16
+
     def test_dense_fp8_does_not_cap_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase
 
