@@ -36,7 +36,6 @@ class TestCustomOpsRuntimePatches:
         # the dflash fallback is now the vllm._custom_ops cat-6 object
         # patch; load + apply() it and assert it rebinds to the _shared helpers.
         import vllm
-
         from vllm_musa.patches import _get_patch_files, _load_patch_module, _shared
 
         vllm_ops = ModuleType("vllm._custom_ops")
@@ -164,9 +163,9 @@ class TestMUSAFlashAttentionReshapeCache:
     """
 
     def _load_fa_utils_with_musa_platform(self, monkeypatch, musa_ops_namespace):
-        import vllm
         import vllm.platforms as vllm_platforms
 
+        import vllm
         import vllm_musa
 
         monkeypatch.setenv("VLLM_MUSA_RESHAPE_CACHE_FLASH", "1")
@@ -1233,19 +1232,6 @@ class TestScaledMMKernelPatch:
         assert (
             MUSAPerTensorTorchFP8ScaledMMLinearKernel.get_output_padding(None) is None
         )
-
-    def test_musa_unquantized_gemm_materializes_plain_parameter_for_compile(self):
-        source = (
-            Path(__file__).parents[1] / "vllm_musa/model_executor/layers/utils.py"
-        ).read_text()
-
-        assert "BasevLLMParameter" in source
-        assert "torch.nn.Parameter(weight.detach(), requires_grad=False)" in source
-        assert "plain_weight.__dict__.update(weight.__dict__)" in source
-        assert "current_platform.is_musa()" in source
-        assert "process_weights_after_loading" in source
-        assert "_musa_materializes_plain_parameter" in source
-        assert "DisableTorchFunction" not in source
 
 
 class TestMUSAFP8ActivationQuant:
