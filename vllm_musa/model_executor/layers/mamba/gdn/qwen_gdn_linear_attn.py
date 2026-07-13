@@ -261,25 +261,25 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         non_spec_query_start_loc: torch.Tensor,
         has_initial_state: torch.Tensor | None,
     ):
-        from vllm.model_executor.layers.fla.ops import fused_post_conv_prep
-
         try:
-            q, k, v, g, beta = fused_post_conv_prep(
-                conv_output=mixed_qkv_non_spec,
-                a=a_non_spec,
-                b=b_non_spec,
-                A_log=self.A_log,
-                dt_bias=self.dt_bias,
-                num_k_heads=self.num_k_heads // self.tp_size,
-                head_k_dim=self.head_k_dim,
-                head_v_dim=self.head_v_dim,
-                apply_l2norm=False,
-                output_g_exp=not _MATE_GDN_PREFILL_HAS_IS_LOG_SPACE,
-            )
+            # MUSA: feed mate no-copy strided q/k/v views (skip the qkv
+            # contiguous copy fused_post_conv_prep does) + one fused kernel for
+            # the log-space gating (g, beta). mate l2-norms q/k internally.
+            hk = self.num_k_heads // self.tp_size
+            hv = self.num_v_heads // self.tp_size
+            _kd = hk * self.head_k_dim
+            _vd = hv * self.head_v_dim
+            _qf, _kf, _vf = torch.split(mixed_qkv_non_spec, [_kd, _kd, _vd], dim=-1)
+            q = _qf.view(_qf.shape[0], hk, self.head_k_dim)
+            k = _kf.view(_kf.shape[0], hk, self.head_k_dim)
+            v = _vf.view(_vf.shape[0], hv, self.head_v_dim)
+            from vllm_musa.jit_kernel.fused_gdn_gating import fused_gdn_gating
+
+            g, beta = fused_gdn_gating(self.A_log, a_non_spec, b_non_spec, self.dt_bias)
             if not _MATE_GDN_PREFILL_HAS_IS_LOG_SPACE:
-                # Clamp exp-space g away from exact zero to avoid MATE NaNs on
-                # long real-model prefills with very negative log-space gates.
-                g = g.clamp_min(1e-30)
+                # Exp-space fallback for pre-is_log_space mate; clamp away from
+                # exact zero to avoid MATE NaNs on long prefills.
+                g = torch.exp(g).clamp_min(1e-30)
 
             state_indices = non_spec_state_indices_tensor.to(torch.int64)
             initial_state = ssm_state[state_indices].to(torch.float32)
