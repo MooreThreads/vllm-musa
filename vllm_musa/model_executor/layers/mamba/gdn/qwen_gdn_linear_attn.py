@@ -332,6 +332,13 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             causal_conv1d_update,
         )
 
+        try:
+            from vllm_musa.jit_kernel.tilelang.causal_conv1d import (
+                musa_tilelang_causal_conv1d_fn as causal_conv1d_fn,
+            )
+        except Exception:
+            pass  # MUSA: fall back to Triton causal_conv1d_fn on import failure
+
         has_initial_state = attn_metadata.has_initial_state
         spec_query_start_loc = attn_metadata.spec_query_start_loc
         non_spec_query_start_loc = attn_metadata.non_spec_query_start_loc
