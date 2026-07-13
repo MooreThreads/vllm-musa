@@ -58,6 +58,63 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             attn_metadata,
         )
 
+    def forward_cuda(
+        self,
+        hidden_states: torch.Tensor,
+        output: torch.Tensor,
+    ) -> None:
+        # MUSA: Qwen3.5 GDN forward with a single fused z/b/a split kernel
+        # (contiguous z/b/a in one launch) replacing the strided-z output-proj
+        # copy + b/a contiguous copies. mixed_qkv stays a strided view (conv/MATE
+        # accept it) so the large qkv block is never materialized. Qwen3-Next's
+        # interleaved layout and the replicated-ba TP path keep the upstream flow.
+        if self.gqa_interleaved_layout:
+            return super().forward_cuda(hidden_states, output)
+
+        from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
+            _encode_layer_name,
+        )
+
+        num_tokens = hidden_states.size(0)
+        mixed_qkvz, _ = self.in_proj_qkvz(hidden_states)
+        ba, _ = self.in_proj_ba(hidden_states)
+
+        qkv_size = (self.key_dim * 2 + self.value_dim) // self.tp_size
+        mixed_qkv = mixed_qkvz[:, :qkv_size]
+
+        if getattr(self, "disable_tp_for_ba_proj", False) and self.tp_size > 1:
+            z = mixed_qkvz[:, qkv_size:].reshape(num_tokens, -1, self.head_v_dim)
+            b, a = self.split_ba(ba)
+            b = b.contiguous()
+            a = a.contiguous()
+        else:
+            from vllm_musa.jit_kernel.tilelang.gdn_fused_proj import fused_zba
+
+            z, b, a = fused_zba(
+                mixed_qkvz,
+                ba,
+                self.num_k_heads // self.tp_size,
+                self.num_v_heads // self.tp_size,
+                self.head_k_dim,
+                self.head_v_dim,
+            )
+
+        core_attn_out = torch.zeros(
+            (num_tokens, self.num_v_heads // self.tp_size, self.head_v_dim),
+            dtype=hidden_states.dtype,
+            device=hidden_states.device,
+        )
+
+        torch.ops.vllm.qwen_gdn_attention_core(
+            mixed_qkv,
+            b,
+            a,
+            core_attn_out,
+            layer_name=_encode_layer_name(self.prefix),
+        )
+
+        self._output_projection(core_attn_out, z, output, num_tokens)
+
     def _get_gdn_attention_metadata(self, mixed_qkv: torch.Tensor):
         from vllm.forward_context import get_forward_context
         from vllm.v1.attention.backends.gdn_attn import GDNAttentionMetadata
