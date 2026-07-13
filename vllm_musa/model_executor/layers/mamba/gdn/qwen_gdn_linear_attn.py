@@ -6,6 +6,7 @@ from __future__ import annotations
 import inspect
 
 import torch
+from mate.gdn_decode import gated_delta_rule_decode
 from mate.gdn_prefill import chunk_gated_delta_rule
 from vllm.logger import init_logger
 from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
@@ -190,10 +191,40 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
 
         query, key, value = self.rearrange_mixed_qkv(mixed_qkv)
 
-        # MUSA: the mate fp32-VK decode kernel is unavailable in this toolchain,
-        # so pure decode runs the fused recurrent update directly on the paged
-        # state pool (leaner than the upstream general prefill/decode path). Fall
-        # back to the general decode path if this kernel ever fails at runtime.
+        # MUSA: mate GDN decode needs a contiguous fp32 recurrent-state pool
+        # (single-token T=1). When the temporal state is that, run it; otherwise
+        # fall through to the leaner Triton fused-recurrent update below.
+        if ssm_state.dtype == torch.float32 and ssm_state.is_contiguous():
+            try:
+                output, _ = gated_delta_rule_decode(
+                    q=query.view(num_decode_tokens, 1, *query.shape[2:]),
+                    k=key.view(num_decode_tokens, 1, *key.shape[2:]),
+                    v=value.view(num_decode_tokens, 1, *value.shape[2:]),
+                    state=ssm_state,
+                    state_layout="VK",
+                    state_indices=state_indices,
+                    scale=self.head_k_dim**-0.5,
+                    A_log=self.A_log.detach().float(),
+                    a=a.view(num_decode_tokens, 1, -1),
+                    dt_bias=self.dt_bias.detach().float(),
+                    b=b.view(num_decode_tokens, 1, -1),
+                    disable_state_update=False,
+                    use_qk_l2norm=True,
+                )
+                core_attn_out[:num_decode_tokens] = output.view(
+                    num_decode_tokens,
+                    self.num_v_heads // self.tp_size,
+                    self.head_v_dim,
+                )
+                _log_once("info", "MUSA GDN mate decode active (fp32 state)")
+                return True
+            except Exception as e:
+                _log_once(
+                    "warning",
+                    "MATE GDN decode failed; using recurrent fallback: %s",
+                    e,
+                )
+
         try:
             core_attn_out_non_spec, _ = fused_sigmoid_gating_delta_rule_update(
                 A_log=self.A_log,
