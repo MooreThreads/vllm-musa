@@ -15,6 +15,9 @@ from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
 
 logger = init_logger(__name__)
 
+_MATE_GDN_PREFILL_HAS_OUTPUT = (
+    "output" in inspect.signature(chunk_gated_delta_rule).parameters
+)
 _MATE_GDN_PREFILL_HAS_IS_LOG_SPACE = (
     "is_log_space" in inspect.signature(chunk_gated_delta_rule).parameters
 )
@@ -260,6 +263,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         non_spec_state_indices_tensor: torch.Tensor,
         non_spec_query_start_loc: torch.Tensor,
         has_initial_state: torch.Tensor | None,
+        out: torch.Tensor | None = None,
     ):
         try:
             # MUSA: feed mate no-copy strided q/k/v views (skip the qkv
@@ -285,7 +289,9 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             initial_state = ssm_state[state_indices].to(torch.float32)
             if has_initial_state is not None:
                 initial_state[~has_initial_state, ...] = 0
-            cu_seqlens = non_spec_query_start_loc.to(torch.int64)
+            # mate compiles the GDN kernel against this dtype; int32 indexing is
+            # cheaper and the offsets are bounded by the per-forward token cap.
+            cu_seqlens = non_spec_query_start_loc.to(torch.int32)
 
             mate_kwargs = {
                 "q": q,
@@ -301,6 +307,11 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             }
             if _MATE_GDN_PREFILL_HAS_IS_LOG_SPACE:
                 mate_kwargs["is_log_space"] = True
+
+            # Let mate write straight into the caller's buffer instead of
+            # producing a temporary that is then copied into it.
+            if out is not None and _MATE_GDN_PREFILL_HAS_OUTPUT:
+                mate_kwargs["output"] = out
 
             output, final_state = chunk_gated_delta_rule(**mate_kwargs)
             ssm_state.index_copy_(0, state_indices, final_state.to(ssm_state.dtype))
@@ -437,6 +448,13 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             core_attn_out_spec = None
 
         assert non_spec_state_indices_tensor is not None
+        # With no spec-decode branch the mate output IS the destination, so hand the
+        # buffer down and let the kernel write it.
+        mate_out = (
+            core_attn_out[:num_actual_tokens]
+            if (core_attn_out_spec is None and _MATE_GDN_PREFILL_HAS_OUTPUT)
+            else None
+        )
         core_attn_out_non_spec = self._try_mate_prefill(
             mixed_qkv_non_spec,
             a_non_spec,
@@ -445,7 +463,9 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             non_spec_state_indices_tensor,
             non_spec_query_start_loc,
             has_initial_state,
+            out=mate_out,
         )
+        wrote_in_place = mate_out is not None and core_attn_out_non_spec is not None
         if core_attn_out_non_spec is None:
             if has_initial_state is not None:
                 zero_mask = ~has_initial_state
@@ -479,7 +499,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             merged_out.index_copy_(1, spec_token_indx, core_attn_out_spec)
             merged_out.index_copy_(1, non_spec_token_indx, core_attn_out_non_spec)
             core_attn_out[:num_actual_tokens] = merged_out.squeeze(0)
-        else:
+        elif not wrote_in_place:
             core_attn_out[:num_actual_tokens] = core_attn_out_non_spec.squeeze(0)
 
 
