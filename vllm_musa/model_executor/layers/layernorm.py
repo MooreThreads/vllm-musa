@@ -75,6 +75,16 @@ class MusaGemmaRMSNorm(GemmaRMSNorm):
             return self.forward_native(x, residual)
 
         weight = self.weight.data
+        if x.dim() != 2:
+            # MUSA: q/k GemmaRMSNorm gets a 3D [tokens, heads, head_dim] tensor;
+            # the fused rmsnorm gate needs 2D, so reshape to 2D, run the fused
+            # kernel, and reshape back (mirrors SGLang RMSNorm.forward_cuda).
+            x2 = x.contiguous().reshape(-1, x.shape[-1])
+            if x2.shape[0] > 0 and _can_use_musa_jit_rmsnorm(x2, weight):
+                y = musa_jit_norm.gemma_rmsnorm(x2, weight, self.variance_epsilon)
+                return y.reshape(x.shape)
+            return self.forward_native(x, residual)
+
         if _can_use_musa_jit_rmsnorm(x, weight):
             return musa_jit_norm.gemma_rmsnorm(x, weight, self.variance_epsilon)
 
