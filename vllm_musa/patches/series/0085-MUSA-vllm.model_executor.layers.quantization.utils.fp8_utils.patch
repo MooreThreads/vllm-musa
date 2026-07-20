@@ -1,16 +1,24 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
+Date: Mon, 14 Jul 2026 12:00:00 +0800
 Subject: [PATCH] MUSA: vllm.model_executor.layers.quantization.utils.fp8_utils vec group quant
 
+Route group-128 bf16/fp16 activation quant to the MUSA register-resident vec
+kernel, which keeps the group in registers instead of round-tripping the
+stable per-token-group path. Falls through to the existing kernel for any
+shape, dtype, alignment or scale layout it does not cover.
 ---
+ vllm/model_executor/layers/quantization/utils/fp8_utils.py | 27 +++---
+ 1 file changed, 27 insertions(+), 0 deletions(-)
+
 diff --git a/vllm/model_executor/layers/quantization/utils/fp8_utils.py b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
-index 32a2d8689..799e51a58 100644
+index 74db17f55..799e51a58 100644
 --- a/vllm/model_executor/layers/quantization/utils/fp8_utils.py
 +++ b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
-@@ -563,6 +563,19 @@ def _per_token_group_quant_fp8_colmajor(
+@@ -563,6 +563,19 @@
      tl.store(y_s_ptr, y_s)
-
-
+ 
+ 
 +_MUSA_VEC_QUANT = None
 +
 +
@@ -27,8 +35,8 @@ index 32a2d8689..799e51a58 100644
  def per_token_group_quant_fp8(
      x: torch.Tensor,
      group_size: int,
-@@ -631,8 +644,24 @@ def per_token_group_quant_fp8(
-
+@@ -631,6 +644,20 @@
+ 
      # prefer CUDA/XPU kernel if available
      # TODO(bnell): this causes some fp8 moe test to fail.
 +    # MUSA: register-resident vec kernel for group-128 bf16/fp16 activation quant.
@@ -46,10 +54,5 @@ index 32a2d8689..799e51a58 100644
 +        return x_q, x_s
 +
      if (
--        current_platform.is_cuda_alike() or current_platform.is_xpu()
-+        current_platform.is_cuda_alike()
-+        or current_platform.is_xpu()
-+        or current_platform.is_musa()
-     ) and x.is_contiguous():
-         torch.ops._C.per_token_group_fp8_quant(
-             x,
+         current_platform.is_cuda_alike()
+         or current_platform.is_xpu()

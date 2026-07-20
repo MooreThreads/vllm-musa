@@ -323,8 +323,8 @@ index 3133243c4..1ca216c0d 100644
    ops.impl("rotary_embedding", TORCH_BOX(&rotary_embedding));
    // w8a8 per-token-group quant (MUSA-0/Option-3 consolidation): the upstream
    // stable kernels replace the native csrc/musa non-fused re-impl. The MUSA-only
-@@ -982,4 +1054,5 @@ STABLE_TORCH_LIBRARY_IMPL(_C, PrivateUse1, ops) {
-   ops.impl("per_token_group_quant_int8", TORCH_BOX(&per_token_group_quant_int8));
+@@ -984,4 +1056,5 @@ STABLE_TORCH_LIBRARY_IMPL(_C, PrivateUse1, ops) {
+   ops.impl("apply_repetition_penalties_", TORCH_BOX(&apply_repetition_penalties_));
  }
  #endif
 +
