@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import inspect
 import json
 import os
 import time
@@ -49,16 +50,19 @@ _MOE_SHAPE_INVENTORY_DEFAULT_PATH = (
 )
 _MOE_SHAPE_INVENTORY_RECORDS = 0
 _MOE_SHAPE_INVENTORY_WARNED = False
-_DEEPGEMM_PREFILL_ENV = "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL"
-_DEEPGEMM_PREFILL_MIN_TOKENS_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL_MIN_TOKENS"
-)
+_DEEPGEMM_PREFILL_ENV = "VLLM_MUSA_MOE_DEEPGEMM_PREFILL"
+_DEEPGEMM_PREFILL_MIN_TOKENS_ENV = "VLLM_MUSA_MOE_DEEPGEMM_PREFILL_MIN_TOKENS"
 _DEEPGEMM_PREFILL_WARNED = False
 
 
 def _env_flag_enabled(name: str) -> bool:
     value = os.environ.get(name, "")
     return value.lower() not in {"", "0", "false", "no", "off"}
+
+
+def _env_flag_disabled(name: str) -> bool:
+    """True only when explicitly set to a falsy value; unset means enabled."""
+    return os.environ.get(name, "").strip().lower() in {"0", "false", "no", "off"}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -213,7 +217,7 @@ def _maybe_record_deepseek_v4_moe_shape_inventory(
             _MOE_SHAPE_INVENTORY_WARNED = True
 
 
-def _can_use_deepseek_v4_moe_deepgemm_prefill(
+def _can_use_moe_deepgemm_prefill(
     *,
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -236,10 +240,10 @@ def _can_use_deepseek_v4_moe_deepgemm_prefill(
     w1_bias: torch.Tensor | None,
     w2_bias: torch.Tensor | None,
 ) -> bool:
-    if not _env_flag_enabled(_DEEPGEMM_PREFILL_ENV):
+    if _env_flag_disabled(_DEEPGEMM_PREFILL_ENV):
         return False
 
-    min_tokens = _env_int(_DEEPGEMM_PREFILL_MIN_TOKENS_ENV, 4096)
+    min_tokens = _env_int(_DEEPGEMM_PREFILL_MIN_TOKENS_ENV, 2500)
     if hidden_states.size(0) < min_tokens:
         return False
 
@@ -266,7 +270,7 @@ def _can_use_deepseek_v4_moe_deepgemm_prefill(
     if block_shape != [128, 128]:
         return False
 
-    if topk_ids.size(1) != 6:
+    if topk_ids.size(1) > 16:
         return False
 
     if hidden_states.dtype != torch.bfloat16:
@@ -289,7 +293,8 @@ def _can_use_deepseek_v4_moe_deepgemm_prefill(
     E, N, K = w1.shape
     return (
         E == 256
-        and N == 512
+        and N % 256 == 0
+        and K % 128 == 0
         and K == hidden_states.size(1)
         and w2.shape == (E, K, N // 2)
         and w1_scale.shape == (E, N // 128, K // 128)
@@ -325,7 +330,132 @@ def _silu_mul_per_token_group_fp8_quant_musa_large(
     return output, output_s
 
 
-def _deepseek_v4_moe_deepgemm_prefill_impl(
+def _moe_deepgemm_prefill_impl(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    w1_scale: torch.Tensor,
+    w2_scale: torch.Tensor,
+    inplace: bool,
+) -> torch.Tensor:
+    # MUSA: SGLang-style fused-glue DeepGEMM MoE prefill. One fused preprocess
+    # kernel does quant + permute + contiguous group-layout + m_indices/src2dst
+    # (replacing moe_kernel_quantize_input + deepgemm_moe_permute), the two
+    # grouped FP8 GEMMs are unchanged, and one post_reorder kernel does the
+    # weighted un-permute (replacing deepgemm_unpermute_and_reduce). Falls back
+    # to the unfused path when the fused preprocess cannot handle the shape.
+    E = w1.shape[0]
+    try:
+        from vllm_musa.jit_kernel.post_reorder import post_reorder_triton_kernel
+        from vllm_musa.jit_kernel.tilelang.deep_gemm_contig_preprocess import (
+            can_use_fp8_tilelang,
+            deep_gemm_contig_preprocess_fp8_tilelang,
+        )
+
+        use_fused = can_use_fp8_tilelang(hidden_states, topk_ids, E, True)
+    except Exception:
+        use_fused = False
+
+    if not use_fused:
+        return _moe_deepgemm_prefill_impl_unfused(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            w1_scale=w1_scale,
+            w2_scale=w2_scale,
+            inplace=inplace,
+        )
+
+    from vllm.utils.deep_gemm import (
+        get_mk_alignment_for_contiguous_layout,
+        m_grouped_fp8_gemm_nt_contiguous,
+        mk_alignment_scope,
+    )
+
+    logger.info_once("Using the MUSA fused-glue grouped DeepGEMM MoE prefill path.")
+
+    _, N, K = w1.shape
+    M, top_k = topk_ids.shape
+    block_m = int(get_mk_alignment_for_contiguous_layout()[0])
+    dev = hidden_states.device
+
+    src2dst_numel = M * top_k
+    all_tokens = (
+        (src2dst_numel + E * (block_m - 1) + block_m - 1) // block_m
+    ) * block_m
+
+    qhidden_perm = torch.empty((all_tokens, K), device=dev, dtype=torch.float8_e4m3fn)
+    qhidden_scale_perm = torch.empty(
+        (all_tokens, K // 128), device=dev, dtype=torch.float32
+    )
+    m_indices = torch.empty(all_tokens, device=dev, dtype=torch.int32)
+    src2dst = torch.empty(src2dst_numel, device=dev, dtype=torch.int32)
+    topk_ids_for_combine = torch.empty_like(topk_ids)
+    counts = torch.empty(E, device=dev, dtype=torch.int32)
+    cursor = torch.empty(E, device=dev, dtype=torch.int32)
+
+    deep_gemm_contig_preprocess_fp8_tilelang(
+        hidden_states,
+        topk_ids,
+        qhidden_perm,
+        qhidden_scale_perm,
+        m_indices,
+        src2dst,
+        topk_ids_for_combine,
+        counts,
+        cursor,
+        E,
+        block_m,
+    )
+
+    with mk_alignment_scope(block_m):
+        mm1_out = torch.empty((all_tokens, N), device=dev, dtype=hidden_states.dtype)
+        m_grouped_fp8_gemm_nt_contiguous(
+            (qhidden_perm, qhidden_scale_perm.contiguous()),
+            (w1, w1_scale.contiguous()),
+            mm1_out,
+            m_indices,
+        )
+
+        a2q = torch.empty((all_tokens, N // 2), device=dev, dtype=torch.float8_e4m3fn)
+        a2q, a2q_scale = _silu_mul_per_token_group_fp8_quant_musa_large(
+            mm1_out.view(-1, N),
+            a2q,
+            group_size=128,
+        )
+
+        mm2_out = torch.empty((all_tokens, K), device=dev, dtype=hidden_states.dtype)
+        m_grouped_fp8_gemm_nt_contiguous(
+            (a2q, a2q_scale.contiguous()),
+            (w2, w2_scale.contiguous()),
+            mm2_out,
+            m_indices,
+        )
+
+    if inplace and not disable_inplace():
+        output = hidden_states
+    else:
+        output = torch.empty_like(hidden_states)
+
+    post_reorder_triton_kernel[(M,)](
+        mm2_out,
+        output,
+        src2dst,
+        topk_ids,
+        topk_weights,
+        top_k,
+        K,
+        BLOCK_SIZE=1024,
+    )
+    return output
+
+
+def _moe_deepgemm_prefill_impl_unfused(
     *,
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -345,11 +475,7 @@ def _deepseek_v4_moe_deepgemm_prefill_impl(
         mk_alignment_scope,
     )
 
-    logger.info_once(
-        "Using DeepSeek-V4 MUSA grouped DeepGEMM MoE prefill path "
-        "(set %s=0 to disable).",
-        _DEEPGEMM_PREFILL_ENV,
-    )
+    logger.info_once("Using the MUSA grouped DeepGEMM MoE prefill path.")
 
     qhidden, a1_scale = moe_kernel_quantize_input(
         A=hidden_states,
@@ -427,7 +553,7 @@ def _deepseek_v4_moe_deepgemm_prefill_impl(
     return output
 
 
-def _maybe_deepseek_v4_moe_deepgemm_prefill(
+def _maybe_moe_deepgemm_prefill(
     *,
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -454,7 +580,7 @@ def _maybe_deepseek_v4_moe_deepgemm_prefill(
 ) -> torch.Tensor | None:
     global _DEEPGEMM_PREFILL_WARNED
 
-    if not _can_use_deepseek_v4_moe_deepgemm_prefill(
+    if not _can_use_moe_deepgemm_prefill(
         hidden_states=hidden_states,
         w1=w1,
         w2=w2,
@@ -481,7 +607,7 @@ def _maybe_deepseek_v4_moe_deepgemm_prefill(
     try:
         assert w1_scale is not None
         assert w2_scale is not None
-        return _deepseek_v4_moe_deepgemm_prefill_impl(
+        return _moe_deepgemm_prefill_impl(
             hidden_states=hidden_states,
             w1=w1,
             w2=w2,
@@ -494,8 +620,8 @@ def _maybe_deepseek_v4_moe_deepgemm_prefill(
     except Exception as exc:
         if not _DEEPGEMM_PREFILL_WARNED:
             logger.warning(
-                "DeepSeek-V4 grouped DeepGEMM MoE prefill path failed; "
-                "falling back to native GEMV path: %s",
+                "Grouped DeepGEMM MoE prefill path failed; "
+                "falling back to the upstream Triton path: %s",
                 exc,
             )
             _DEEPGEMM_PREFILL_WARNED = True
@@ -695,7 +821,7 @@ def fused_experts_impl(
         global_num_experts=global_num_experts,
     )
 
-    deepgemm_prefill_output = _maybe_deepseek_v4_moe_deepgemm_prefill(
+    deepgemm_prefill_output = _maybe_moe_deepgemm_prefill(
         hidden_states=hidden_states,
         w1=w1,
         w2=w2,
@@ -837,6 +963,43 @@ if not hasattr(_upstream_fused_moe, "_musa_original_fused_experts_impl"):
     )
 
 
+def _try_deepgemm_prefill_dispatch(args, kwargs) -> torch.Tensor | None:
+    try:
+        bound = inspect.signature(fused_experts_impl).bind(*args, **kwargs)
+    except TypeError:
+        return None
+    bound.apply_defaults()
+    a = bound.arguments
+    if not a.get("use_fp8_w8a8"):
+        return None
+    w1 = a["w1"]
+    w2 = a["w2"]
+    return _maybe_moe_deepgemm_prefill(
+        hidden_states=a["hidden_states"],
+        w1=w1,
+        w2=w2,
+        topk_weights=a["topk_weights"],
+        topk_ids=a["topk_ids"],
+        inplace=a.get("inplace", False),
+        activation=a.get("activation", "silu"),
+        apply_router_weight_on_input=a.get("apply_router_weight_on_input", False),
+        use_fp8_w8a8=a.get("use_fp8_w8a8", False),
+        use_int8_w8a8=a.get("use_int8_w8a8", False),
+        use_int8_w8a16=a.get("use_int8_w8a16", False),
+        use_int4_w4a16=a.get("use_int4_w4a16", False),
+        ocp_mx_scheme=a.get("ocp_mx_scheme"),
+        per_channel_quant=a.get("per_channel_quant", False),
+        expert_map=a.get("expert_map"),
+        w1_scale=_maybe_expand_fp8_moe_per_tensor_scale(a.get("w1_scale"), w1),
+        w2_scale=_maybe_expand_fp8_moe_per_tensor_scale(a.get("w2_scale"), w2),
+        a1_scale=a.get("a1_scale"),
+        a2_scale=a.get("a2_scale"),
+        block_shape=a.get("block_shape"),
+        w1_bias=a.get("w1_bias"),
+        w2_bias=a.get("w2_bias"),
+    )
+
+
 def _musa_fused_experts_impl_dispatch(*args, **kwargs) -> torch.Tensor:
     # The native GEMV MoE path (fused_experts_impl) is opt-in: it can hurt some
     # prefill workloads, but DeepSeek-V4-Flash-Base TP8 graph+MTP decode depends
@@ -844,6 +1007,11 @@ def _musa_fused_experts_impl_dispatch(*args, **kwargs) -> torch.Tensor:
     # other models; platform.py opts DeepSeek-V4 in per serving process.
     if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV", "0") == "1":
         return fused_experts_impl(*args, **kwargs)
+    # Grouped DeepGEMM for large-M FP8 block-128 MoE prefill; the shape gate declines
+    # decode and every non-matching shape, which then fall through to upstream Triton.
+    dg_out = _try_deepgemm_prefill_dispatch(args, kwargs)
+    if dg_out is not None:
+        return dg_out
     return _upstream_fused_moe._musa_original_fused_experts_impl(*args, **kwargs)
 
 
