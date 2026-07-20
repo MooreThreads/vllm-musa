@@ -194,32 +194,61 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
 
         query, key, value = self.rearrange_mixed_qkv(mixed_qkv)
 
-        # MUSA: mate GDN decode needs a contiguous fp32 recurrent-state pool
-        # (single-token T=1). When the temporal state is that, run it; otherwise
-        # fall through to the leaner Triton fused-recurrent update below.
-        if ssm_state.dtype == torch.float32 and ssm_state.is_contiguous():
+        # MUSA: the mamba pool is page-aligned (it must not be laid out contiguously,
+        # or its bytes would alias the attention KV in the shared hybrid tensor), so
+        # ssm_state is not contiguous. Gather the active per-sequence states into a
+        # small contiguous buffer for mate's fp32 VK decode (identity mapping), then
+        # scatter the updated states back. This keeps the fast mate kernel without a
+        # whole-pool contiguity copy.
+        if ssm_state.dtype == torch.float32:
             try:
-                output, _ = gated_delta_rule_decode(
-                    q=query.view(num_decode_tokens, 1, *query.shape[2:]),
-                    k=key.view(num_decode_tokens, 1, *key.shape[2:]),
-                    v=value.view(num_decode_tokens, 1, *value.shape[2:]),
-                    state=ssm_state,
-                    state_layout="VK",
-                    state_indices=state_indices,
-                    scale=self.head_k_dim**-0.5,
-                    A_log=self.A_log.detach().float(),
-                    a=a.view(num_decode_tokens, 1, -1),
-                    dt_bias=self.dt_bias.detach().float(),
-                    b=b.view(num_decode_tokens, 1, -1),
-                    disable_state_update=False,
-                    use_qk_l2norm=True,
-                )
+                import os as _os
+
+                _musa_sep = _os.environ.get("VLLM_MUSA_MAMBA_SEPARATE_POOL", "0") == "1"
+                if _musa_sep and ssm_state.is_contiguous():
+                    # MUSA: separate contiguous mamba pool -> mate decodes in
+                    # place (block b at b*state_numel); no gather/scatter copy.
+                    output, _ = gated_delta_rule_decode(
+                        q=query.view(num_decode_tokens, 1, *query.shape[2:]),
+                        k=key.view(num_decode_tokens, 1, *key.shape[2:]),
+                        v=value.view(num_decode_tokens, 1, *value.shape[2:]),
+                        state=ssm_state,
+                        state_layout="VK",
+                        state_indices=state_indices,
+                        scale=self.head_k_dim**-0.5,
+                        A_log=self.A_log.detach().float(),
+                        a=a.view(num_decode_tokens, 1, -1),
+                        dt_bias=self.dt_bias.detach().float(),
+                        b=b.view(num_decode_tokens, 1, -1),
+                        disable_state_update=False,
+                        use_qk_l2norm=True,
+                    )
+                    _log_once(
+                        "info",
+                        "MUSA GDN mate in-place decode active (separate pool)",
+                    )
+                else:
+                    active_state = ssm_state[state_indices]
+                    output, updated_state = gated_delta_rule_decode(
+                        q=query.view(num_decode_tokens, 1, *query.shape[2:]),
+                        k=key.view(num_decode_tokens, 1, *key.shape[2:]),
+                        v=value.view(num_decode_tokens, 1, *value.shape[2:]),
+                        state=active_state,
+                        state_layout="VK",
+                        scale=self.head_k_dim**-0.5,
+                        A_log=self.A_log.detach().float(),
+                        a=a.view(num_decode_tokens, 1, -1),
+                        dt_bias=self.dt_bias.detach().float(),
+                        b=b.view(num_decode_tokens, 1, -1),
+                        disable_state_update=False,
+                        use_qk_l2norm=True,
+                    )
+                    ssm_state[state_indices] = updated_state
                 core_attn_out[:num_decode_tokens] = output.view(
                     num_decode_tokens,
                     self.num_v_heads // self.tp_size,
                     self.head_v_dim,
                 )
-                _log_once("info", "MUSA GDN mate decode active (fp32 state)")
                 return True
             except Exception as e:
                 _log_once(

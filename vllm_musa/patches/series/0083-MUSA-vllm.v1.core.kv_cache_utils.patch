@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 14 Jul 2026 12:00:00 +0800
+Subject: [PATCH] MUSA: separate mamba state BlockPool
+
+Give mamba state its own contiguous BlockPool, sized from max_num_seqs so it
+never binds, and keep it out of the attention pool's proportional shrink. The
+mamba groups then own a small contiguous block-id space and mate's GDN decode
+updates the recurrent state in place instead of gathering and scattering it.
+
+Off unless VLLM_MUSA_MAMBA_SEPARATE_POOL=1.
+---
+ vllm/v1/core/kv_cache_utils.py | 76 +++---
+ 1 file changed, 76 insertions(+), 0 deletions(-)
+
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index 3ea89d5af..c8425baa5 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1357,6 +1357,63 @@
+ _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
+ 
+ 
++def musa_mamba_separate_pool_enabled() -> bool:
++    """MUSA: give mamba state its own contiguous BlockPool so mate's GDN
++    decode runs in place (no gather/scatter). Off by default."""
++    return os.environ.get("VLLM_MUSA_MAMBA_SEPARATE_POOL", "0") == "1"
++
++
++def _musa_has_mamba_and_attention(kv_cache_groups) -> bool:
++    has_mamba = any(isinstance(g.kv_cache_spec, MambaSpec) for g in kv_cache_groups)
++    has_attn = any(not isinstance(g.kv_cache_spec, MambaSpec) for g in kv_cache_groups)
++    return has_mamba and has_attn
++
++
++def _musa_separated_mamba_attn_tensors(vllm_config, kv_cache_groups, available_memory):
++    """Split KV memory into a small contiguous mamba pool and the attention pool.
++
++    Mamba groups get one dedicated tensor per layer (segregated-contiguous,
++    indexed by their own block-id space); the mamba pool is sized so it never
++    binds (attention admission caps running requests at <= max_num_seqs, each
++    needing 1 block per mamba group).
++    Returns (kv_cache_tensors, attn_num_blocks, mamba_num_blocks).
++    """
++    mamba_groups = [g for g in kv_cache_groups if isinstance(g.kv_cache_spec, MambaSpec)]
++    attn_groups = [
++        g for g in kv_cache_groups if not isinstance(g.kv_cache_spec, MambaSpec)
++    ]
++    max_num_seqs = vllm_config.scheduler_config.max_num_seqs
++    # Peak live blocks = num_mamba_groups * max_num_seqs (1 block/seq/group);
++    # plus the null block and slack.
++    mamba_num_blocks = len(mamba_groups) * (max_num_seqs + 8) + 1
++    mamba_page = get_uniform_page_size([g.kv_cache_spec for g in mamba_groups])
++    mamba_layers = [ln for g in mamba_groups for ln in g.layer_names]
++    mamba_bytes = mamba_page * mamba_num_blocks * len(mamba_layers)
++    if mamba_bytes >= available_memory:
++        raise ValueError("MUSA separate mamba pool needs more memory than available")
++    remaining = available_memory - mamba_bytes
++    attn_group_size = max(len(g.layer_names) for g in attn_groups)
++    attn_page = get_uniform_page_size([g.kv_cache_spec for g in attn_groups])
++    attn_num_blocks = get_num_blocks(
++        vllm_config, attn_group_size, remaining, attn_page
++    )
++    kv_cache_tensors = []
++    for i in range(attn_group_size):
++        shared_by = [g.layer_names[i] for g in attn_groups if i < len(g.layer_names)]
++        kv_cache_tensors.append(
++            KVCacheTensor(size=attn_page * attn_num_blocks, shared_by=shared_by)
++        )
++    for ln in mamba_layers:
++        kv_cache_tensors.append(
++            KVCacheTensor(
++                size=mamba_page * mamba_num_blocks,
++                shared_by=[ln],
++                musa_mamba_pool=True,
++            )
++        )
++    return kv_cache_tensors, attn_num_blocks, mamba_num_blocks
++
++
+ def get_kv_cache_config_from_groups(
+     vllm_config: VllmConfig,
+     kv_cache_groups: list[KVCacheGroupSpec],
+@@ -1407,6 +1464,21 @@
+         num_blocks, kv_cache_tensors = _get_kv_cache_config_packed(
+             vllm_config, kv_cache_groups, available_memory
+         )
++    elif musa_mamba_separate_pool_enabled() and _musa_has_mamba_and_attention(
++        kv_cache_groups
++    ):
++        # MUSA: mamba state on its own contiguous pool (own block-id space).
++        kv_cache_tensors, num_blocks, musa_mamba_num_blocks = (
++            _musa_separated_mamba_attn_tensors(
++                vllm_config, kv_cache_groups, available_memory
++            )
++        )
++        return KVCacheConfig(
++            num_blocks=num_blocks,
++            kv_cache_tensors=kv_cache_tensors,
++            kv_cache_groups=kv_cache_groups,
++            musa_mamba_num_blocks=musa_mamba_num_blocks,
++        )
+     else:
+         # General case:
+         # We will have group_size memory pools, each is shared by one layer from
+@@ -2182,6 +2254,10 @@
+ 
+         # Shrink tensor size proportionally
+         for tensor in kv_cache_config.kv_cache_tensors:
++            if getattr(tensor, "musa_mamba_pool", False):
++                # MUSA: mamba pool size is rank-invariant (from max_num_seqs),
++                # not shrunk with the attention pool's num_blocks.
++                continue
+             assert tensor.size % num_blocks_old == 0
+             tensor.size = tensor.size // num_blocks_old * min_num_blocks
+ 

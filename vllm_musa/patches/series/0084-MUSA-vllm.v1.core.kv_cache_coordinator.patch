@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
+
+---
+--- a/vllm/v1/core/kv_cache_coordinator.py
++++ b/vllm/v1/core/kv_cache_coordinator.py
+@@ -12,9 +12,11 @@
+     BlockHashList,
+     BlockHashListWithBlockSize,
+     KVCacheBlock,
++    musa_mamba_separate_pool_enabled,
+ )
+ from vllm.v1.core.single_type_kv_cache_manager import (
+     CrossAttentionManager,
++    MambaManager,
+     SingleTypeKVCacheManager,
+     get_manager_for_kv_cache_spec,
+ )
+@@ -96,6 +98,22 @@
+             metrics_collector=metrics_collector,
+         )
+
++        # MUSA: dedicated non-binding BlockPool for mamba state, so mamba
++        # groups own a small contiguous block-id space and the mate GDN
++        # decode runs in place. Sized in the config to never bind.
++        self.musa_mamba_block_pool = None
++        _musa_mamba_nb = getattr(
++            kv_cache_config, "musa_mamba_num_blocks", None
++        )
++        if musa_mamba_separate_pool_enabled() and _musa_mamba_nb:
++            self.musa_mamba_block_pool = BlockPool(
++                num_gpu_blocks=_musa_mamba_nb,
++                enable_caching=False,
++                hash_block_size=hash_block_size,
++                enable_kv_cache_events=False,
++                metrics_collector=None,
++            )
++
+         # KV cache group indices that get the EAGLE last-block drop.
+         self.eagle_group_ids: set[int] = {
+             i for i, g in enumerate(kv_cache_config.kv_cache_groups) if g.is_eagle_group
+@@ -109,7 +127,16 @@
+                 kv_cache_spec=kv_cache_group.kv_cache_spec,
+                 max_num_batched_tokens=max_num_batched_tokens,
+                 max_model_len=max_model_len,
+-                block_pool=self.block_pool,
++                block_pool=(
++                    self.musa_mamba_block_pool
++                    if (
++                        self.musa_mamba_block_pool is not None
++                        and isinstance(
++                            kv_cache_group.kv_cache_spec, MambaSpec
++                        )
++                    )
++                    else self.block_pool
++                ),
+                 enable_caching=enable_caching,
+                 kv_cache_group_id=i,
+                 dcp_world_size=dcp_world_size,
+@@ -162,6 +189,12 @@
+         """
+         num_blocks_to_allocate = 0
+         for i, manager in enumerate(self.single_type_managers):
++            if self.musa_mamba_block_pool is not None and isinstance(
++                manager, MambaManager
++            ):
++                # MUSA: mamba is on its own non-binding pool; do not count
++                # its blocks against the attention pool admission check.
++                continue
+             if isinstance(manager, CrossAttentionManager):
+                 # For cross-attention, we issue a single static allocation
+                 # of blocks based on the number of encoder input tokens.
