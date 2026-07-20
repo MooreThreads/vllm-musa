@@ -20,6 +20,7 @@ def _zero_fp8_weight(weight: torch.Tensor) -> None:
 
 _ORIGINAL_FP8_MOE_MAYBE_ROUNDUP_SIZES = vllm_fp8.Fp8MoEMethod.maybe_roundup_sizes
 _ORIGINAL_FP8_MOE_CREATE_WEIGHTS = vllm_fp8.Fp8MoEMethod.create_weights
+_ORIGINAL_FP8_MOE_PROCESS_WEIGHTS = vllm_fp8.Fp8MoEMethod.process_weights_after_loading
 
 
 def maybe_roundup_sizes(
@@ -109,6 +110,106 @@ def create_weights(
     )
 
 
+def _release_cached_blocks() -> None:
+    empty_cache = getattr(current_platform, "empty_cache", None)
+    if callable(empty_cache):
+        empty_cache()
+    elif hasattr(torch, "musa"):
+        torch.musa.empty_cache()
+
+
+def _fold_shared_expert_weights(self, layer: FusedMoE) -> None:
+    """Append the model's shared expert to the routed FP8 expert stack.
+
+    The MoE block stashes its shared MLP and gate on the routed-experts layer
+    when the two carry the same weight format. The shared gate_up/down
+    projections and their block scales are concatenated as one extra expert, so
+    a single grouped GEMM covers routed + shared work instead of running the
+    shared expert as separate dense GEMMs on every MoE layer. Runs once after
+    load, before any graph capture.
+    """
+    mlp = getattr(layer, "_musa_shared_mlp", None)
+    if mlp is None or getattr(layer, "_musa_shared_folded", False):
+        return
+
+    scale_name = self.weight_scale_name
+    parts = (
+        ("w13_weight", f"w13_{scale_name}", mlp.gate_up_proj),
+        ("w2_weight", f"w2_{scale_name}", mlp.down_proj),
+    )
+    folded: dict[str, torch.Tensor] = {}
+    for weight_attr, scale_attr, proj in parts:
+        routed_w = getattr(layer, weight_attr).data
+        routed_s = getattr(layer, scale_attr).data
+        shared_w = proj.weight.data
+        shared_s = getattr(proj, scale_name).data
+        if shared_w.shape != routed_w.shape[1:] or shared_w.dtype != routed_w.dtype:
+            raise RuntimeError(
+                f"MUSA shared-expert fold: {weight_attr} expects "
+                f"{tuple(routed_w.shape[1:])}/{routed_w.dtype}, shared expert has "
+                f"{tuple(shared_w.shape)}/{shared_w.dtype}"
+            )
+        if shared_s.shape != routed_s.shape[1:] or shared_s.dtype != routed_s.dtype:
+            raise RuntimeError(
+                f"MUSA shared-expert fold: {scale_attr} expects "
+                f"{tuple(routed_s.shape[1:])}/{routed_s.dtype}, shared expert has "
+                f"{tuple(shared_s.shape)}/{shared_s.dtype}"
+            )
+        folded[weight_attr] = torch.cat(
+            [routed_w, shared_w.unsqueeze(0)], dim=0
+        ).contiguous()
+        folded[scale_attr] = torch.cat(
+            [routed_s, shared_s.unsqueeze(0)], dim=0
+        ).contiguous()
+
+    num_routed = int(layer.w13_weight.shape[0])
+    # Rebuild the quant config / kernel so they bind the folded tensors.
+    self._setup_kernel(
+        layer,
+        folded["w13_weight"],
+        folded["w2_weight"],
+        folded[f"w13_{scale_name}"],
+        folded[f"w2_{scale_name}"],
+        layer.w13_input_scale,
+        layer.w2_input_scale,
+    )
+    del folded
+    # Each expert stack is concatenated while the unfolded one is still alive, so the
+    # freed blocks leave expert-sized holes in the caching allocator. Left there, they
+    # are reserved-but-unusable and the KV cache later fails to find contiguous space.
+    _release_cached_blocks()
+    layer._musa_shared_expert_id = num_routed
+    layer._musa_shared_folded = True
+    logger.info_once(
+        "MUSA shared-expert fold active: shared expert folded into the routed "
+        "FP8 grouped GEMM as slot %d (%d routed + 1 shared).",
+        num_routed,
+        num_routed,
+    )
+
+
+def process_weights_after_loading(self, layer: FusedMoE) -> None:
+    _ORIGINAL_FP8_MOE_PROCESS_WEIGHTS(self, layer)
+    _fold_shared_expert_weights(self, layer)
+
+
+def _extend_routing_with_shared_expert(
+    layer: FusedMoE,
+    x: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    from vllm_musa.jit_kernel.extend_topk_shared import extend_topk_with_shared
+
+    shared_logits, _ = layer._musa_shared_gate(x)
+    return extend_topk_with_shared(
+        topk_weights,
+        topk_ids,
+        shared_logits.view(-1),
+        layer._musa_shared_expert_id,
+    )
+
+
 def apply(
     self,
     layer: FusedMoE,
@@ -121,6 +222,21 @@ def apply(
     ep_size = getattr(layer, "ep_size", None)
     if ep_size is None:
         ep_size = layer.moe_config.ep_size
+
+    # A folded shared expert rides the routed grouped GEMM as one extra
+    # always-selected slot, so extend the routing by a single column here.
+    folded_shared = getattr(layer, "_musa_shared_folded", False)
+    if folded_shared:
+        assert (
+            shared_experts is None and shared_experts_input is None
+        ), "folded shared expert expects shared_experts=None"
+        topk_weights, topk_ids = _extend_routing_with_shared_expert(
+            layer, x, topk_weights, topk_ids
+        )
+    global_num_experts = (
+        layer._musa_shared_expert_id + 1 if folded_shared else layer.global_num_experts
+    )
+
     if ep_size != None and ep_size <= 1:
         # the legacy fused_experts() path only computes routed
         # experts. For the no-overlap path used by DeepSeek-V2/V3 on MUSA, the
@@ -139,7 +255,7 @@ def apply(
             topk_weights=topk_weights,
             topk_ids=topk_ids,
             activation=layer.activation,
-            global_num_experts=layer.global_num_experts,
+            global_num_experts=global_num_experts,
             apply_router_weight_on_input=layer.apply_router_weight_on_input,
             expert_map=layer.expert_map,
             quant_config=self.moe_quant_config,
@@ -157,7 +273,7 @@ def apply(
             topk_weights,
             topk_ids,
             activation=layer.activation,
-            global_num_experts=layer.global_num_experts,
+            global_num_experts=global_num_experts,
             expert_map=layer.expert_map,
             apply_router_weight_on_input=layer.apply_router_weight_on_input,
             shared_experts=shared_experts,
@@ -167,4 +283,5 @@ def apply(
 
 vllm_fp8.Fp8MoEMethod.maybe_roundup_sizes = maybe_roundup_sizes
 vllm_fp8.Fp8MoEMethod.create_weights = create_weights
+vllm_fp8.Fp8MoEMethod.process_weights_after_loading = process_weights_after_loading
 vllm_fp8.Fp8MoEMethod.apply = apply

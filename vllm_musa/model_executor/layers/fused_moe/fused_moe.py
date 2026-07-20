@@ -292,7 +292,7 @@ def _can_use_moe_deepgemm_prefill(
 
     E, N, K = w1.shape
     return (
-        E == 256
+        E in (256, 257)
         and N % 256 == 0
         and K % 128 == 0
         and K == hidden_states.size(1)
