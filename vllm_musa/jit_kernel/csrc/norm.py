@@ -150,3 +150,138 @@ direct_register_custom_op(
     mutates_args=["input", "residual"],
     fake_impl=_fused_add_rmsnorm_custom_fake,
 )
+
+
+@cache_once
+def _qk_mrope_module():
+    import tilelang
+
+    tilelang_dir = Path(tilelang.__file__).resolve().parent
+    return load_musa_jit(
+        "vllm_musa_norm_qk_mrope",
+        ("norm/qk_mrope.mu",),
+        extra_musa_cflags=(
+            f"-I{(tilelang_dir / 'src').resolve()}",
+            f"-I{(tilelang_dir / '3rdparty' / 'mutlass' / 'include').resolve()}",
+            "-Wno-error=address-of-temporary",
+            "-fmusa-flush-denormals-to-zero",
+            "-fno-signed-zeros",
+            "-D__MUSA_ARCH_LIST__=310",
+            "-mllvm",
+            "-mtgpu-opt-level=1",
+            "-mllvm",
+            "-mtgpu-load-store-opt=1",
+            "-mllvm",
+            "-mtgpu-fold-global-ldst=1",
+            "-mllvm",
+            "-mtgpu-load-cluster-mutation=1",
+            "-mllvm",
+            "-mtgpu-store-cluster-mutation=1",
+            "-mllvm",
+            "-mtgpu-memory-sched-mutation=1",
+            "-mllvm",
+            "-mtgpu-alloc-shared-memory-from-zero=1",
+        ),
+    )
+
+
+def fused_qk_rmsnorm_mrope(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    q_weight: torch.Tensor,
+    k_weight: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    is_neox: bool,
+    mrope_section_t: int,
+    mrope_section_h: int,
+    mrope_section_w: int,
+    is_interleaved: bool,
+    eps: float = 1e-6,
+    gemma: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """QK-RMSNorm + MRoPE in one kernel. q/k are (tokens, heads, head_dim)."""
+    q_out = torch.empty_like(q)
+    k_out = torch.empty_like(k)
+    torch.ops.vllm.musa_csrc_fused_qk_rmsnorm_mrope(
+        q,
+        k,
+        q_weight,
+        k_weight,
+        positions,
+        cos_sin_cache,
+        q_out,
+        k_out,
+        bool(is_neox),
+        int(mrope_section_t),
+        int(mrope_section_h),
+        int(mrope_section_w),
+        bool(is_interleaved),
+        float(eps),
+        bool(gemma),
+    )
+    return q_out, k_out
+
+
+def _fused_qk_rmsnorm_mrope_custom(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    q_weight: torch.Tensor,
+    k_weight: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    q_out: torch.Tensor,
+    k_out: torch.Tensor,
+    is_neox: bool,
+    mrope_section_t: int,
+    mrope_section_h: int,
+    mrope_section_w: int,
+    is_interleaved: bool,
+    eps: float,
+    gemma: bool,
+) -> None:
+    _qk_mrope_module().sgl_musa_fused_qk_rmsnorm_mrope(
+        q,
+        k,
+        q_weight,
+        k_weight,
+        positions,
+        cos_sin_cache,
+        q_out,
+        k_out,
+        bool(is_neox),
+        int(mrope_section_t),
+        int(mrope_section_h),
+        int(mrope_section_w),
+        bool(is_interleaved),
+        float(eps),
+        bool(gemma),
+    )
+
+
+def _fused_qk_rmsnorm_mrope_custom_fake(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    q_weight: torch.Tensor,
+    k_weight: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    q_out: torch.Tensor,
+    k_out: torch.Tensor,
+    is_neox: bool,
+    mrope_section_t: int,
+    mrope_section_h: int,
+    mrope_section_w: int,
+    is_interleaved: bool,
+    eps: float,
+    gemma: bool,
+) -> None:
+    return
+
+
+direct_register_custom_op(
+    op_name="musa_csrc_fused_qk_rmsnorm_mrope",
+    op_func=_fused_qk_rmsnorm_mrope_custom,
+    mutates_args=["q_out", "k_out"],
+    fake_impl=_fused_qk_rmsnorm_mrope_custom_fake,
+)

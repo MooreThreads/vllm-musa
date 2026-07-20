@@ -1,0 +1,118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 14 Jul 2026 12:00:00 +0800
+Subject: [PATCH] MUSA(model): fuse QK-RMSNorm and MRoPE for interleaved MRoPE
+
+Fuse QK-RMSNorm and MRoPE into one MUSA kernel for interleaved-MRoPE gated
+attention. The text-only NeoX fusion rejects these models and the IR provider
+keeps routed MoE on native, so they otherwise run the eager rotary path and
+issue a long tail of elementwise kernels.
+
+The IR operation stays as the fallback for every shape this kernel declines.
+Set VLLM_MUSA_FUSED_QK_MROPE=0 to disable.
+---
+ vllm/model_executor/models/qwen3_next.py | 77 +++---
+ 1 file changed, 77 insertions(+), 0 deletions(-)
+
+diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
+index f7907f3c4..d73dfa9e4 100644
+--- a/vllm/model_executor/models/qwen3_next.py
++++ b/vllm/model_executor/models/qwen3_next.py
+@@ -267,6 +267,30 @@
+         return final_hidden_states.view(orig_shape)
+ 
+ 
++MUSA_FUSED_QK_MROPE_ENV = "VLLM_MUSA_FUSED_QK_MROPE"
++
++_MUSA_MROPE_COS_SIN_CACHE: dict[tuple[int, torch.dtype], torch.Tensor] = {}
++
++
++def _musa_mrope_cos_sin_cache(
++    cos_sin_cache: torch.Tensor, dtype: torch.dtype
++) -> torch.Tensor:
++    """The fused kernel reads the rotary cache in the activation dtype.
++
++    get_rope() hands every layer the same rotary module, so convert once and
++    share: this cache is num_positions x rotary_dim and reaches hundreds of MB
++    on long-context models.
++    """
++    if cos_sin_cache.dtype == dtype:
++        return cos_sin_cache
++    key = (cos_sin_cache.data_ptr(), dtype)
++    converted = _MUSA_MROPE_COS_SIN_CACHE.get(key)
++    if converted is None:
++        converted = cos_sin_cache.to(dtype)
++        _MUSA_MROPE_COS_SIN_CACHE[key] = converted
++    return converted
++
++
+ class Qwen3NextAttention(nn.Module):
+     def __init__(
+         self,
+@@ -379,6 +403,26 @@
+         self.mrope_interleaved = bool(
+             getattr(self.rotary_emb, "mrope_interleaved", False)
+         )
++        # MUSA: interleaved-MRoPE models reject the text-only NeoX fusion above
++        # and the IR provider keeps routed MoE on native, leaving the eager
++        # rotary path. Fuse QK-RMSNorm + MRoPE for them in one kernel.
++        self._musa_fused_qk_mrope = (
++            self.attn_output_gate
++            and current_platform.is_musa()
++            and os.environ.get(MUSA_FUSED_QK_MROPE_ENV, "1").strip().lower()
++            not in ("0", "false", "off", "no")
++            and len(self.mrope_section) == 3
++            and self.mrope_interleaved
++        )
++        self._musa_mrope_cos_sin_cache = None
++        if self._musa_fused_qk_mrope:
++            dtype = model_config.dtype if model_config else torch.bfloat16
++            self._musa_fused_qk_mrope = dtype == torch.bfloat16
++            if self._musa_fused_qk_mrope:
++                self._musa_mrope_cos_sin_cache = _musa_mrope_cos_sin_cache(
++                    self.rotary_emb.cos_sin_cache, dtype
++                )
++                self._musa_mrope_section = tuple(int(x) for x in self.mrope_section)
+ 
+     def _project_qkv_gate(
+         self,
+@@ -414,6 +458,39 @@
+             )
+             return q, k, v, gate
+ 
++        if self._musa_fused_qk_mrope and positions.ndim == 2:
++            from vllm_musa.jit_kernel.csrc.norm import fused_qk_rmsnorm_mrope
++
++            q_gate, k, v = qkv.split(
++                [self.q_size * 2, self.kv_size, self.kv_size], dim=-1
++            )
++            orig_shape = q_gate.shape[:-1]
++            q_gate = q_gate.view(*orig_shape, self.num_heads, -1)
++            q, gate = torch.chunk(q_gate, 2, dim=-1)
++            gate = gate.reshape(*orig_shape, -1)
++            t, h, w = self._musa_mrope_section
++            q, k = fused_qk_rmsnorm_mrope(
++                q.contiguous(),
++                k.view(-1, self.num_kv_heads, self.head_dim),
++                self.q_norm.weight,
++                self.k_norm.weight,
++                positions,
++                self._musa_mrope_cos_sin_cache,
++                is_neox=bool(self.rotary_emb.is_neox_style),
++                mrope_section_t=t,
++                mrope_section_h=h,
++                mrope_section_w=w,
++                is_interleaved=True,
++                eps=self.q_norm.variance_epsilon,
++                gemma=True,
++            )
++            return (
++                q.view(-1, self.num_heads * self.head_dim),
++                k.view(-1, self.num_kv_heads * self.head_dim),
++                v,
++                gate,
++            )
++
+         if self.use_gated_qkv_rms_norm_rope:
+             # Gate and V remain views of the packed projection. In particular,
+             # keeping gate outside the functional IR op lets Inductor fuse its
