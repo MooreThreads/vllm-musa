@@ -56,6 +56,17 @@ def per_token_group_quant_8bit(
     )
 
 
+_DUMMY_MASKED_M: dict[torch.device, torch.Tensor] = {}
+
+
+def _dummy_masked_m(device: torch.device) -> torch.Tensor:
+    t = _DUMMY_MASKED_M.get(device)
+    if t is None:
+        t = torch.empty((1,), device=device, dtype=torch.int32)
+        _DUMMY_MASKED_M[device] = t
+    return t
+
+
 def _per_token_group_quant_8bit_custom(
     input: torch.Tensor,
     output_q: torch.Tensor,
@@ -68,8 +79,8 @@ def _per_token_group_quant_8bit_custom(
     fuse_silu_and_mul: bool,
 ) -> None:
     # The kernel takes a masked_m tensor for the masked-layout callers; the contiguous
-    # layout used here has no mask, so pass a dummy and flag it off.
-    masked_m = torch.empty((1,), device=input.device, dtype=torch.int32)
+    # layout used here has no mask, so pass a cached dummy and flag it off.
+    masked_m = _dummy_masked_m(input.device)
     _quant_v2_module().sgl_per_token_group_quant_8bit_v2(
         input,
         output_q,

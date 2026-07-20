@@ -192,7 +192,14 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             validate_data=False,
         )
 
-        query, key, value = self.rearrange_mixed_qkv(mixed_qkv)
+        # MUSA: mate's decode kernel reads q/k/v from strided views; split the
+        # packed qkv without materializing contiguous copies.
+        _qk_dim = self.key_dim // self.tp_size
+        _v_dim = self.value_dim // self.tp_size
+        _q, _k, _v = torch.split(mixed_qkv, [_qk_dim, _qk_dim, _v_dim], dim=-1)
+        query = _q.unflatten(-1, (-1, self.head_k_dim)).unsqueeze(1)
+        key = _k.unflatten(-1, (-1, self.head_k_dim)).unsqueeze(1)
+        value = _v.unflatten(-1, (-1, self.head_v_dim)).unsqueeze(1)
 
         # MUSA: the mamba pool is page-aligned (it must not be laid out contiguously,
         # or its bytes would alias the attention KV in the shared hybrid tensor), so
@@ -204,14 +211,14 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             try:
                 import os as _os
 
-                _musa_sep = _os.environ.get("VLLM_MUSA_MAMBA_SEPARATE_POOL", "0") == "1"
+                _musa_sep = _os.environ.get("VLLM_MUSA_MAMBA_SEPARATE_POOL", "1") == "1"
                 if _musa_sep and ssm_state.is_contiguous():
                     # MUSA: separate contiguous mamba pool -> mate decodes in
                     # place (block b at b*state_numel); no gather/scatter copy.
                     output, _ = gated_delta_rule_decode(
-                        q=query.view(num_decode_tokens, 1, *query.shape[2:]),
-                        k=key.view(num_decode_tokens, 1, *key.shape[2:]),
-                        v=value.view(num_decode_tokens, 1, *value.shape[2:]),
+                        q=query,
+                        k=key,
+                        v=value,
                         state=ssm_state,
                         state_layout="VK",
                         state_indices=state_indices,
@@ -230,9 +237,9 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                 else:
                     active_state = ssm_state[state_indices]
                     output, updated_state = gated_delta_rule_decode(
-                        q=query.view(num_decode_tokens, 1, *query.shape[2:]),
-                        k=key.view(num_decode_tokens, 1, *key.shape[2:]),
-                        v=value.view(num_decode_tokens, 1, *value.shape[2:]),
+                        q=query,
+                        k=key,
+                        v=value,
                         state=active_state,
                         state_layout="VK",
                         scale=self.head_k_dim**-0.5,
