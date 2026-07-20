@@ -317,15 +317,18 @@ def _silu_mul_per_token_group_fp8_quant_musa_large(
         device=input_tensor.device,
         dtype=torch.float32,
     )
+    from vllm_musa.jit_kernel.csrc.quant import per_token_group_quant_8bit
+
     fp8_min, fp8_max = get_fp8_min_max()
-    torch.ops._C_musa_ops.silu_and_mul_per_token_group_fp8_quant(
+    per_token_group_quant_8bit(
         input_tensor,
         output,
         output_s,
-        group_size,
-        1e-10,
-        fp8_min,
-        fp8_max,
+        group_size=group_size,
+        eps=1e-10,
+        min_8bit=fp8_min,
+        max_8bit=fp8_max,
+        fuse_silu_and_mul=True,
     )
     return output, output_s
 
