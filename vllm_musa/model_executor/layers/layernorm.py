@@ -69,9 +69,18 @@ class MusaGemmaRMSNorm(GemmaRMSNorm):
             return self.forward_native(x, residual)
 
         if residual is not None:
-            # Residual calls flow through vLLM IR so its maybe_inplace contract
-            # validates donation. The MUSA provider owns only capability and
-            # measured profitability.
+            weight = self.weight.data
+            if (
+                _can_use_musa_jit_rmsnorm(x, weight)
+                and residual.shape == x.shape
+                and residual.dtype == x.dtype
+                and residual.is_contiguous()
+            ):
+                # MUSA: fused residual-add + Gemma RMSNorm in one JIT kernel;
+                # weight is the raw zero-centered param, gemma=True applies +1.
+                return musa_jit_norm.fused_add_rmsnorm(
+                    x, residual, weight, self.variance_epsilon, gemma=True
+                )
             return self.forward_native(x, residual)
 
         weight = self.weight.data
