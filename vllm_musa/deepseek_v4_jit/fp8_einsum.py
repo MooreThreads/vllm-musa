@@ -8,11 +8,7 @@ import os
 import torch
 
 _GROUP_SIZE = 128
-_IMPL_ENV = "VLLM_MUSA_DEEPSEEK_V4_FP8_EINSUM_IMPL"
-
-
-def _impl_mode() -> str:
-    return os.getenv(_IMPL_ENV, "auto").strip().lower()
+_DEEPGEMM_MIN_TOKENS = 128
 
 
 def _is_musa_tensor(tensor: torch.Tensor) -> bool:
@@ -86,10 +82,7 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
     out: torch.Tensor,
     equation: str,
 ) -> tuple[bool, str]:
-    """Try the native MUSA GEMV path for ``bhr,hdr->bhd`` FP8 einsum."""
-    mode = _impl_mode()
-    if mode in {"torch", "fallback", "off", "0"}:
-        return False, f"disabled by {_IMPL_ENV}"
+    """Dispatch ``bhr,hdr->bhd`` to DeepGEMM or GEMV based on token count."""
     if equation != "bhr,hdr->bhd":
         return False, f"unsupported equation {equation!r}"
     if activation.dim() != 3 or out.dim() != 3:
@@ -122,8 +115,6 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
             groups,
         )
     except Exception as exc:
-        if mode in {"gemv", "native", "force"}:
-            raise
         return False, f"{type(exc).__name__}: {exc}"
 
     if normalized_in_dim != in_dim or out.shape != (tokens, groups, out_dim):
@@ -132,6 +123,41 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
             f"activation={tuple(activation.shape)}, weight={tuple(weight.shape)}, "
             f"out={tuple(out.shape)}"
         )
+
+    deepgemm_error: str | None = None
+    if tokens >= _DEEPGEMM_MIN_TOKENS and out.dtype == torch.bfloat16:
+        try:
+            from vllm.utils.deep_gemm import fp8_gemm_nt
+
+            for group_idx in range(groups):
+                group_out_view = out[:, group_idx, :]
+                copy_group_out = not group_out_view.is_contiguous()
+                group_out = (
+                    torch.empty_like(
+                        group_out_view,
+                        memory_format=torch.contiguous_format,
+                    )
+                    if copy_group_out
+                    else group_out_view
+                )
+                fp8_gemm_nt(
+                    (
+                        activation[:, group_idx, :].contiguous(),
+                        activation_scale[:, group_idx, :].contiguous(),
+                    ),
+                    (
+                        weight[group_idx].contiguous(),
+                        scales[group_idx].contiguous(),
+                    ),
+                    group_out,
+                    is_deep_gemm_e8m0_used=False,
+                )
+                if copy_group_out:
+                    group_out_view.copy_(group_out)
+        except Exception as exc:
+            deepgemm_error = f"{type(exc).__name__}: {exc}"
+        else:
+            return True, "musa_deepgemm_fp8_o_proj"
 
     try:
         from vllm_musa import _custom_ops as musa_ops
@@ -145,10 +171,10 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
             )
             out[:, group_idx, :].copy_(group_out)
     except Exception as exc:
-        if mode in {"gemv", "native", "force"}:
-            raise
         return False, f"{type(exc).__name__}: {exc}"
 
+    if deepgemm_error is not None:
+        return True, f"musa_fused_gemv (DeepGEMM fallback: {deepgemm_error})"
     return True, "musa_fused_gemv"
 
 
