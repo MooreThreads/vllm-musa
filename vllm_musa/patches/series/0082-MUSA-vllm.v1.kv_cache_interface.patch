@@ -3,6 +3,7 @@ From: musa <musa@local>
 Subject: [PATCH] MUSA: vllm.v1.kv_cache_interface separate mamba pool fields
 
 ---
+diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
 --- a/vllm/v1/kv_cache_interface.py
 +++ b/vllm/v1/kv_cache_interface.py
 @@ -859,6 +859,7 @@
@@ -19,7 +20,8 @@ Subject: [PATCH] MUSA: vllm.v1.kv_cache_interface separate mamba pool fields
 
 +    # MUSA: block count of the separate mamba state pool when
 +    # VLLM_MUSA_MAMBA_SEPARATE_POOL is on. None = mamba shares the
-+    # attention pool (upstream behavior).
++    # attention pool (upstream behavior). The count is per Mamba group;
++    # each group owns a separate BlockPool/address space.
 +    musa_mamba_num_blocks: int | None = None
 +
      @property

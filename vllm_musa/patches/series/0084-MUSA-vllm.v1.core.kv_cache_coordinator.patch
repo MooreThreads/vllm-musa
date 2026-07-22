@@ -24,18 +24,22 @@ Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
 +        # MUSA: dedicated non-binding BlockPool for mamba state, so mamba
 +        # groups own a small contiguous block-id space and the mate GDN
 +        # decode runs in place. Sized in the config to never bind.
-+        self.musa_mamba_block_pool = None
++        self.musa_mamba_block_pools = {}
 +        _musa_mamba_nb = getattr(
 +            kv_cache_config, "musa_mamba_num_blocks", None
 +        )
 +        if musa_mamba_separate_pool_enabled() and _musa_mamba_nb:
-+            self.musa_mamba_block_pool = BlockPool(
-+                num_gpu_blocks=_musa_mamba_nb,
-+                enable_caching=False,
-+                hash_block_size=hash_block_size,
-+                enable_kv_cache_events=False,
-+                metrics_collector=None,
-+            )
++            for _musa_group_id, _musa_group in enumerate(
++                kv_cache_config.kv_cache_groups
++            ):
++                if isinstance(_musa_group.kv_cache_spec, MambaSpec):
++                    self.musa_mamba_block_pools[_musa_group_id] = BlockPool(
++                        num_gpu_blocks=_musa_mamba_nb,
++                        enable_caching=False,
++                        hash_block_size=hash_block_size,
++                        enable_kv_cache_events=False,
++                        metrics_collector=None,
++                    )
 +
          # KV cache group indices that get the EAGLE last-block drop.
          self.eagle_group_ids: set[int] = {
@@ -46,9 +50,9 @@ Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
                  max_model_len=max_model_len,
 -                block_pool=self.block_pool,
 +                block_pool=(
-+                    self.musa_mamba_block_pool
++                    self.musa_mamba_block_pools.get(i)
 +                    if (
-+                        self.musa_mamba_block_pool is not None
++                        i in self.musa_mamba_block_pools
 +                        and isinstance(
 +                            kv_cache_group.kv_cache_spec, MambaSpec
 +                        )
@@ -62,7 +66,7 @@ Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
          """
          num_blocks_to_allocate = 0
          for i, manager in enumerate(self.single_type_managers):
-+            if self.musa_mamba_block_pool is not None and isinstance(
++            if self.musa_mamba_block_pools and isinstance(
 +                manager, MambaManager
 +            ):
 +                # MUSA: mamba is on its own non-binding pool; do not count

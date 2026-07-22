@@ -1,23 +1,23 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Mon, 14 Jul 2026 12:00:00 +0800
-Subject: [PATCH] MUSA: separate mamba state BlockPool
+Subject: [PATCH] MUSA: separate mamba state BlockPools
 
-Give mamba state its own contiguous BlockPool, sized from max_num_seqs so it
-never binds, and keep it out of the attention pool's proportional shrink. The
-mamba groups then own a small contiguous block-id space and mate's GDN decode
+Give mamba state its own contiguous BlockPools, sized from max_num_seqs so they
+never bind, and keep them out of the attention pool's proportional shrink. The
+mamba groups then own small contiguous block-id spaces and mate's GDN decode
 updates the recurrent state in place instead of gathering and scattering it.
 
 On by default; set VLLM_MUSA_MAMBA_SEPARATE_POOL=0 to fall back to the shared pool.
 ---
- vllm/v1/core/kv_cache_utils.py | 76 +++---
- 1 file changed, 76 insertions(+), 0 deletions(-)
+ vllm/v1/core/kv_cache_utils.py | 80 ++++++++
+ 1 file changed, 80 insertions(+), 0 deletions(-)
 
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
 index 3ea89d5af..c8425baa5 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
-@@ -1357,6 +1357,63 @@
+@@ -1357,6 +1357,69 @@
  _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
  
  
@@ -37,20 +37,31 @@ index 3ea89d5af..c8425baa5 100644
 +    """Split KV memory into a small contiguous mamba pool and the attention pool.
 +
 +    Mamba groups get one dedicated tensor per layer (segregated-contiguous,
-+    indexed by their own block-id space); the mamba pool is sized so it never
-+    binds (attention admission caps running requests at <= max_num_seqs, each
-+    needing 1 block per mamba group).
++    indexed by their own block-id space); the mamba pool is sized from the
++    MambaSpec admission bound so it never binds (attention admission caps
++    running requests at <= max_num_seqs).
 +    Returns (kv_cache_tensors, attn_num_blocks, mamba_num_blocks).
 +    """
 +    mamba_groups = [g for g in kv_cache_groups if isinstance(g.kv_cache_spec, MambaSpec)]
 +    attn_groups = [
 +        g for g in kv_cache_groups if not isinstance(g.kv_cache_spec, MambaSpec)
 +    ]
-+    max_num_seqs = vllm_config.scheduler_config.max_num_seqs
-+    # Peak live blocks = num_mamba_groups * max_num_seqs (1 block/seq/group);
-+    # plus the null block and slack.
-+    mamba_num_blocks = len(mamba_groups) * (max_num_seqs + 8) + 1
 +    mamba_page = get_uniform_page_size([g.kv_cache_spec for g in mamba_groups])
++    max_num_seqs = vllm_config.scheduler_config.max_num_seqs
++    # Each Mamba group gets its own non-binding BlockPool/address space.
++    # Therefore block IDs are local to a group and do not reserve another
++    # copy of every request for sibling groups. Use the same per-request
++    # bound as MambaManager (including align/all/speculative modes), then add
++    # only BlockPool's null block. The previous fixed +8 slack wasted state
++    # memory and reduced the attention pool without an admission invariant.
++    mamba_blocks_per_request = max(
++        cdiv(
++            group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
++            mamba_page,
++        )
++        for group in mamba_groups
++    )
++    mamba_num_blocks = max_num_seqs * mamba_blocks_per_request + 1
 +    mamba_layers = [ln for g in mamba_groups for ln in g.layer_names]
 +    mamba_bytes = mamba_page * mamba_num_blocks * len(mamba_layers)
 +    if mamba_bytes >= available_memory:
@@ -81,7 +92,7 @@ index 3ea89d5af..c8425baa5 100644
  def get_kv_cache_config_from_groups(
      vllm_config: VllmConfig,
      kv_cache_groups: list[KVCacheGroupSpec],
-@@ -1407,6 +1464,21 @@
+@@ -1407,6 +1470,21 @@
          num_blocks, kv_cache_tensors = _get_kv_cache_config_packed(
              vllm_config, kv_cache_groups, available_memory
          )
