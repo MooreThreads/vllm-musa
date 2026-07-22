@@ -141,6 +141,22 @@ def test_mhc_fused_post_pre_composes_musa_post_pre_and_norm():
     assert _stores_subscript(inner_kernel, out_arg)
 
 
+def test_mhc_fused_post_prenorm_small_m_path_is_shape_bounded():
+    source = _read("vllm_musa/deepseek_v4_mhc.py")
+    kernels = _read("vllm_musa/deepseek_v4_jit/tilelang_kernels.py")
+
+    assert "def _try_mhc_fused_post_prenorm_musa(" in source
+    assert "num_tokens <= 16" in source
+    assert "hidden_size == 4096" in source
+    assert "tile_n = 2 if num_tokens < 8 else 3" in source
+    assert "split_k = 8 if num_tokens < 8 else 4" in source
+    assert "def mhc_fused_post_prenorm_kernel(" in kernels
+    assert "new_residual[row] = T.cast(" in kernels
+    assert "residual_out[token_id, row, hidden_idx]" in kernels
+    assert "out_partial[" in kernels
+    assert "sqrsum_partial[split_id, token_id]" in kernels
+
+
 def test_mhc_auto_paths_fall_back_when_tilelang_is_unavailable():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
 

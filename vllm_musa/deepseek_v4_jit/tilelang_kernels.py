@@ -305,6 +305,166 @@ def mhc_prenorm_splitk_x_tme_cast_kernel(
 
 
 @lru_cache(maxsize=None)
+def mhc_fused_post_prenorm_kernel(
+    hidden_size: int,
+    n_out: int = 24,
+    threads: int = 256,
+    tile_n: int = 2,
+    split_k: int = 8,
+):
+    """Fuse MHC post mapping with the next prenorm projection."""
+    num_tokens = T.dynamic("num_tokens")
+    hc_mult = 4
+    hidden_per_split = hidden_size // split_k
+    n_tiles = n_out // tile_n
+
+    assert threads == 256
+    assert split_k in (4, 8)
+    assert hidden_size % split_k == 0
+    assert hidden_per_split % threads == 0
+    assert tile_n in (2, 3)
+    assert n_out % tile_n == 0
+
+    @tilelang.jit(
+        target="musa",
+        pass_configs=_mhc_pre_big_fuse_pass_configs(tilelang, "safe"),
+    )
+    def _mhc_fused_post_prenorm_kernel():
+        @T.prim_func
+        def _kernel(
+            comb_mix: T.Tensor((num_tokens, hc_mult, hc_mult), T.float32),
+            residual_in: T.Tensor(
+                (num_tokens, hc_mult, hidden_size),
+                T.bfloat16,
+            ),
+            post_mix: T.Tensor((num_tokens, hc_mult), T.float32),
+            x_in: T.Tensor((num_tokens, hidden_size), T.bfloat16),
+            weight: T.Tensor(
+                (n_out, hc_mult, hidden_size),
+                T.float32,
+            ),
+            out_partial: T.Tensor(
+                (split_k, num_tokens, n_out),
+                T.float32,
+            ),
+            sqrsum_partial: T.Tensor(
+                (split_k, num_tokens),
+                T.float32,
+            ),
+            residual_out: T.Tensor(
+                (num_tokens, hc_mult, hidden_size),
+                T.bfloat16,
+            ),
+        ):
+            with T.Kernel(
+                num_tokens,
+                n_tiles,
+                split_k,
+                threads=threads,
+            ) as (token_id, out_tile_id, split_id):
+                thread_id = T.get_thread_binding()
+                warp_id = thread_id // 32
+                lane_id = thread_id % 32
+                num_warps = threads // 32
+
+                warp_partial = T.alloc_shared(
+                    (num_warps, tile_n + 1),
+                    T.float32,
+                )
+                post_shared = T.alloc_shared((hc_mult,), T.float32)
+                comb_shared = T.alloc_shared(
+                    (hc_mult, hc_mult),
+                    T.float32,
+                )
+                post_local = T.alloc_local((hc_mult,), T.float32)
+                comb_local = T.alloc_local(
+                    (hc_mult, hc_mult),
+                    T.float32,
+                )
+                accum = T.alloc_local((tile_n,), T.float32)
+                sqrsum = T.alloc_local((1,), T.float32)
+                new_residual = T.alloc_local((hc_mult,), T.float32)
+
+                T.clear(accum)
+                T.clear(sqrsum)
+                hidden_start = split_id * hidden_per_split
+
+                T.copy(post_mix[token_id, 0], post_shared)
+                T.copy(comb_mix[token_id, 0, 0], comb_shared)
+                for row in T.unroll(hc_mult):
+                    post_local[row] = post_shared[row]
+                    for source_row in T.unroll(hc_mult):
+                        comb_local[source_row, row] = comb_shared[source_row, row]
+
+                for hidden_iter in T.serial(hidden_per_split // threads):
+                    hidden_idx = hidden_start + hidden_iter * threads + thread_id
+
+                    for row in T.unroll(hc_mult):
+                        new_residual[row] = (
+                            post_local[row] * x_in[token_id, hidden_idx]
+                        )
+                        for source_row in T.unroll(hc_mult):
+                            new_residual[row] += (
+                                comb_local[source_row, row]
+                                * residual_in[token_id, source_row, hidden_idx]
+                            )
+                        # Match the decomposed path: post stores bf16 before
+                        # prenorm consumes the value.
+                        new_residual[row] = T.cast(
+                            new_residual[row],
+                            T.bfloat16,
+                        )
+
+                    if out_tile_id == 0:
+                        for row in T.unroll(hc_mult):
+                            residual_out[token_id, row, hidden_idx] = T.cast(
+                                new_residual[row],
+                                T.bfloat16,
+                            )
+                            sqrsum[0] += new_residual[row] * new_residual[row]
+
+                    for out_idx in T.unroll(tile_n):
+                        weight_row = out_tile_id * tile_n + out_idx
+                        for row in T.unroll(hc_mult):
+                            accum[out_idx] += (
+                                weight[weight_row, row, hidden_idx]
+                                * new_residual[row]
+                            )
+
+                for out_idx in T.unroll(tile_n):
+                    accum[out_idx] = T.warp_reduce_sum(accum[out_idx])
+                if out_tile_id == 0:
+                    sqrsum[0] = T.warp_reduce_sum(sqrsum[0])
+
+                if lane_id == 0:
+                    for out_idx in T.unroll(tile_n):
+                        warp_partial[warp_id, out_idx] = accum[out_idx]
+                    if out_tile_id == 0:
+                        warp_partial[warp_id, tile_n] = sqrsum[0]
+                T.sync_threads()
+
+                if warp_id == 0:
+                    if lane_id < tile_n:
+                        reduced = T.alloc_var(T.float32, init=0.0)
+                        for source_warp in T.unroll(num_warps):
+                            reduced += warp_partial[source_warp, lane_id]
+                        out_partial[
+                            split_id,
+                            token_id,
+                            out_tile_id * tile_n + lane_id,
+                        ] = reduced
+                    if out_tile_id == 0 and lane_id == 0:
+                        reduced_sqrsum = T.alloc_var(T.float32, init=0.0)
+                        for source_warp in T.unroll(num_warps):
+                            reduced_sqrsum += warp_partial[source_warp, tile_n]
+                        sqrsum_partial[split_id, token_id] = reduced_sqrsum
+
+        return _kernel
+
+    return _mhc_fused_post_prenorm_kernel()
+
+
+@lru_cache(maxsize=None)
 def mhc_pre_big_fuse_kernel(
     hidden_size: int,
     rms_eps: float,
