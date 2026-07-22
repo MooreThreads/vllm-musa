@@ -35,6 +35,7 @@ from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     select_fused_moe_backend,
     thresholds_for_shape,
 )
+from vllm_musa.jit_kernel.csrc.moe import maybe_fast_moe_sum
 
 logger = init_logger(__name__)
 
@@ -1409,10 +1410,9 @@ def fused_experts_impl(
             use_swigelu=False,
         )
         # ========================== END ====================
-        ops.moe_sum(
-            curr_intermediate_cache3.view(*curr_intermediate_cache3.size()),
-            curr_out_hidden_states,
-        )
+        moe_sum_input = curr_intermediate_cache3.view(*curr_intermediate_cache3.size())
+        if not maybe_fast_moe_sum(moe_sum_input, curr_out_hidden_states):
+            ops.moe_sum(moe_sum_input, curr_out_hidden_states)
 
     return out_hidden_states
 
