@@ -910,14 +910,49 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def update_block_size_for_backend(cls, vllm_config: "VllmConfig") -> None:
+        model_config = vllm_config.model_config
+        cache_config = vllm_config.cache_config
+        # The separate Mamba pools have independent physical pages and block-id
+        # spaces. In the no-prefix-cache mode used by Qwen3.5/Qwen3.6 serving,
+        # do not let upstream inflate the attention block to the full recurrent
+        # state page (1056 tokens for Qwen3.6-35B-A3B). That inflation wastes
+        # attention KV capacity and forces avoidable request preemption.
+        separate_mamba_pages = (
+            model_config is not None
+            and cache_config is not None
+            and model_config.is_hybrid
+            and cache_config.mamba_cache_mode == "none"
+            and os.environ.get("VLLM_MUSA_MAMBA_SEPARATE_POOL", "1") == "1"
+        )
+        if separate_mamba_pages:
+            backend_cls = cls._find_non_ssm_backend(vllm_config)
+            if backend_cls is not None:
+                from vllm.config.vllm import set_current_vllm_config
+
+                target_block_size = (
+                    cache_config.block_size
+                    if cache_config.user_specified_block_size
+                    else 64
+                )
+                with set_current_vllm_config(vllm_config):
+                    supported = backend_cls.supports_block_size(target_block_size)
+                if supported:
+                    cache_config.block_size = target_block_size
+                    cache_config.mamba_page_size_padded = None
+                    logger.info(
+                        "[MUSA]Keeping separate-pool hybrid attention block "
+                        "size at %d for %s backend.",
+                        target_block_size,
+                        backend_cls.get_name(),
+                    )
+                    return
+
         # MUSA: 64 is the only optimal KV page here (paged FMHA/MLA decode takes
         # the TME bulk-gather path). Let upstream pick and mamba-align the page
         # first, then pin every non-hybrid backend that supports a 64 page to 64,
         # whatever super() picked. A user --block-size and fixed-page kernels that
         # cannot take 64 (sparse MLA at 256) are left as super() resolved them.
         super().update_block_size_for_backend(vllm_config)
-        model_config = vllm_config.model_config
-        cache_config = vllm_config.cache_config
         if (
             model_config is None
             or cache_config is None

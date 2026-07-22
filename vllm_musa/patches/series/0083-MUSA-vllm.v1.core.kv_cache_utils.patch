@@ -114,7 +114,32 @@ index 3ea89d5af..c8425baa5 100644
      else:
          # General case:
          # We will have group_size memory pools, each is shared by one layer from
-@@ -2182,6 +2254,10 @@
+@@ -1748,8 +1838,21 @@
+     # As KVCacheManager can only allocate memory of one size, we need to unify
+     # the page size of the layers. For cases cannot be unified, this function
+     # will raise an error.
+-    filtered_spec = unify_kv_cache_spec_page_size(filtered_spec)
+-    groups = _get_kv_cache_groups_uniform_page_size(filtered_spec)
++    if (
++        musa_mamba_separate_pool_enabled()
++        and not hidden_specs
++        and any(isinstance(spec, MambaSpec) for spec in filtered_spec.values())
++        and any(not isinstance(spec, MambaSpec) for spec in filtered_spec.values())
++    ):
++        # MUSA: the dedicated Mamba BlockPools have independent page sizes and
++        # block-id spaces. Keep the attention spec at its backend-preferred
++        # block size instead of expanding every attention page to one full
++        # recurrent-state page. The grouping algorithm itself does not require
++        # equal page sizes; the separated allocator below handles each family.
++        groups = _get_kv_cache_groups_uniform_page_size(filtered_spec)
++    else:
++        filtered_spec = unify_kv_cache_spec_page_size(filtered_spec)
++        groups = _get_kv_cache_groups_uniform_page_size(filtered_spec)
+-
++
+     # Add hidden-state layers back with page aligned to the common page.
+     if hidden_specs:
+@@ -2182,6 +2260,10 @@
  
          # Shrink tensor size proportionally
          for tensor in kv_cache_config.kv_cache_tensors:
