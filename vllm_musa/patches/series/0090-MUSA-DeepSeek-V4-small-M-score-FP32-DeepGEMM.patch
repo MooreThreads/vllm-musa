@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 21 Jul 2026 22:00:00 +0800
+Subject: [PATCH] MUSA: route DeepSeek-V4 small-M score FP32 GEMM to DeepGEMM
+
+---
+ vllm/models/deepseek_v4/attention.py | 36 ++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 1f39ffa8ca..6d63b89036 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -65,11 +65,47 @@ logger = init_logger(__name__)
+ from vllm.platforms import current_platform
+ 
+ 
++_MUSA_DEEPSEEK_V4_SCORE_FP32_DEEPGEMM_MAX_TOKENS = 16
++
++
++def _musa_deepseek_v4_use_score_fp32_deepgemm(
++    a: torch.Tensor,
++    weight: torch.Tensor,
++    out_dtype: torch.dtype,
++) -> bool:
++    is_musa = (
++        current_platform.is_musa()
++        or getattr(torch.version, "musa", None) is not None
++        or getattr(a.device, "type", None) == "musa"
++        or getattr(weight.device, "type", None) == "musa"
++    )
++    return (
++        is_musa
++        and a.ndim == 2
++        and weight.ndim == 2
++        and a.dtype == torch.bfloat16
++        and weight.dtype == torch.bfloat16
++        and out_dtype == torch.float32
++        and a.shape[0]
++        <= _MUSA_DEEPSEEK_V4_SCORE_FP32_DEEPGEMM_MAX_TOKENS
++    )
++
++
+ def _musa_deepseek_v4_linear_out_dtype(
+     a: torch.Tensor,
+     weight: torch.Tensor,
+     out_dtype: torch.dtype,
+ ) -> torch.Tensor:
++    if _musa_deepseek_v4_use_score_fp32_deepgemm(a, weight, out_dtype):
++        import deep_gemm
++
++        output = torch.empty(
++            (a.shape[0], weight.shape[0]),
++            dtype=out_dtype,
++            device=a.device,
++        )
++        deep_gemm.bf16_gemm_nt(a, weight, output)
++        return output
+     if (
+         current_platform.is_musa()
+         or getattr(torch.version, "musa", None) is not None
