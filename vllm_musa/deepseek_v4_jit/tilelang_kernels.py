@@ -835,6 +835,98 @@ def mhc_weighted_rmsnorm_kernel(
     return _mhc_weighted_rmsnorm_kernel()
 
 
+@lru_cache(maxsize=None)
+def mhc_weighted_rmsnorm_mudnn_like_kernel(
+    hidden_size: int,
+    threads: int = 128,
+):
+    """Low-latency weighted RMSNorm for DeepSeek-V4 MHC at any token M."""
+    num_rows = T.dynamic("num_rows")
+    elements_per_thread = 8
+    chunks = hidden_size // (threads * elements_per_thread)
+    assert hidden_size > 0
+    assert hidden_size % (threads * elements_per_thread) == 0
+    assert threads == 128
+
+    @tilelang.jit(target="musa", pass_configs={})
+    def _mhc_weighted_rmsnorm_mudnn_like_kernel():
+        @T.prim_func
+        def _kernel(
+            x: T.Tensor((num_rows, hidden_size), T.bfloat16),
+            weight: T.Tensor((hidden_size,), T.bfloat16),
+            out: T.Tensor((num_rows, hidden_size), T.bfloat16),
+            eps: T.float32,
+        ):
+            with T.Kernel(num_rows, threads=threads) as row_id:
+                tx = T.get_thread_binding()
+                sumsq = T.alloc_local((1,), T.float32)
+                shared = T.alloc_shared((threads,), T.float32)
+                rrms = T.alloc_local((1,), T.float32)
+                rsqrt_estimate = T.alloc_local((1,), T.float32)
+
+                sumsq[0] = 0.0
+                for chunk in T.serial(chunks):
+                    base = (
+                        chunk * threads * elements_per_thread
+                        + tx * elements_per_thread
+                    )
+                    for elem in T.serial(elements_per_thread):
+                        value = T.cast(x[row_id, base + elem], T.float32)
+                        sumsq[0] += value * value
+
+                if threads >= 128:
+                    if tx >= 64:
+                        shared[tx] = sumsq[0]
+                    T.sync_threads()
+                    if tx < 64:
+                        sumsq[0] += shared[tx + 64]
+                if threads >= 64:
+                    T.sync_threads()
+                    if tx >= 32:
+                        shared[tx] = sumsq[0]
+                    T.sync_threads()
+                    if tx < 32:
+                        sumsq[0] += shared[tx + 32]
+                if tx < 32:
+                    sumsq[0] += T.shfl_down(sumsq[0], 16)
+                    sumsq[0] += T.shfl_down(sumsq[0], 8)
+                    sumsq[0] += T.shfl_down(sumsq[0], 4)
+                    sumsq[0] += T.shfl_down(sumsq[0], 2)
+                    sumsq[0] += T.shfl_down(sumsq[0], 1)
+                if tx == 0:
+                    shared[0] = sumsq[0]
+                T.sync_threads()
+
+                sumsq[0] = shared[0] / float(hidden_size) + eps
+                # Match the fast muDNN sequence: hardware reciprocal sqrt
+                # followed by one Newton refinement.
+                rsqrt_estimate[0] = T.ieee_frsqrt(sumsq[0])
+                rrms[0] = rsqrt_estimate[0] * (
+                    T.cast(1.5, T.float32)
+                    - T.cast(0.5, T.float32)
+                    * sumsq[0]
+                    * rsqrt_estimate[0]
+                    * rsqrt_estimate[0]
+                )
+
+                for chunk in T.serial(chunks):
+                    base = (
+                        chunk * threads * elements_per_thread
+                        + tx * elements_per_thread
+                    )
+                    for elem in T.serial(elements_per_thread):
+                        value = T.cast(x[row_id, base + elem], T.float32)
+                        weight_value = T.cast(weight[base + elem], T.float32)
+                        out[row_id, base + elem] = T.cast(
+                            (value * rrms[0]) * weight_value,
+                            T.bfloat16,
+                        )
+
+        return _kernel
+
+    return _mhc_weighted_rmsnorm_mudnn_like_kernel()
+
+
 @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
 def qnorm_rope_kernel():
     num_tokens = T.dynamic("num_tokens")

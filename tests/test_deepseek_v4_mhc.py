@@ -121,7 +121,11 @@ def test_mhc_fused_post_pre_composes_musa_post_pre_and_norm():
     apply_norm = _function_node(source_tree, "_apply_optional_rms_norm")
     weighted_norm = _function_node(source_tree, "_try_mhc_weighted_rms_norm_musa")
     kernel_factory = _function_node(kernels_tree, "mhc_weighted_rmsnorm_kernel")
+    mudnn_like_factory = _function_node(
+        kernels_tree, "mhc_weighted_rmsnorm_mudnn_like_kernel"
+    )
     inner_kernel = _function_node(kernel_factory, "_kernel")
+    mudnn_like_inner = _function_node(mudnn_like_factory, "_kernel")
 
     assert "def mhc_fused_post_pre_musa(" in source
     assert "residual_cur = mhc_post_musa(" in source
@@ -130,15 +134,24 @@ def test_mhc_fused_post_pre_composes_musa_post_pre_and_norm():
     assert "def _try_mhc_weighted_rms_norm_musa(" in source
     assert "VLLM_MUSA_DEEPSEEK_V4_MHC_WEIGHTED_RMSNORM_IMPL" in source
     assert "def mhc_weighted_rmsnorm_kernel(" in kernels
+    assert "def mhc_weighted_rmsnorm_mudnn_like_kernel(" in kernels
     assert _calls(apply_norm, "_try_mhc_weighted_rms_norm_musa")
     assert _loads_name(apply_norm, "norm_weight")
-    assert _calls(weighted_norm, "mhc_weighted_rmsnorm_kernel")
+    assert _loads_name(weighted_norm, "kernel_factory")
+    assert "mhc_weighted_rmsnorm_kernel" in source
+    assert "mhc_weighted_rmsnorm_mudnn_like_kernel" in source
     assert _calls(kernel_factory, "T.rsqrt")
     kernel_args = [arg.arg for arg in inner_kernel.args.args]
     assert len(kernel_args) == 4
     _, weight_arg, out_arg, _ = kernel_args
     assert _loads_name(inner_kernel, weight_arg)
     assert _stores_subscript(inner_kernel, out_arg)
+    assert _calls(mudnn_like_factory, "T.ieee_frsqrt")
+    mudnn_like_args = [arg.arg for arg in mudnn_like_inner.args.args]
+    assert len(mudnn_like_args) == 4
+    _, mudnn_weight_arg, mudnn_out_arg, _ = mudnn_like_args
+    assert _loads_name(mudnn_like_inner, mudnn_weight_arg)
+    assert _stores_subscript(mudnn_like_inner, mudnn_out_arg)
 
 
 def test_mhc_fused_post_prenorm_small_m_path_is_shape_bounded():

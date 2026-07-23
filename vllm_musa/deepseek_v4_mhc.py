@@ -176,11 +176,17 @@ def _try_mhc_weighted_rms_norm_musa(
     try:
         from vllm_musa.deepseek_v4_jit.tilelang_kernels import (
             mhc_weighted_rmsnorm_kernel,
+            mhc_weighted_rmsnorm_mudnn_like_kernel,
         )
 
         x_2d = x.view(-1, hidden_size)
         out_2d = torch.empty_like(x_2d)
-        mhc_weighted_rmsnorm_kernel(hidden_size, threads=threads)(
+        kernel_factory = (
+            mhc_weighted_rmsnorm_mudnn_like_kernel
+            if hidden_size == 4096
+            else mhc_weighted_rmsnorm_kernel
+        )
+        kernel_factory(hidden_size, threads=threads)(
             x_2d,
             norm_weight,
             out_2d,
