@@ -4,6 +4,7 @@
 
 import json
 
+import pytest
 import torch
 
 
@@ -753,3 +754,68 @@ def test_musa_dispatcher_explicit_upstream_bypasses_deepgemm(monkeypatch):
     )
 
     assert fused_moe._musa_fused_experts_impl_dispatch(**kwargs) is fallback
+
+
+def _qwen36_bf16_moe_meta_inputs(tokens: int):
+    return {
+        "hidden_states": torch.empty(
+            tokens, 4096, dtype=torch.bfloat16, device="meta"
+        ),
+        "w1": torch.empty(257, 2048, 4096, dtype=torch.bfloat16, device="meta"),
+        "w2": torch.empty(257, 4096, 1024, dtype=torch.bfloat16, device="meta"),
+    }
+
+
+def _qwen36_bf16_prefill_gate_kwargs(tokens: int = 2500):
+    inputs = _qwen36_bf16_moe_meta_inputs(tokens)
+    return {
+        **inputs,
+        "topk_ids": torch.empty(tokens, 9, dtype=torch.int32, device="meta"),
+        "activation": "silu",
+        "apply_router_weight_on_input": False,
+        "use_fp8_w8a8": False,
+        "use_int8_w8a8": False,
+        "use_int8_w8a16": False,
+        "use_int4_w4a16": False,
+        "ocp_mx_scheme": None,
+        "per_channel_quant": False,
+        "expert_map": None,
+        "w1_scale": None,
+        "w2_scale": None,
+        "a1_scale": None,
+        "a2_scale": None,
+        "block_shape": None,
+        "w1_bias": None,
+        "w2_bias": None,
+    }
+
+
+def test_musa_bf16_deepgemm_prefill_uses_validated_threshold():
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    assert not fused_moe._can_use_moe_deepgemm_bf16_prefill(
+        **_qwen36_bf16_prefill_gate_kwargs(1023)
+    )
+    assert fused_moe._can_use_moe_deepgemm_bf16_prefill(
+        **_qwen36_bf16_prefill_gate_kwargs(1024)
+    )
+
+
+@pytest.mark.parametrize(
+    "unsupported",
+    [
+        {"use_fp8_w8a8": True},
+        {"block_shape": [128, 128]},
+        {"expert_map": torch.empty(1, dtype=torch.int32, device="meta")},
+        {"w1_bias": torch.empty(1, dtype=torch.bfloat16, device="meta")},
+        {"activation": "gelu"},
+    ],
+)
+def test_musa_bf16_deepgemm_prefill_gate_rejects_unsupported_variants(
+    unsupported,
+):
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    kwargs = _qwen36_bf16_prefill_gate_kwargs()
+    kwargs.update(unsupported)
+    assert not fused_moe._can_use_moe_deepgemm_bf16_prefill(**kwargs)

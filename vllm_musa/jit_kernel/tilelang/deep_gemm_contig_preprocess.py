@@ -706,6 +706,129 @@ def _fp8_assign_compact_kernel(
     return deep_gemm_contig_preprocess_fp8_assign_compact
 
 
+@functools.lru_cache(maxsize=8)
+@tilelang.jit(
+    out_idx=[],
+    target="musa",
+    pass_configs=_PASS_CONFIGS,
+    compile_flags=_COMPILE_FLAGS + ["-include", _ATOMIC_HELPER_H],
+)
+def _bf16_assign_compact_kernel(
+    input_dtype,
+    output_dtype,
+    hidden_groups: int,
+    groups_per_block: int,
+    vec_elems: int,
+    topk: int,
+):
+    input_numel = T.dynamic("input_numel")
+    output_numel = T.dynamic("output_numel")
+    src2dst_numel = T.dynamic("src2dst_numel")
+    m_indices_numel = T.dynamic("m_indices_numel")
+    expert_numel = T.dynamic("expert_numel")
+    group_size = 128
+    hidden_size = hidden_groups * group_size
+    threads_per_group = group_size // vec_elems
+    num_threads = threads_per_group * groups_per_block
+
+    @T.prim_func
+    def deep_gemm_contig_preprocess_bf16_assign_compact(
+        hidden: T.Tensor((input_numel,), input_dtype),
+        topk_ids: T.Tensor((src2dst_numel,), "int32"),
+        topk_ids_for_combine: T.Tensor((src2dst_numel,), "int32"),
+        cursor: T.Tensor((expert_numel,), "int32"),
+        src2dst: T.Tensor((src2dst_numel,), "int32"),
+        m_indices: T.Tensor((m_indices_numel,), "int32"),
+        output_bf16: T.Tensor((output_numel,), output_dtype),
+        num_tokens: T.int32,
+        num_local_experts: T.int32,
+    ):
+        with T.Kernel(num_tokens, threads=num_threads) as (bt,):
+            tid = T.get_thread_binding()
+            subgroup = tid // threads_per_group
+            lane = tid % threads_per_group
+            elem_base = T.alloc_var("int32")
+            hidden_group = T.alloc_var("int32")
+            input_base = T.alloc_var("int64")
+            dst = T.alloc_var("int32")
+            out_base = T.alloc_var("int64")
+            dst_shared = T.alloc_shared((topk,), "int32")
+
+            if tid < topk:
+                slot = bt * topk + tid
+                expert = topk_ids[slot]
+                if expert >= 0 and expert < num_local_experts:
+                    topk_ids_for_combine[slot] = expert
+                    dst = T.call_extern(
+                        "int32",
+                        "sgl_tl_atomic_add_offset",
+                        T.address_of(cursor[0]),
+                        expert,
+                        T.int32(1),
+                    )
+                    if dst < m_indices_numel:
+                        src2dst[slot] = dst
+                        m_indices[dst] = expert
+                        dst_shared[tid] = dst
+                    else:
+                        topk_ids_for_combine[slot] = num_local_experts
+                        src2dst[slot] = T.int32(-1)
+                        dst_shared[tid] = T.int32(-1)
+                else:
+                    topk_ids_for_combine[slot] = num_local_experts
+                    src2dst[slot] = T.int32(-1)
+                    dst_shared[tid] = T.int32(-1)
+            T.sync_threads()
+
+            elem_base = lane * vec_elems
+            for tile in T.serial(T.ceildiv(hidden_groups, groups_per_block)):
+                hidden_group = tile * groups_per_block + subgroup
+                if hidden_group < hidden_groups:
+                    input_base = (
+                        T.Cast("int64", bt) * hidden_size
+                        + hidden_group * group_size
+                        + elem_base
+                    )
+                    for topk_idx in T.serial(topk):
+                        dst = dst_shared[topk_idx]
+                        if dst >= 0:
+                            out_base = (
+                                T.Cast("int64", dst) * hidden_size
+                                + hidden_group * group_size
+                                + elem_base
+                            )
+                            T.call_extern(
+                                "handle",
+                                "sgl_tl_copy_bf16x8",
+                                T.address_of(output_bf16[0]),
+                                T.address_of(hidden[0]),
+                                out_base,
+                                input_base,
+                            )
+                            if vec_elems == 16:
+                                T.call_extern(
+                                    "handle",
+                                    "sgl_tl_copy_bf16x8",
+                                    T.address_of(output_bf16[0]),
+                                    T.address_of(hidden[0]),
+                                    out_base + 8,
+                                    input_base + 8,
+                                )
+
+    return deep_gemm_contig_preprocess_bf16_assign_compact
+
+
+def _bf16_config(hidden_size: int) -> tuple[int, int, int] | None:
+    if hidden_size <= 0 or hidden_size % 128 != 0:
+        return None
+    hidden_groups = hidden_size // 128
+    if hidden_groups <= 64:
+        return hidden_groups, hidden_groups, 8
+    if hidden_groups <= 128:
+        return hidden_groups, hidden_groups, 16
+    return None
+
+
 def _fp8_config(hidden_size: int) -> tuple[int, int, int] | None:
     if hidden_size <= 0 or hidden_size % 128 != 0:
         return None
@@ -833,6 +956,112 @@ def _impl_fp8(
     )
 
 
+def _impl_bf16(
+    hidden_states: torch.Tensor,
+    topk_ids: torch.Tensor,
+    output: torch.Tensor,
+    m_indices: torch.Tensor,
+    src2dst: torch.Tensor,
+    topk_ids_for_combine: torch.Tensor,
+    counts: torch.Tensor,
+    cursor: torch.Tensor,
+    num_local_experts: int,
+    block_m: int,
+) -> None:
+    num_slots = topk_ids.numel()
+    num_tokens = hidden_states.shape[0]
+    topk = topk_ids.shape[-1]
+    config = _bf16_config(hidden_states.shape[1])
+    if config is None:
+        raise RuntimeError(
+            f"unsupported TileLang DeepGEMM bf16 preprocess hidden={hidden_states.shape[1]}"
+        )
+    if topk > 16:
+        raise RuntimeError(f"unsupported TileLang DeepGEMM bf16 preprocess topk={topk}")
+    hidden_groups, groups_per_block, vec_elems = config
+    num_local_experts = int(num_local_experts)
+    if num_local_experts <= 0:
+        raise ValueError(f"num_local_experts must be positive, got {num_local_experts}")
+    clear = _clear_i32_kernel()
+    fill = _fill_i32_kernel()
+    single_block_count = _count_topk_single_block_kernel(num_local_experts)
+    count = _count_topk_block_hist_kernel(num_local_experts)
+    block_m = int(block_m)
+    if block_m <= 0:
+        raise ValueError(f"block_m must be positive, got {block_m}")
+    single_block_count_prefix = _count_prefix_topk_single_block_kernel(
+        num_local_experts, block_m
+    )
+    use_single_block_count = num_slots <= 1024
+    use_single_block_count_prefix = block_m != 1 and use_single_block_count
+    prefix = (
+        _prefix_counts_no_pad_kernel(num_local_experts)
+        if block_m == 1
+        else (
+            _prefix_counts_tree_kernel(num_local_experts, block_m)
+            if num_tokens < 512 and num_local_experts <= 1024
+            else (
+                _prefix_counts_scan_kernel(num_local_experts, block_m)
+                if num_local_experts <= 1024
+                else _prefix_counts_kernel(num_local_experts, block_m)
+            )
+        )
+    )
+    compact = _bf16_assign_compact_kernel(
+        hidden_states.dtype,
+        output.dtype,
+        hidden_groups,
+        groups_per_block,
+        vec_elems,
+        topk,
+    )
+    if not use_single_block_count and not use_single_block_count_prefix:
+        clear(counts, tilelang.cdiv(num_local_experts, 256), num_local_experts)
+        count(
+            topk_ids.reshape(-1),
+            counts,
+            tilelang.cdiv(num_slots, 1024),
+            num_slots,
+            num_local_experts,
+        )
+    if block_m == 1:
+        if use_single_block_count:
+            single_block_count(
+                topk_ids.reshape(-1), counts, num_slots, num_local_experts
+            )
+        prefix(counts, cursor, num_local_experts)
+    else:
+        fill(
+            m_indices,
+            tilelang.cdiv(m_indices.numel(), 256),
+            m_indices.numel(),
+            num_local_experts - 1,
+        )
+        if use_single_block_count_prefix:
+            single_block_count_prefix(
+                topk_ids.reshape(-1),
+                counts,
+                cursor,
+                m_indices,
+                num_slots,
+                num_local_experts,
+                block_m,
+            )
+        else:
+            prefix(counts, cursor, m_indices, num_local_experts, block_m)
+    compact(
+        hidden_states.reshape(-1),
+        topk_ids.reshape(-1),
+        topk_ids_for_combine.reshape(-1),
+        cursor,
+        src2dst,
+        m_indices,
+        output.reshape(-1),
+        num_tokens,
+        num_local_experts,
+    )
+
+
 @register_custom_op(
     op_name="musa_deep_gemm_contig_preprocess_fp8_tilelang",
     mutates_args=[
@@ -901,6 +1130,69 @@ def deep_gemm_contig_preprocess_fp8_tilelang(
     )
 
 
+@register_custom_op(
+    op_name="musa_deep_gemm_contig_preprocess_bf16_tilelang",
+    mutates_args=[
+        "output",
+        "m_indices",
+        "src2dst",
+        "topk_ids_for_combine",
+        "counts",
+        "cursor",
+    ],
+)
+def _custom_bf16(
+    hidden_states: torch.Tensor,
+    topk_ids: torch.Tensor,
+    output: torch.Tensor,
+    m_indices: torch.Tensor,
+    src2dst: torch.Tensor,
+    topk_ids_for_combine: torch.Tensor,
+    counts: torch.Tensor,
+    cursor: torch.Tensor,
+    num_local_experts: int,
+    block_m: int,
+) -> None:
+    _impl_bf16(
+        hidden_states,
+        topk_ids,
+        output,
+        m_indices,
+        src2dst,
+        topk_ids_for_combine,
+        counts,
+        cursor,
+        int(num_local_experts),
+        int(block_m),
+    )
+
+
+def deep_gemm_contig_preprocess_bf16_tilelang(
+    hidden_states: torch.Tensor,
+    topk_ids: torch.Tensor,
+    output: torch.Tensor,
+    m_indices: torch.Tensor,
+    src2dst: torch.Tensor,
+    topk_ids_for_combine: torch.Tensor,
+    counts: torch.Tensor,
+    cursor: torch.Tensor,
+    num_local_experts: int,
+    block_m: int,
+) -> None:
+    _custom_bf16(
+        hidden_states,
+        topk_ids,
+        output,
+        m_indices,
+        src2dst,
+        topk_ids_for_combine,
+        counts,
+        cursor,
+        int(num_local_experts),
+        int(block_m),
+    )
+
+
 def can_use_fp8_tilelang(
     hidden_states: torch.Tensor,
     topk_ids: torch.Tensor,
@@ -911,6 +1203,21 @@ def can_use_fp8_tilelang(
         use_fp8_quant
         and hidden_states.dim() == 2
         and _fp8_config(hidden_states.shape[1]) is not None
+        and topk_ids.dim() == 2
+        and topk_ids.shape[-1] <= 16
+        and num_local_experts > 0
+    )
+
+
+def can_use_bf16_tilelang(
+    hidden_states: torch.Tensor,
+    topk_ids: torch.Tensor,
+    num_local_experts: int,
+) -> bool:
+    return (
+        hidden_states.dtype == torch.bfloat16
+        and hidden_states.dim() == 2
+        and _bf16_config(hidden_states.shape[1]) is not None
         and topk_ids.dim() == 2
         and topk_ids.shape[-1] <= 16
         and num_local_experts > 0

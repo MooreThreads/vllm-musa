@@ -61,6 +61,8 @@ _MOE_SHAPE_INVENTORY_WARNED = False
 _DEEPGEMM_PREFILL_ENV = "VLLM_MUSA_MOE_DEEPGEMM_PREFILL"
 _DEEPGEMM_PREFILL_MIN_TOKENS_ENV = "VLLM_MUSA_MOE_DEEPGEMM_PREFILL_MIN_TOKENS"
 _DEEPGEMM_PREFILL_WARNED = False
+_DEEPGEMM_BF16_PREFILL_MIN_TOKENS = 1024
+_DEEPGEMM_BF16_PREFILL_WARNED = False
 _MUSA_GROUPED_GEMM_AVAILABLE = True
 _MUSA_FUSED_MOE_REQUESTED_BACKEND = parse_dispatch_backend()
 
@@ -470,6 +472,73 @@ def _can_use_moe_deepgemm_prefill(
     )
 
 
+def _can_use_moe_deepgemm_bf16_prefill(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> bool:
+    if hidden_states.size(0) < _DEEPGEMM_BF16_PREFILL_MIN_TOKENS:
+        return False
+
+    if (
+        use_fp8_w8a8
+        or use_int8_w8a8
+        or use_int8_w8a16
+        or use_int4_w4a16
+        or ocp_mx_scheme is not None
+        or per_channel_quant
+        or expert_map is not None
+        or w1_scale is not None
+        or w2_scale is not None
+        or a1_scale is not None
+        or a2_scale is not None
+        or block_shape is not None
+        or w1_bias is not None
+        or w2_bias is not None
+    ):
+        return False
+
+    if activation != "silu" or apply_router_weight_on_input:
+        return False
+    if topk_ids.dtype != torch.int32 or topk_ids.size(1) > 16:
+        return False
+    if hidden_states.dtype != torch.bfloat16:
+        return False
+    if w1.dtype != hidden_states.dtype or w2.dtype != hidden_states.dtype:
+        return False
+    if not (
+        hidden_states.is_contiguous() and w1.is_contiguous() and w2.is_contiguous()
+    ):
+        return False
+
+    E, N, K = w1.shape
+    return (
+        E in (256, 257)
+        and N % 256 == 0
+        and K % 128 == 0
+        and K == hidden_states.size(1)
+        and w2.shape == (E, K, N // 2)
+    )
+
+
 def _silu_mul_per_token_group_fp8_quant_musa_large(
     input_tensor: torch.Tensor,
     output: torch.Tensor,
@@ -817,6 +886,110 @@ def _musa_fp8_moe_deepgemm_prefill_impl(
     return output
 
 
+def _moe_deepgemm_bf16_prefill_impl(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    inplace: bool,
+) -> torch.Tensor:
+    import deep_gemm
+    from vllm.utils.deep_gemm import (
+        get_mk_alignment_for_contiguous_layout,
+        mk_alignment_scope,
+    )
+    from vllm_musa.jit_kernel.post_reorder import post_reorder_triton_kernel
+    from vllm_musa.jit_kernel.tilelang.deep_gemm_contig_preprocess import (
+        can_use_bf16_tilelang,
+        deep_gemm_contig_preprocess_bf16_tilelang,
+    )
+
+    E, N, K = w1.shape
+    if not can_use_bf16_tilelang(hidden_states, topk_ids, E):
+        raise RuntimeError(
+            "TileLang BF16 DeepGEMM preprocess does not support this MoE shape"
+        )
+
+    logger.info_once("Using the MUSA grouped BF16 DeepGEMM MoE prefill path.")
+
+    M, top_k = topk_ids.shape
+    block_m = int(get_mk_alignment_for_contiguous_layout()[0])
+    device = hidden_states.device
+    src2dst_numel = M * top_k
+    all_tokens = (
+        (src2dst_numel + E * (block_m - 1) + block_m - 1) // block_m
+    ) * block_m
+
+    hidden_perm = torch.empty(
+        (all_tokens, K), device=device, dtype=hidden_states.dtype
+    )
+    m_indices = torch.empty(all_tokens, device=device, dtype=torch.int32)
+    src2dst = torch.empty(src2dst_numel, device=device, dtype=torch.int32)
+    topk_ids_for_combine = torch.empty_like(topk_ids)
+    counts = torch.empty(E, device=device, dtype=torch.int32)
+    cursor = torch.empty(E, device=device, dtype=torch.int32)
+
+    deep_gemm_contig_preprocess_bf16_tilelang(
+        hidden_states,
+        topk_ids,
+        hidden_perm,
+        m_indices,
+        src2dst,
+        topk_ids_for_combine,
+        counts,
+        cursor,
+        E,
+        block_m,
+    )
+
+    with mk_alignment_scope(block_m):
+        mm1_out = torch.empty(
+            (all_tokens, N), device=device, dtype=hidden_states.dtype
+        )
+        deep_gemm.m_grouped_bf16_gemm_nt_contiguous(
+            hidden_perm,
+            w1,
+            mm1_out,
+            m_indices,
+            alignment_m=block_m,
+        )
+
+        act_out = torch.empty(
+            (all_tokens, N // 2), device=device, dtype=hidden_states.dtype
+        )
+        torch.ops._C.silu_and_mul(act_out, mm1_out)
+
+        mm2_out = torch.empty(
+            (all_tokens, K), device=device, dtype=hidden_states.dtype
+        )
+        deep_gemm.m_grouped_bf16_gemm_nt_contiguous(
+            act_out,
+            w2,
+            mm2_out,
+            m_indices,
+            alignment_m=block_m,
+        )
+
+    if inplace and not disable_inplace():
+        output = hidden_states
+    else:
+        output = torch.empty_like(hidden_states)
+
+    post_reorder_triton_kernel[(M,)](
+        mm2_out,
+        output,
+        src2dst,
+        topk_ids,
+        topk_weights,
+        top_k,
+        K,
+        BLOCK_SIZE=1024,
+    )
+    return output
+
+
 def _maybe_moe_deepgemm_prefill(
     *,
     hidden_states: torch.Tensor,
@@ -889,6 +1062,77 @@ def _maybe_moe_deepgemm_prefill(
                 exc,
             )
             _DEEPGEMM_PREFILL_WARNED = True
+        return None
+
+
+def _maybe_moe_deepgemm_bf16_prefill(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    inplace: bool,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> torch.Tensor | None:
+    global _DEEPGEMM_BF16_PREFILL_WARNED
+
+    if not _can_use_moe_deepgemm_bf16_prefill(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_ids=topk_ids,
+        activation=activation,
+        apply_router_weight_on_input=apply_router_weight_on_input,
+        use_fp8_w8a8=use_fp8_w8a8,
+        use_int8_w8a8=use_int8_w8a8,
+        use_int8_w8a16=use_int8_w8a16,
+        use_int4_w4a16=use_int4_w4a16,
+        ocp_mx_scheme=ocp_mx_scheme,
+        per_channel_quant=per_channel_quant,
+        expert_map=expert_map,
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+        a1_scale=a1_scale,
+        a2_scale=a2_scale,
+        block_shape=block_shape,
+        w1_bias=w1_bias,
+        w2_bias=w2_bias,
+    ):
+        return None
+
+    try:
+        return _moe_deepgemm_bf16_prefill_impl(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            inplace=inplace,
+        )
+    except Exception as exc:
+        if not _DEEPGEMM_BF16_PREFILL_WARNED:
+            logger.warning(
+                "Grouped BF16 DeepGEMM MoE prefill path failed; "
+                "falling back to the upstream Triton path: %s",
+                exc,
+            )
+            _DEEPGEMM_BF16_PREFILL_WARNED = True
         return None
 
 
@@ -1678,6 +1922,41 @@ def _musa_fused_experts_impl_dispatch(
             inplace=False,
             _allow_deepgemm_prefill=False,
         )
+
+    bf16_prefill_candidate = (
+        _MUSA_FUSED_MOE_REQUESTED_BACKEND == MusaFusedMoeBackend.AUTO
+        and not use_fp8_w8a8
+        and hidden_states.shape[0] >= _DEEPGEMM_BF16_PREFILL_MIN_TOKENS
+        and w1.dim() == 3
+        and w1.shape[0] in (256, 257)
+    )
+    if bf16_prefill_candidate and not _musa_stream_is_capturing():
+        bf16_prefill_output = _maybe_moe_deepgemm_bf16_prefill(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            inplace=False,
+            activation=activation,
+            apply_router_weight_on_input=apply_router_weight_on_input,
+            use_fp8_w8a8=use_fp8_w8a8,
+            use_int8_w8a8=use_int8_w8a8,
+            use_int8_w8a16=use_int8_w8a16,
+            use_int4_w4a16=use_int4_w4a16,
+            ocp_mx_scheme=ocp_mx_scheme,
+            per_channel_quant=per_channel_quant,
+            expert_map=expert_map,
+            w1_scale=w1_scale,
+            w2_scale=w2_scale,
+            a1_scale=a1_scale,
+            a2_scale=a2_scale,
+            block_shape=block_shape,
+            w1_bias=w1_bias,
+            w2_bias=w2_bias,
+        )
+        if bf16_prefill_output is not None:
+            return bf16_prefill_output
 
     # The default-on contiguous DeepGEMM is the large-M/prefill backend of the
     # established base path. Keep it after the small-M auto decision:
