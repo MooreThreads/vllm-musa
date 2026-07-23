@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 23 Jul 2026 13:47:12 +0800
+Subject: [PATCH] MUSA: enable DeepSeek-V4 auxiliary overlap by default
+
+---
+ vllm/models/deepseek_v4/nvidia/model.py | 8 --------
+ 1 file changed, 8 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index ce73743da2..2f2f618212 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -1,6 +1,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+-import os
+ import typing
+ from collections.abc import Callable, Iterable, MutableSequence, Sequence
+ from itertools import islice
+@@ -71,12 +70,6 @@ from vllm.utils.math_utils import cdiv
+ from vllm.v1.attention.backends.registry import AttentionBackendEnum
+ 
+ 
+-def _musa_deepseek_v4_disable_aux_overlap() -> bool:
+-    return (
+-        current_platform.is_musa()
+-        and os.getenv("VLLM_MUSA_DEEPSEEK_V4_DISABLE_AUX_OVERLAP", "0") == "1"
+-    )
+-
+ 
+ class DeepseekV4MLP(nn.Module):
+     def __init__(
+@@ -959,7 +952,6 @@ class DeepseekV4Model(nn.Module):
+             if (
+                 current_platform.is_rocm()
+                 or current_platform.is_xpu()
+-                or _musa_deepseek_v4_disable_aux_overlap()
+             )
+             else [torch.cuda.Stream() for _ in range(3)]
+         )
