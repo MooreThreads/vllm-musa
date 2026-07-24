@@ -868,11 +868,9 @@ void launch_topk(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
     if constexpr (IsSoftmax) {
       if (topk == 8 && !has_correction_bias && moe_softcapping <= 0.0f) {
         if (renormalize) {
-          const int halfwarp_rows_per_cta = kWarpsPerCta * 2;
-          const int halfwarp_blocks =
-              (num_tokens + halfwarp_rows_per_cta - 1) / halfwarp_rows_per_cta;
-          topk_softmax_no_bias_renorm_halfwarp_kernel_fixed_k<T, 256, 8>
-              <<<halfwarp_blocks, kWarpsPerCta * kWarpSize, 0, stream>>>(
+          // MUSA: e256 renorm goes one-warp-per-row, matching the e1024 path.
+          topk_softmax_no_bias_renorm_warp_kernel_fixed_k<T, 256, values_per_thread, 8>
+              <<<blocks, kWarpsPerCta * kWarpSize, 0, stream>>>(
                   input_ptr, weights_ptr, ids_ptr, num_tokens);
         } else {
           topk_softmax_no_bias_warp_kernel_fixed_k<T, 256, values_per_thread, 8>
