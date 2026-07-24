@@ -135,6 +135,23 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         assert isinstance(attn_metadata, GDNAttentionMetadata)
         return attn_metadata
 
+    def _gdn_A_log_f32(self):
+        # MUSA: cache the fp32 A_log so the captured decode does not re-cast a
+        # constant parameter every layer, every step.
+        t = getattr(self, "_A_log_f32_cache", None)
+        if t is None:
+            t = self.A_log.detach().float()
+            self._A_log_f32_cache = t
+        return t
+
+    def _gdn_dt_bias_f32(self):
+        # MUSA: cache the fp32 dt_bias (stored bf16) to drop the per-layer cast.
+        t = getattr(self, "_dt_bias_f32_cache", None)
+        if t is None:
+            t = self.dt_bias.detach().float()
+            self._dt_bias_f32_cache = t
+        return t
+
     def _try_mate_decode(
         self,
         mixed_qkv: torch.Tensor,
@@ -212,6 +229,14 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                 import os as _os
 
                 _musa_sep = _os.environ.get("VLLM_MUSA_MAMBA_SEPARATE_POOL", "1") == "1"
+                # MUSA: write the mate decode output straight into the
+                # preallocated core_attn_out buffer (bf16) to skip a per-layer copy.
+                _out_view = core_attn_out[:num_decode_tokens].view(
+                    num_decode_tokens,
+                    1,
+                    self.num_v_heads // self.tp_size,
+                    self.head_v_dim,
+                )
                 if _musa_sep and ssm_state.is_contiguous():
                     # MUSA: separate contiguous mamba pool -> mate decodes in
                     # place (block b at b*state_numel); no gather/scatter copy.
@@ -223,10 +248,11 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                         state_layout="VK",
                         state_indices=state_indices,
                         scale=self.head_k_dim**-0.5,
-                        A_log=self.A_log.detach().float(),
+                        A_log=self._gdn_A_log_f32(),
                         a=a.view(num_decode_tokens, 1, -1),
-                        dt_bias=self.dt_bias.detach().float(),
+                        dt_bias=self._gdn_dt_bias_f32(),
                         b=b.view(num_decode_tokens, 1, -1),
+                        output=_out_view,
                         disable_state_update=False,
                         use_qk_l2norm=True,
                     )
@@ -243,19 +269,15 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                         state=active_state,
                         state_layout="VK",
                         scale=self.head_k_dim**-0.5,
-                        A_log=self.A_log.detach().float(),
+                        A_log=self._gdn_A_log_f32(),
                         a=a.view(num_decode_tokens, 1, -1),
-                        dt_bias=self.dt_bias.detach().float(),
+                        dt_bias=self._gdn_dt_bias_f32(),
                         b=b.view(num_decode_tokens, 1, -1),
+                        output=_out_view,
                         disable_state_update=False,
                         use_qk_l2norm=True,
                     )
                     ssm_state[state_indices] = updated_state
-                core_attn_out[:num_decode_tokens] = output.view(
-                    num_decode_tokens,
-                    self.num_v_heads // self.tp_size,
-                    self.head_v_dim,
-                )
                 return True
             except Exception as e:
                 _log_once(
