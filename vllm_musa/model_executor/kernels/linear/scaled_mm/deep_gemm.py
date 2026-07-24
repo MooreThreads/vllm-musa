@@ -156,10 +156,13 @@ class MUSADeepGemmFp8BlockScaledMMKernel(Fp8BlockScaledMMLinearKernel):
         B: torch.Tensor,
         As: torch.Tensor,
         Bs: torch.Tensor,
+        **kwargs,
     ) -> torch.Tensor:
         group_size = self.weight_group_shape.col
 
-        return run_deepgemm(A, B, Bs, group_size, self.use_deep_gemm_e8m0)
+        return run_deepgemm(
+            A, B, Bs, group_size, self.use_deep_gemm_e8m0, output=kwargs.get("output")
+        )
 
 
 def run_deepgemm(
@@ -168,6 +171,7 @@ def run_deepgemm(
     weight_scale: torch.Tensor,
     group_size: int,
     use_deep_gemm_e8m0: bool,
+    output: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if _should_use_musa_fp8_small_m_gemv(
         input, weight, weight_scale, group_size, use_deep_gemm_e8m0
@@ -176,6 +180,7 @@ def run_deepgemm(
             input,
             weight,
             weight_scale,
+            output,
         )
     return torch.ops.vllm.musa_deepgemm_fp8_op(
         input,
@@ -183,6 +188,7 @@ def run_deepgemm(
         weight_scale,
         group_size,
         use_deep_gemm_e8m0,
+        output,
     )
 
 
@@ -192,6 +198,7 @@ def _musa_deepgemm_fp8_op(
     weight_scale: torch.Tensor,
     group_size: int,
     use_deep_gemm_e8m0: bool,
+    output: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if not input.is_contiguous():
         input = input.contiguous()
@@ -201,11 +208,12 @@ def _musa_deepgemm_fp8_op(
         column_major_scales=not _use_row_major_activation_scales(use_deep_gemm_e8m0),
         use_ue8m0=use_deep_gemm_e8m0,
     )
-    output = torch.empty(
-        (q_input.shape[0], weight.shape[0]),
-        dtype=torch.bfloat16,
-        device=q_input.device,
-    )
+    if output is None:
+        output = torch.empty(
+            (q_input.shape[0], weight.shape[0]),
+            dtype=torch.bfloat16,
+            device=q_input.device,
+        )
 
     fp8_gemm_nt(
         (q_input, input_scale),
@@ -391,12 +399,14 @@ def _musa_fp8_small_m_gemv_op(
     input: torch.Tensor,
     weight: torch.Tensor,
     weight_scale: torch.Tensor,
+    output: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    output = torch.empty(
-        (input.shape[0], weight.shape[0]),
-        dtype=torch.bfloat16,
-        device=input.device,
-    )
+    if output is None:
+        output = torch.empty(
+            (input.shape[0], weight.shape[0]),
+            dtype=torch.bfloat16,
+            device=input.device,
+        )
     torch.ops._C_musa_ops.musa_fused_gemv(
         input,
         weight,
@@ -416,8 +426,11 @@ def _musa_fp8_small_m_gemv_op_fake(
     input: torch.Tensor,
     weight: torch.Tensor,
     weight_scale: torch.Tensor,
+    output: torch.Tensor | None = None,
 ) -> torch.Tensor:
     del weight_scale
+    if output is not None:
+        return output
     return torch.empty(
         (input.shape[0], weight.shape[0]),
         dtype=torch.bfloat16,
@@ -431,7 +444,10 @@ def _musa_deepgemm_fp8_op_fake(
     weight_scale: torch.Tensor,
     group_size: int,
     use_deep_gemm_e8m0: bool,
+    output: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    if output is not None:
+        return output
     return torch.empty(
         (input.shape[0], weight.shape[0]),
         dtype=torch.bfloat16,
@@ -478,12 +494,14 @@ def _musa_fused_add_rms_deepgemm_fp8_op_fake(
 direct_register_custom_op(
     "musa_fp8_small_m_gemv_op",
     _musa_fp8_small_m_gemv_op,
+    mutates_args=["output"],
     fake_impl=_musa_fp8_small_m_gemv_op_fake,
 )
 
 direct_register_custom_op(
     "musa_deepgemm_fp8_op",
     _musa_deepgemm_fp8_op,
+    mutates_args=["output"],
     fake_impl=_musa_deepgemm_fp8_op_fake,
 )
 
