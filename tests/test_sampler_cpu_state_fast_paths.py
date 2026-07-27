@@ -172,6 +172,7 @@ def _unfiltered_gumbel_gate_sampler(
         top_p=_state_array([1.0] * rows, torch.float32),
         min_p=_state_array([0.0] * rows, torch.float32),
         seeds=SimpleNamespace(gpu=object()),
+        has_user_seed=np.zeros(rows, dtype=np.bool_),
     )
     return SimpleNamespace(
         sampling_states=states,
@@ -568,6 +569,14 @@ def test_qwen_v2_unfiltered_gumbel_gate_rejects_noncontract(monkeypatch) -> None
 
     value = _unfiltered_gumbel_gate_sampler(rows)
     value.num_speculative_tokens = 2
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    value.sampling_states.has_user_seed[0] = True
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    del value.sampling_states.has_user_seed
     rejected.append((value, False))
 
     value = _unfiltered_gumbel_gate_sampler(rows)
