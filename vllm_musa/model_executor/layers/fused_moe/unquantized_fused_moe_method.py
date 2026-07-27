@@ -23,6 +23,8 @@ from vllm.model_executor.layers.fused_moe.modular_kernel import (
     FusedMoEPrepareAndFinalizeModular,
 )
 
+from vllm_musa.jit_kernel.extend_topk_shared import extend_topk_with_shared
+
 logger = init_logger(__name__)
 
 _FUSED_EXPERTS_ACCEPTS_SHARED_EXPERTS = (
@@ -100,10 +102,12 @@ class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
                 "folded shared expert expects shared_experts=None"
             )
             shared_logits, _ = layer._musa_shared_gate(x)
-            shared_weight = torch.sigmoid(shared_logits).to(topk_weights.dtype)
-            shared_ids = torch.zeros_like(topk_ids[:, :1]) + layer._musa_shared_expert_id
-            topk_weights = torch.cat([topk_weights, shared_weight], dim=-1)
-            topk_ids = torch.cat([topk_ids, shared_ids], dim=-1)
+            topk_weights, topk_ids = extend_topk_with_shared(
+                topk_weights,
+                topk_ids,
+                shared_logits,
+                layer._musa_shared_expert_id,
+            )
             global_num_experts = layer._musa_shared_expert_id + 1
         else:
             global_num_experts = layer.global_num_experts

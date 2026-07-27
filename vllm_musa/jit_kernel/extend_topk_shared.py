@@ -38,7 +38,9 @@ def _extend_topk_with_shared_kernel(
     tl.store(out_i + offs, i, mask=mask)
 
     logit = tl.load(shared_logits_ptr + token).to(tl.float32)
-    shared_w = 1.0 / (1.0 + tl.exp(-logit))
+    shared_w = (1.0 / (1.0 + tl.exp(-logit))).to(
+        shared_logits_ptr.dtype.element_ty
+    )
     tl.store(out_w + top_k, shared_w.to(out_w.dtype.element_ty))
     tl.store(out_i + top_k, shared_expert_id)
 
