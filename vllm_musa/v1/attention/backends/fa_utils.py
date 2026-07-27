@@ -132,31 +132,26 @@ def is_flash_attn_varlen_func_available() -> bool:
 
 # MUSA: present the paged KV to mate's FMHA decode as page_size=64 (TME fast
 # path) without changing the unified KV block. When the attention block is a
-# multiple of 64 (>64) and VLLM_MUSA_ATTN_BLOCK64=1, reshape the k/v cache
+# multiple of 64 (>64), reshape the k/v cache
 # [n_blk, blk, H, D] -> [n_blk*r, 64, H, D] (a view) and expand the page table;
 # mate then reads page_size == 64 and avoids the slow LSU KV load.
-import os as _os_b64
-
 _MUSA_B64_ARANGE: dict = {}
 
 
 def flash_attn_with_kvcache(*args, **kwargs):
-    if _os_b64.environ.get("VLLM_MUSA_ATTN_BLOCK64", "0") == "1":
-        pt = kwargs.get("page_table")
-        kc = kwargs.get("k_cache")
-        vc = kwargs.get("v_cache")
-        if pt is not None and kc is not None and vc is not None and kc.dim() >= 2:
-            blk = kc.shape[1]
-            if blk != 64 and blk % 64 == 0:
-                r = blk // 64
-                kwargs["k_cache"] = kc.reshape(kc.shape[0] * r, 64, *kc.shape[2:])
-                kwargs["v_cache"] = vc.reshape(vc.shape[0] * r, 64, *vc.shape[2:])
-                key = (r, pt.device, pt.dtype)
-                ar = _MUSA_B64_ARANGE.get(key)
-                if ar is None:
-                    ar = torch.arange(r, device=pt.device, dtype=pt.dtype)
-                    _MUSA_B64_ARANGE[key] = ar
-                kwargs["page_table"] = (pt.unsqueeze(-1) * r + ar).reshape(
-                    pt.shape[0], -1
-                )
+    pt = kwargs.get("page_table")
+    kc = kwargs.get("k_cache")
+    vc = kwargs.get("v_cache")
+    if pt is not None and kc is not None and vc is not None and kc.dim() >= 2:
+        blk = kc.shape[1]
+        if blk != 64 and blk % 64 == 0:
+            r = blk // 64
+            kwargs["k_cache"] = kc.reshape(kc.shape[0] * r, 64, *kc.shape[2:])
+            kwargs["v_cache"] = vc.reshape(vc.shape[0] * r, 64, *vc.shape[2:])
+            key = (r, pt.device, pt.dtype)
+            ar = _MUSA_B64_ARANGE.get(key)
+            if ar is None:
+                ar = torch.arange(r, device=pt.device, dtype=pt.dtype)
+                _MUSA_B64_ARANGE[key] = ar
+            kwargs["page_table"] = (pt.unsqueeze(-1) * r + ar).reshape(pt.shape[0], -1)
     return _mate_flash_attn_with_kvcache(*args, **kwargs)

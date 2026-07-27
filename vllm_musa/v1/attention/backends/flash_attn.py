@@ -144,11 +144,9 @@ class MUSAFlashAttentionBackend(AttentionBackend):
                 or cache_config.mamba_cache_dtype == "float32"
             )
         ):
-            # NOTE(tdoublep): while in principle, FA supports
-            # MultipleOf(16), these are the block sizes that do not
-            # suffer from the NaN propagation problem described here:
-            # https://github.com/Dao-AILab/flash-attention/issues/1974
-            return [16, 32, 64]
+            # Let upstream hybrid-cache alignment compute the attention block
+            # and Mamba padding from the 64-token requirement.
+            return [MultipleOf(64)]
         return [MultipleOf(64)]
 
     forward_includes_kv_cache_update: bool = False
