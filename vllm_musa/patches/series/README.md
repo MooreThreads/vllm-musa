@@ -15,7 +15,7 @@ is pre-patched.
   sequence and patches removed from the commit stack cannot leave stale files.
   Author headers are normalized to the synthetic `musa <musa@local>` identity.
 
-Currently **91 patches** — the MUSA source edits against the immutable vLLM commit
+Currently **92 patches** — the MUSA source edits against the immutable vLLM commit
 recorded as `VLLM_COMMIT` in `third_party/PINS` (release label `v0.24.0`), applied
 at build. Runtime object/registration patches (which patch live objects at import)
 are kept separately in `vllm_musa/patches/`, not in this build-time series. Run
