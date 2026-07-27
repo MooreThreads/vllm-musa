@@ -39,7 +39,6 @@ if is_flash_attn_varlen_func_available():
 
 from vllm.config import (
     VllmConfig,
-    get_current_vllm_config,
     get_current_vllm_config_or_none,
     get_layers_from_vllm_config,
 )
@@ -133,20 +132,6 @@ class MUSAFlashAttentionBackend(AttentionBackend):
 
     @staticmethod
     def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
-        vllm_config = get_current_vllm_config()
-        model_config = vllm_config.model_config
-        cache_config = vllm_config.cache_config
-        if (
-            model_config
-            and model_config.is_hybrid
-            and (
-                cache_config.mamba_ssm_cache_dtype == "float32"
-                or cache_config.mamba_cache_dtype == "float32"
-            )
-        ):
-            # Let upstream hybrid-cache alignment compute the attention block
-            # and Mamba padding from the 64-token requirement.
-            return [MultipleOf(64)]
         return [MultipleOf(64)]
 
     forward_includes_kv_cache_update: bool = False
