@@ -814,6 +814,64 @@ def can_use_qwen_v2_gumbel(
     return bool(np.all(states.min_p.np[idx_mapping_np] == np.float32(0.05)))
 
 
+def can_use_qwen_v2_unfiltered_gumbel(
+    sampler: Any,
+    logits: torch.Tensor,
+    expanded_idx_mapping: torch.Tensor,
+    idx_mapping_np: np.ndarray,
+    pos: torch.Tensor,
+    return_logprobs: bool,
+) -> bool:
+    """Gate direct logits-domain Gumbel to an unfiltered Qwen contract."""
+    if (
+        not getattr(sampler, "_musa_qwen_family", False)
+        or not current_platform.is_musa()
+        or not is_musa_tensor(logits)
+    ):
+        return False
+    if (
+        logits.dtype != torch.bfloat16
+        or not _is_qwen_sampler_vocab(logits)
+        or logits.stride(-1) != 1
+    ):
+        return False
+    if idx_mapping_np.ndim != 1 or logits.shape[0] != idx_mapping_np.size:
+        return False
+    if (
+        expanded_idx_mapping.ndim != 1
+        or expanded_idx_mapping.numel() != logits.shape[0]
+    ):
+        return False
+    if pos.ndim != 1 or pos.numel() != logits.shape[0]:
+        return False
+    if getattr(sampler, "num_speculative_tokens", 1) != 1:
+        return False
+    if sampler.use_fp64_gumbel or sampler.logprobs_mode != "raw_logprobs":
+        return False
+    if return_logprobs:
+        return False
+
+    states = sampler.sampling_states
+    if not (
+        np.all(states.temperature.np[idx_mapping_np] == np.float32(1.0))
+        and np.all(states.top_k.np[idx_mapping_np] == logits.shape[1])
+        and np.all(states.top_p.np[idx_mapping_np] == np.float32(1.0))
+        and np.all(states.min_p.np[idx_mapping_np] == np.float32(0.0))
+    ):
+        return False
+
+    use_logit_bias = getattr(sampler.logit_bias_state, "use_logit_bias", None)
+    use_penalty = getattr(sampler.penalties_state, "use_penalty", None)
+    num_bad_words = getattr(sampler.bad_words_state, "num_bad_words", None)
+    if use_logit_bias is None or use_penalty is None or num_bad_words is None:
+        return False
+    return bool(
+        not np.any(use_logit_bias[idx_mapping_np])
+        and not np.any(use_penalty[idx_mapping_np])
+        and not np.any(num_bad_words.np[idx_mapping_np])
+    )
+
+
 def can_use_worker_seeded_multinomial(
     logits: torch.Tensor,
     logprobs_mode: LogprobsMode,
@@ -932,6 +990,25 @@ def sample_worker_logits_qwen_v2_gumbel(
     return sampled, processed_logits
 
 
+def sample_worker_logits_qwen_v2_unfiltered_gumbel(
+    sampler: Any,
+    logits: torch.Tensor,
+    expanded_idx_mapping: torch.Tensor,
+    pos: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample unfiltered categorical Qwen logits without materializing probs."""
+    sampled = vllm_worker_sampler.gumbel_sample(
+        logits,
+        expanded_idx_mapping,
+        sampler.sampling_states.temperature.gpu,
+        sampler.sampling_states.seeds.gpu,
+        pos,
+        apply_temperature=False,
+        use_fp64=False,
+    )
+    return sampled, logits
+
+
 def _sampling_states_init(self: Any, max_num_reqs: int, vocab_size: int):
     original_init = vllm_worker_states.SamplingStates._musa_original_init
     original_init(self, max_num_reqs, vocab_size)
@@ -1035,6 +1112,25 @@ def _worker_sample(
     expanded_local_pos: torch.Tensor,
     return_logprobs: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    if can_use_qwen_v2_unfiltered_gumbel(
+        self,
+        logits,
+        expanded_idx_mapping,
+        idx_mapping_np,
+        pos,
+        return_logprobs,
+    ):
+        vllm_topk_topp_sampler.logger.info_once(
+            "Using the gated MUSA unfiltered Gumbel sampler for Qwen requests.",
+            scope="global",
+        )
+        return sample_worker_logits_qwen_v2_unfiltered_gumbel(
+            self,
+            logits,
+            expanded_idx_mapping,
+            pos,
+        )
+
     if can_use_qwen_v2_gumbel(
         self,
         logits,
