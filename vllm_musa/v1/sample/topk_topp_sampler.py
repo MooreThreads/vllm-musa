@@ -80,30 +80,6 @@ def _squeeze_filter_tensor(value: torch.Tensor | None) -> torch.Tensor | None:
     return value.contiguous()
 
 
-def _has_active_top_k(top_k: torch.Tensor | int | None, vocab_size: int) -> bool:
-    if top_k is None:
-        return False
-    if isinstance(top_k, torch.Tensor):
-        return bool((top_k != vocab_size).any().item())
-    return 0 < top_k < vocab_size
-
-
-def _has_active_top_p(top_p: torch.Tensor | float | None) -> bool:
-    if top_p is None:
-        return False
-    if isinstance(top_p, torch.Tensor):
-        return bool((top_p != 1.0).any().item())
-    return top_p != 1.0
-
-
-def _has_active_min_p(min_p: torch.Tensor | float | None) -> bool:
-    if min_p is None:
-        return False
-    if isinstance(min_p, torch.Tensor):
-        return bool((min_p != 0.0).any().item())
-    return min_p != 0.0
-
-
 def sample_from_probs(
     probs: torch.Tensor,
     top_k: torch.Tensor | int | None,
@@ -114,9 +90,13 @@ def sample_from_probs(
     top_p = _squeeze_filter_tensor(top_p) if isinstance(top_p, torch.Tensor) else top_p
     min_p = _squeeze_filter_tensor(min_p) if isinstance(min_p, torch.Tensor) else min_p
 
-    use_top_k = _has_active_top_k(top_k, probs.shape[-1])
-    use_top_p = _has_active_top_p(top_p)
-    use_min_p = _has_active_min_p(min_p)
+    # Sampling metadata already uses valid sentinel values for inactive
+    # filters (vocab_size, 1.0, and 0.0). Keep those tensors on device and let
+    # the native sampler consume them instead of calling .item(), which
+    # synchronizes the host with the preceding decode graph.
+    use_top_k = top_k is not None
+    use_top_p = top_p is not None
+    use_min_p = min_p is not None
 
     if use_min_p:
         if use_top_k:
