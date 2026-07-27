@@ -852,6 +852,8 @@ def can_use_qwen_v2_unfiltered_gumbel(
         return False
 
     states = sampler.sampling_states
+    if has_worker_user_seed(states, idx_mapping_np):
+        return False
     if not (
         np.all(states.temperature.np[idx_mapping_np] == np.float32(1.0))
         and np.all(states.top_k.np[idx_mapping_np] == logits.shape[1])
@@ -1102,7 +1104,7 @@ def _apply_worker_sampling_filters_for_seeded_multinomial(
     return logits
 
 
-def _worker_sample(
+def _worker_sample_unfiltered_gumbel(
     self: Any,
     logits: torch.Tensor,
     expanded_idx_mapping: torch.Tensor,
@@ -1131,6 +1133,28 @@ def _worker_sample(
             pos,
         )
 
+    return _worker_sample(
+        self,
+        logits,
+        expanded_idx_mapping,
+        idx_mapping_np,
+        pos,
+        input_ids,
+        expanded_local_pos,
+        return_logprobs=return_logprobs,
+    )
+
+
+def _worker_sample(
+    self: Any,
+    logits: torch.Tensor,
+    expanded_idx_mapping: torch.Tensor,
+    idx_mapping_np: np.ndarray,
+    pos: torch.Tensor,
+    input_ids: torch.Tensor,
+    expanded_local_pos: torch.Tensor,
+    return_logprobs: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
     if can_use_qwen_v2_gumbel(
         self,
         logits,
@@ -1244,7 +1268,7 @@ def install_hooks() -> None:
     worker_cls = vllm_worker_sampler.Sampler
     if not getattr(worker_cls, "_musa_sampling_hooks_installed", False):
         worker_cls._musa_original_sample = worker_cls.sample
-        worker_cls.sample = _worker_sample
+        worker_cls.sample = _worker_sample_unfiltered_gumbel
         worker_cls._musa_sampling_hooks_installed = True
 
 
