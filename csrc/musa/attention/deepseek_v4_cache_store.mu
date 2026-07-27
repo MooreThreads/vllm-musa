@@ -1,7 +1,5 @@
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
 
 #include <musa_bf16.h>
 #include <musa_fp8.h>
@@ -24,8 +22,6 @@ constexpr int kQNormThreads = 256;
 
 constexpr int kIndexInt32 = 1;
 constexpr int kIndexInt64 = 2;
-constexpr const char* kFusedQKVInsertEnv =
-    "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED";
 
 __device__ __forceinline__ int64_t load_index(const void* ptr, int kind,
                                               int64_t idx) {
@@ -262,11 +258,6 @@ int index_kind(const torch::Tensor& tensor) {
   TORCH_CHECK(false, "slot_mapping must be int32 or int64");
 }
 
-bool env_flag_enabled(const char* name) {
-  const char* value = std::getenv(name);
-  return value != nullptr && std::strcmp(value, "1") == 0;
-}
-
 __global__ void deepseek_v4_qnorm_rope_kv_pack_fused_kernel(
     __mt_bfloat16* __restrict__ q, const __mt_bfloat16* __restrict__ kv,
     uint8_t* __restrict__ cache, const void* __restrict__ slots,
@@ -436,42 +427,20 @@ void deepseek_v4_qnorm_rope_kv_insert(
   const dim3 q_grid(static_cast<unsigned int>(q.size(0)),
                     static_cast<unsigned int>(q.size(1)));
   const dim3 q_block(kQNormThreads);
-  if (env_flag_enabled(kFusedQKVInsertEnv)) {
-    deepseek_v4_qnorm_rope_kv_pack_fused_kernel<<<q_grid, q_block, 0, stream>>>(
-        static_cast<__mt_bfloat16*>(q.data_ptr()),
-        static_cast<const __mt_bfloat16*>(kv.data_ptr()),
-        static_cast<uint8_t*>(kv_cache.data_ptr()), slot_mapping.data_ptr(),
-        index_kind(slot_mapping), positions.data_ptr(), index_kind(positions),
-        static_cast<const float*>(cos_sin_cache.data_ptr()),
-        static_cast<float>(eps), q.size(0), q.size(1), slot_mapping.numel(),
-        kv_cache.size(0), cache_block_size, kv_cache.stride(0));
-    const auto err = musaGetLastError();
-    TORCH_CHECK(err == musaSuccess,
-                "deepseek_v4_qnorm_rope_kv_pack_fused launch failed: ",
-                musaGetErrorString(err));
-    return;
-  }
-  deepseek_v4_qnorm_rope_kernel<<<q_grid, q_block, 0, stream>>>(
-      static_cast<__mt_bfloat16*>(q.data_ptr()), positions.data_ptr(),
-      index_kind(positions), static_cast<const float*>(cos_sin_cache.data_ptr()),
-      static_cast<float>(eps), q.size(0), q.size(1));
-  auto err = musaGetLastError();
-  TORCH_CHECK(err == musaSuccess, "deepseek_v4_qnorm_rope launch failed: ",
-              musaGetErrorString(err));
-
-  if (slot_mapping.numel() == 0) {
-    return;
-  }
-  const dim3 kv_grid(static_cast<unsigned int>(slot_mapping.numel()));
-  const dim3 kv_block(128);
-  deepseek_v4_kv_rope_pack_kernel<<<kv_grid, kv_block, 0, stream>>>(
+  // The fused q-norm/RoPE/KV-pack kernel is the validated DeepSeek-V4 path.
+  // Keep the fallback kernels available for source-level reuse, but do not
+  // make production behavior depend on an A/B-only process environment flag.
+  deepseek_v4_qnorm_rope_kv_pack_fused_kernel<<<q_grid, q_block, 0, stream>>>(
+      static_cast<__mt_bfloat16*>(q.data_ptr()),
       static_cast<const __mt_bfloat16*>(kv.data_ptr()),
       static_cast<uint8_t*>(kv_cache.data_ptr()), slot_mapping.data_ptr(),
       index_kind(slot_mapping), positions.data_ptr(), index_kind(positions),
-      static_cast<const float*>(cos_sin_cache.data_ptr()), slot_mapping.numel(),
+      static_cast<const float*>(cos_sin_cache.data_ptr()),
+      static_cast<float>(eps), q.size(0), q.size(1), slot_mapping.numel(),
       kv_cache.size(0), cache_block_size, kv_cache.stride(0));
-  err = musaGetLastError();
-  TORCH_CHECK(err == musaSuccess, "deepseek_v4_kv_rope_pack launch failed: ",
+  auto err = musaGetLastError();
+  TORCH_CHECK(err == musaSuccess,
+              "deepseek_v4_qnorm_rope_kv_pack_fused launch failed: ",
               musaGetErrorString(err));
 }
 

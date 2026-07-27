@@ -860,7 +860,6 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE",
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
-            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
@@ -871,7 +870,6 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
-            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
         ]
 
         with patch.dict(os.environ, {}, clear=False):
@@ -889,7 +887,6 @@ class TestMUSAPlatformDefaults:
                 "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS" not in os.environ
             )
             assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS" not in os.environ
-            assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL" not in os.environ
             assert (
                 "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE" not in os.environ
             )
@@ -917,7 +914,6 @@ class TestMUSAPlatformDefaults:
                 "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
                 not in os.environ
             )
-            assert "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED" not in os.environ
 
     def test_deepseek_v4_tp8_profile_sets_missing_envs(self):
         from vllm_musa.platform import MUSAPlatformBase
@@ -936,7 +932,6 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE",
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
-            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
@@ -944,7 +939,6 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
-            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
         ]
 
         with patch.dict(
@@ -974,7 +968,6 @@ class TestMUSAPlatformDefaults:
                 os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"]
                 == "2048"
             )
-            assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL" not in os.environ
             assert (
                 "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE" not in os.environ
             )
@@ -1002,10 +995,9 @@ class TestMUSAPlatformDefaults:
                 "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
                 not in os.environ
             )
-            assert "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED" not in os.environ
             assert vllm_config.cache_config.block_size == 256
 
-    def test_deepseek_v4_tp8_aggressive_profile_sets_mhc_deepgemm(self):
+    def test_deepseek_v4_tp8_aggressive_profile_sets_prefill_tuning(self):
         from vllm_musa.platform import MUSAPlatformBase
 
         vllm_config = self._make_vllm_config(
@@ -1022,7 +1014,6 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE",
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
-            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
@@ -1030,7 +1021,6 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
-            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
         ]
 
         with patch.dict(
@@ -1059,9 +1049,6 @@ class TestMUSAPlatformDefaults:
             assert (
                 os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"]
                 == "2048"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL"] == "deepgemm_big_fuse"
             )
             assert (
                 os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE"] == "1"
@@ -1116,7 +1103,6 @@ class TestMUSAPlatformDefaults:
                 ]
                 == "1"
             )
-            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"] == "1"
             assert vllm_config.cache_config.block_size == 256
 
     def test_deepseek_v4_tp8_profile_preserves_explicit_overrides(self):
@@ -1137,7 +1123,6 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE": "opt1",
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS": "0",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS": "0",
-            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL": "native",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE": "0",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT": "0",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT": "0",
@@ -1148,7 +1133,6 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS": "128",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED": "1",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT": "0",
-            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED": "0",
         }
 
         with patch.dict(os.environ, env, clear=False):
@@ -1168,7 +1152,6 @@ class TestMUSAPlatformDefaults:
             assert (
                 os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"] == "0"
             )
-            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL"] == "native"
             assert (
                 os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE"] == "0"
             )
@@ -1222,7 +1205,6 @@ class TestMUSAPlatformDefaults:
                 ]
                 == "0"
             )
-            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"] == "0"
             assert vllm_config.cache_config.block_size == 64
 
     def test_deepseek_v4_tp8_profile_rejects_unknown_name(self):
