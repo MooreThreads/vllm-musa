@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 27 Jul 2026 19:30:00 +0800
+Subject: [PATCH] MUSA: copy MRoPE positions row-wise
+
+The two-dimensional MRoPE slice is strided on the host. Copy each contiguous
+row separately so MUSA can keep the pinned-host transfers asynchronous instead
+of blocking the model runner on every decode step.
+---
+ vllm/v1/worker/gpu_model_runner.py | 19 ++++++++++++++-----
+ 1 file changed, 14 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -2168,11 +2168,20 @@ class GPUModelRunner(
+         )
+
+         if self.uses_mrope:
+-            # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
+-            self.mrope_positions.gpu[:, :total_num_scheduled_tokens].copy_(
+-                self.mrope_positions.cpu[:, :total_num_scheduled_tokens],
+-                non_blocking=True,
+-            )
++            if current_platform.is_musa():
++                # Keep each source row contiguous so the pinned host buffer
++                # remains eligible for a truly asynchronous MUSA transfer.
++                for row in range(self.mrope_positions.gpu.shape[0]):
++                    self.mrope_positions.gpu[row, :total_num_scheduled_tokens].copy_(
++                        self.mrope_positions.cpu[row, :total_num_scheduled_tokens],
++                        non_blocking=True,
++                    )
++            else:
++                # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
++                self.mrope_positions.gpu[:, :total_num_scheduled_tokens].copy_(
++                    self.mrope_positions.cpu[:, :total_num_scheduled_tokens],
++                    non_blocking=True,
++                )
+         elif self.uses_xdrope_dim > 0:
+             # Only relevant for models using XD-RoPE (e.g, HunYuan-VL)
+             self.xdrope_positions.gpu[:, :total_num_scheduled_tokens].copy_(
