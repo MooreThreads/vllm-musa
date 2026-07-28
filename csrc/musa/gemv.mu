@@ -596,6 +596,34 @@ bool ShouldUseDeepSeekFp8W1Moe32x4(
            IsForcedBlockConfigValid(config, nr_n, hidden_size, vlen);
 }
 
+bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
+    bool is_fp8,
+    bool use_swigelu,
+    bool use_int4_w4a16,
+    int64_t topk,
+    int hidden_size,
+    int reduce_size,
+    int num_experts,
+    int scale_k_group_tile,
+    int nr_n,
+    int vlen,
+    int bseqlen) {
+    if (!is_fp8 || use_int4_w4a16 || num_experts != 256 ||
+        scale_k_group_tile != 128 || bseqlen != 1) {
+        return false;
+    }
+
+    const bool w1 = use_swigelu && topk == 6 && hidden_size == 4096 &&
+                    reduce_size == 512 && nr_n == 256;
+    const bool w2 = !use_swigelu && topk == 1 && hidden_size == 256 &&
+                    reduce_size == 4096 && nr_n == 4096;
+    const BlockConfig config =
+        w1 ? BlockConfig{4, 32, 0.f, true}
+           : BlockConfig{32, 4, 0.f, true};
+    return (w1 || w2) &&
+           IsForcedBlockConfigValid(config, nr_n, hidden_size, vlen);
+}
+
 void musa_fused_gemv(
     torch::Tensor &A,
     torch::Tensor &B,
@@ -879,8 +907,24 @@ void musa_fused_gemv_moe(
     BlockConfig forced_config{0, 0, 0.f, false};
     BlockConfig qwen_fp8_moe_config{32, 4, 0.f, true};
     BlockConfig deepseek_fp8_w1_config{32, 4, 0.f, true};
+    BlockConfig deepseek_v4_fp8_moe_config =
+        use_swigelu ? BlockConfig{4, 32, 0.f, true}
+                    : BlockConfig{32, 4, 0.f, true};
     BlockConfig* best_config = &fallback_config;
-    if (ParseForcedBlockConfig(&forced_config)) {
+    if (ShouldUseDeepSeekV4Fp8MoeSplitTile(
+            is_fp8,
+            use_swigelu,
+            use_int4_w4a16,
+            topk,
+            hidden_size,
+            reduce_size,
+            num_experts,
+            scale_k_group_tile,
+            nr_n,
+            vlen,
+            bseqlen)) {
+        best_config = &deepseek_v4_fp8_moe_config;
+    } else if (ParseForcedBlockConfig(&forced_config)) {
         TORCH_CHECK(
             IsForcedBlockConfigValid(forced_config, nr_n, hidden_size, vlen),
             kGemvMoeBlockEnv, "=", forced_config.block_n, "x",
