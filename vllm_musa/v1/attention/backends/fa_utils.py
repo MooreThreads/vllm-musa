@@ -132,10 +132,43 @@ def is_flash_attn_varlen_func_available() -> bool:
 
 # MUSA: present the paged KV to mate's FMHA decode as page_size=64 (TME fast
 # path) without changing the unified KV block. When the attention block is a
-# multiple of 64 (>64), reshape the k/v cache
+# multiple of 64 (>64), view the k/v cache
 # [n_blk, blk, H, D] -> [n_blk*r, 64, H, D] (a view) and expand the page table;
 # mate then reads page_size == 64 and avoids the slow LSU KV load.
 _MUSA_B64_ARANGE: dict = {}
+
+
+def _try_view_musa_kv_cache_as_pages(
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    block_size: int,
+    page_size: int,
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    if value_cache.dim() < 2 or value_cache.shape[1] != block_size:
+        return None
+
+    # Flattening [num_blocks, block_size] is only an alias when adjacent
+    # blocks have no padding. Hybrid caches can use a padded block stride.
+    key_blocks_are_dense = key_cache.stride(0) == block_size * key_cache.stride(1)
+    value_blocks_are_dense = value_cache.stride(0) == block_size * value_cache.stride(1)
+    if not key_blocks_are_dense or not value_blocks_are_dense:
+        return None
+
+    pages_per_block = block_size // page_size
+    try:
+        key_pages = key_cache.view(
+            key_cache.shape[0] * pages_per_block,
+            page_size,
+            *key_cache.shape[2:],
+        )
+        value_pages = value_cache.view(
+            value_cache.shape[0] * pages_per_block,
+            page_size,
+            *value_cache.shape[2:],
+        )
+    except RuntimeError:
+        return None
+    return key_pages, value_pages
 
 
 def flash_attn_with_kvcache(*args, **kwargs):
@@ -146,8 +179,10 @@ def flash_attn_with_kvcache(*args, **kwargs):
         blk = kc.shape[1]
         if blk != 64 and blk % 64 == 0:
             r = blk // 64
-            kwargs["k_cache"] = kc.reshape(kc.shape[0] * r, 64, *kc.shape[2:])
-            kwargs["v_cache"] = vc.reshape(vc.shape[0] * r, 64, *vc.shape[2:])
+            kv_pages = _try_view_musa_kv_cache_as_pages(kc, vc, blk, 64)
+            if kv_pages is None:
+                return _mate_flash_attn_with_kvcache(*args, **kwargs)
+            kwargs["k_cache"], kwargs["v_cache"] = kv_pages
             key = (r, pt.device, pt.dtype)
             ar = _MUSA_B64_ARANGE.get(key)
             if ar is None:
