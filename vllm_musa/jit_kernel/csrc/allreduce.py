@@ -132,9 +132,7 @@ def launch_all_gather_registered(
     world_size: int,
 ) -> None:
     """Gather directly from persistent IPC-registered input shards."""
-    _custom_ar_module(
-        int(world_size)
-    ).vllm_musa_custom_ar_launch_all_gather_registered(
+    _custom_ar_module(int(world_size)).vllm_musa_custom_ar_launch_all_gather_registered(
         rank_data,
         signal_ptrs_cpu,
         inp,
