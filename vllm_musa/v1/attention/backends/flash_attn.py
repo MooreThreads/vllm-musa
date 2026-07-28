@@ -503,6 +503,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         self.kv_cache_dtype = kv_cache_spec.dtype
         self.headdim = self.model_config.get_head_size()
         self.block_size = kv_cache_spec.block_size
+        self.kv_cache_layout = get_kv_cache_layout()
 
         self.max_num_splits = 0  # No upper bound on the number of splits.
         self.aot_schedule = get_flash_attn_version() == 3
@@ -1181,6 +1182,7 @@ class FlashAttentionImpl(AttentionImpl):
                         k_cache=key_cache,
                         v_cache=value_cache,
                         page_table=attn_metadata.decode_block_table,
+                        _musa_kv_cache_layout=self.kv_cache_layout,
                         cache_seqlens=attn_metadata.decode_seq_lens,
                         cu_seqlens_q=attn_metadata.decode_query_start_loc,
                         max_seqlen_q=1,
@@ -1260,6 +1262,7 @@ class FlashAttentionImpl(AttentionImpl):
                         k_cache=key_cache,
                         v_cache=value_cache,
                         page_table=attn_metadata.decode_block_table,
+                        _musa_kv_cache_layout=self.kv_cache_layout,
                         cache_seqlens=attn_metadata.decode_seq_lens,
                         cu_seqlens_q=attn_metadata.decode_query_start_loc,
                         max_seqlen_q=1,

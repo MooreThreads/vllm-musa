@@ -172,10 +172,17 @@ def _try_view_musa_kv_cache_as_pages(
 
 
 def flash_attn_with_kvcache(*args, **kwargs):
+    cache_layout = kwargs.pop("_musa_kv_cache_layout", None)
     pt = kwargs.get("page_table")
     kc = kwargs.get("k_cache")
     vc = kwargs.get("v_cache")
-    if pt is not None and kc is not None and vc is not None and kc.dim() >= 2:
+    if (
+        pt is not None
+        and kc is not None
+        and vc is not None
+        and kc.dim() >= 2
+        and cache_layout == "NHD"
+    ):
         blk = kc.shape[1]
         if blk != 64 and blk % 64 == 0:
             r = blk // 64
