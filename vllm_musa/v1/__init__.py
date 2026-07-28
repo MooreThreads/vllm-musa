@@ -4,3 +4,4 @@ import vllm_musa.v1.attention.backends.mla.flashmla_sparse
 import vllm_musa.v1.executor
 import vllm_musa.v1.sample
 import vllm_musa.v1.spec_decode.utils
+import vllm_musa.v1.worker  # noqa: F401
