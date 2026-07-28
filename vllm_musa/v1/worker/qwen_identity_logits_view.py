@@ -8,6 +8,7 @@ from vllm.v1.worker.gpu.model_runner import GPUModelRunner
 
 logger = init_logger(__name__)
 
+
 def _is_musa_tensor(tensor: torch.Tensor) -> bool:
     return tensor.device.type == "musa"
 
@@ -20,9 +21,9 @@ def select_qwen_identity_logits_view(
     runner: Any, hidden_states: torch.Tensor, input_batch: Any
 ) -> torch.Tensor | None:
     """Return a view when uniform decode makes logits indices the identity."""
-    if not current_platform.is_musa() or not _is_musa_tensor(hidden_states):
-        return None
     if not _is_qwen_runner(runner):
+        return None
+    if not current_platform.is_musa() or not _is_musa_tensor(hidden_states):
         return None
     if (
         hidden_states.dtype != torch.bfloat16
