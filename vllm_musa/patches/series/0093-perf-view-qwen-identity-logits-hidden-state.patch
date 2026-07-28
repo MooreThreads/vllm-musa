@@ -1,0 +1,17 @@
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1040,7 +1040,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         input_batch: InputBatch,
+         grammar_output: GrammarOutput | None,
+     ) -> tuple[SamplerOutput, torch.Tensor, torch.Tensor]:
+-        sample_hidden_states = hidden_states[input_batch.logits_indices]
++        selector = getattr(self, "_musa_select_sample_hidden_states", None)
++        sample_hidden_states = (
++            None if selector is None else selector(hidden_states, input_batch)
++        )
++        if sample_hidden_states is None:
++            sample_hidden_states = hidden_states[input_batch.logits_indices]
+         logits = self.model.compute_logits(sample_hidden_states)
+         if grammar_output is not None:
+             # Apply grammar bitmask to the logits in-place.
