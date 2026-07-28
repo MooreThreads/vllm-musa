@@ -97,6 +97,7 @@ class Envs:
     VLLM_MUSA_QWEN_IDENTITY_LOGITS_VIEW = EnvBool(False)
     VLLM_MUSA_QWEN_UNIFORM_SAMPLE_COUNTS = EnvBool(False)
     VLLM_MUSA_QWEN_FUSED_NEXT_INPUT_IDS = EnvBool(False)
+    VLLM_MUSA_QWEN_SAMPLE_INPUT_VIEWS = EnvBool(False)
     VLLM_MUSA_RESHAPE_CACHE_FLASH = EnvBool(True)
     # Exact-shape Qwen2 RoPE+NHD-cache fusion.  The model, graph, dtype, and
     # tensor-layout gates fail closed; the environment switch is an A/B escape
