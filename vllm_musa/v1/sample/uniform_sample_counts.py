@@ -16,6 +16,7 @@ from vllm_musa.v1.sample.topk_topp_sampler import (
 
 logger = init_logger(__name__)
 
+
 def select_qwen_uniform_sample_counts(
     sampler: Any, logits: torch.Tensor, input_batch: Any
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
