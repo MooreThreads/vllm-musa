@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Direct single-request FA3 metadata preparation for MUSA."""
+"""Direct exact-gated FA3 metadata preparation for MUSA."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from vllm.triton_utils import tl, triton
 
 _BLOCK_SIZE = 256
 _SINGLE_REQUEST_SCHEDULER_SIZE = 16
+_BS16 = 16
+_BS16_SCHEDULER_SIZE = _BS16 * 4
 _SUPPORTED_QWEN_GEOMETRIES = frozenset(
     {
         (12, 2, 128),
@@ -102,6 +104,63 @@ def _build_qwen_single_request_fa3_metadata_kernel(
     )
 
 
+@triton.jit
+def _build_qwen_bs16_fa3_metadata_kernel(
+    seq_lens_ptr,
+    cu_seqlens_k_ptr,
+    scheduler_dst_ptr,
+    NUM_HEADS_KV: tl.constexpr,
+    MAX_KV_BLOCKS_IN_L2: tl.constexpr,
+    BATCH_SIZE: tl.constexpr,
+):
+    offsets = tl.arange(0, BATCH_SIZE)
+    seq_lens = tl.load(seq_lens_ptr + offsets)
+    safe_seq_lens = tl.where(seq_lens > 0, seq_lens, 1)
+    num_n_blocks = (safe_seq_lens + 63) // 64
+
+    # MATE's causal metadata path sorts by descending N-block count. Pack the
+    # original index into a unique key so equal lengths retain stable order.
+    stable_keys = num_n_blocks * 32 + (31 - offsets)
+    sorted_keys = tl.sort(stable_keys, descending=True)
+    sorted_batch_indices = 31 - sorted_keys % 32
+    sorted_n_blocks = sorted_keys // 32
+
+    num_nheads_in_l2 = tl.where(
+        sorted_n_blocks * 16 <= MAX_KV_BLOCKS_IN_L2,
+        16,
+        tl.where(
+            sorted_n_blocks * 8 <= MAX_KV_BLOCKS_IN_L2,
+            8,
+            tl.where(
+                sorted_n_blocks * 4 <= MAX_KV_BLOCKS_IN_L2,
+                4,
+                tl.where(sorted_n_blocks * 2 <= MAX_KV_BLOCKS_IN_L2, 2, 1),
+            ),
+        ),
+    )
+    num_nheads_in_l2 = tl.where(
+        num_nheads_in_l2 <= NUM_HEADS_KV,
+        num_nheads_in_l2,
+        NUM_HEADS_KV,
+    )
+
+    # Pinned MATE 0.2.4 layout for b_rounded == 16:
+    # [dynamic splits, sorted batch table, M blocks, L2 head swizzle].
+    tl.store(scheduler_dst_ptr + offsets, 1)
+    tl.store(scheduler_dst_ptr + BATCH_SIZE + offsets, sorted_batch_indices)
+    tl.store(scheduler_dst_ptr + BATCH_SIZE * 2 + offsets, 1)
+    tl.store(
+        scheduler_dst_ptr + BATCH_SIZE * 3 + offsets,
+        num_nheads_in_l2,
+    )
+
+    tl.store(cu_seqlens_k_ptr, 0)
+    tl.store(
+        cu_seqlens_k_ptr + offsets + 1,
+        tl.cumsum(safe_seq_lens, axis=0),
+    )
+
+
 def _supports_qwen_fa3_scheduler_geometry(
     max_seq_len: int,
     num_heads_q: int,
@@ -182,7 +241,69 @@ def try_build_qwen_single_request_fa3_metadata(
     return True
 
 
+def supports_qwen_bs16_fa3_metadata(
+    seq_lens: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    scheduler_dst: torch.Tensor,
+    max_seq_len: int,
+    num_heads_q: int,
+    num_heads_kv: int,
+    head_dim: int,
+    max_num_splits: int,
+) -> bool:
+    """Check the exact Qwen3-8B BS16 persistent-scheduler envelope."""
+    tensors = (seq_lens, cu_seqlens_k, scheduler_dst)
+    return (
+        1 <= max_seq_len <= 8192
+        and (num_heads_q, num_heads_kv, head_dim) == (32, 8, 128)
+        and max_num_splits == 1
+        and seq_lens.device.type == "musa"
+        and all(tensor.dtype == torch.int32 for tensor in tensors)
+        and all(tensor.device == seq_lens.device for tensor in tensors)
+        and all(tensor.is_contiguous() for tensor in tensors)
+        and seq_lens.numel() == _BS16
+        and cu_seqlens_k.numel() == _BS16 + 1
+        and scheduler_dst.numel() == _BS16_SCHEDULER_SIZE
+    )
+
+
+def try_build_qwen_bs16_fa3_metadata(
+    seq_lens: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    scheduler_dst: torch.Tensor,
+    max_seq_len: int,
+    num_heads_q: int,
+    num_heads_kv: int,
+    head_dim: int,
+    max_num_splits: int,
+) -> bool:
+    """Build BS16 MATE-compatible metadata without changing its scheduler."""
+    if not supports_qwen_bs16_fa3_metadata(
+        seq_lens,
+        cu_seqlens_k,
+        scheduler_dst,
+        max_seq_len,
+        num_heads_q,
+        num_heads_kv,
+        head_dim,
+        max_num_splits,
+    ):
+        return False
+
+    _build_qwen_bs16_fa3_metadata_kernel[(1,)](
+        seq_lens,
+        cu_seqlens_k,
+        scheduler_dst,
+        NUM_HEADS_KV=num_heads_kv,
+        MAX_KV_BLOCKS_IN_L2=48,
+        BATCH_SIZE=_BS16,
+    )
+    return True
+
+
 __all__ = [
+    "supports_qwen_bs16_fa3_metadata",
     "supports_qwen_single_request_fa3_scheduler_lookup",
+    "try_build_qwen_bs16_fa3_metadata",
     "try_build_qwen_single_request_fa3_metadata",
 ]

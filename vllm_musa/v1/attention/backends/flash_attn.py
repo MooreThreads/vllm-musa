@@ -45,6 +45,7 @@ from vllm.v1.attention.ops.dcp_alltoall import dcp_a2a_lse_reduce
 from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
 from vllm.v1.kv_cache_interface import AttentionSpec
 
+from vllm_musa.utils.environ import envs as musa_envs
 from vllm_musa.v1.attention.backends.fa_utils import (
     flash_attn_supports_fp8,
     get_flash_attn_version,
@@ -537,6 +538,11 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
             _is_qwen_family_scheduler_lookup_config(vllm_config)
             and _has_supported_fa3_scheduler_layout()
         )
+        self._use_qwen_bs16_batched_metadata = (
+            musa_envs.VLLM_MUSA_QWEN_FA3_BATCHED_METADATA_BS16.get()
+            and self._use_qwen_single_request_scheduler_lookup
+        )
+        self._logged_qwen_bs16_metadata = False
         # ========================== END ==========================
 
         if self.use_full_cuda_graph and self.aot_schedule:
@@ -816,10 +822,58 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         else:
             scheduler_metadata = None
 
-            # The direct builder handles only supported Qwen batch-one decode
-            # inputs. All other inputs continue through schedule() below.
+            use_qwen_bs16_metadata = (
+                getattr(self, "_use_qwen_bs16_batched_metadata", False)
+                and self.use_full_cuda_graph
+                and aot_schedule
+                and self._cu_seqlens_k_buffer is not None
+                and num_reqs == 16
+                and num_decodes == 16
+                and num_decode_tokens == 16
+                and num_prefills == 0
+                and max_query_len == 1
+                and 1 <= max_seq_len <= 8192
+                and causal
+                and self.aot_sliding_window == (-1, -1)
+                and self._sm_count_query_succeeded
+                and self._sm_count == 60
+                and max_num_splits == 1
+                and self.num_heads_q == 32
+                and self.num_heads_kv == 8
+                and self.headdim == 128
+                and self.block_size == 64
+                and self.kv_cache_dtype == torch.bfloat16
+            )
+            if use_qwen_bs16_metadata:
+                from vllm_musa.jit_kernel.fa3_metadata import (
+                    try_build_qwen_bs16_fa3_metadata,
+                )
+
+                buf = self._cu_seqlens_k_buffer
+                direct_metadata_built = try_build_qwen_bs16_fa3_metadata(
+                    seq_lens[:16],
+                    buf[:17],
+                    self.scheduler_metadata[:64],
+                    max_seq_len,
+                    self.num_heads_q,
+                    self.num_heads_kv,
+                    self.headdim,
+                    max_num_splits,
+                )
+                if direct_metadata_built:
+                    cu_seqlens_k = buf[:17]
+                    scheduler_metadata = self.scheduler_metadata[:64]
+                    if not self._logged_qwen_bs16_metadata:
+                        logger.info(
+                            "Using MUSA Qwen BS16 batched FA3 metadata builder."
+                        )
+                        self._logged_qwen_bs16_metadata = True
+
+            # The batch-one lookup has its own strict Qwen decode envelope.
+            # All unsupported inputs continue through schedule() below.
             use_qwen_scheduler_lookup = (
-                self._use_qwen_single_request_scheduler_lookup
+                not direct_metadata_built
+                and self._use_qwen_single_request_scheduler_lookup
                 and self.use_full_cuda_graph
                 and aot_schedule
                 and self._cu_seqlens_k_buffer is not None

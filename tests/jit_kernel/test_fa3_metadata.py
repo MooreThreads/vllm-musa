@@ -25,6 +25,8 @@ def _make_builder(flash_attn):
     builder._sm_count = 60
     builder._sm_count_query_succeeded = True
     builder._use_qwen_single_request_scheduler_lookup = True
+    builder._use_qwen_bs16_batched_metadata = False
+    builder._logged_qwen_bs16_metadata = False
     builder._cu_seqlens_k_buffer = torch.zeros(9, dtype=torch.int32)
     builder.scheduler_metadata = torch.full((33,), -1, dtype=torch.int32)
     builder.num_heads_q = 16
@@ -401,6 +403,171 @@ def test_qwen_single_request_fa3_scheduler_lookup_launches_once(monkeypatch):
     )
     assert len(launches) == 1
     assert launches[0][0] == (3,)
+
+
+def test_qwen_bs16_fa3_metadata_support_and_launch_gate(monkeypatch):
+    seq_lens = torch.zeros(16, dtype=torch.int32)
+    cu_seqlens_k = torch.zeros(17, dtype=torch.int32)
+    scheduler_dst = torch.zeros(64, dtype=torch.int32)
+
+    assert not fa3_metadata.supports_qwen_bs16_fa3_metadata(
+        seq_lens, cu_seqlens_k, scheduler_dst, 4096, 32, 8, 128, 1
+    )
+
+    launches = []
+
+    class FakeKernel:
+        def __getitem__(self, grid):
+            def launch(*args, **kwargs):
+                launches.append((grid, args, kwargs))
+
+            return launch
+
+    monkeypatch.setattr(
+        fa3_metadata,
+        "_build_qwen_bs16_fa3_metadata_kernel",
+        FakeKernel(),
+    )
+    monkeypatch.setattr(
+        fa3_metadata,
+        "supports_qwen_bs16_fa3_metadata",
+        lambda *args: True,
+    )
+    assert fa3_metadata.try_build_qwen_bs16_fa3_metadata(
+        seq_lens, cu_seqlens_k, scheduler_dst, 4096, 32, 8, 128, 1
+    )
+    assert len(launches) == 1
+    assert launches[0][0] == (1,)
+    assert launches[0][2]["BATCH_SIZE"] == 16
+
+
+def test_qwen_bs16_builder_preserves_aot_scheduler(monkeypatch):
+    from vllm_musa.v1.attention.backends import flash_attn
+
+    builder = _make_builder(flash_attn)
+    builder.max_cudagraph_size = 16
+    builder.max_num_splits = 1
+    builder.num_heads_q = 32
+    builder.num_heads_kv = 8
+    builder._cu_seqlens_k_buffer = torch.zeros(17, dtype=torch.int32)
+    builder.scheduler_metadata = torch.full((65,), -1, dtype=torch.int32)
+    common_metadata = _make_common_metadata(
+        num_reqs=16,
+        num_actual_tokens=16,
+        max_query_len=1,
+        max_seq_len=128,
+    )
+    monkeypatch.setattr(
+        flash_attn,
+        "split_decodes_and_prefills",
+        lambda *_args, **_kwargs: (16, 0, 16, 0),
+    )
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "0")
+    builder._use_qwen_bs16_batched_metadata = True
+
+    direct_calls = []
+
+    def direct_builder(seq_lens, cu_seqlens_k, scheduler_dst, *args):
+        direct_calls.append((seq_lens.clone(), args))
+        scheduler_dst.copy_(torch.arange(64, dtype=torch.int32))
+        cu_seqlens_k.copy_(torch.arange(17, dtype=torch.int32) * 128)
+        return True
+
+    monkeypatch.setattr(
+        fa3_metadata,
+        "try_build_qwen_bs16_fa3_metadata",
+        direct_builder,
+    )
+    monkeypatch.setattr(
+        flash_attn,
+        "get_scheduler_metadata",
+        lambda **_kwargs: pytest.fail("MATE metadata fallback should not run"),
+        raising=False,
+    )
+
+    result = builder.build(0, common_metadata)
+    assert len(direct_calls) == 1
+    assert direct_calls[0][1] == (128, 32, 8, 128, 1)
+    assert result.scheduler_metadata is not None
+    assert result.scheduler_metadata.tolist() == list(range(64))
+    assert result.cu_seqlens_k is not None
+    assert result.cu_seqlens_k.tolist() == [index * 128 for index in range(17)]
+    assert builder._logged_qwen_bs16_metadata
+
+
+@pytest.mark.skipif(
+    not (hasattr(torch, "musa") and torch.musa.is_available()),
+    reason="requires a MUSA device",
+)
+@pytest.mark.parametrize(
+    "seq_lens_values",
+    [
+        [1] * 16,
+        [65] * 16,
+        [4108] * 16,
+        [8192] * 16,
+        [
+            1,
+            64,
+            65,
+            127,
+            128,
+            129,
+            511,
+            512,
+            513,
+            1023,
+            2047,
+            4095,
+            4096,
+            4108,
+            5000,
+            8192,
+        ],
+    ],
+)
+def test_qwen_bs16_fa3_metadata_matches_mate(seq_lens_values):
+    from vllm_musa.v1.attention.backends.fa_utils import get_scheduler_metadata
+
+    seq_lens = torch.tensor(seq_lens_values, dtype=torch.int32, device="musa")
+    cu_seqlens_q = torch.arange(17, dtype=torch.int32, device="musa")
+    cu_seqlens_k = torch.full((17,), -1, dtype=torch.int32, device="musa")
+    scheduler_dst = torch.full((64,), -1, dtype=torch.int32, device="musa")
+    reference = get_scheduler_metadata(
+        batch_size=16,
+        max_seqlen_q=1,
+        max_seqlen_k=max(seq_lens_values),
+        num_heads_q=32,
+        num_heads_kv=8,
+        headdim=128,
+        cache_seqlens=seq_lens,
+        qkv_dtype=torch.bfloat16,
+        cu_seqlens_q=cu_seqlens_q,
+        page_size=64,
+        causal=True,
+        window_size=(-1, -1),
+        num_splits=1,
+    )
+
+    assert fa3_metadata.try_build_qwen_bs16_fa3_metadata(
+        seq_lens,
+        cu_seqlens_k,
+        scheduler_dst,
+        max(seq_lens_values),
+        32,
+        8,
+        128,
+        1,
+    )
+    torch.musa.synchronize()
+    assert torch.equal(scheduler_dst, reference)
+    expected_cu = torch.cat(
+        (
+            torch.zeros(1, dtype=torch.int32, device="musa"),
+            torch.cumsum(seq_lens, dim=0, dtype=torch.int32),
+        )
+    )
+    assert torch.equal(cu_seqlens_k, expected_cu)
 
 
 @pytest.mark.skipif(
