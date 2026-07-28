@@ -61,7 +61,6 @@ def test_mhc_pre_defaults_to_auto_provider():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
 
     assert "def _select_mhc_pre_auto_impl(" in source
-    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS" in source
     assert "hidden_size in {4096, 7168}" in source
     assert "def _mhc_pre_native_provider(" in source
     assert "deepseek_v4_mhc_pre(" in source
@@ -189,13 +188,16 @@ def test_hc_head_musa_eager_path_preserves_token_dimensions():
     assert "return y.reshape(*token_shape, hidden_size).to(dtype)" in source
 
 
-def test_mhc_pre_decode_prenorm_tilelang_selector_is_default_off():
+def test_mhc_pre_decode_prenorm_uses_deepgemm_by_default():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
 
-    assert "def _select_mhc_pre_big_fuse_prenorm_impl(" in source
-    assert "hc_hidden_size == 16384 and num_tokens <= 64" in source
-    assert 'return "tilelang"' in source
-    assert 'return "deepgemm"' in source
+    selector = source[
+        source.index("def _select_mhc_pre_big_fuse_prenorm_impl(") : source.index(
+            "def _mhc_prenorm_gemm_sqrsum_tilelang_decode_partials("
+        )
+    ]
+    assert 'return "deepgemm"' in selector
+    assert 'return "tilelang"' not in selector
     assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_DECODE_PRENORM_IMPL" not in source
 
 
