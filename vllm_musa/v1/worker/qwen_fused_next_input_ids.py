@@ -8,6 +8,7 @@ import torch
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.v1.worker.gpu.model_runner import GPUModelRunner
+
 from vllm_musa.v1.worker.qwen_identity_logits_view import (
     _is_musa_tensor,
     _is_qwen_runner,
