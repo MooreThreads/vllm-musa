@@ -7,11 +7,11 @@ from vllm.platforms import current_platform
 from vllm.v1.attention.backends.fa_utils import logger
 
 if current_platform.is_musa():
-    from flash_attn_interface import flash_attn_varlen_func as flash_attn_varlen_func
-    from flash_attn_interface import (
-        flash_attn_with_kvcache as _mate_flash_attn_with_kvcache,
+    from flash_attn_interface import (  # noqa: F401
+        flash_attn_varlen_func,
+        flash_attn_with_kvcache,
+        get_scheduler_metadata,
     )
-    from flash_attn_interface import get_scheduler_metadata as get_scheduler_metadata
     from vllm import _custom_ops as ops
 
     from vllm_musa import _custom_ops as musa_ops
@@ -128,72 +128,3 @@ def flash_attn_supports_mla():
 
 def is_flash_attn_varlen_func_available() -> bool:
     return "flash_attn_varlen_func" in globals()
-
-
-# MUSA: present the paged KV to mate's FMHA decode as page_size=64 (TME fast
-# path) without changing the unified KV block. When the attention block is a
-# multiple of 64 (>64), view the k/v cache
-# [n_blk, blk, H, D] -> [n_blk*r, 64, H, D] (a view) and expand the page table;
-# mate then reads page_size == 64 and avoids the slow LSU KV load.
-_MUSA_B64_ARANGE: dict = {}
-
-
-def _try_view_musa_kv_cache_as_pages(
-    key_cache: torch.Tensor,
-    value_cache: torch.Tensor,
-    block_size: int,
-    page_size: int,
-) -> tuple[torch.Tensor, torch.Tensor] | None:
-    if value_cache.dim() < 2 or value_cache.shape[1] != block_size:
-        return None
-
-    # Flattening [num_blocks, block_size] is only an alias when adjacent
-    # blocks have no padding. Hybrid caches can use a padded block stride.
-    key_blocks_are_dense = key_cache.stride(0) == block_size * key_cache.stride(1)
-    value_blocks_are_dense = value_cache.stride(0) == block_size * value_cache.stride(1)
-    if not key_blocks_are_dense or not value_blocks_are_dense:
-        return None
-
-    pages_per_block = block_size // page_size
-    try:
-        key_pages = key_cache.view(
-            key_cache.shape[0] * pages_per_block,
-            page_size,
-            *key_cache.shape[2:],
-        )
-        value_pages = value_cache.view(
-            value_cache.shape[0] * pages_per_block,
-            page_size,
-            *value_cache.shape[2:],
-        )
-    except RuntimeError:
-        return None
-    return key_pages, value_pages
-
-
-def flash_attn_with_kvcache(*args, **kwargs):
-    cache_layout = kwargs.pop("_musa_kv_cache_layout", None)
-    pt = kwargs.get("page_table")
-    kc = kwargs.get("k_cache")
-    vc = kwargs.get("v_cache")
-    if (
-        pt is not None
-        and kc is not None
-        and vc is not None
-        and kc.dim() >= 2
-        and cache_layout == "NHD"
-    ):
-        blk = kc.shape[1]
-        if blk != 64 and blk % 64 == 0:
-            r = blk // 64
-            kv_pages = _try_view_musa_kv_cache_as_pages(kc, vc, blk, 64)
-            if kv_pages is None:
-                return _mate_flash_attn_with_kvcache(*args, **kwargs)
-            kwargs["k_cache"], kwargs["v_cache"] = kv_pages
-            key = (r, pt.device, pt.dtype)
-            ar = _MUSA_B64_ARANGE.get(key)
-            if ar is None:
-                ar = torch.arange(r, device=pt.device, dtype=pt.dtype)
-                _MUSA_B64_ARANGE[key] = ar
-            kwargs["page_table"] = (pt.unsqueeze(-1) * r + ar).reshape(pt.shape[0], -1)
-    return _mate_flash_attn_with_kvcache(*args, **kwargs)

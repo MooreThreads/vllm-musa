@@ -981,7 +981,6 @@ class FlashAttentionImpl(AttentionImpl):
         else:
             self.sliding_window = (sliding_window - 1, 0)
         self.kv_cache_dtype = kv_cache_dtype
-        self.kv_cache_layout = get_kv_cache_layout()
         if logits_soft_cap is None:
             # In flash-attn, setting logits_soft_cap as 0 means no soft cap.
             logits_soft_cap = 0
@@ -1182,7 +1181,6 @@ class FlashAttentionImpl(AttentionImpl):
                         k_cache=key_cache,
                         v_cache=value_cache,
                         page_table=attn_metadata.decode_block_table,
-                        _musa_kv_cache_layout=self.kv_cache_layout,
                         cache_seqlens=attn_metadata.decode_seq_lens,
                         cu_seqlens_q=attn_metadata.decode_query_start_loc,
                         max_seqlen_q=1,
@@ -1262,7 +1260,6 @@ class FlashAttentionImpl(AttentionImpl):
                         k_cache=key_cache,
                         v_cache=value_cache,
                         page_table=attn_metadata.decode_block_table,
-                        _musa_kv_cache_layout=self.kv_cache_layout,
                         cache_seqlens=attn_metadata.decode_seq_lens,
                         cu_seqlens_q=attn_metadata.decode_query_start_loc,
                         max_seqlen_q=1,
