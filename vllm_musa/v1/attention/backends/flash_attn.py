@@ -503,7 +503,6 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         self.kv_cache_dtype = kv_cache_spec.dtype
         self.headdim = self.model_config.get_head_size()
         self.block_size = kv_cache_spec.block_size
-        self.kv_cache_layout = get_kv_cache_layout()
 
         self.max_num_splits = 0  # No upper bound on the number of splits.
         self.aot_schedule = get_flash_attn_version() == 3
@@ -982,6 +981,7 @@ class FlashAttentionImpl(AttentionImpl):
         else:
             self.sliding_window = (sliding_window - 1, 0)
         self.kv_cache_dtype = kv_cache_dtype
+        self.kv_cache_layout = get_kv_cache_layout()
         if logits_soft_cap is None:
             # In flash-attn, setting logits_soft_cap as 0 means no soft cap.
             logits_soft_cap = 0
