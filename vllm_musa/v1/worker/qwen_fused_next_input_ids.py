@@ -15,6 +15,7 @@ from vllm_musa.v1.worker.qwen_identity_logits_view import (
 
 logger = init_logger(__name__)
 
+
 def select_qwen_fused_decode_inputs(
     runner: Any,
     req_ids: list[str],
@@ -27,6 +28,9 @@ def select_qwen_fused_decode_inputs(
     num_reqs_after_padding: int,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
     """Use input IDs written by the preceding post-update kernel."""
+    if not _is_qwen_runner(runner):
+        return None
+
     primed_req_ids = getattr(runner, "_musa_qwen_primed_input_req_ids", None)
     runner._musa_qwen_primed_input_req_ids = None
     runner._musa_qwen_pending_input_req_ids = None
@@ -35,7 +39,6 @@ def select_qwen_fused_decode_inputs(
     if (
         not current_platform.is_musa()
         or not _is_musa_tensor(input_ids)
-        or not _is_qwen_runner(runner)
         or getattr(runner, "use_pp", False)
     ):
         return None

@@ -10,6 +10,7 @@ import torchada  # noqa: F401
 import torch
 # isort: on
 
+
 def _select_qwen_sample_input_views(
     sampler: Any,
     logits: torch.Tensor,
@@ -18,6 +19,8 @@ def _select_qwen_sample_input_views(
     idx_mapping_np: np.ndarray,
     return_logprobs: bool,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
+    if not getattr(sampler, "_musa_qwen_family", False):
+        return None
     if return_logprobs:
         return None
 
