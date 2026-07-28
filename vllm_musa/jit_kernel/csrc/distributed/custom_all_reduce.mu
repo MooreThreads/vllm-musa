@@ -693,6 +693,91 @@ void vllm_musa_custom_ar_launch_all_gather(
       << "MUSA custom all-gather kernel failed: " << musaGetErrorString(err);
 }
 
+void vllm_musa_custom_ar_launch_all_gather_registered(
+    ffi::TensorView rank_data,
+    ffi::TensorView signal_ptrs_cpu,
+    ffi::TensorView inp,
+    ffi::TensorView out,
+    int64_t rank,
+    int64_t world_size) {
+  // Input allocations and peer IPC mappings must outlive the launch.
+  CHECK_MUSA_CONTIGUOUS(inp);
+  CHECK_MUSA_CONTIGUOUS(out);
+  TVM_FFI_ICHECK(world_size == 2 || world_size == 4 || world_size == 8);
+  TVM_FFI_ICHECK_EQ(inp.device().device_id, out.device().device_id);
+  TVM_FFI_ICHECK_EQ(rank_data.ndim(), 1);
+  TVM_FFI_ICHECK_EQ(rank_data.device().device_type, kDLCPU);
+  TVM_FFI_ICHECK(rank_data.IsContiguous());
+  TVM_FFI_ICHECK(dtype_equal(rank_data.dtype(), dl_int64));
+  TVM_FFI_ICHECK_GE(rank_data.size(0), kMaxRanks);
+  TVM_FFI_ICHECK_EQ(signal_ptrs_cpu.ndim(), 1);
+  TVM_FFI_ICHECK_EQ(signal_ptrs_cpu.device().device_type, kDLCPU);
+  TVM_FFI_ICHECK(signal_ptrs_cpu.IsContiguous());
+  TVM_FFI_ICHECK(dtype_equal(signal_ptrs_cpu.dtype(), dl_int64));
+  TVM_FFI_ICHECK_GE(signal_ptrs_cpu.size(0), world_size);
+  TVM_FFI_ICHECK(rank >= 0 && rank < world_size);
+  TVM_FFI_ICHECK_EQ(inp.ndim(), 2);
+  TVM_FFI_ICHECK_EQ(out.ndim(), 2);
+  TVM_FFI_ICHECK_GT(inp.size(0), 0);
+  TVM_FFI_ICHECK_GT(inp.size(1), 0);
+  TVM_FFI_ICHECK_EQ(inp.size(0), out.size(0));
+  TVM_FFI_ICHECK_EQ(inp.size(1) * world_size, out.size(1));
+  TVM_FFI_ICHECK(dtype_equal(inp.dtype(), out.dtype()));
+
+  RankSignals sg{};
+  const auto* signal_ptrs =
+      static_cast<const int64_t*>(signal_ptrs_cpu.data_ptr());
+  for (int i = 0; i < world_size; ++i) {
+    sg.signals[i] = reinterpret_cast<Signal*>(signal_ptrs[i]);
+    TVM_FFI_ICHECK(sg.signals[i] != nullptr);
+  }
+  RankData data{};
+  const auto* rank_ptrs = static_cast<const int64_t*>(rank_data.data_ptr());
+  for (int i = 0; i < kMaxRanks; ++i) {
+    data.ptrs[i] = reinterpret_cast<const void*>(rank_ptrs[i]);
+  }
+  for (int i = 0; i < world_size; ++i) {
+    TVM_FFI_ICHECK(data.ptrs[i] != nullptr);
+  }
+  TVM_FFI_ICHECK_EQ(data.ptrs[rank], inp.data_ptr());
+
+  auto* self_sg = sg.signals[rank];
+  auto stream = get_stream(out.device());
+  const int64_t input_numel = tensor_numel(inp);
+  const int64_t output_numel = tensor_numel(out);
+  TVM_FFI_ICHECK_LE(input_numel,
+                    static_cast<int64_t>(std::numeric_limits<int32_t>::max()));
+  TVM_FFI_ICHECK_LE(output_numel,
+                    static_cast<int64_t>(std::numeric_limits<int32_t>::max()));
+
+  const int rows = static_cast<int>(inp.size(0));
+  const int shard_size = static_cast<int>(inp.size(1));
+  if (dtype_equal(out.dtype(), dl_float16)) {
+    dispatch_all_gather_world_size<half, half>(
+        data, sg, self_sg, static_cast<half*>(out.data_ptr()),
+        static_cast<int>(rank), static_cast<int>(world_size), rows, shard_size,
+        stream);
+  } else if (dtype_equal(out.dtype(), dl_bfloat16)) {
+    dispatch_all_gather_world_size<__mt_bfloat16, __mt_bfloat16>(
+        data, sg, self_sg, static_cast<__mt_bfloat16*>(out.data_ptr()),
+        static_cast<int>(rank), static_cast<int>(world_size), rows, shard_size,
+        stream);
+  } else if (dtype_equal(out.dtype(), dl_float32)) {
+    dispatch_all_gather_world_size<float, float>(
+        data, sg, self_sg, static_cast<float*>(out.data_ptr()),
+        static_cast<int>(rank), static_cast<int>(world_size), rows, shard_size,
+        stream);
+  } else {
+    TVM_FFI_THROW(ValueError)
+        << "registered custom all-gather only supports same-dtype "
+           "fp16/bf16/fp32";
+  }
+  const musaError_t err = musaGetLastError();
+  TVM_FFI_ICHECK_EQ(err, musaSuccess)
+      << "MUSA registered custom all-gather kernel failed: "
+      << musaGetErrorString(err);
+}
+
 void vllm_musa_custom_ar_launch_registered(
     ffi::TensorView rank_data,
     ffi::TensorView signal_ptrs_cpu,
@@ -796,5 +881,8 @@ TVM_FFI_DLL_EXPORT_TYPED_FUNC(vllm_musa_custom_ar_meta_size, vllm_musa_custom_ar
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(vllm_musa_custom_ar_launch_unregistered, vllm_musa_custom_ar_launch_unregistered);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(vllm_musa_custom_ar_launch_all_gather,
                               vllm_musa_custom_ar_launch_all_gather);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(
+    vllm_musa_custom_ar_launch_all_gather_registered,
+    vllm_musa_custom_ar_launch_all_gather_registered);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(vllm_musa_custom_ar_launch_registered, vllm_musa_custom_ar_launch_registered);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(vllm_musa_custom_ar_launch_graph_registered, vllm_musa_custom_ar_launch_graph_registered);
