@@ -92,6 +92,7 @@ class Envs:
     VLLM_MUSA_ENABLE_JIT_TOPK = EnvBool(True)
     VLLM_MUSA_SEEDED_MULTINOMIAL = EnvBool(True)
     VLLM_MUSA_RESHAPE_CACHE_FLASH = EnvBool(True)
+    VLLM_MUSA_QWEN_UNIFORM_COUNT_HOST = EnvBool(True)
 
 
 envs = Envs()

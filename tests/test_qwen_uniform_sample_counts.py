@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # ruff: noqa: I001
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -43,6 +44,11 @@ def test_qwen_uniform_sample_counts_accepts_and_reuses(monkeypatch) -> None:
     assert first[1].tolist() == [0, 0, 0, 0]
     assert first[0].data_ptr() == second[0].data_ptr()
     assert first[1].data_ptr() == second[1].data_ptr()
+    first_host = getattr(first[0], sample_counts.UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR)
+    second_host = getattr(second[0], sample_counts.UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR)
+    assert first_host.dtype == np.int32
+    assert first_host.tolist() == [1, 1, 1, 1]
+    assert first_host.ctypes.data == second_host.ctypes.data
 
 
 def test_qwen_uniform_sample_counts_grows_and_changes_dtype(monkeypatch) -> None:
@@ -72,6 +78,11 @@ def test_qwen_uniform_sample_counts_grows_and_changes_dtype(monkeypatch) -> None
     assert larger[0].data_ptr() != first[0].data_ptr()
     assert int64_counts[0].dtype == torch.int64
     assert int64_counts[0].data_ptr() != larger[0].data_ptr()
+    int64_host = getattr(
+        int64_counts[0], sample_counts.UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR
+    )
+    assert int64_host.dtype == np.int64
+    assert int64_host.tolist() == [1] * 8
 
 
 def test_qwen_uniform_sample_counts_bound_hook(monkeypatch) -> None:
@@ -132,3 +143,44 @@ def test_qwen_uniform_sample_counts_rejects_non_qwen_trait(monkeypatch) -> None:
         )
         is None
     )
+
+
+def test_qwen_uniform_sample_counts_rejects_unsupported_count_dtype(
+    monkeypatch,
+) -> None:
+    install_test_gates(monkeypatch)
+    batch = make_batch(2)
+    batch.seq_lens = batch.seq_lens.to(torch.float32)
+    logits = torch.empty((2, 151936), dtype=torch.bfloat16)
+    assert (
+        sample_counts.select_qwen_uniform_sample_counts(
+            SimpleNamespace(_musa_qwen_family=True), logits, batch
+        )
+        is None
+    )
+
+
+def test_qwen_async_output_patch_is_tag_gated() -> None:
+    patch = (
+        Path(__file__).parents[1]
+        / "vllm_musa"
+        / "patches"
+        / "series"
+        / "0097-perf-elide-qwen-uniform-count-dtoh.patch"
+    ).read_text()
+    assert sample_counts.UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR in patch
+    assert "if host_num_sampled_tokens is None" in patch
+    assert "async_copy_to_np(num_sampled_tokens)" in patch
+    assert "import vllm_musa" not in patch
+
+
+def test_qwen_uniform_count_host_tag_can_be_disabled(monkeypatch) -> None:
+    install_test_gates(monkeypatch)
+    monkeypatch.setattr(sample_counts, "_use_uniform_count_host", False)
+    output = sample_counts.select_qwen_uniform_sample_counts(
+        SimpleNamespace(_musa_qwen_family=True),
+        torch.empty((2, 151936), dtype=torch.bfloat16),
+        make_batch(2),
+    )
+    assert output is not None
+    assert not hasattr(output[0], sample_counts.UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR)
