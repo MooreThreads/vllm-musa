@@ -1,0 +1,28 @@
+Subject: [PATCH] perf: reuse proven Qwen sample counts on host
+
+The MUSA Qwen pure-decode selector already proves that every request produces
+exactly one token and returns a tagged cached count tensor. Reuse its cached
+host array in AsyncOutput instead of issuing a second per-step DtoH copy. The
+untagged upstream path remains unchanged for prefill, speculative decoding,
+non-Qwen models, and every selector fallback.
+
+--- a/vllm/v1/worker/gpu/async_utils.py
++++ b/vllm/v1/worker/gpu/async_utils.py
+@@ -38,7 +38,16 @@ class AsyncOutput(AsyncModelRunnerOutput):
+             self.num_nans: np.ndarray | None = None
+             if sampler_output.num_nans is not None:
+                 self.num_nans = async_copy_to_np(sampler_output.num_nans)
+-            self.num_sampled_tokens_np = async_copy_to_np(num_sampled_tokens)
++            host_num_sampled_tokens = getattr(
++                num_sampled_tokens,
++                "_vllm_musa_uniform_num_sampled_tokens_host",
++                None,
++            )
++            self.num_sampled_tokens_np = (
++                async_copy_to_np(num_sampled_tokens)
++                if host_num_sampled_tokens is None
++                else host_num_sampled_tokens
++            )
+             self.prompt_logprobs_dict = {
+                 k: v.to_cpu_nonblocking() if v is not None else None
+                 for k, v in self.model_runner_output.prompt_logprobs_dict.items()

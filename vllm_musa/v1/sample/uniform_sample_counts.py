@@ -9,12 +9,16 @@ from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.v1.worker.gpu.sample.sampler import Sampler
 
+from vllm_musa.utils.environ import envs
 from vllm_musa.v1.sample.topk_topp_sampler import (
     _is_qwen_sampler_vocab,
     is_musa_tensor,
 )
 
 logger = init_logger(__name__)
+
+UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR = "_vllm_musa_uniform_num_sampled_tokens_host"
+_use_uniform_count_host = envs.VLLM_MUSA_QWEN_UNIFORM_COUNT_HOST.get()
 
 
 def select_qwen_uniform_sample_counts(
@@ -32,7 +36,6 @@ def select_qwen_uniform_sample_counts(
         or not _is_qwen_sampler_vocab(logits)
     ):
         return None
-
     try:
         num_reqs = input_batch.num_reqs
         num_scheduled_tokens = input_batch.num_scheduled_tokens
@@ -40,6 +43,12 @@ def select_qwen_uniform_sample_counts(
         num_draft_tokens = input_batch.num_draft_tokens
         seq_lens = input_batch.seq_lens
     except AttributeError:
+        return None
+    if seq_lens.dtype == torch.int32:
+        host_dtype = np.int32
+    elif seq_lens.dtype == torch.int64:
+        host_dtype = np.int64
+    else:
         return None
     if (
         num_reqs <= 0
@@ -64,13 +73,21 @@ def select_qwen_uniform_sample_counts(
             device=seq_lens.device,
         )
         num_rejected = torch.zeros_like(num_sampled)
-        buffers = (cache_key, num_sampled, num_rejected)
+        num_sampled_host = np.ones(capacity, dtype=host_dtype)
+        buffers = (cache_key, num_sampled, num_rejected, num_sampled_host)
         sampler._musa_qwen_uniform_sample_count_buffers = buffers
         logger.info_once(
             "Using cached MUSA Qwen uniform decode sample counts.",
             scope="global",
         )
-    return buffers[1][:num_reqs], buffers[2][:num_reqs]
+    num_sampled_tokens = buffers[1][:num_reqs]
+    if _use_uniform_count_host:
+        setattr(
+            num_sampled_tokens,
+            UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR,
+            buffers[3][:num_reqs],
+        )
+    return num_sampled_tokens, buffers[2][:num_reqs]
 
 
 def install_hooks() -> None:
