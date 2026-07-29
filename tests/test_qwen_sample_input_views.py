@@ -46,6 +46,28 @@ def test_uniform_decode_uses_identity_views(monkeypatch):
     assert selected[0].shape == selected[1].shape == (batch.num_reqs,)
 
 
+def test_uniform_decode_views_match_upstream_gather_with_graph_padding(monkeypatch):
+    batch = make_batch(batch_size=4, padded=8)
+    batch.positions = torch.tensor([19, 7, 31, 3, -1, -1, -1, -1], dtype=torch.int64)
+    batch.input_ids = torch.tensor(
+        [101, 303, 202, 404, -1, -1, -1, -1], dtype=torch.int32
+    )
+
+    # For one scheduled token per actual request, upstream's query-end minus
+    # one producer yields the identity logits indices even if request rows are
+    # reordered and graph padding follows the actual rows.
+    query_start_loc = torch.arange(batch.num_reqs + 1, dtype=torch.int32)
+    logits_indices = query_start_loc[1:] - 1
+    assert torch.equal(logits_indices, torch.arange(batch.num_reqs, dtype=torch.int32))
+
+    selected = select(monkeypatch, batch)
+    assert selected is not None
+    assert torch.equal(selected[0], batch.positions[logits_indices])
+    assert torch.equal(selected[1], batch.input_ids[logits_indices])
+    assert selected[0].data_ptr() == batch.positions.data_ptr()
+    assert selected[1].data_ptr() == batch.input_ids.data_ptr()
+
+
 def test_non_uniform_or_logprobs_falls_back(monkeypatch):
     for overrides in (
         {"num_scheduled_tokens": np.array([1, 1, 2, 1], dtype=np.int32)},
