@@ -69,6 +69,7 @@ def _causal_conv1d_fwd_kernel(
     state_stride_seq: int,
     state_stride_dim: int,
     state_stride_token: int,
+    cache_indices_stride: int,
     o_stride_dim: int,
     o_stride_token: int,
     has_bias: bool,
@@ -152,7 +153,7 @@ def _causal_conv1d_fwd_kernel(
 
             cache_idx = seq_idx
             if has_cache_indices:
-                cache_idx = cache_indices[seq_idx]
+                cache_idx = cache_indices[seq_idx * cache_indices_stride]
                 if has_cache_index_mapping:
                     cache_idx = cache_index_mapping[cache_idx]
             valid_seq = segment_len > 0
@@ -950,6 +951,7 @@ def _causal_conv1d_decode_width4_batched_kernel(
     state_stride_seq: int,
     state_stride_dim: int,
     state_stride_token: int,
+    cache_indices_stride: int,
     o_stride_token: int,
     has_bias: bool,
     has_cache_indices: bool,
@@ -1009,7 +1011,7 @@ def _causal_conv1d_decode_width4_batched_kernel(
 
             cache_idx = seq_idx
             if has_cache_indices and seq_idx < batch:
-                cache_idx = cache_indices[seq_idx]
+                cache_idx = cache_indices[seq_idx * cache_indices_stride]
                 if has_cache_index_mapping:
                     cache_idx = cache_index_mapping[cache_idx]
             valid = seq_idx < batch and feat < dim
@@ -1195,7 +1197,9 @@ def _causal_conv1d_fwd_impl(
     out_arg = storage_window(out)
     bias_arg = storage_window(bias) if bias is not None else x_arg
     conv_states_arg = storage_window(conv_states) if conv_states is not None else x_arg
-    cache_indices_arg = cache_indices if cache_indices is not None else query_start_loc
+    cache_indices_arg = (
+        storage_window(cache_indices) if cache_indices is not None else query_start_loc
+    )
     cache_index_mapping_arg = (
         cache_index_mapping if cache_index_mapping is not None else cache_indices_arg
     )
@@ -1255,6 +1259,7 @@ def _causal_conv1d_fwd_impl(
             int(state_stride_seq),
             int(state_stride_dim),
             int(state_stride_token),
+            int(cache_indices.stride(0)) if cache_indices is not None else 1,
             int(out.stride(1)),
             bias is not None,
             cache_indices is not None,
@@ -1410,6 +1415,7 @@ def _causal_conv1d_fwd_impl(
         int(state_stride_seq),
         int(state_stride_dim),
         int(state_stride_token),
+        int(cache_indices.stride(0)) if cache_indices is not None else 1,
         int(out.stride(0)),
         int(out.stride(1)),
         bias is not None,
@@ -1677,6 +1683,7 @@ def musa_tilelang_causal_conv1d_update(
         int(conv_state.stride(0)),
         int(conv_state.stride(1)),
         int(conv_state.stride(2)),
+        int(idx.stride(0)),
         int(outt.stride(1)),
         bias is not None,
         has_cache_indices,
@@ -1687,13 +1694,14 @@ def musa_tilelang_causal_conv1d_update(
         256,
         1,
     )
+    idx_arg = storage_window(idx)
     ker(
         storage_window(xt),
         storage_window(weight),
         storage_window(bias) if bias is not None else storage_window(xt),
         storage_window(conv_state),
-        idx,
-        idx,
+        idx_arg,
+        idx_arg,
         has_init,
         storage_window(outt),
         int(batch),

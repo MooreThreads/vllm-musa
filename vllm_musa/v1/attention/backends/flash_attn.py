@@ -569,6 +569,18 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
                 self._sm_count = 60
 
         # ==================== MUSA ADAPTATION ====================
+        self.num_speculative_tokens = (
+            vllm_config.speculative_config.num_speculative_tokens
+            if vllm_config.speculative_config is not None
+            else 0
+        )
+        # With MTP, a decode/verify row carries 1 + draft tokens. Keep the
+        # attention split aligned with Mamba/GDN metadata so pure MTP verify
+        # batches are not misclassified as prefills.
+        self.decode_threshold = (
+            self.reorder_batch_threshold + self.num_speculative_tokens
+        )
+
         if self.use_full_cuda_graph:
             self._cu_seqlens_k_buffer = torch.zeros(
                 vllm_config.scheduler_config.max_num_seqs + 1,
@@ -605,8 +617,12 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens = (
             split_decodes_and_prefills(
                 common_attn_metadata,
-                decode_threshold=self.reorder_batch_threshold,
+                decode_threshold=self.decode_threshold,
                 require_uniform=False,
+                treat_short_extends_as_decodes=(
+                    self.num_speculative_tokens == 0
+                    or common_attn_metadata.is_prefilling is None
+                ),
             )
         )
 
@@ -1298,31 +1314,66 @@ class FlashAttentionImpl(AttentionImpl):
                     # verify (multiple query tokens per seq), or layers ineligible for the
                     # mubin fast path (sliding-window/softcap/fp8/sinks). All tokens attend
                     # through the paged KV cache with the original query_start_loc layout.
-                    flash_attn_varlen_func(
-                        q=query[:num_actual_tokens].view(
-                            -1, self.num_heads, self.head_size
-                        ),
-                        k=key_cache,
-                        v=value_cache,
-                        out=output[:num_actual_tokens].view(
-                            -1, self.num_heads, self.head_size
-                        ),
-                        cu_seqlens_q=cu_seqlens_q,
-                        max_seqlen_q=max_seqlen_q,
-                        seqused_k=seqused_k,
-                        max_seqlen_k=max_seqlen_k,
-                        softmax_scale=self.scale,
-                        causal=attn_metadata.causal,
-                        window_size=sliding_window_size,
-                        block_table=block_table,
-                        softcap=self.logits_soft_cap,
-                        scheduler_metadata=scheduler_metadata,
-                        q_descale=q_descale,
-                        k_descale=k_descale,
-                        v_descale=v_descale,
-                        num_splits=attn_metadata.max_num_splits,
-                        s_aux=self.sinks,
+                    use_fused_kv_verify = (
+                        num_decodes > 0
+                        and num_prefills == 0
+                        and num_decode_tokens > num_decodes
+                        and max_seqlen_q > 1
+                        and attn_metadata.causal
                     )
+
+                    if use_fused_kv_verify:
+                        # MTP verify has multiple query tokens per request. KV
+                        # cache has already been populated by do_kv_cache_update;
+                        # use the paged decode kernel for the verify attention
+                        # instead of the varlen paged fallback, which is not
+                        # graph-safe for this MUSA shape.
+                        output[:num_actual_tokens] = flash_attn_with_kvcache(
+                            q=query[:num_actual_tokens].view(
+                                -1, self.num_heads, self.head_size
+                            ),
+                            k_cache=key_cache,
+                            v_cache=value_cache,
+                            cache_seqlens=seqused_k,
+                            page_table=block_table,
+                            cu_seqlens_q=cu_seqlens_q,
+                            max_seqlen_q=max_seqlen_q,
+                            softmax_scale=self.scale,
+                            causal=attn_metadata.causal,
+                            window_size=sliding_window_size,
+                            softcap=self.logits_soft_cap,
+                            q_descale=q_descale,
+                            k_descale=k_descale,
+                            v_descale=v_descale,
+                            num_splits=max(attn_metadata.max_num_splits, 1),
+                            s_aux=self.sinks,
+                        )
+                    else:
+                        flash_attn_varlen_func(
+                            q=query[:num_actual_tokens].view(
+                                -1, self.num_heads, self.head_size
+                            ),
+                            k=key_cache,
+                            v=value_cache,
+                            out=output[:num_actual_tokens].view(
+                                -1, self.num_heads, self.head_size
+                            ),
+                            cu_seqlens_q=cu_seqlens_q,
+                            max_seqlen_q=max_seqlen_q,
+                            seqused_k=seqused_k,
+                            max_seqlen_k=max_seqlen_k,
+                            softmax_scale=self.scale,
+                            causal=attn_metadata.causal,
+                            window_size=sliding_window_size,
+                            block_table=block_table,
+                            softcap=self.logits_soft_cap,
+                            scheduler_metadata=scheduler_metadata,
+                            q_descale=q_descale,
+                            k_descale=k_descale,
+                            v_descale=v_descale,
+                            num_splits=attn_metadata.max_num_splits,
+                            s_aux=self.sinks,
+                        )
                 # ========================== END ==========================
 
                 return output

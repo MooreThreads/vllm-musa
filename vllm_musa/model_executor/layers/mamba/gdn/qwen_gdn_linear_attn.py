@@ -519,10 +519,12 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             b_non_spec = b
 
         if spec_sequence_masks is not None:
+            a_spec = a.index_select(0, spec_token_indx)
+            b_spec = b.index_select(0, spec_token_indx)
             core_attn_out_spec, _ = fused_sigmoid_gating_delta_rule_update(
                 A_log=self.A_log,
-                a=a,
-                b=b,
+                a=a_spec,
+                b=b_spec,
                 dt_bias=self.dt_bias,
                 q=query_spec,
                 k=key_spec,

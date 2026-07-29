@@ -36,7 +36,6 @@ class TestCustomOpsRuntimePatches:
         # the dflash fallback is now the vllm._custom_ops cat-6 object
         # patch; load + apply() it and assert it rebinds to the _shared helpers.
         import vllm
-
         from vllm_musa.patches import _get_patch_files, _load_patch_module, _shared
 
         vllm_ops = ModuleType("vllm._custom_ops")
@@ -456,9 +455,9 @@ class TestMUSAFlashAttentionReshapeCache:
     """
 
     def _load_fa_utils_with_musa_platform(self, monkeypatch, musa_ops_namespace):
-        import vllm
         import vllm.platforms as vllm_platforms
 
+        import vllm
         import vllm_musa
 
         monkeypatch.setenv("VLLM_MUSA_RESHAPE_CACHE_FLASH", "1")
@@ -702,6 +701,110 @@ class TestMUSAPlatformDefaults:
                 max_cudagraph_capture_size=max_cudagraph_capture_size,
                 cudagraph_capture_sizes=cudagraph_capture_sizes,
             ),
+        )
+
+    def _make_hybrid_spec_config(
+        self,
+        *,
+        is_hybrid=True,
+        cudagraph_mode=None,
+        compilation_mode=None,
+        enable_sp=False,
+        fuse_gemm_comms=False,
+        fuse_attn_quant=False,
+    ):
+        from types import SimpleNamespace
+
+        from vllm.config import CompilationMode
+
+        vllm_config = self._make_vllm_config(cudagraph_mode=cudagraph_mode)
+        vllm_config.model_config.is_hybrid = is_hybrid
+        vllm_config.speculative_config = SimpleNamespace(
+            method="qwen3_5_mtp",
+            num_speculative_tokens=2,
+            use_dflash=lambda: False,
+        )
+        vllm_config.compilation_config.mode = (
+            CompilationMode.VLLM_COMPILE
+            if compilation_mode is None
+            else compilation_mode
+        )
+        vllm_config.compilation_config.pass_config = SimpleNamespace(
+            enable_sp=enable_sp,
+            fuse_gemm_comms=fuse_gemm_comms,
+            fuse_attn_quant=fuse_attn_quant,
+        )
+        return vllm_config
+
+    def test_hybrid_mtp_full_cudagraph_coerced_to_piecewise(self):
+        from vllm.config import CUDAGraphMode
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        os.environ.pop("VLLM_MUSA_HYBRID_SPEC_ALLOW_FULL", None)
+        vllm_config = self._make_hybrid_spec_config(
+            cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
+            enable_sp=True,
+            fuse_gemm_comms=True,
+            fuse_attn_quant=True,
+        )
+
+        MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        pc = vllm_config.compilation_config.pass_config
+        assert vllm_config.compilation_config.cudagraph_mode == CUDAGraphMode.PIECEWISE
+        assert pc.enable_sp is False
+        assert pc.fuse_gemm_comms is False
+        assert pc.fuse_attn_quant is False
+
+    def test_hybrid_mtp_compilation_none_disables_cudagraph(self):
+        from vllm.config import CompilationMode, CUDAGraphMode
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        os.environ.pop("VLLM_MUSA_HYBRID_SPEC_ALLOW_FULL", None)
+        vllm_config = self._make_hybrid_spec_config(
+            cudagraph_mode=CUDAGraphMode.FULL_DECODE_ONLY,
+            compilation_mode=CompilationMode.NONE,
+        )
+
+        MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.compilation_config.cudagraph_mode == CUDAGraphMode.NONE
+
+    def test_non_hybrid_spec_keeps_full_cudagraph(self):
+        from vllm.config import CUDAGraphMode
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        os.environ.pop("VLLM_MUSA_HYBRID_SPEC_ALLOW_FULL", None)
+        vllm_config = self._make_hybrid_spec_config(
+            is_hybrid=False,
+            cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
+        )
+
+        MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert (
+            vllm_config.compilation_config.cudagraph_mode
+            == CUDAGraphMode.FULL_AND_PIECEWISE
+        )
+
+    def test_hybrid_spec_full_cudagraph_diagnostic_override(self):
+        from vllm.config import CUDAGraphMode
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        os.environ["VLLM_MUSA_HYBRID_SPEC_ALLOW_FULL"] = "1"
+        vllm_config = self._make_hybrid_spec_config(
+            cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
+        )
+
+        MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert (
+            vllm_config.compilation_config.cudagraph_mode
+            == CUDAGraphMode.FULL_AND_PIECEWISE
         )
 
     def test_qwen3_moe_does_not_cap_default_cudagraph_capture_size(self):
