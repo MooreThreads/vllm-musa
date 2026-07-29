@@ -11,6 +11,7 @@ reservation and the minimum attention capacity in the required byte count.
  vllm/v1/core/kv_cache_utils.py | 46 ++++++++++++++++++++++++++++++++++
  1 file changed, 46 insertions(+)
 
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
 @@ -1995,6 +1995,52 @@

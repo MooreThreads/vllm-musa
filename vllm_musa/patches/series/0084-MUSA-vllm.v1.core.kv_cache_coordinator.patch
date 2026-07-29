@@ -3,6 +3,7 @@ From: musa <musa@local>
 Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
 
 ---
+diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
 --- a/vllm/v1/core/kv_cache_coordinator.py
 +++ b/vllm/v1/core/kv_cache_coordinator.py
 @@ -12,9 +12,11 @@

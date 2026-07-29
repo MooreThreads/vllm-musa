@@ -1,3 +1,6 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 28 Jul 2026 10:00:00 +0800
 Subject: [PATCH] MUSA(csrc): reduce moe align scan threads for Qwen3.5 decode
 
 Use a 288-thread BlockScan specialization for the Qwen3.5 decode shape
@@ -5,6 +8,11 @@ Use a 288-thread BlockScan specialization for the Qwen3.5 decode shape
 input rows). Keep the established 1024-thread specialization for every other
 shape.
 
+---
+ csrc/libtorch_stable/moe/moe_align_sum_kernels.cu | 51 +++++++++++++++++++++-
+ 1 file changed, 49 insertions(+), 2 deletions(-)
+
+diff --git a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 --- a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 +++ b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 @@ -78,7 +78,7 @@
