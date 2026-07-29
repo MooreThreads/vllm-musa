@@ -25,14 +25,10 @@ class FakeEvent:
         self.synchronized = True
 
 
-class FakeDeviceModule:
-    Event = FakeEvent
-
-    @staticmethod
-    @contextmanager
-    def stream(copy_stream):
-        del copy_stream
-        yield
+@contextmanager
+def fake_stream(to_stream, from_stream):
+    del to_stream, from_stream
+    yield
 
 
 class FakeCopyStream:
@@ -65,9 +61,8 @@ def test_async_output_skips_only_tagged_uniform_count_copy(monkeypatch) -> None:
         calls.append(value)
         return sampled_host if len(calls) % 2 == 1 else fallback_host
 
-    monkeypatch.setattr(
-        async_utils.torch, "get_device_module", lambda: FakeDeviceModule
-    )
+    monkeypatch.setattr(async_utils, "stream", fake_stream)
+    monkeypatch.setattr(async_utils.torch.cuda, "Event", FakeEvent)
     monkeypatch.setattr(async_utils, "async_copy_to_np", fake_copy)
 
     tagged_counts = SimpleNamespace()
