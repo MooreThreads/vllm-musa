@@ -12,10 +12,10 @@
 # projects on public PyPI, so they must resolve from the Moore Threads index
 # only. Versions below track the MUSA release_5.2.0 Python Wheel guide.
 
-torch==2.9.1.post1+musa5.2.0s5000
-torch_musa==2.9.1.post1+musa5.2.0s5000
-torchvision==0.24.1.post1+musa5.2.0s5000
-torchaudio==2.9.1+musa5.2.0s5000
+torch==2.9.1.post1+musa5.2.0
+torch_musa==2.9.1.post1+musa5.2.0
+torchvision==0.24.1.post1+musa5.2.0
+torchaudio==2.9.1+musa5.2.0
 mate==0.2.4
 flash_attn_3==0.2.4
 flash_mla==0.2.4
