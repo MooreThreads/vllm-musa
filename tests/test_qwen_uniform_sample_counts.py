@@ -51,7 +51,7 @@ def test_qwen_uniform_sample_counts_accepts_and_reuses(monkeypatch) -> None:
     assert first_host.ctypes.data == second_host.ctypes.data
 
 
-def test_qwen_uniform_sample_counts_accepts_all_qwen_vocab_families(
+def test_qwen_uniform_sample_counts_accepts_supported_qwen_vocab_sizes(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(sample_counts.current_platform, "is_musa", lambda: True)
