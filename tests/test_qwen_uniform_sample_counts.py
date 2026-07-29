@@ -51,6 +51,30 @@ def test_qwen_uniform_sample_counts_accepts_and_reuses(monkeypatch) -> None:
     assert first_host.ctypes.data == second_host.ctypes.data
 
 
+def test_qwen_uniform_sample_counts_accepts_all_qwen_vocab_families(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(sample_counts.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sample_counts, "is_musa_tensor", lambda _tensor: True)
+    for vocab_size in (151936, 248320):
+        output = sample_counts.select_qwen_uniform_sample_counts(
+            SimpleNamespace(_musa_qwen_family=True),
+            torch.empty((2, vocab_size), dtype=torch.bfloat16),
+            make_batch(2),
+        )
+        assert output is not None
+        assert output[0].tolist() == [1, 1]
+
+    assert (
+        sample_counts.select_qwen_uniform_sample_counts(
+            SimpleNamespace(_musa_qwen_family=True),
+            torch.empty((2, 32000), dtype=torch.bfloat16),
+            make_batch(2),
+        )
+        is None
+    )
+
+
 def test_qwen_uniform_sample_counts_grows_and_changes_dtype(monkeypatch) -> None:
     install_test_gates(monkeypatch)
     sampler = SimpleNamespace(_musa_qwen_family=True)
