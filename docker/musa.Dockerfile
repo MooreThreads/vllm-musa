@@ -262,8 +262,8 @@ RUN musa_public_extras="$(grep -vE '^[[:space:]]*(#|-r[[:space:]]|--|$)' require
         --index-url "${PYPI_INDEX_URL}" \
         -r requirements/build.txt \
         -r requirements/common.txt \
-        ${musa_public_extras} \
-        pytest
+        -r requirements/test.txt \
+        ${musa_public_extras}
 
 # 3. Fill in the MUSA wheels' ordinary deps (sympy, networkx, ...) from public
 #    PyPI. Step 1 already pinned every MUSA wheel, so none are re-resolved here.
@@ -434,3 +434,7 @@ LABEL org.opencontainers.image.source="https://github.com/MooreThreads/vllm-musa
       com.mthreads.vllm.version="${VLLM_TAG}"
 
 CMD ["/bin/bash"]
+
+FROM final AS vllm-openai
+
+ENTRYPOINT ["vllm", "serve"]

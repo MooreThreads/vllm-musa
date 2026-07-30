@@ -21,7 +21,9 @@ The resulting image contains:
   image.
 
 The source tree and default working directory are `/vllm-workspace`, matching
-the upstream vLLM runtime-image contract.
+the upstream vLLM runtime-image contract. A default build produces the
+`vllm-openai` target with `ENTRYPOINT ["vllm", "serve"]`; the `final` target
+retains `CMD ["/bin/bash"]` for tests and interactive use.
 
 ## Prerequisites
 
@@ -51,6 +53,12 @@ With the defaults this produces:
 vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.9.1.post1_musa5.2.0s5000
 ```
 
+The image accepts the model and engine arguments directly:
+
+```bash
+docker run --rm <MUSA GPU flags> <image> <model> --host 0.0.0.0
+```
+
 Every setting is an environment variable — override by exporting it or prefixing
 the command, e.g.:
 
@@ -63,6 +71,13 @@ Any extra arguments are forwarded verbatim to `docker build`, so you can also pa
 
 ```bash
 bash docker/build_image.sh --no-cache --build-arg http_proxy=http://proxy:8118
+```
+
+Build the shell/test target under a separate tag when arbitrary container
+commands should run without overriding an entrypoint:
+
+```bash
+IMAGE_TAG=vllm-musa:test bash docker/build_image.sh --target final
 ```
 
 ## Build a vLLM-Omni image
@@ -82,20 +97,15 @@ IMAGE_TAG=vllm-omni-musa:v0.24.1 \
   bash docker/build_vllm_omni_image.sh
 ```
 
-The Dockerfile follows the source-image shape of vLLM-Omni's
-`docker/Dockerfile.cuda`: the build context is copied to `/app/vllm-omni`, the
-source package is installed, and the inherited entrypoint is cleared. The MUSA
-variant follows the platform-aware install contract introduced by
-[vLLM-Omni PR #2337](https://github.com/vllm-project/vllm-omni/pull/2337): it
-sets `VLLM_OMNI_TARGET_DEVICE=musa` and uses
+The build context is copied to `/app/vllm-omni`, the source package is
+installed, and the inherited entrypoint is cleared. The MUSA variant uses
+vLLM-Omni's platform-aware install contract: it sets
+`VLLM_OMNI_TARGET_DEVICE=musa` and uses
 `python -m pip install --no-build-isolation` so setup does not fall back to CUDA
 or CPU during a GPU-less Docker build.
 
-The install is constrained to the MUSA packages already present in the base
-image (`torch`, `torch_musa`, `torchada`, MATE, FlashAttention 3, Triton, vLLM,
-and vLLM-MUSA), and the build fails if the resolver changes any of their
-versions. This prevents a public package index from replacing the MUSA stack
-with CUDA wheels.
+The vLLM-MUSA base owns the accelerator stack; the overlay installs the
+platform-aware vLLM-Omni dependencies without duplicating those base packages.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -109,8 +119,8 @@ The script records the vLLM-Omni source SHA and ref as OCI labels. Verify the
 two user-requested image contracts with:
 
 ```bash
-docker run --rm vllm-musa:v0.24.0-dev \
-  bash -lc 'test "$PWD" = /vllm-workspace && python -m pytest --version'
+docker run --rm --entrypoint /bin/bash vllm-musa:v0.24.0-dev \
+  -lc 'test "$PWD" = /vllm-workspace && python -m pytest --version'
 
 docker run --rm vllm-omni-musa:v0.24.1 \
   python -c 'import torchada, torch, vllm_omni; assert torch.version.musa'
@@ -211,8 +221,9 @@ Two build-time details make this work on such a host:
 
 ```bash
 docker run --rm <MUSA GPU flags> \
+  --entrypoint python \
   vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.9.1.post1_musa5.2.0s5000 \
-  python -c "import torch, torch_musa; print('musa available:', torch.musa.is_available())"
+  -c "import torch, torch_musa; print('musa available:', torch.musa.is_available())"
 ```
 
 On a MUSA GPU you should see `musa available: True`.
@@ -245,7 +256,9 @@ for the validated runtime flags.
 7. **mooncake** — installs the pinned `mooncake-transfer-engine-musa` wheel on
    top of the torch/vLLM stack.
 8. **final** — installs optional Rust artifacts, enables MUSA device visibility,
-   and removes build caches.
+   removes build caches, and retains a shell command for test/debug use.
+9. **vllm-openai** — the default serving target, with `vllm serve` as its
+   entrypoint.
 
 The Triton `3.2.0` pin is intentional for the torch `2.9.1` MUSA stack. Torch
 Inductor reads `KernelMetadata.cluster_dims`; the MUSA backend in Triton `3.6.0`

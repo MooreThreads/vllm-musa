@@ -31,12 +31,14 @@ def test_musa_image_runtime_dependency_contract():
 
 def test_musa_image_matches_upstream_workspace_and_includes_pytest():
     dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
+    test_requirements = (ROOT / "requirements" / "test.txt").read_text().splitlines()
 
     assert "WORKDIR /vllm-workspace" in dockerfile
     assert "COPY requirements/ /vllm-workspace/requirements/" in dockerfile
     assert "COPY . /vllm-workspace" in dockerfile
     assert "/workspace/vllm-musa" not in dockerfile
-    assert re.search(r"\n\s+pytest\n", dockerfile)
+    assert "pytest" in test_requirements
+    assert "-r requirements/test.txt" in dockerfile
     assert '("pytest", "pytest", "")' in dockerfile
 
 
@@ -49,14 +51,16 @@ def test_vllm_omni_musa_image_uses_platform_aware_install_contract():
         "ARG COMMON_WORKDIR=/app",
         "ENV VLLM_OMNI_TARGET_DEVICE=musa",
         "COPY . ${COMMON_WORKDIR}/vllm-omni",
-        "--constraint /tmp/vllm-musa-constraints.txt",
+        "python -m pip install",
         "--no-build-isolation",
-        "python -m pytest --version",
         "ENTRYPOINT []",
     ):
         assert token in dockerfile
 
     assert "ARG BASE_IMAGE=vllm-musa:latest" not in dockerfile
+    assert "vllm-musa-constraints" not in dockerfile
+    assert "python -m pytest --version" not in dockerfile
+    assert "ln -sf /usr/bin/python3 /usr/bin/python" not in dockerfile
     assert "VLLM_OMNI_SOURCE" in build_script
     assert "VLLM_MUSA_IMAGE must name the vllm-musa image to extend" in build_script
     assert '--build-arg VLLM_OMNI_VERSION_OVERRIDE="${VLLM_OMNI_VERSION_OVERRIDE}"' in build_script
@@ -74,6 +78,7 @@ def test_musa_image_stage_and_optional_component_contract():
         "FROM vllm_musa_installed AS vllm_rs_build",
         "FROM vllm_musa_installed AS mooncake",
         "FROM mooncake AS final",
+        "FROM final AS vllm-openai",
     )
     stage_positions = [dockerfile.index(marker) for marker in stage_markers]
     assert stage_positions == sorted(stage_positions)
@@ -124,6 +129,12 @@ def test_musa_image_stage_and_optional_component_contract():
     assert "/tmp/vllm-rs-artifacts/build-mode" in dockerfile
     assert 'BUILD_VLLM_RS="${BUILD_VLLM_RS:-1}"' in build_script
     assert '--build-arg BUILD_VLLM_RS="${BUILD_VLLM_RS}"' in build_script
+
+    final_stage, openai_stage = dockerfile.split("FROM final AS vllm-openai", 1)
+    final_stage = final_stage.split("FROM mooncake AS final", 1)[1]
+    assert 'CMD ["/bin/bash"]' in final_stage
+    assert "ENTRYPOINT" not in final_stage
+    assert 'ENTRYPOINT ["vllm", "serve"]' in openai_stage
 
 
 def test_mooncake_uses_the_pinned_upstream_connector():
@@ -178,6 +189,7 @@ def test_mooncake_rdma_container_contract_is_explicit():
     example_readme = (ROOT / "docs" / "example" / "README.md").read_text()
     for token in (
         "--detach",
+        "--entrypoint /bin/bash",
         "--network host",
         "sleep infinity",
         "/dev/infiniband:/dev/infiniband",

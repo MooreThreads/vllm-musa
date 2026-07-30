@@ -54,11 +54,15 @@ The plugin leverages the following key components:
 The Docker flow installs the MUSA SDK, the MUSA wheels, `vllm-musa`, the
 vendored vLLM, and `pytest` into one image, and is the least error-prone way to
 get a working environment. Its working directory is `/vllm-workspace`, matching
-the upstream vLLM runtime image:
+the upstream vLLM runtime image. The default target also matches
+`vllm-openai` and starts `vllm serve`:
 
 ```bash
 bash docker/build_image.sh
 ```
+
+Use `--target final` to build the shell/test image without the serving
+entrypoint.
 
 The same base can produce a vLLM-Omni-on-MUSA image from a compatible
 vLLM-Omni checkout:

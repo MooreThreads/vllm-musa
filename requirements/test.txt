@@ -1,0 +1,2 @@
+# Test runner included in the Docker image.
+pytest

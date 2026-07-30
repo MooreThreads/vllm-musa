@@ -58,7 +58,8 @@ docker run --rm --name vllm-musa-mooncake \
   --device-cgroup-rule="c ${RDMA_CM_MAJOR}:${RDMA_CM_MINOR} rmw" \
   --cap-add IPC_LOCK \
   --ulimit memlock=-1:-1 \
-  "${IMAGE}" sleep infinity
+  --entrypoint /bin/bash \
+  "${IMAGE}" -lc 'sleep infinity'
 ```
 
 Run the example commands with `docker exec vllm-musa-mooncake ...`, then stop
