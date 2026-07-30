@@ -9,7 +9,6 @@ from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.v1.worker.gpu.sample.sampler import Sampler
 
-from vllm_musa.utils.environ import envs
 from vllm_musa.v1.sample.topk_topp_sampler import (
     _is_qwen_sampler_vocab,
     is_musa_tensor,
@@ -18,7 +17,6 @@ from vllm_musa.v1.sample.topk_topp_sampler import (
 logger = init_logger(__name__)
 
 UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR = "_vllm_musa_uniform_num_sampled_tokens_host"
-_use_uniform_count_host = envs.VLLM_MUSA_QWEN_UNIFORM_COUNT_HOST.get()
 
 
 def select_qwen_uniform_sample_counts(
@@ -81,12 +79,11 @@ def select_qwen_uniform_sample_counts(
             scope="global",
         )
     num_sampled_tokens = buffers[1][:num_reqs]
-    if _use_uniform_count_host:
-        setattr(
-            num_sampled_tokens,
-            UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR,
-            buffers[3][:num_reqs],
-        )
+    setattr(
+        num_sampled_tokens,
+        UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR,
+        buffers[3][:num_reqs],
+    )
     return num_sampled_tokens, buffers[2][:num_reqs]
 
 

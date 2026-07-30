@@ -198,13 +198,12 @@ def test_qwen_async_output_patch_is_tag_gated() -> None:
     assert "import vllm_musa" not in patch
 
 
-def test_qwen_uniform_count_host_tag_can_be_disabled(monkeypatch) -> None:
+def test_qwen_uniform_count_host_tag_is_automatic(monkeypatch) -> None:
     install_test_gates(monkeypatch)
-    monkeypatch.setattr(sample_counts, "_use_uniform_count_host", False)
     output = sample_counts.select_qwen_uniform_sample_counts(
         SimpleNamespace(_musa_qwen_family=True),
         torch.empty((2, 151936), dtype=torch.bfloat16),
         make_batch(2),
     )
     assert output is not None
-    assert not hasattr(output[0], sample_counts.UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR)
+    assert hasattr(output[0], sample_counts.UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR)
