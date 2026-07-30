@@ -51,16 +51,27 @@ The plugin leverages the following key components:
 
 ### Docker image
 
-The Docker flow installs the MUSA SDK, the MUSA wheels, `vllm-musa`, and the
-vendored vLLM into one image, and is the least error-prone way to get a working
-environment:
+The Docker flow installs the MUSA SDK, the MUSA wheels, `vllm-musa`, the
+vendored vLLM, and `pytest` into one image, and is the least error-prone way to
+get a working environment. Its working directory is `/vllm-workspace`, matching
+the upstream vLLM runtime image:
 
 ```bash
 bash docker/build_image.sh
 ```
 
-See [docker/README.md](docker/README.md) for the build options. To install onto
-a host that already has the MUSA SDK, use the source install below.
+The same base can produce a vLLM-Omni-on-MUSA image from a compatible
+vLLM-Omni checkout:
+
+```bash
+VLLM_OMNI_SOURCE=/path/to/vllm-omni \
+VLLM_MUSA_IMAGE=vllm-musa:v0.24.0-dev \
+  bash docker/build_vllm_omni_image.sh
+```
+
+See [docker/README.md](docker/README.md) for version compatibility and build
+options. To install onto a host that already has the MUSA SDK, use the source
+install below.
 
 ### Package indexes
 
@@ -235,7 +246,7 @@ vllm-musa/
 ├── README_CN.md                # Documentation (中文)
 ├── LICENSE                     # Apache 2.0 License
 ├── requirements/               # Dependency pins (build, common, musa_private)
-├── docker/                     # Image build flow (musa.Dockerfile, build_image.sh)
+├── docker/                     # vLLM-MUSA and vLLM-Omni image Dockerfiles/build scripts
 ├── third_party/                # PINS + the upstream vLLM cloned at build time
 ├── build_utils/                # Build helpers (ccache wrapper)
 ├── tools/                      # Sync, verify, and patch-validation utilities

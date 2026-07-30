@@ -243,8 +243,8 @@ ARG MUSA_PIP_INDEX_URL
 ENV PIP_CACHE_DIR=/root/.cache/pip \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-COPY requirements/ /workspace/vllm-musa/requirements/
-WORKDIR /workspace/vllm-musa
+COPY requirements/ /vllm-workspace/requirements/
+WORKDIR /vllm-workspace
 
 # 1. MUSA/MT wheels from the internal index only, FIRST and --no-deps (their
 #    ordinary deps come in steps 2-3). MUSA torch must land before the public
@@ -262,7 +262,8 @@ RUN musa_public_extras="$(grep -vE '^[[:space:]]*(#|-r[[:space:]]|--|$)' require
         --index-url "${PYPI_INDEX_URL}" \
         -r requirements/build.txt \
         -r requirements/common.txt \
-        ${musa_public_extras}
+        ${musa_public_extras} \
+        pytest
 
 # 3. Fill in the MUSA wheels' ordinary deps (sympy, networkx, ...) from public
 #    PyPI. Step 1 already pinned every MUSA wheel, so none are re-resolved here.
@@ -280,7 +281,7 @@ FROM vllm_musa_deps AS vllm_musa_installed
 ARG PYPI_INDEX_URL
 ENV PIP_INDEX_URL=${PYPI_INDEX_URL}
 
-COPY . /workspace/vllm-musa
+COPY . /vllm-workspace
 RUN python -m pip install \
         -e . --no-build-isolation -v && \
     python -m pip install numpy==1.26
@@ -319,6 +320,7 @@ RUN printf '%s\n' \
         '    ("triton", "triton", requirement_prefix("triton")),' \
         '    ("uvloop", "uvloop", ""),' \
         '    ("pycountry", "pycountry", ""),' \
+        '    ("pytest", "pytest", ""),' \
         '    ("apache-tvm-ffi", "tvm_ffi", ""),' \
         '    ("torch_c_dlpack_ext", "torch_c_dlpack_ext", ""),' \
         ')' \
@@ -344,7 +346,7 @@ FROM vllm_musa_installed AS vllm_rs_build
 ARG BUILD_VLLM_RS=1
 
 RUN if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
-        /workspace/vllm-musa/third_party/vllm/tools/install_protoc.sh && \
+        /vllm-workspace/third_party/vllm/tools/install_protoc.sh && \
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
             sh -s -- -y --profile minimal --default-toolchain none; \
     elif [[ "${BUILD_VLLM_RS}" == "0" ]]; then \
@@ -364,7 +366,7 @@ COPY docker/cargo-config.toml /root/.cargo/config.toml
 RUN mkdir -p /tmp/vllm-rs-artifacts && \
     printf '%s\n' "${BUILD_VLLM_RS}" > /tmp/vllm-rs-artifacts/build-mode && \
     if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
-        cd /workspace/vllm-musa/third_party/vllm && \
+        cd /vllm-workspace/third_party/vllm && \
         bash build_rust.sh && \
         install -Dm755 vllm/vllm-rs /tmp/vllm-rs-artifacts/vllm-rs && \
         install -Dm755 vllm/_rust_tool_parser.abi3.so \
@@ -394,19 +396,22 @@ ARG BUILD_VLLM_RS=1
 
 ENV MTHREADS_VISIBLE_DEVICES=all
 
+# Match the upstream vLLM runtime-image workspace contract.
+WORKDIR /vllm-workspace
+
 COPY --from=vllm_rs_build /tmp/vllm-rs-artifacts/ /tmp/vllm-rs-artifacts/
 
 RUN test "$(cat /tmp/vllm-rs-artifacts/build-mode)" = "${BUILD_VLLM_RS}" && \
     if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
         install -Dm755 /tmp/vllm-rs-artifacts/vllm-rs \
-            /workspace/vllm-musa/third_party/vllm/vllm/vllm-rs && \
+            /vllm-workspace/third_party/vllm/vllm/vllm-rs && \
         install -Dm755 /tmp/vllm-rs-artifacts/_rust_tool_parser.abi3.so \
-            /workspace/vllm-musa/third_party/vllm/vllm/_rust_tool_parser.abi3.so && \
+            /vllm-workspace/third_party/vllm/vllm/_rust_tool_parser.abi3.so && \
         VLLM_USE_RUST_FRONTEND=1 python -c 'from pathlib import Path; from vllm import envs; path = Path(envs.VLLM_RUST_FRONTEND_PATH); assert path.is_file(), f"missing vllm-rs binary: {path}"; print(f"PASS vllm-rs path={path}")'; \
     elif [[ "${BUILD_VLLM_RS}" == "0" ]]; then \
         rm -f \
-            /workspace/vllm-musa/third_party/vllm/vllm/vllm-rs \
-            /workspace/vllm-musa/third_party/vllm/vllm/_rust_tool_parser.abi3.so && \
+            /vllm-workspace/third_party/vllm/vllm/vllm-rs \
+            /vllm-workspace/third_party/vllm/vllm/_rust_tool_parser.abi3.so && \
         echo "Skipping vllm-rs artifact install because BUILD_VLLM_RS=0"; \
     else \
         echo "Unsupported BUILD_VLLM_RS=${BUILD_VLLM_RS}" >&2; \

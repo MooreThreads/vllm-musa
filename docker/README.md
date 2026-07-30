@@ -5,6 +5,9 @@ a runnable Docker image from `docker/musa.Dockerfile`. It is the supported entry
 point — it defines every setting in one place and passes them to the build as
 `--build-arg`s, so the Dockerfile itself carries no hardcoded URLs or versions.
 
+`docker/build_vllm_omni_image.sh` can then layer a compatible vLLM-Omni source
+checkout on that image by using `docker/vllm-omni.Dockerfile`.
+
 The resulting image contains:
 
 - the MUSA runtime SDK (installed from apt),
@@ -13,7 +16,12 @@ The resulting image contains:
   `torch_c_dlpack_ext`),
 - `vllm-musa` and the vendored upstream vLLM, built from source,
 - `vllm-rs` and its Python tool-parser extension when `BUILD_VLLM_RS=1`,
-- `mooncake-transfer-engine-musa`.
+- `mooncake-transfer-engine-musa`,
+- `pytest`, so the repository's pytest-based validation can run directly in the
+  image.
+
+The source tree and default working directory are `/vllm-workspace`, matching
+the upstream vLLM runtime-image contract.
 
 ## Prerequisites
 
@@ -55,6 +63,57 @@ Any extra arguments are forwarded verbatim to `docker build`, so you can also pa
 
 ```bash
 bash docker/build_image.sh --no-cache --build-arg http_proxy=http://proxy:8118
+```
+
+## Build a vLLM-Omni image
+
+Build and tag the vLLM-MUSA base first, then point the overlay builder at a
+vLLM-Omni checkout. For this vLLM-MUSA `v0.24.0-dev` line, vLLM-Omni `v0.24.1`
+is the matching released source line because its CUDA image is based on vLLM
+`v0.24.0` as well. A newer vLLM-Omni checkout must be paired with a compatible
+vLLM-MUSA base deliberately.
+
+```bash
+IMAGE_TAG=vllm-musa:v0.24.0-dev bash docker/build_image.sh
+
+VLLM_OMNI_SOURCE=/path/to/vllm-omni-v0.24.1 \
+VLLM_MUSA_IMAGE=vllm-musa:v0.24.0-dev \
+IMAGE_TAG=vllm-omni-musa:v0.24.1 \
+  bash docker/build_vllm_omni_image.sh
+```
+
+The Dockerfile follows the source-image shape of vLLM-Omni's
+`docker/Dockerfile.cuda`: the build context is copied to `/app/vllm-omni`, the
+source package is installed, and the inherited entrypoint is cleared. The MUSA
+variant follows the platform-aware install contract introduced by
+[vLLM-Omni PR #2337](https://github.com/vllm-project/vllm-omni/pull/2337): it
+sets `VLLM_OMNI_TARGET_DEVICE=musa` and uses
+`python -m pip install --no-build-isolation` so setup does not fall back to CUDA
+or CPU during a GPU-less Docker build.
+
+The install is constrained to the MUSA packages already present in the base
+image (`torch`, `torch_musa`, `torchada`, MATE, FlashAttention 3, Triton, vLLM,
+and vLLM-MUSA), and the build fails if the resolver changes any of their
+versions. This prevents a public package index from replacing the MUSA stack
+with CUDA wheels.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VLLM_OMNI_SOURCE` | adjacent `../vllm-omni` checkout | vLLM-Omni source directory used as the Docker build context. |
+| `VLLM_MUSA_IMAGE` | required | Exact vLLM-MUSA image tag to extend; there is intentionally no implicit `latest` base. |
+| `IMAGE_TAG` | `vllm-omni-musa:latest` | Resulting vLLM-Omni-on-MUSA image tag. |
+| `COMMON_WORKDIR` | `/app` | Parent directory for the copied `vllm-omni` source, matching the CUDA Dockerfile. |
+| `VLLM_OMNI_VERSION_OVERRIDE` | exact Git tag as `<version>+musa`, when available | Explicit setuptools-scm version for contexts where Git metadata is not copied. |
+
+The script records the vLLM-Omni source SHA and ref as OCI labels. Verify the
+two user-requested image contracts with:
+
+```bash
+docker run --rm vllm-musa:v0.24.0-dev \
+  bash -lc 'test "$PWD" = /vllm-workspace && python -m pytest --version'
+
+docker run --rm vllm-omni-musa:v0.24.1 \
+  python -c 'import torchada, torch, vllm_omni; assert torch.version.musa'
 ```
 
 ## Configuration
