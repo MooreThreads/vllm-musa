@@ -190,7 +190,7 @@ def test_qwen_async_output_patch_is_tag_gated() -> None:
         / "vllm_musa"
         / "patches"
         / "series"
-        / "0097-perf-elide-qwen-uniform-count-dtoh.patch"
+        / "0098-perf-elide-qwen-uniform-count-dtoh.patch"
     ).read_text()
     assert sample_counts.UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR in patch
     assert "if host_num_sampled_tokens is None" in patch

@@ -5,7 +5,7 @@ from pathlib import Path
 
 PATCH = (
     Path(__file__).parents[1]
-    / "vllm_musa/patches/series/0095-perf-fuse-qwen-next-input-ids.patch"
+    / "vllm_musa/patches/series/0096-perf-fuse-qwen-next-input-ids.patch"
 )
 
 
