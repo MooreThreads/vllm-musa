@@ -8,3 +8,5 @@ transformers==5.5.3
 einops
 ray>=2.47.1,<=2.48.0
 click==8.2.0
+six>=1.16.0; python_version >= "3.12" # transitive dependency needed by Python 3.12 packages
+setuptools>=77.0.3,<81.0.0; python_version >= "3.12" # triton imports setuptools APIs removed from old distutils shims

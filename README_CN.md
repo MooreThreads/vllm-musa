@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10-blue.svg" alt="Python 3.10"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12-blue.svg" alt="Python 3.12"></a>
 </p>
 
 ---
@@ -30,8 +30,7 @@
 
 ## 环境要求
 
-- **Python**：3.10 — 本套件所固定的 MUSA wheel 仅发布了 x86_64 上的 CPython 3.10
-  版本，其他 Python 版本无法解析这些依赖
+- **Python**：3.12 — 本套件所固定的 MUSA wheel 面向 x86_64 上的 CPython 3.12
 - **硬件**：安装了 MUSA 工具包的摩尔线程 (MUSA) GPU
 - **依赖项**：
   - [torchada](https://github.com/MooreThreads/torchada) — CUDA→MUSA 兼容层
@@ -72,7 +71,7 @@ bash docker/build_image.sh
 
 大部分 MUSA wheel 并未发布到公共 PyPI，因此用 pip 默认索引安装
 `requirements/musa.txt` 会失败并报
-`No matching distribution found for torch==2.9.1.post1+musa5.2.0s5000`。
+`No matching distribution found for torch==2.9.1.post1+musa5.2.0`。
 
 MUSA wheel 必须在摩尔线程索引作为**唯一** `--index-url` 的前提下解析，因此下面的
 安装步骤以“只装 MUSA wheel”的一步开始。

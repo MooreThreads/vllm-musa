@@ -5,9 +5,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-PYTHON_VERSION="${PYTHON_VERSION:-3.10}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 BASE_IMAGE="${BASE_IMAGE:-ubuntu:22.04}"
 
+if [[ "${PYTHON_VERSION}" != "3.12" ]]; then
+    echo "vllm-musa currently supports only PYTHON_VERSION=3.12 (got ${PYTHON_VERSION})" >&2
+    exit 1
+fi
+
+DEADSNAKES_MIRROR_URL="${DEADSNAKES_MIRROR_URL:-}"
+DEADSNAKES_GPGKEY_URL="${DEADSNAKES_GPGKEY_URL:-}"
+GET_PIP_URL="${GET_PIP_URL:-https://bootstrap.pypa.io/get-pip.py}"
+RUSTUP_DIST_SERVER="${RUSTUP_DIST_SERVER:-}"
+RUSTUP_UPDATE_ROOT="${RUSTUP_UPDATE_ROOT:-}"
 MUSA_APT_SOURCE="${MUSA_APT_SOURCE:-https://dl.mthreads.com/repo/repository/ubuntu2204/}"
 INSTALL_MUSA_STACK="${INSTALL_MUSA_STACK:-auto}"
 MUSA_RUNTIME_VERSION="${MUSA_RUNTIME_VERSION:-5.2}"
@@ -17,6 +27,7 @@ MCCL_VERSION="${MCCL_VERSION:-2.4.0}"
 # from the internal Moore Threads index only; ordinary third-party wheels resolve
 # from public PyPI. See docker/musa.Dockerfile for why the two are not merged.
 PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple}"
+PIP_BOOTSTRAP_INDEX_URL="${PIP_BOOTSTRAP_INDEX_URL:-${PYPI_INDEX_URL}}"
 MUSA_PIP_INDEX_URL="${MUSA_PIP_INDEX_URL:-https://dl.mthreads.com/repo/api/pypi/pypi/simple}"
 
 PYTORCH_RELEASE="$(
@@ -46,6 +57,12 @@ docker build \
     -t "${IMAGE_TAG}" \
     --build-arg BASE_IMAGE="${BASE_IMAGE}" \
     --build-arg PYTHON_VERSION="${PYTHON_VERSION}" \
+    --build-arg DEADSNAKES_MIRROR_URL="${DEADSNAKES_MIRROR_URL}" \
+    --build-arg DEADSNAKES_GPGKEY_URL="${DEADSNAKES_GPGKEY_URL}" \
+    --build-arg GET_PIP_URL="${GET_PIP_URL}" \
+    --build-arg PIP_BOOTSTRAP_INDEX_URL="${PIP_BOOTSTRAP_INDEX_URL}" \
+    --build-arg RUSTUP_DIST_SERVER="${RUSTUP_DIST_SERVER}" \
+    --build-arg RUSTUP_UPDATE_ROOT="${RUSTUP_UPDATE_ROOT}" \
     --build-arg MUSA_APT_SOURCE="${MUSA_APT_SOURCE}" \
     --build-arg PYPI_INDEX_URL="${PYPI_INDEX_URL}" \
     --build-arg MUSA_PIP_INDEX_URL="${MUSA_PIP_INDEX_URL}" \

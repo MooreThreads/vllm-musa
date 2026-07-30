@@ -12,7 +12,7 @@ vLLM Hardware Plugin for Moore Threads MUSA
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10-blue.svg" alt="Python 3.10"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12-blue.svg" alt="Python 3.12"></a>
 </p>
 
 ---
@@ -30,8 +30,7 @@ The plugin leverages the following key components:
 
 ## Requirements
 
-- **Python**: 3.10 — the pinned MUSA wheels are published for CPython 3.10 on
-  x86_64, so other versions cannot resolve them
+- **Python**: 3.12 — the pinned MUSA wheels target CPython 3.12 on x86_64
 - **Hardware**: Moore Threads (MUSA) GPU with MUSA toolkit installed
 - **Dependencies**:
   - [torchada](https://github.com/MooreThreads/torchada) — CUDA→MUSA compatibility layer
@@ -73,7 +72,7 @@ a host that already has the MUSA SDK, use the source install below.
 
 Most of the MUSA wheels are not published on public PyPI, so installing
 `requirements/musa.txt` with pip's default index fails with
-`No matching distribution found for torch==2.9.1.post1+musa5.2.0s5000`.
+`No matching distribution found for torch==2.9.1.post1+musa5.2.0`.
 
 The MUSA wheels must be **resolved** with the Moore Threads index as the sole
 `--index-url`, which is why the install below starts with a pass that installs

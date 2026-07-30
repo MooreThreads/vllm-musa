@@ -10,7 +10,9 @@
 # carry torchada and mirrors the rest only at versions that miss the common.txt
 # pins. Names such as torch, mate and apache-tvm-ffi also exist as unrelated
 # projects on public PyPI, so they must resolve from the Moore Threads index
-# only. Versions below track the MUSA release_5.2.0 Python Wheel guide.
+# only. The image targets CPython 3.12. These pins intentionally use the
+# matching generic 5.2.0 build: the S5000-specific torch wheel has no matching
+# cp312 torch_musa/torchvision/torchaudio/deep_ep set in the index.
 
 torch==2.9.1.post1+musa5.2.0
 torch_musa==2.9.1.post1+musa5.2.0
@@ -21,7 +23,7 @@ flash_attn_3==0.2.4
 flash_mla==0.2.4
 deep-gemm==0.2.4
 sageattention==0.2.4
-deep_ep==1.1.0+musa5.2.0torch2.9.1.post1s5000
+deep_ep==1.1.0+musa5.2.0torch2.9.1.post1
 tilelang_musa==0.1.8+musa.3
 # torch 2.9.1 Inductor reads KernelMetadata.cluster_dims. The MUSA backend in
 # Triton 3.6.0 does not expose it; the 3.2.0 mtgpu backend does.

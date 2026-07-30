@@ -24,6 +24,8 @@ The resulting image contains:
   - a public PyPI index/mirror (`PYPI_INDEX_URL`) — ordinary third-party wheels
     and the vendored vLLM's dependencies,
   - the MUSA apt source (`MUSA_APT_SOURCE`) — the runtime SDK,
+  - the Deadsnakes PPA (or configured mirror) — system CPython 3.12 for jammy,
+  - `GET_PIP_URL` — bootstraps pip into that system interpreter,
   - GitHub — the vendored vLLM/flashinfer clones, the Rust frontend's
     `llm-multimodal` dependency when the Rust frontend is enabled.
 - **A MUSA GPU visible to the build** if you want the final-stage import verify to
@@ -40,7 +42,7 @@ bash docker/build_image.sh
 With the defaults this produces:
 
 ```
-vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.9.1.post1_musa5.2.0s5000
+vllm-musa:ubuntu22.04_py3.12_musa_runtime_5.2_pytorch_release_2.9.1.post1_musa5.2.0
 ```
 
 Every setting is an environment variable — override by exporting it or prefixing
@@ -62,7 +64,13 @@ bash docker/build_image.sh --no-cache --build-arg http_proxy=http://proxy:8118
 | Variable | Default | Purpose |
 |---|---|---|
 | `BASE_IMAGE` | `ubuntu:22.04` | Base image. Point at a local/mirror image if Docker Hub is unreachable, or an `mthreads/musa:*-devel` image to reuse its runtime. |
-| `PYTHON_VERSION` | `3.10` | Python version (apt `python3.X`). The wheels pinned in `requirements/musa_private.txt` are published for 3.10 on x86_64 only, so other values fail the dependency install. |
+| `PYTHON_VERSION` | `3.12` | Supported system Python version. The build rejects other values because the pinned MUSA wheel set targets cp312. |
+| `DEADSNAKES_MIRROR_URL` | empty | Optional apt mirror for the Deadsnakes jammy repository. When set, `DEADSNAKES_GPGKEY_URL` is required. |
+| `DEADSNAKES_GPGKEY_URL` | empty | GPG key URL for a configured Deadsnakes mirror. |
+| `GET_PIP_URL` | `https://bootstrap.pypa.io/get-pip.py` | PyPA bootstrap script; override this URL when the default host is unavailable from the build network. |
+| `PIP_BOOTSTRAP_INDEX_URL` | `${PYPI_INDEX_URL}` | Simple index used by the pip bootstrap; keep its host in `no_proxy` when the mirror is reached directly. |
+| `RUSTUP_DIST_SERVER` | empty | Optional rustup distribution mirror for the vllm-rs stage (for example `https://rsproxy.cn`). |
+| `RUSTUP_UPDATE_ROOT` | empty | Optional rustup update-root mirror paired with `RUSTUP_DIST_SERVER` (for example `https://rsproxy.cn/rustup`). |
 | `MUSA_APT_SOURCE` | `https://dl.mthreads.com/repo/repository/ubuntu2204/` | apt repo for the MUSA runtime SDK. |
 | `INSTALL_MUSA_STACK` | `auto` | `auto`: install the MUSA apt stack unless the base already provides `mcc`; `0`: skip (base image supplies the runtime). |
 | `MUSA_RUNTIME_VERSION` | `5.2` | MUSA runtime line as `major.minor`; derives apt package names (e.g. `musa-toolkit-5-2`). |
@@ -152,8 +160,8 @@ Two build-time details make this work on such a host:
 
 ```bash
 docker run --rm <MUSA GPU flags> \
-  vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.9.1.post1_musa5.2.0s5000 \
-  python -c "import torch, torch_musa; print('musa available:', torch.musa.is_available())"
+  vllm-musa:ubuntu22.04_py3.12_musa_runtime_5.2_pytorch_release_2.9.1.post1_musa5.2.0 \
+  python -c "import sys, torch, torch_musa; assert sys.prefix == sys.base_prefix; print(sys.version, 'musa available:', torch.musa.is_available())"
 ```
 
 On a MUSA GPU you should see `musa available: True`.
@@ -168,7 +176,8 @@ for the validated runtime flags.
 `docker/musa.Dockerfile` is multi-stage:
 
 1. **base** — base image and shell behavior only.
-2. **apt_base** — generic build environment, toolchain, and Python from apt.
+2. **apt_base** — generic build environment and a system Python 3.12 installed
+   from the Deadsnakes PPA. It does not install uv or create a virtualenv.
 3. **devel** — the MUSA SDK from apt (`INSTALL_MUSA_STACK`), MUSA library paths,
    and guarded compatibility shims.
 4. **vllm_musa_deps** — MUSA architecture selectors and Python dependencies,
