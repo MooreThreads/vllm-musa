@@ -1,7 +1,17 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 30 Jul 2026 10:02:00 +0800
+Subject: [PATCH] perf: cache Qwen uniform sample counts
+
+---
+ vllm/v1/worker/gpu/sample/sampler.py | 19 +++++++++++--------
+ 1 file changed, 11 insertions(+), 8 deletions(-)
+
 diff --git a/vllm/v1/worker/gpu/sample/sampler.py b/vllm/v1/worker/gpu/sample/sampler.py
+index b269de9..4d892cb 100644
 --- a/vllm/v1/worker/gpu/sample/sampler.py
 +++ b/vllm/v1/worker/gpu/sample/sampler.py
-@@ -122,13 +122,16 @@ class Sampler(nn.Module):
+@@ -122,14 +122,17 @@ class Sampler:
          # 1 sampled token per request, except chunked-prefill requests
          # (seq_len < prefill_len) which aren't done prefilling and produce no
          # output token. num_rejected is always 0 here (one logit per request).
@@ -26,3 +36,4 @@ diff --git a/vllm/v1/worker/gpu/sample/sampler.py b/vllm/v1/worker/gpu/sample/sa
 +        num_sampled, num_rejected = counts
          # These are GPU tensors.
          sampler_output = SamplerOutput(
+             # The sampled tokens are expanded to 2D tensor with shape

@@ -1,4 +1,15 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 30 Jul 2026 10:03:00 +0800
+Subject: [PATCH] perf: fuse Qwen next input IDs
+
+---
+ vllm/v1/worker/gpu/input_batch.py  |  7 +++++
+ vllm/v1/worker/gpu/model_runner.py | 46 +++++++++++++++++++++---------
+ 2 files changed, 40 insertions(+), 13 deletions(-)
+
 diff --git a/vllm/v1/worker/gpu/input_batch.py b/vllm/v1/worker/gpu/input_batch.py
+index 6b750fe..12cec7d 100644
 --- a/vllm/v1/worker/gpu/input_batch.py
 +++ b/vllm/v1/worker/gpu/input_batch.py
 @@ -457,6 +457,8 @@ def _post_update_kernel(
@@ -16,8 +27,7 @@ diff --git a/vllm/v1/worker/gpu/input_batch.py b/vllm/v1/worker/gpu/input_batch.
          tl.store(total_len_ptr + req_state_idx, total_len + num_sampled)
 +        if WRITE_NEXT_INPUT_IDS:
 +            tl.store(next_input_ids_ptr + req_id, token_id)
--
-+
+ 
      for i in range(num_sampled):
          token_id = tl.load(sampled_tokens_ptr + req_id * sampled_tokens_stride + i)
 @@ -524,6 +528,7 @@ def post_update(
@@ -28,7 +38,7 @@ diff --git a/vllm/v1/worker/gpu/input_batch.py b/vllm/v1/worker/gpu/input_batch.
  ) -> None:
      num_reqs = idx_mapping.shape[0]
      _post_update_kernel[(num_reqs,)](
-@@ -540,5 +545,7 @@ def post_update(
+@@ -540,6 +545,8 @@ def post_update(
          all_token_ids,
          all_token_ids.stride(0),
          total_len,
@@ -36,12 +46,13 @@ diff --git a/vllm/v1/worker/gpu/input_batch.py b/vllm/v1/worker/gpu/input_batch.
 +        WRITE_NEXT_INPUT_IDS=next_input_ids is not None,
          num_warps=1,
      )
+ 
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 24e7886..add89be 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
-@@ -949,18 +949,36 @@ class GPUModelRunner(LoRAModelRunnerMixin):
--
-+
+@@ -963,18 +963,35 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+ 
          # Some input token ids are directly read from the last sampled tokens
          # and draft tokens. Also, get the logits indices to sample tokens from.
 -        logits_indices = combine_sampled_and_draft_tokens(
@@ -85,11 +96,11 @@ diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runne
 +            input_ids = self.input_buffers.input_ids[:num_tokens_after_padding]
 +        else:
 +            input_ids, logits_indices = model_inputs
--
-+
+ 
          # CPU upper bound on seq_lens; padded entries left at zero.
          num_computed_tokens_np = self.req_states.num_computed_tokens_np[idx_mapping_np]
-@@ -999,6 +1023,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1013,7 +1030,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             num_computed_prefill_tokens_np=num_computed_prefill_tokens_np,
              is_prefilling_np=is_prefilling_np,
              max_seq_len_np=max_seq_len_np,
 -            input_ids=self.input_buffers.input_ids[:num_tokens_after_padding],
@@ -97,7 +108,8 @@ diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runne
              positions=self.input_buffers.positions[:num_tokens_after_padding],
              logits_indices=logits_indices,
              cu_num_logits=cu_num_logits,
-@@ -1082,5 +1106,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1101,6 +1118,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             output_bin_counts = self.sampler.penalties_state.output_bin_counts
          else:
              output_bin_counts = None
 +        selector = getattr(self, "_musa_select_next_input_ids_buffer", None)
@@ -105,12 +117,11 @@ diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runne
          post_update(
              idx_mapping,
              self.req_states.num_computed_tokens.gpu,
-@@ -1098,6 +1125,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1112,6 +1131,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              query_start_loc,
              self.req_states.all_token_ids.gpu,
              self.req_states.total_len.gpu,
 +            next_input_ids=next_input_ids,
          )
--
-+
+ 
          self.model_state.postprocess_state(idx_mapping, num_sampled)
