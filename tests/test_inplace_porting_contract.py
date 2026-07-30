@@ -42,31 +42,6 @@ def test_musa_image_matches_upstream_workspace_and_includes_pytest():
     assert '("pytest", "pytest", "")' in dockerfile
 
 
-def test_vllm_omni_musa_image_uses_platform_aware_install_contract():
-    dockerfile = (ROOT / "docker" / "vllm-omni.Dockerfile").read_text()
-    build_script = (ROOT / "docker" / "build_vllm_omni_image.sh").read_text()
-
-    for token in (
-        "ARG BASE_IMAGE\n",
-        "ARG COMMON_WORKDIR=/app",
-        "ENV VLLM_OMNI_TARGET_DEVICE=musa",
-        "COPY . ${COMMON_WORKDIR}/vllm-omni",
-        "python -m pip install",
-        "--no-build-isolation",
-        "ENTRYPOINT []",
-    ):
-        assert token in dockerfile
-
-    assert "ARG BASE_IMAGE=vllm-musa:latest" not in dockerfile
-    assert "vllm-musa-constraints" not in dockerfile
-    assert "python -m pytest --version" not in dockerfile
-    assert "ln -sf /usr/bin/python3 /usr/bin/python" not in dockerfile
-    assert "VLLM_OMNI_SOURCE" in build_script
-    assert "VLLM_MUSA_IMAGE must name the vllm-musa image to extend" in build_script
-    assert '--build-arg VLLM_OMNI_VERSION_OVERRIDE="${VLLM_OMNI_VERSION_OVERRIDE}"' in build_script
-    assert '"${VLLM_OMNI_SOURCE}"' in build_script
-
-
 def test_musa_image_stage_and_optional_component_contract():
     dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
     build_script = (ROOT / "docker" / "build_image.sh").read_text()

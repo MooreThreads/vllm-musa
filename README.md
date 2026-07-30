@@ -64,15 +64,6 @@ bash docker/build_image.sh
 Use `--target final` to build the shell/test image without the serving
 entrypoint.
 
-The same base can produce a vLLM-Omni-on-MUSA image from a compatible
-vLLM-Omni checkout:
-
-```bash
-VLLM_OMNI_SOURCE=/path/to/vllm-omni \
-VLLM_MUSA_IMAGE=vllm-musa:v0.24.0-dev \
-  bash docker/build_vllm_omni_image.sh
-```
-
 See [docker/README.md](docker/README.md) for version compatibility and build
 options. To install onto a host that already has the MUSA SDK, use the source
 install below.
@@ -250,7 +241,7 @@ vllm-musa/
 ├── README_CN.md                # Documentation (中文)
 ├── LICENSE                     # Apache 2.0 License
 ├── requirements/               # Dependency pins (build, common, musa_private)
-├── docker/                     # vLLM-MUSA and vLLM-Omni image Dockerfiles/build scripts
+├── docker/                     # Image build flow (musa.Dockerfile, build_image.sh)
 ├── third_party/                # PINS + the upstream vLLM cloned at build time
 ├── build_utils/                # Build helpers (ccache wrapper)
 ├── tools/                      # Sync, verify, and patch-validation utilities

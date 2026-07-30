@@ -62,14 +62,6 @@ bash docker/build_image.sh
 
 如需不带 serving entrypoint 的 shell/test 镜像，请增加 `--target final`。
 
-也可以基于该镜像和兼容的 vLLM-Omni 源码构建 vLLM-Omni-on-MUSA 镜像：
-
-```bash
-VLLM_OMNI_SOURCE=/path/to/vllm-omni \
-VLLM_MUSA_IMAGE=vllm-musa:v0.24.0-dev \
-  bash docker/build_vllm_omni_image.sh
-```
-
 版本兼容性和构建选项参见 [docker/README.md](docker/README.md)。若要安装到已具备
 MUSA SDK 的主机上，请使用下面的源码安装。
 
@@ -241,7 +233,7 @@ vllm-musa/
 ├── README_CN.md                # 文档（中文）
 ├── LICENSE                     # Apache 2.0 许可证
 ├── requirements/               # 依赖版本约束（build、common、musa_private）
-├── docker/                     # vLLM-MUSA 与 vLLM-Omni 镜像 Dockerfile/构建脚本
+├── docker/                     # 镜像构建流程（musa.Dockerfile、build_image.sh）
 ├── third_party/                # PINS 及构建时克隆的上游 vLLM
 ├── build_utils/                # 构建辅助（ccache wrapper）
 ├── tools/                      # 同步、校验与补丁验证工具
