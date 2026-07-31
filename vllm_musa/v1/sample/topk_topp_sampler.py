@@ -44,7 +44,7 @@ def _is_qwen_sharded_logits(sampler: Any, logits: torch.Tensor) -> bool:
         logits.ndim == 2
         and global_vocab in _MUSA_QWEN_SAMPLER_VOCAB_SIZES
         and tp_size == get_tensor_model_parallel_world_size()
-        and tp_size == 2
+        and tp_size in (2, 4)
         and logits.shape[0] >= _MUSA_QWEN_SHARDED_MIN_BATCH
         and logits.shape[0] <= 64
         and logits.shape[1] * tp_size == global_vocab
@@ -613,7 +613,7 @@ def musa_compute_logits_if_eligible(
         return model.compute_logits(hidden_states), False
     processor, _lm_head = processor_and_head
     tp_size = get_tensor_model_parallel_world_size()
-    if tp_size != 2:
+    if tp_size not in (2, 4):
         return model.compute_logits(hidden_states), False
     global_vocab = int(getattr(processor, "org_vocab_size", 0))
     if (
