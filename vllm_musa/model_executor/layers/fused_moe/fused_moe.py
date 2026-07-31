@@ -63,6 +63,7 @@ _DEEPGEMM_PREFILL_MIN_TOKENS_ENV = "VLLM_MUSA_MOE_DEEPGEMM_PREFILL_MIN_TOKENS"
 _DEEPGEMM_PREFILL_WARNED = False
 _DEEPGEMM_BF16_PREFILL_MIN_TOKENS = 1024
 _DEEPGEMM_BF16_PREFILL_WARNED = False
+_QWEN_MOE_UPSTREAM_PREFILL_ENV = "VLLM_MUSA_QWEN_MOE_UPSTREAM_PREFILL"
 _MUSA_GROUPED_GEMM_AVAILABLE = True
 _MUSA_FUSED_MOE_REQUESTED_BACKEND = parse_dispatch_backend()
 
@@ -84,6 +85,9 @@ def _env_flag_disabled(name: str) -> bool:
 
 
 _MOE_SHAPE_INVENTORY_ENABLED = _env_flag_enabled(_MOE_SHAPE_INVENTORY_ENV)
+_QWEN_MOE_UPSTREAM_PREFILL_ENABLED = not _env_flag_disabled(
+    _QWEN_MOE_UPSTREAM_PREFILL_ENV
+)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -536,6 +540,33 @@ def _can_use_moe_deepgemm_bf16_prefill(
         and K % 128 == 0
         and K == hidden_states.size(1)
         and w2.shape == (E, K, N // 2)
+    )
+
+
+def _is_calibrated_qwen_moe_bf16_prefill_shape(
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    global_num_experts: int | None,
+) -> bool:
+    """Match the TP4 Qwen3.5/3.6-35B-A3B BF16 prefill shape."""
+    return (
+        _QWEN_MOE_UPSTREAM_PREFILL_ENABLED
+        and global_num_experts == 256
+        and hidden_states.ndim == 2
+        and hidden_states.dtype == torch.bfloat16
+        and w1.dtype == torch.bfloat16
+        and w2.dtype == torch.bfloat16
+        and hidden_states.shape[0] >= _DEEPGEMM_BF16_PREFILL_MIN_TOKENS
+        and hidden_states.shape[1] == 2048
+        and w1.shape == (256, 256, 2048)
+        and w2.shape == (256, 2048, 128)
+        and topk_weights.ndim == 2
+        and topk_ids.ndim == 2
+        and topk_weights.shape == topk_ids.shape
+        and topk_ids.shape[1] == 8
     )
 
 
@@ -1923,8 +1954,48 @@ def _musa_fused_experts_impl_dispatch(
             _allow_deepgemm_prefill=False,
         )
 
+    prefer_upstream_qwen_prefill = (
+        _MUSA_FUSED_MOE_REQUESTED_BACKEND == MusaFusedMoeBackend.AUTO
+        and _is_calibrated_qwen_moe_bf16_prefill_shape(
+            hidden_states,
+            w1,
+            w2,
+            topk_weights,
+            topk_ids,
+            global_num_experts,
+        )
+        and _can_use_moe_deepgemm_bf16_prefill(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_ids=topk_ids,
+            activation=activation,
+            apply_router_weight_on_input=apply_router_weight_on_input,
+            use_fp8_w8a8=use_fp8_w8a8,
+            use_int8_w8a8=use_int8_w8a8,
+            use_int8_w8a16=use_int8_w8a16,
+            use_int4_w4a16=use_int4_w4a16,
+            ocp_mx_scheme=ocp_mx_scheme,
+            per_channel_quant=per_channel_quant,
+            expert_map=expert_map,
+            w1_scale=w1_scale,
+            w2_scale=w2_scale,
+            a1_scale=a1_scale,
+            a2_scale=a2_scale,
+            block_shape=block_shape,
+            w1_bias=w1_bias,
+            w2_bias=w2_bias,
+        )
+    )
+    if prefer_upstream_qwen_prefill:
+        logger.info_once(
+            "Using the upstream fused MoE path for large BF16 "
+            "Qwen3.5/3.6-35B-A3B prefill batches."
+        )
+
     bf16_prefill_candidate = (
         _MUSA_FUSED_MOE_REQUESTED_BACKEND == MusaFusedMoeBackend.AUTO
+        and not prefer_upstream_qwen_prefill
         and not use_fp8_w8a8
         and hidden_states.shape[0] >= _DEEPGEMM_BF16_PREFILL_MIN_TOKENS
         and w1.dim() == 3
