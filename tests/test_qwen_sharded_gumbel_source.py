@@ -20,4 +20,6 @@ def test_sharded_gumbel_is_narrowly_gated_and_uses_ipc_pair_gather() -> None:
     assert "tp_size == 2" in source
     assert "get_pp_group().world_size != 1" in source
     assert "maybe_musa_jit_logits_all_gather(pair, dim=-1)" in source
+    assert "scores = gathered[:, :, 0].contiguous()" in source
+    assert "token_ids = gathered[:, :, 1].contiguous()" in source
     assert "_musa_qwen_shard_start_index" in source

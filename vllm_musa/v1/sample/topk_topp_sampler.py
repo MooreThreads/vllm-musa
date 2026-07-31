@@ -749,8 +749,13 @@ def sample_qwen_legacy_unfiltered_gumbel(
         )
     tp_size = int(getattr(sampler, "_musa_qwen_tp_size", 2))
     gathered = gathered.view(rows, tp_size, 4)
-    winner_rank = gathered[:, :, 0].argmax(dim=-1)
-    sampled = gathered[:, :, 1].gather(1, winner_rank.unsqueeze(-1)).squeeze(-1)
+    # MUSA argmax/gather can mis-handle the strided [B, TP, 4] view.  These
+    # compact views are only four floats per request and keep the winner
+    # bit-exact with the full-vocab path.
+    scores = gathered[:, :, 0].contiguous()
+    token_ids = gathered[:, :, 1].contiguous()
+    winner_rank = scores.argmax(dim=-1)
+    sampled = token_ids.gather(1, winner_rank.unsqueeze(-1)).squeeze(-1)
     vllm_topk_topp_sampler.logger.info_once(
         "Using MUSA sharded Qwen Gumbel pair reduction.", scope="global"
     )
