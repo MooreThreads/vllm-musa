@@ -16,6 +16,7 @@ def test_sharded_gumbel_patch_keeps_the_upstream_default_contract() -> None:
 def test_sharded_gumbel_is_narrowly_gated_and_uses_ipc_pair_gather() -> None:
     source = SAMPLER.read_text()
     assert "_MUSA_QWEN_SHARDED_MIN_BATCH = 16" in source
+    assert '"VLLM_MUSA_SHARDED_QWEN_GUMBEL"' in source
     assert "tp_size == 2" in source
     assert "get_pp_group().world_size != 1" in source
     assert "maybe_musa_jit_logits_all_gather(pair, dim=-1)" in source

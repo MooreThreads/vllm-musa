@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import logging
+import os
 from typing import Any
 
 import numpy as np
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 _SAMPLING_EPS = 1e-5
 _MUSA_QWEN_SAMPLER_VOCAB_SIZES = frozenset((151936, 248320))
 _MUSA_QWEN_SHARDED_MIN_BATCH = 16
+_MUSA_QWEN_SHARDED_ENV = "VLLM_MUSA_SHARDED_QWEN_GUMBEL"
 
 
 def _is_qwen_sampler_vocab(logits: torch.Tensor) -> bool:
@@ -583,6 +585,13 @@ def musa_compute_logits_if_eligible(
     sampler._musa_qwen_global_vocab_size = 0
     sampler._musa_qwen_shard_start_index = 0
     sampler._musa_qwen_tp_size = 0
+    if os.getenv(_MUSA_QWEN_SHARDED_ENV, "1").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return model.compute_logits(hidden_states), False
     metadata_ok = can_use_qwen_legacy_unfiltered_metadata(
         sampling_metadata,
         getattr(sampler, "logprobs_mode", "raw_logprobs"),
