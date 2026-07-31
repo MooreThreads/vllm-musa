@@ -11,6 +11,11 @@ import vllm.v1.sample.sampler as vllm_sample_sampler
 import vllm.v1.worker.gpu.sample.sampler as vllm_worker_sampler
 import vllm.v1.worker.gpu.sample.states as vllm_worker_states
 from vllm.config.model import LogprobsMode
+from vllm.distributed import (
+    get_pp_group,
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
+)
 from vllm.platforms import current_platform
 
 from vllm_musa import _custom_ops as _ops
@@ -20,11 +25,31 @@ logger = logging.getLogger(__name__)
 
 _SAMPLING_EPS = 1e-5
 _MUSA_QWEN_SAMPLER_VOCAB_SIZES = frozenset((151936, 248320))
+_MUSA_QWEN_SHARDED_MIN_BATCH = 16
 
 
 def _is_qwen_sampler_vocab(logits: torch.Tensor) -> bool:
     """Limit scalar sampler specializations to validated Qwen vocabularies."""
     return logits.ndim == 2 and logits.shape[1] in _MUSA_QWEN_SAMPLER_VOCAB_SIZES
+
+
+def _is_qwen_sharded_logits(sampler: Any, logits: torch.Tensor) -> bool:
+    if not getattr(sampler, "_musa_qwen_sharded_logits", False):
+        return False
+    global_vocab = getattr(sampler, "_musa_qwen_global_vocab_size", 0)
+    tp_size = getattr(sampler, "_musa_qwen_tp_size", 0)
+    return (
+        logits.ndim == 2
+        and global_vocab in _MUSA_QWEN_SAMPLER_VOCAB_SIZES
+        and tp_size == get_tensor_model_parallel_world_size()
+        and tp_size == 2
+        and logits.shape[0] >= _MUSA_QWEN_SHARDED_MIN_BATCH
+        and logits.shape[0] <= 64
+        and logits.shape[1] * tp_size == global_vocab
+        and logits.dtype == torch.bfloat16
+        and logits.is_contiguous()
+        and logits.stride(-1) == 1
+    )
 
 
 def _is_uniform_top_k_50(top_k: np.ndarray) -> bool:
@@ -445,27 +470,15 @@ def _legacy_logits_processors_are_inactive(sampling_metadata: Any) -> bool:
     return True
 
 
-def can_use_qwen_legacy_unfiltered_gumbel(
-    logits: torch.Tensor,
+def can_use_qwen_legacy_unfiltered_metadata(
     sampling_metadata: Any,
     logprobs_mode: LogprobsMode,
     predict_bonus_token: bool,
     use_fp64_gumbel: bool,
     is_qwen_family: bool = False,
 ) -> bool:
-    """Gate raw-logits Gumbel for Qwen models on the legacy GPU runner."""
-    if (
-        not is_qwen_family
-        or not current_platform.is_musa()
-        or not is_musa_tensor(logits)
-    ):
-        return False
-    if (
-        logits.dtype != torch.bfloat16
-        or logits.shape[0] == 0
-        or not _is_qwen_sampler_vocab(logits)
-        or logits.stride(-1) != 1
-    ):
+    """Gate raw-logits Gumbel using metadata available before lm-head."""
+    if not is_qwen_family or not current_platform.is_musa():
         return False
     if predict_bonus_token or use_fp64_gumbel or logprobs_mode != "raw_logprobs":
         return False
@@ -499,6 +512,133 @@ def can_use_qwen_legacy_unfiltered_gumbel(
         if not callable(has_tracked_requests) or has_tracked_requests():
             return False
     return _legacy_logits_processors_are_inactive(sampling_metadata)
+
+
+def can_use_qwen_legacy_unfiltered_gumbel(
+    logits: torch.Tensor,
+    sampling_metadata: Any,
+    logprobs_mode: LogprobsMode,
+    predict_bonus_token: bool,
+    use_fp64_gumbel: bool,
+    is_qwen_family: bool = False,
+    sampler: Any | None = None,
+) -> bool:
+    """Gate raw-logits Gumbel for Qwen models on the legacy GPU runner."""
+    if not is_musa_tensor(logits):
+        return False
+    if not can_use_qwen_legacy_unfiltered_metadata(
+        sampling_metadata,
+        logprobs_mode,
+        predict_bonus_token,
+        use_fp64_gumbel,
+        is_qwen_family,
+    ):
+        return False
+    if logits.dtype != torch.bfloat16 or logits.shape[0] == 0:
+        return False
+    if sampler is not None and _is_qwen_sharded_logits(sampler, logits):
+        return True
+    return _is_qwen_sampler_vocab(logits) and logits.stride(-1) == 1
+
+
+def _find_logits_processor(model: Any) -> tuple[Any, Any] | None:
+    candidate = model
+    for _ in range(3):
+        processor = getattr(candidate, "logits_processor", None)
+        lm_head = getattr(candidate, "lm_head", None)
+        if processor is not None and lm_head is not None:
+            return processor, lm_head
+        candidate = getattr(candidate, "language_model", None)
+        if candidate is None:
+            break
+    return None
+
+
+def _musa_jit_pair_gather_available() -> bool:
+    try:
+        from vllm.distributed.parallel_state import get_tp_group
+
+        from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (
+            MusaJitCustomAllreduce,
+        )
+
+        communicator = getattr(get_tp_group().device_communicator, "ca_comm", None)
+        return (
+            isinstance(communicator, MusaJitCustomAllreduce)
+            and not communicator.disabled
+            and bool(getattr(communicator, "_jit_available", False))
+        )
+    except Exception:
+        return False
+
+
+def musa_compute_logits_if_eligible(
+    model: Any,
+    hidden_states: torch.Tensor,
+    sampling_metadata: Any,
+    sampler: Any,
+) -> tuple[torch.Tensor | None, bool]:
+    """Compute local Qwen logits only for the exact sharded-Gumbel contract."""
+    sampler._musa_qwen_sharded_logits = False
+    sampler._musa_qwen_global_vocab_size = 0
+    sampler._musa_qwen_shard_start_index = 0
+    sampler._musa_qwen_tp_size = 0
+    metadata_ok = can_use_qwen_legacy_unfiltered_metadata(
+        sampling_metadata,
+        getattr(sampler, "logprobs_mode", "raw_logprobs"),
+        predict_bonus_token=False,
+        use_fp64_gumbel=bool(getattr(sampler, "use_fp64_gumbel", False)),
+        is_qwen_family=bool(getattr(sampler, "_musa_qwen_family", False)),
+    )
+    rows = int(hidden_states.shape[0]) if hidden_states.ndim > 0 else 0
+    if (
+        not metadata_ok
+        or rows < _MUSA_QWEN_SHARDED_MIN_BATCH
+        or rows > 64
+        or get_pp_group().world_size != 1
+        or not _musa_jit_pair_gather_available()
+    ):
+        return model.compute_logits(hidden_states), False
+    processor_and_head = _find_logits_processor(model)
+    if processor_and_head is None:
+        return model.compute_logits(hidden_states), False
+    processor, _lm_head = processor_and_head
+    tp_size = get_tensor_model_parallel_world_size()
+    if tp_size != 2:
+        return model.compute_logits(hidden_states), False
+    global_vocab = int(getattr(processor, "org_vocab_size", 0))
+    if (
+        global_vocab not in _MUSA_QWEN_SAMPLER_VOCAB_SIZES
+        or getattr(processor, "scale", 1.0) != 1.0
+        or getattr(processor, "soft_cap", None) is not None
+        or not getattr(processor, "use_all_gather", True)
+    ):
+        return model.compute_logits(hidden_states), False
+
+    old_skip = getattr(processor, "_musa_skip_tp_gather", False)
+    processor._musa_skip_tp_gather = True
+    try:
+        logits = model.compute_logits(hidden_states)
+    finally:
+        processor._musa_skip_tp_gather = old_skip
+    if (
+        logits is None
+        or not is_musa_tensor(logits)
+        or logits.ndim != 2
+        or logits.dtype != torch.bfloat16
+        or logits.shape[0] != rows
+        or logits.shape[1] * tp_size != global_vocab
+        or not logits.is_contiguous()
+        or logits.stride(-1) != 1
+    ):
+        return logits, False
+    sampler._musa_qwen_sharded_logits = True
+    sampler._musa_qwen_global_vocab_size = global_vocab
+    sampler._musa_qwen_tp_size = tp_size
+    sampler._musa_qwen_shard_start_index = (
+        get_tensor_model_parallel_rank() * logits.shape[-1]
+    )
+    return logits, True
 
 
 def _get_qwen_legacy_unfiltered_generator(
@@ -550,14 +690,23 @@ def sample_qwen_legacy_unfiltered_gumbel(
         buffers[rows] = entry
     mapping, temperature, seeds, positions = entry
     torch.arange(offset // 4, offset // 4 + rows, out=positions)
+    sharded = _is_qwen_sharded_logits(sampler, logits)
+    gumbel_kwargs = {
+        "apply_temperature": False,
+        "use_fp64": False,
+    }
+    if sharded:
+        gumbel_kwargs.update(
+            vocab_start_index=int(getattr(sampler, "_musa_qwen_shard_start_index", 0)),
+            return_values=True,
+        )
     sampled = vllm_worker_sampler.gumbel_sample(
         logits,
         mapping,
         temperature,
         seeds,
         positions,
-        apply_temperature=False,
-        use_fp64=False,
+        **gumbel_kwargs,
     )
     try:
         generator.set_offset(next_offset)
@@ -565,7 +714,38 @@ def sample_qwen_legacy_unfiltered_gumbel(
         raise RuntimeError(
             "Failed to advance the legacy-runner unfiltered Gumbel generator"
         ) from error
-    return sampled
+    if not sharded:
+        return sampled
+
+    local_sampled, local_values = sampled
+    pair_buffers = getattr(sampler, "_musa_qwen_sharded_pair_buffers", None)
+    if pair_buffers is None:
+        pair_buffers = {}
+        sampler._musa_qwen_sharded_pair_buffers = pair_buffers
+    pair = pair_buffers.get(rows)
+    if pair is None:
+        pair = torch.empty((rows, 4), dtype=torch.float32, device=logits.device)
+        pair_buffers[rows] = pair
+    pair[:, 0].copy_(local_values)
+    pair[:, 1].copy_(local_sampled.to(torch.float32))
+    pair[:, 2:].zero_()
+    from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (
+        maybe_musa_jit_logits_all_gather,
+    )
+
+    gathered = maybe_musa_jit_logits_all_gather(pair, dim=-1)
+    if gathered is None:
+        raise RuntimeError(
+            "MUSA sharded Qwen Gumbel lost its IPC pair all-gather capability"
+        )
+    tp_size = int(getattr(sampler, "_musa_qwen_tp_size", 2))
+    gathered = gathered.view(rows, tp_size, 4)
+    winner_rank = gathered[:, :, 0].argmax(dim=-1)
+    sampled = gathered[:, :, 1].gather(1, winner_rank.unsqueeze(-1)).squeeze(-1)
+    vllm_topk_topp_sampler.logger.info_once(
+        "Using MUSA sharded Qwen Gumbel pair reduction.", scope="global"
+    )
+    return sampled.to(torch.int64)
 
 
 def can_use_qwen_legacy_gumbel(
@@ -896,6 +1076,7 @@ def _sampler_forward(
         predict_bonus_token,
         self.use_fp64_gumbel,
         bool(getattr(self, "_musa_qwen_family", False)),
+        sampler=self,
     ):
         sampled = sample_qwen_legacy_unfiltered_gumbel(self, logits)
         if sampled is not None:
