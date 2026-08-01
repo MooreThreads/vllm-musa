@@ -1,13 +1,13 @@
-From 6f7f82fa52c48dfd09e02fbdefff6321316cd28f Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Sat, 1 Aug 2026 17:44:03 +0800
-Subject: [PATCH 99/99] perf(musa): return Qwen attention projection outputs
+Date: Sat, 1 Aug 2026 19:53:33 +0800
+Subject: [PATCH] perf(musa): return Qwen attention projection outputs
 
 ---
- .../layers/mamba/gdn/qwen_gdn_linear_attn.py  | 16 ++++--
- vllm/model_executor/models/qwen3_5.py         |  4 ++
- vllm/model_executor/models/qwen3_next.py      | 55 +++++++++++++++++--
- 3 files changed, 63 insertions(+), 12 deletions(-)
+ .../layers/mamba/gdn/qwen_gdn_linear_attn.py  | 16 ++--
+ vllm/model_executor/models/qwen3_5.py         |  8 ++
+ vllm/model_executor/models/qwen3_next.py      | 82 +++++++++++++++++--
+ 3 files changed, 94 insertions(+), 12 deletions(-)
 
 diff --git a/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py b/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
 index 06bfe5c5de..e270e62f89 100644
@@ -22,7 +22,7 @@ index 06bfe5c5de..e270e62f89 100644
      ):
 -        self._forward_method(hidden_states, output)
 +        return self._forward_method(hidden_states, output)
-
+ 
      def _output_projection(
          self,
          core_attn_out: torch.Tensor,
@@ -42,7 +42,7 @@ index 06bfe5c5de..e270e62f89 100644
 +            return projected
 +        output[:num_tokens] = projected
 +        return None
-
+ 
      def forward_hip(
          self,
 @@ -908,7 +912,7 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
@@ -60,38 +60,58 @@ index 06bfe5c5de..e270e62f89 100644
          # ============================================================
 -        self._output_projection(core_attn_out, z, output, num_tokens)
 +        return self._output_projection(core_attn_out, z, output, num_tokens)
-
+ 
      def forward_xpu(
          self,
 diff --git a/vllm/model_executor/models/qwen3_5.py b/vllm/model_executor/models/qwen3_5.py
-index 43b9004638..8885730e6a 100644
+index 43b9004638..a703d883a8 100644
 --- a/vllm/model_executor/models/qwen3_5.py
 +++ b/vllm/model_executor/models/qwen3_5.py
-@@ -88,6 +88,7 @@ from .qwen3_next import (
+@@ -88,6 +88,8 @@ from .qwen3_next import (
      Qwen3NextModel,
      Qwen3NextSparseMoeBlock,
      QwenNextMixtureOfExperts,
++    _musa_qwen_next_attention_metadata_prefix,
 +    _use_musa_qwen_next_return_attention_output,
  )
  from .qwen3_vl import (
      Qwen3_VisionTransformer,
-@@ -136,6 +137,9 @@ class Qwen3_5DecoderLayer(Qwen3NextDecoderLayer):
-
+@@ -136,6 +138,12 @@ class Qwen3_5DecoderLayer(Qwen3NextDecoderLayer):
+ 
          self.layer_type = layer_type
          self.layer_idx = extract_layer_index(prefix)
 +        self._musa_return_attention_output = (
 +            _use_musa_qwen_next_return_attention_output(vllm_config, config)
 +        )
-
++        self._musa_attention_metadata_prefix = (
++            _musa_qwen_next_attention_metadata_prefix(layer_type, prefix)
++        )
+ 
          if self.layer_type == "linear_attention":
              self.linear_attn = QwenGatedDeltaNetAttention(
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
-index d73dfa9e42..17b9e12e20 100644
+index d73dfa9e42..353c9fe31e 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
-@@ -268,6 +268,33 @@ class Qwen3NextSparseMoeBlock(nn.Module):
-
-
+@@ -8,6 +8,7 @@ from itertools import islice
+ 
+ import torch
+ from torch import nn
++from transformers import PretrainedConfig
+ 
+ from vllm import ir
+ from vllm._aiter_ops import rocm_aiter_ops
+@@ -24,6 +25,7 @@ from vllm.distributed import (
+     get_tensor_model_parallel_world_size,
+     tensor_model_parallel_all_gather,
+ )
++from vllm.forward_context import get_forward_context, is_forward_context_available
+ from vllm.logger import init_logger
+ from vllm.model_executor.layers.attention import Attention
+ from vllm.model_executor.layers.fused_moe import (
+@@ -268,6 +270,53 @@ class Qwen3NextSparseMoeBlock(nn.Module):
+ 
+ 
  MUSA_FUSED_QK_MROPE_ENV = "VLLM_MUSA_FUSED_QK_MROPE"
 +MUSA_QWEN_NEXT_RETURN_ATTN_OUTPUT_ENV = (
 +    "VLLM_MUSA_QWEN_NEXT_RETURN_ATTN_OUTPUT"
@@ -99,7 +119,7 @@ index d73dfa9e42..17b9e12e20 100644
 +
 +
 +def _use_musa_qwen_next_return_attention_output(
-+    vllm_config: VllmConfig, config: Qwen3NextConfig
++    vllm_config: VllmConfig, config: PretrainedConfig
 +) -> bool:
 +    model_config = vllm_config.model_config
 +    enabled = (
@@ -120,10 +140,30 @@ index d73dfa9e42..17b9e12e20 100644
 +        )
 +    return enabled
 +
-
++
++def _musa_qwen_next_attention_metadata_prefix(
++    layer_type: str, prefix: str
++) -> str:
++    if layer_type == "linear_attention":
++        return f"{prefix}.linear_attn"
++    if layer_type == "full_attention":
++        return f"{prefix}.self_attn.attn"
++    raise ValueError(f"Invalid layer_type {layer_type}")
++
++
++def _is_musa_qwen_next_prefill(attention_metadata_prefix: str) -> bool:
++    if not is_forward_context_available():
++        return False
++    attn_metadata = get_forward_context().attn_metadata
++    if not isinstance(attn_metadata, dict):
++        return False
++    layer_metadata = attn_metadata.get(attention_metadata_prefix)
++    return getattr(layer_metadata, "num_prefills", 0) > 0
++
+ 
  _MUSA_MROPE_COS_SIN_CACHE: dict[tuple[int, torch.dtype], torch.Tensor] = {}
-
-@@ -545,7 +572,7 @@ class Qwen3NextAttention(nn.Module):
+ 
+@@ -545,7 +594,7 @@ class Qwen3NextAttention(nn.Module):
      def forward(
          self,
          positions: torch.Tensor,
@@ -132,7 +172,7 @@ index d73dfa9e42..17b9e12e20 100644
          hidden_states: torch.Tensor,
      ):
          qkv, _ = self.qkv_proj(hidden_states)
-@@ -557,7 +584,11 @@ class Qwen3NextAttention(nn.Module):
+@@ -557,7 +606,11 @@ class Qwen3NextAttention(nn.Module):
              # this multiply, then flatten the fresh contiguous result for o_proj.
              attn_output = attn_output.view_as(gate) * torch.sigmoid(gate)
              attn_output = attn_output.view(-1, self.q_size)
@@ -142,26 +182,31 @@ index d73dfa9e42..17b9e12e20 100644
 +            return projected
 +        output[:] = projected
 +        return None
-
-
+ 
+ 
  class Qwen3NextDecoderLayer(nn.Module):
-@@ -576,6 +607,9 @@ class Qwen3NextDecoderLayer(nn.Module):
-
+@@ -576,6 +629,12 @@ class Qwen3NextDecoderLayer(nn.Module):
+ 
          self.layer_type = layer_type
          self.layer_idx = extract_layer_index(prefix)
 +        self._musa_return_attention_output = (
 +            _use_musa_qwen_next_return_attention_output(vllm_config, config)
 +        )
-
++        self._musa_attention_metadata_prefix = (
++            _musa_qwen_next_attention_metadata_prefix(layer_type, prefix)
++        )
+ 
          if self.layer_type == "linear_attention":
              self.linear_attn = QwenGatedDeltaNetAttention(
-@@ -652,21 +686,30 @@ class Qwen3NextDecoderLayer(nn.Module):
+@@ -652,21 +711,32 @@ class Qwen3NextDecoderLayer(nn.Module):
          else:
              hidden_states, residual = self.input_layernorm(hidden_states, residual)
-
+ 
 -        self_attention_output = torch.empty_like(hidden_states)
 +        return_attention_output = (
-+            self._musa_return_attention_output and hidden_states.shape[0] >= 1024
++            self._musa_return_attention_output
++            and hidden_states.shape[0] >= 1024
++            and _is_musa_qwen_next_prefill(self._musa_attention_metadata_prefix)
 +        )
 +        self_attention_output = (
 +            None if return_attention_output else torch.empty_like(hidden_states)
@@ -187,8 +232,6 @@ index d73dfa9e42..17b9e12e20 100644
 +            if return_attention_output
 +            else self_attention_output
 +        )
-
+ 
          if self.layer_scale:
              if len(hidden_states.shape) == 2:
---
-2.34.1

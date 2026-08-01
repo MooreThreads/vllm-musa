@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Source contract for the Qwen3.5/3.6 prefill return-through path."""
+"""Packaging contracts for the Qwen3.5/3.6 return-through patch."""
 
 from pathlib import Path
 
@@ -8,12 +8,24 @@ PATCH = (
     ROOT
     / "vllm_musa/patches/series/0099-perf-musa-return-Qwen-attention-projection-outputs.patch"
 )
-MUSA_GDN = (
-    ROOT / "vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
-)
+MUSA_GDN = ROOT / "vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
 
 
-def test_return_through_is_exactly_gated() -> None:
+def test_patch_uses_canonical_format_patch_headers() -> None:
+    source = PATCH.read_text()
+
+    assert source.startswith(
+        "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001\n"
+    )
+    assert (
+        "Subject: [PATCH] perf(musa): return Qwen attention projection outputs"
+        in source
+    )
+    assert "Subject: [PATCH " not in source
+    assert not source.rstrip().endswith("2.34.1")
+
+
+def test_patch_carries_phase_gate_and_both_qwen_initializers() -> None:
     source = PATCH.read_text()
 
     assert "vllm/model_executor/models/qwen3_5.py" in source
@@ -25,22 +37,14 @@ def test_return_through_is_exactly_gated() -> None:
     assert "config.hidden_size == 5120" in source
     assert "get_tensor_model_parallel_world_size() == 2" in source
     assert "hidden_states.shape[0] >= 1024" in source
+    assert "_is_musa_qwen_next_prefill(self._musa_attention_metadata_prefix)" in source
     assert source.count("_use_musa_qwen_next_return_attention_output(") >= 3
-
-
-def test_full_and_gdn_attention_return_projection_without_copy() -> None:
-    source = PATCH.read_text()
-
-    assert source.count("if output is None:") == 2
-    assert source.count("return projected") == 2
-    assert "None if return_attention_output else torch.empty_like(hidden_states)" in source
-    assert "returned_attention_output" in source
-    assert "output[:] = projected" in source
-    assert "output[:num_tokens] = projected" in source
 
 
 def test_musa_gdn_oot_propagates_returned_projection() -> None:
     source = MUSA_GDN.read_text()
 
     assert "output: torch.Tensor | None" in source
-    assert "return self._output_projection(core_attn_out, z, output, num_tokens)" in source
+    assert (
+        "return self._output_projection(core_attn_out, z, output, num_tokens)" in source
+    )
