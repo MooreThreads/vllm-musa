@@ -51,6 +51,19 @@ class TestCustomOpsRuntimePatches:
         assert getattr(vllm_ops.rotary_embedding, "_musa_safe_rotary_embedding") is True
 
 
+class TestModelOptFp8CapabilityPatch:
+    def test_modelopt_fp8_uses_musa_capability_floor(self):
+        patch_path = (
+            Path(__file__).parent.parent
+            / "vllm_musa/patches/series/0099-MUSA-allow-ModelOpt-FP8-on-MUSA-capability.patch"
+        )
+        source = patch_path.read_text()
+
+        assert "vllm/model_executor/layers/quantization/modelopt.py" in source
+        assert "-        return 89" in source
+        assert "+        return 31" in source
+
+
 class TestCompilationBackendPatch:
     """Tests for MUSA torch.compile backend compatibility patches."""
 
