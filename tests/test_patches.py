@@ -88,6 +88,17 @@ class TestCustomOpsRuntimePatches:
             rtol=0.1,
         )
 
+        saturated, _ = vllm_ops.scaled_fp8_quant(
+            torch.tensor([[1000.0, -1000.0]]),
+            torch.tensor(1.0),
+        )
+        fp8_info = torch.finfo(torch.float8_e4m3fn)
+        torch.testing.assert_close(
+            saturated.float(),
+            torch.tensor([[fp8_info.max, fp8_info.min]]),
+        )
+        assert torch.isfinite(saturated.float()).all()
+
 
 class TestModelOptFp8CapabilityPatch:
     def test_modelopt_fp8_uses_musa_capability_floor(self):

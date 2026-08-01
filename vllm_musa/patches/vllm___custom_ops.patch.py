@@ -94,7 +94,12 @@ def _make_musa_scaled_fp8_quant(
             raise ValueError(f"MUSA static FP8 output must have dtype {out_dtype}")
 
         expanded_scale = _expand_static_fp8_scale(scale, (rows, cols), group_shape)
-        output[:rows].copy_((input / expanded_scale).to(out_dtype))
+        fp8_info = torch.finfo(out_dtype)
+        scaled = (input / expanded_scale).clamp(
+            min=fp8_info.min,
+            max=fp8_info.max,
+        )
+        output[:rows].copy_(scaled.to(out_dtype))
         if out_rows > rows:
             output[rows:].zero_()
         return output, scale
