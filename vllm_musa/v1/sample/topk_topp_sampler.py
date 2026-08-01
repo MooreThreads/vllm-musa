@@ -19,7 +19,7 @@ from vllm_musa.utils.environ import envs
 logger = logging.getLogger(__name__)
 
 _SAMPLING_EPS = 1e-5
-_MUSA_QWEN_SAMPLER_VOCAB_SIZES = frozenset((151936, 248320))
+_MUSA_QWEN_SAMPLER_VOCAB_SIZES = frozenset((151936, 152064, 248320))
 
 
 def _is_qwen_sampler_vocab(logits: torch.Tensor) -> bool:
@@ -83,7 +83,7 @@ def can_use_musa_seeded_multinomial(
         and musa_seeded_multinomial_enabled()
         and current_platform.is_musa()
         and is_musa_tensor(logits)
-        # MUSA seeded multinomial is validated for Qwen text vocabularies only.
+        # Keep non-Qwen and small codec vocabularies on the upstream sampler.
         and _is_qwen_sampler_vocab(logits)
         and logprobs_mode not in ("processed_logits", "processed_logprobs")
     )

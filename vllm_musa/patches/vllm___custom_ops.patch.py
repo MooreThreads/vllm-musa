@@ -61,6 +61,11 @@ def _expand_static_fp8_scale(
 def _make_musa_scaled_fp8_quant(
     original: Callable,
 ) -> Callable:
+    """Wrap vLLM's CUDA-only static FP8 custom op for MUSA.
+
+    Dynamic FP8 quantization continues to use the original vLLM implementation.
+    """
+
     def musa_scaled_fp8_quant(
         input: torch.Tensor,
         scale: torch.Tensor | None = None,
