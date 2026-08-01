@@ -8,11 +8,8 @@ import os
 # isort: off
 import torchada  # noqa: F401
 import torch
-from vllm.logger import init_logger
 from vllm.triton_utils import tl, triton
 # isort: on
-
-logger = init_logger(__name__)
 
 _FUSED_GDN_STATE_GATHER_ENV = "VLLM_MUSA_FUSED_GDN_STATE_GATHER"
 _QWEN_GDN_LOCAL_HEAD_COUNTS = (8, 16, 32)
@@ -80,6 +77,7 @@ def can_use_fused_gdn_state_gather_mask(
     )
 
 
+@torch.compile(dynamic=True)
 def fused_gdn_state_gather_mask(
     state: torch.Tensor,
     state_indices: torch.Tensor,
@@ -109,5 +107,4 @@ def fused_gdn_state_gather_mask(
         num_warps=4,
         num_stages=1,
     )
-    logger.info_once("Using fused MUSA Qwen GDN prefill state gather and mask.")
     return output

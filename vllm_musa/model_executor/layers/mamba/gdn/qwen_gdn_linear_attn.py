@@ -392,6 +392,9 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                         non_spec_state_indices_tensor,
                         has_initial_state,
                     )
+                    logger.info_once(
+                        "Using fused MUSA Qwen GDN prefill state gather and mask."
+                    )
 
             state_indices = non_spec_state_indices_tensor.to(torch.int64)
             if fused_initial_state is None:
