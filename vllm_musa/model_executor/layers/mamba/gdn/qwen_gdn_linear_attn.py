@@ -387,14 +387,21 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                     non_spec_state_indices_tensor,
                     has_initial_state,
                 ):
-                    fused_initial_state = fused_gdn_state_gather_mask(
-                        ssm_state,
-                        non_spec_state_indices_tensor,
-                        has_initial_state,
-                    )
-                    logger.info_once(
-                        "Using fused MUSA Qwen GDN prefill state gather and mask."
-                    )
+                    try:
+                        fused_initial_state = fused_gdn_state_gather_mask(
+                            ssm_state,
+                            non_spec_state_indices_tensor,
+                            has_initial_state,
+                        )
+                        logger.info_once(
+                            "Using fused MUSA Qwen GDN prefill state gather and mask."
+                        )
+                    except Exception as exc:
+                        _log_once(
+                            "warning",
+                            "fused GDN state gather failed (%s); using indexed gather",
+                            exc,
+                        )
 
             state_indices = non_spec_state_indices_tensor.to(torch.int64)
             if fused_initial_state is None:
