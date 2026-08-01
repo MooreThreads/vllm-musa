@@ -5,6 +5,7 @@ import functools
 import tilelang
 import tilelang.language as T
 import torch
+from vllm.logger import init_logger
 
 from vllm_musa.jit_kernel.tilelang.utils import (
     MUSA_COMMON_PASS_CONFIGS,
@@ -12,6 +13,7 @@ from vllm_musa.jit_kernel.tilelang.utils import (
     storage_window,
     tilelang_dtype,
 )
+from vllm_musa.utils.environ import envs
 
 PAD_SLOT_ID = -1  # MUSA: match vllm mamba causal_conv1d PAD_SLOT_ID
 NULL_BLOCK_ID = 0  # MUSA: match vllm mamba causal_conv1d NULL_BLOCK_ID
@@ -25,7 +27,43 @@ def register_custom_op(fn=None, **_kw):
 
 
 _LOG2E = 1.4426950408889634
-_ENABLE_WIDTH4_PREFILL_SPLIT = False
+_ENABLE_WIDTH4_PREFILL_SPLIT = envs.VLLM_MUSA_QWEN_GDN_WIDTH4_PREFILL_SPLIT.get()
+_WIDTH4_PREFILL_SPLIT_DIMS = frozenset((10240,))
+_WIDTH4_PREFILL_SPLIT_LOGGED = False
+logger = init_logger(__name__)
+
+
+def _should_use_width4_prefill_split(
+    *,
+    width: int,
+    dim: int,
+    dtype: torch.dtype,
+    max_seq_len: int,
+    batch_size: int,
+    has_conv_states: bool,
+    has_cache_indices: bool,
+    cache_indices_stride: int,
+    x_inner_stride: int,
+    out_inner_stride: int,
+    weight_inner_stride: int,
+) -> bool:
+    return (
+        _ENABLE_WIDTH4_PREFILL_SPLIT
+        and width == 4
+        and dtype is torch.bfloat16
+        # The split is beneficial only once the local channel width is large
+        # enough to amortize its two launches on MP31.
+        and dim in _WIDTH4_PREFILL_SPLIT_DIMS
+        and max_seq_len >= 4096
+        and batch_size > 1
+        and has_conv_states
+        and has_cache_indices
+        and cache_indices_stride == 1
+        and x_inner_stride == 1
+        and out_inner_stride == 1
+        and weight_inner_stride == 1
+    )
+
 
 _CAUSAL_CONV1D_PASS_CONFIGS = dict(MUSA_COMMON_PASS_CONFIGS)
 for _key, _value in (
@@ -1285,17 +1323,25 @@ def _causal_conv1d_fwd_impl(
         )
         return out
 
-    if (
-        _ENABLE_WIDTH4_PREFILL_SPLIT
-        and width == 4
-        and max_seq_len >= 128
-        and query_start_loc.numel() > 2
-        and conv_states is not None
-        and cache_indices is not None
-        and x.stride(0) == 1
-        and out.stride(0) == 1
-        and weight.stride(1) == 1
+    if _should_use_width4_prefill_split(
+        width=width,
+        dim=dim,
+        dtype=x.dtype,
+        max_seq_len=max_seq_len,
+        batch_size=query_start_loc.numel() - 1,
+        has_conv_states=conv_states is not None,
+        has_cache_indices=cache_indices is not None,
+        cache_indices_stride=(
+            cache_indices.stride(0) if cache_indices is not None else 1
+        ),
+        x_inner_stride=x.stride(0),
+        out_inner_stride=out.stride(0),
+        weight_inner_stride=weight.stride(1),
     ):
+        global _WIDTH4_PREFILL_SPLIT_LOGGED
+        if not _WIDTH4_PREFILL_SPLIT_LOGGED:
+            logger.info_once("MUSA width-4 causal-conv prefill split active")
+            _WIDTH4_PREFILL_SPLIT_LOGGED = True
         _causal_conv1d_prefill_width4_kernel(
             dtype,
             cache_indices_dtype,
