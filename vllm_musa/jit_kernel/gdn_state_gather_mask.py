@@ -62,6 +62,7 @@ def can_use_fused_gdn_state_gather_mask(
     has_initial_state: torch.Tensor,
 ) -> bool:
     """Return whether the narrow Qwen3.5/3.6 GDN prefill contract is met."""
+    num_sequences = state_indices.numel()
     return (
         _env_enabled()
         and state.dtype == torch.float32
@@ -72,7 +73,7 @@ def can_use_fused_gdn_state_gather_mask(
         and state_indices.dtype == torch.int32
         and state_indices.ndim == 1
         and state_indices.is_contiguous()
-        and 0 < state_indices.numel() <= 64
+        and (num_sequences == 1 or 8 <= num_sequences <= 64)
         and has_initial_state.dtype == torch.bool
         and has_initial_state.shape == state_indices.shape
         and has_initial_state.is_contiguous()

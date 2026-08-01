@@ -15,7 +15,7 @@ def test_fused_gdn_state_gather_has_narrow_shape_and_dtype_gate() -> None:
     assert "state.dtype == torch.float32" in source
     assert "state_indices.dtype == torch.int32" in source
     assert "has_initial_state.dtype == torch.bool" in source
-    assert "0 < state_indices.numel() <= 64" in source
+    assert "num_sequences == 1 or 8 <= num_sequences <= 64" in source
 
 
 def test_qwen_gdn_prefill_preserves_fallback_and_scatter() -> None:
