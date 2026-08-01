@@ -16,6 +16,7 @@ def test_fused_gdn_state_gather_has_narrow_shape_and_dtype_gate() -> None:
     assert "state_indices.dtype == torch.int32" in source
     assert "has_initial_state.dtype == torch.bool" in source
     assert "num_sequences == 64" in source
+    assert "_SMALL_HEAD_BLOCK_SIZE if state.shape[1] == 8" in source
     assert "if state.shape[1] == 8" in source
 
 

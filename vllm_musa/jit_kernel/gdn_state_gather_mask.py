@@ -13,7 +13,8 @@ from vllm.triton_utils import tl, triton
 
 _FUSED_GDN_STATE_GATHER_ENV = "VLLM_MUSA_FUSED_GDN_STATE_GATHER"
 _QWEN_GDN_LOCAL_HEAD_COUNTS = (8, 16, 32)
-_BLOCK_SIZE = 256
+_DEFAULT_BLOCK_SIZE = 256
+_SMALL_HEAD_BLOCK_SIZE = 512
 _DEFAULT_ITEMS_PER_PROGRAM = 16
 _SMALL_HEAD_ITEMS_PER_PROGRAM = 8
 
@@ -86,6 +87,7 @@ def fused_gdn_state_gather_mask(
     """Run after ``can_use_fused_gdn_state_gather_mask`` accepts the inputs."""
     num_sequences = state_indices.numel()
     state_size = state[0].numel()
+    block_size = _SMALL_HEAD_BLOCK_SIZE if state.shape[1] == 8 else _DEFAULT_BLOCK_SIZE
     items_per_program = (
         _SMALL_HEAD_ITEMS_PER_PROGRAM
         if state.shape[1] == 8
@@ -96,7 +98,7 @@ def fused_gdn_state_gather_mask(
     )
     grid = (
         num_sequences,
-        triton.cdiv(state_size, _BLOCK_SIZE * items_per_program),
+        triton.cdiv(state_size, block_size * items_per_program),
     )
     _gather_mask_gdn_state_kernel[grid](
         state,
@@ -104,7 +106,7 @@ def fused_gdn_state_gather_mask(
         has_initial_state,
         output,
         state_size=state_size,
-        block_size=_BLOCK_SIZE,
+        block_size=block_size,
         items_per_program=items_per_program,
         num_warps=4,
         num_stages=1,
