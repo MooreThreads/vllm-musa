@@ -72,6 +72,23 @@ def can_use_musa_sampler(
     return logprobs_mode not in ("processed_logits", "processed_logprobs")
 
 
+def can_use_musa_seeded_multinomial(
+    logits: torch.Tensor,
+    generators: dict[int, torch.Generator],
+    logprobs_mode: LogprobsMode,
+) -> bool:
+    """Gate the legacy per-request multinomial path to validated vocabularies."""
+    return (
+        bool(generators)
+        and musa_seeded_multinomial_enabled()
+        and current_platform.is_musa()
+        and is_musa_tensor(logits)
+        # MUSA seeded multinomial is validated for Qwen text vocabularies only.
+        and _is_qwen_sampler_vocab(logits)
+        and logprobs_mode not in ("processed_logits", "processed_logprobs")
+    )
+
+
 def _squeeze_filter_tensor(value: torch.Tensor | None) -> torch.Tensor | None:
     if value is None:
         return None
@@ -273,13 +290,7 @@ def forward_musa(
     p: torch.Tensor | float | None,
     min_p: torch.Tensor | float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    if (
-        generators
-        and musa_seeded_multinomial_enabled()
-        and current_platform.is_musa()
-        and is_musa_tensor(logits)
-        and self.logprobs_mode not in ("processed_logits", "processed_logprobs")
-    ):
+    if can_use_musa_seeded_multinomial(logits, generators, self.logprobs_mode):
         if min_p is not None:
             return self.forward_native(logits, generators, k, p)
         logits = _apply_top_k_top_p(logits, k, p)
