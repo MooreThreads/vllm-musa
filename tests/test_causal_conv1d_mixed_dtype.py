@@ -5,6 +5,46 @@ pytest.importorskip("tilelang")
 causal_conv1d = pytest.importorskip("vllm_musa.jit_kernel.tilelang.causal_conv1d")
 
 
+def _prefill_gate(**overrides):
+    kwargs = {
+        "width": 4,
+        "dim": 10240,
+        "dtype": torch.bfloat16,
+        "max_seq_len": 4096,
+        "batch_size": 2,
+        "has_conv_states": True,
+        "has_cache_indices": True,
+        "cache_indices_stride": 1,
+        "x_inner_stride": 1,
+        "out_inner_stride": 1,
+        "weight_inner_stride": 1,
+    }
+    kwargs.update(overrides)
+    return causal_conv1d._should_use_width4_prefill_split(**kwargs)
+
+
+def test_prefill_split_gate_accepts_validated_tp1_width(monkeypatch):
+    monkeypatch.setattr(causal_conv1d, "_ENABLE_WIDTH4_PREFILL_SPLIT", True)
+    assert _prefill_gate(dim=10240)
+
+
+def test_prefill_split_gate_rejects_tp4_and_small_prefill(monkeypatch):
+    monkeypatch.setattr(causal_conv1d, "_ENABLE_WIDTH4_PREFILL_SPLIT", True)
+    assert not _prefill_gate(dim=2048)
+    assert not _prefill_gate(dim=2560)
+    assert not _prefill_gate(dim=12288)
+    assert not _prefill_gate(dim=8192)
+    assert not _prefill_gate(max_seq_len=2048)
+    assert not _prefill_gate(batch_size=1)
+    assert not _prefill_gate(cache_indices_stride=2)
+    assert not _prefill_gate(dtype=torch.float16)
+
+
+def test_prefill_split_gate_honors_kill_switch(monkeypatch):
+    monkeypatch.setattr(causal_conv1d, "_ENABLE_WIDTH4_PREFILL_SPLIT", False)
+    assert not _prefill_gate()
+
+
 def test_decode_kernel_keeps_supported_mixed_dtypes(monkeypatch):
     captured = {}
 
