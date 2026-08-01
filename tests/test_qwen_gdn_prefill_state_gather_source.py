@@ -10,7 +10,8 @@ CALLER = ROOT / "vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.
 
 def test_fused_gdn_state_gather_has_narrow_shape_and_dtype_gate() -> None:
     source = KERNEL.read_text()
-    assert "_QWEN_GDN_STATE_SHAPE = (32, 128, 128)" in source
+    assert "_QWEN_GDN_LOCAL_HEAD_COUNTS = (8, 16, 32)" in source
+    assert "tuple(state.shape[2:]) == (128, 128)" in source
     assert "state.dtype == torch.float32" in source
     assert "state_indices.dtype == torch.int32" in source
     assert "has_initial_state.dtype == torch.bool" in source

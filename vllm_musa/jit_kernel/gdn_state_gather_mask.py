@@ -15,7 +15,7 @@ from vllm.triton_utils import tl, triton
 logger = init_logger(__name__)
 
 _FUSED_GDN_STATE_GATHER_ENV = "VLLM_MUSA_FUSED_GDN_STATE_GATHER"
-_QWEN_GDN_STATE_SHAPE = (32, 128, 128)
+_QWEN_GDN_LOCAL_HEAD_COUNTS = (8, 16, 32)
 _BLOCK_SIZE = 256
 _ITEMS_PER_PROGRAM = 16
 
@@ -67,7 +67,8 @@ def can_use_fused_gdn_state_gather_mask(
         and state.dtype == torch.float32
         and state.is_contiguous()
         and state.ndim == 4
-        and tuple(state.shape[1:]) == _QWEN_GDN_STATE_SHAPE
+        and state.shape[1] in _QWEN_GDN_LOCAL_HEAD_COUNTS
+        and tuple(state.shape[2:]) == (128, 128)
         and state_indices.dtype == torch.int32
         and state_indices.ndim == 1
         and state_indices.is_contiguous()
