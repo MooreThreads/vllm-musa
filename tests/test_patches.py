@@ -50,6 +50,44 @@ class TestCustomOpsRuntimePatches:
         assert vllm_ops.rotary_embedding is _shared.musa_safe_rotary_embedding
         assert getattr(vllm_ops.rotary_embedding, "_musa_safe_rotary_embedding") is True
 
+    def test_static_fp8_fallback_is_registered_on_vllm_custom_ops(self, monkeypatch):
+        import vllm
+
+        from vllm_musa.patches import _get_patch_files, _load_patch_module
+
+        delegated = object()
+        vllm_ops = ModuleType("vllm._custom_ops")
+        vllm_ops.scaled_fp8_quant = lambda *args: delegated
+        monkeypatch.setitem(sys.modules, "vllm._custom_ops", vllm_ops)
+        monkeypatch.setattr(vllm, "_custom_ops", vllm_ops, raising=False)
+
+        patch_file = next(f for m, f in _get_patch_files() if m == "vllm._custom_ops")
+        patch_module = _load_patch_module(patch_file)
+        monkeypatch.setattr(
+            patch_module,
+            "current_platform",
+            SimpleNamespace(fp8_dtype=lambda: torch.float8_e4m3fn),
+        )
+        patch_module.apply()
+
+        assert getattr(vllm_ops.scaled_fp8_quant, "_musa_static_fp8_fallback")
+        assert vllm_ops.scaled_fp8_quant(torch.ones((1, 1))) is delegated
+
+        values = torch.tensor([[2.0, 4.0], [4.0, 4.0]])
+        scale = torch.tensor([1.0, 2.0])
+        quantized, returned_scale = vllm_ops.scaled_fp8_quant(
+            values, scale, group_shape=(-1, 1)
+        )
+
+        assert returned_scale is scale
+        assert quantized.dtype == torch.float8_e4m3fn
+        torch.testing.assert_close(
+            quantized.float(),
+            torch.tensor([[2.0, 2.0], [4.0, 2.0]]),
+            atol=0.1,
+            rtol=0.1,
+        )
+
 
 class TestModelOptFp8CapabilityPatch:
     def test_modelopt_fp8_uses_musa_capability_floor(self):
