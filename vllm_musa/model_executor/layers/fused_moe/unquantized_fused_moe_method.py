@@ -3,10 +3,16 @@ import inspect
 import torch
 from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe import (
-    TritonExperts,
     UnquantizedFusedMoEMethod,
     fused_experts,
 )
+
+try:
+    from vllm.model_executor.layers.fused_moe.experts.triton_moe import (
+        TritonExperts,
+    )
+except ImportError:
+    from vllm.model_executor.layers.fused_moe import TritonExperts
 
 try:
     from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import (
