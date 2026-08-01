@@ -375,10 +375,31 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                 # exact zero to avoid MATE NaNs on long prefills.
                 g = torch.exp(g).clamp_min(1e-30)
 
-            state_indices = non_spec_state_indices_tensor.to(torch.int64)
-            initial_state = ssm_state[state_indices].to(torch.float32)
+            fused_initial_state = None
             if has_initial_state is not None:
-                initial_state[~has_initial_state, ...] = 0
+                from vllm_musa.jit_kernel.gdn_state_gather_mask import (
+                    can_use_fused_gdn_state_gather_mask,
+                    fused_gdn_state_gather_mask,
+                )
+
+                if can_use_fused_gdn_state_gather_mask(
+                    ssm_state,
+                    non_spec_state_indices_tensor,
+                    has_initial_state,
+                ):
+                    fused_initial_state = fused_gdn_state_gather_mask(
+                        ssm_state,
+                        non_spec_state_indices_tensor,
+                        has_initial_state,
+                    )
+
+            state_indices = non_spec_state_indices_tensor.to(torch.int64)
+            if fused_initial_state is None:
+                initial_state = ssm_state[state_indices].to(torch.float32)
+                if has_initial_state is not None:
+                    initial_state[~has_initial_state, ...] = 0
+            else:
+                initial_state = fused_initial_state
             # mate compiles the GDN kernel against this dtype; int32 indexing is
             # cheaper and the offsets are bounded by the per-forward token cap.
             cu_seqlens = non_spec_query_start_loc.to(torch.int32)
