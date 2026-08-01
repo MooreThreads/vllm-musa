@@ -14,7 +14,8 @@ from vllm.triton_utils import tl, triton
 _FUSED_GDN_STATE_GATHER_ENV = "VLLM_MUSA_FUSED_GDN_STATE_GATHER"
 _QWEN_GDN_LOCAL_HEAD_COUNTS = (8, 16, 32)
 _BLOCK_SIZE = 256
-_ITEMS_PER_PROGRAM = 16
+_DEFAULT_ITEMS_PER_PROGRAM = 16
+_SMALL_HEAD_ITEMS_PER_PROGRAM = 8
 
 
 @triton.jit
@@ -70,31 +71,32 @@ def can_use_fused_gdn_state_gather_mask(
         and state_indices.dtype == torch.int32
         and state_indices.ndim == 1
         and state_indices.is_contiguous()
-        and (num_sequences == 1 or 8 <= num_sequences <= 64)
+        and num_sequences == 64
         and has_initial_state.dtype == torch.bool
         and has_initial_state.shape == state_indices.shape
         and has_initial_state.is_contiguous()
     )
 
 
-@torch.compile(dynamic=True)
 def fused_gdn_state_gather_mask(
     state: torch.Tensor,
     state_indices: torch.Tensor,
     has_initial_state: torch.Tensor,
 ) -> torch.Tensor:
-    """Gather selected fp32 states and zero rows without initial state."""
-    if not can_use_fused_gdn_state_gather_mask(state, state_indices, has_initial_state):
-        raise ValueError("unsupported fused Qwen GDN state-gather contract")
-
+    """Run after ``can_use_fused_gdn_state_gather_mask`` accepts the inputs."""
     num_sequences = state_indices.numel()
     state_size = state[0].numel()
+    items_per_program = (
+        _SMALL_HEAD_ITEMS_PER_PROGRAM
+        if state.shape[1] == 8
+        else _DEFAULT_ITEMS_PER_PROGRAM
+    )
     output = torch.empty(
         (num_sequences, *state.shape[1:]), dtype=state.dtype, device=state.device
     )
     grid = (
         num_sequences,
-        triton.cdiv(state_size, _BLOCK_SIZE * _ITEMS_PER_PROGRAM),
+        triton.cdiv(state_size, _BLOCK_SIZE * items_per_program),
     )
     _gather_mask_gdn_state_kernel[grid](
         state,
@@ -103,7 +105,7 @@ def fused_gdn_state_gather_mask(
         output,
         state_size=state_size,
         block_size=_BLOCK_SIZE,
-        items_per_program=_ITEMS_PER_PROGRAM,
+        items_per_program=items_per_program,
         num_warps=4,
         num_stages=1,
     )
