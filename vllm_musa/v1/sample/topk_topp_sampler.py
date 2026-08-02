@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 _SAMPLING_EPS = 1e-5
 _MUSA_QWEN_SAMPLER_VOCAB_SIZES = frozenset((151936, 152064, 248320))
+# Keep chunked-prefill and first-token response draining on the original path.
+_QWEN_LEGACY_UNFILTERED_GUMBEL_MIN_ROWS = 16
+_QWEN_LEGACY_UNFILTERED_GUMBEL_MIN_OFFSET = 64
 
 
 def _is_qwen_sampler_vocab(logits: torch.Tensor) -> bool:
@@ -613,13 +616,21 @@ def can_use_qwen_legacy_gumbel(
     ):
         return False
     top_k = sampling_metadata.top_k
-    if (
-        top_k is None
-        or top_k.ndim != 1
-        or top_k.numel() != logits.shape[0]
-        or sampling_metadata.top_p is not None
+    if sampling_metadata.top_p is not None or (
+        top_k is not None and (top_k.ndim != 1 or top_k.numel() != logits.shape[0])
     ):
         return False
+    if top_k is None and logits.shape[0] < _QWEN_LEGACY_UNFILTERED_GUMBEL_MIN_ROWS:
+        return False
+    if top_k is None:
+        generator_state = _get_qwen_legacy_generator_state_for_rows(
+            sampling_metadata.generators,
+            list(range(logits.shape[0])),
+        )
+        if generator_state is None or min(generator_state[1]) < (
+            _QWEN_LEGACY_UNFILTERED_GUMBEL_MIN_OFFSET
+        ):
+            return False
 
     spec_token_ids = getattr(sampling_metadata, "spec_token_ids", None)
     if spec_token_ids and any(spec_token_ids):
@@ -726,7 +737,7 @@ def _sample_qwen_legacy_gumbel_filtered(
 def sample_qwen_legacy_gumbel_partitioned(
     logits: torch.Tensor,
     generators: dict[int, torch.Generator],
-    top_k: torch.Tensor,
+    top_k: torch.Tensor | None,
 ) -> torch.Tensor | None:
     """Use Gumbel for seeded rows and preserve multinomial for unseeded rows."""
     rows = logits.shape[0]
