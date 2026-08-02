@@ -491,6 +491,84 @@ def test_qwen_legacy_gumbel_gate_and_generator_handoff(monkeypatch) -> None:
     ] * rows
 
 
+def test_qwen_legacy_gumbel_accepts_unfiltered_seeded_rows(monkeypatch) -> None:
+    monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
+    rows = 16
+    logits = torch.randn((rows, 248320))
+    metadata = _legacy_gumbel_metadata(rows, top_k=None)
+    for generator in metadata.generators.values():
+        generator.set_offset(64)
+
+    assert _can_use_qwen_legacy_gumbel(
+        logits,
+        metadata,
+        "raw_logprobs",
+        None,
+        False,
+    )
+
+    filter_args = []
+
+    def fake_apply_top_k_top_p(logits_arg, top_k_arg, top_p_arg):
+        filter_args.append((top_k_arg, top_p_arg))
+        return logits_arg
+
+    monkeypatch.setattr(sampler, "_apply_top_k_top_p", fake_apply_top_k_top_p)
+    monkeypatch.setattr(
+        sampler.vllm_worker_sampler,
+        "gumbel_sample",
+        lambda *args, **kwargs: torch.arange(rows, dtype=torch.int64),
+    )
+
+    sampled = sampler.sample_qwen_legacy_gumbel_partitioned(
+        logits,
+        metadata.generators,
+        None,
+    )
+
+    assert sampled is not None
+    assert sampled.tolist() == list(range(rows))
+    assert filter_args == [(None, None)]
+    assert [generator.get_offset() for generator in metadata.generators.values()] == [
+        68
+    ] * rows
+
+
+def test_qwen_legacy_gumbel_rejects_small_unfiltered_batches(monkeypatch) -> None:
+    monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
+    rows = 15
+    logits = torch.randn((rows, 248320))
+    metadata = _legacy_gumbel_metadata(rows, top_k=None)
+
+    assert not _can_use_qwen_legacy_gumbel(
+        logits,
+        metadata,
+        "raw_logprobs",
+        None,
+        False,
+    )
+
+
+def test_qwen_legacy_gumbel_waits_for_unfiltered_seed_offsets(monkeypatch) -> None:
+    monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
+    rows = 16
+    logits = torch.randn((rows, 248320))
+    metadata = _legacy_gumbel_metadata(rows, top_k=None)
+    for generator in metadata.generators.values():
+        generator.set_offset(60)
+
+    assert not _can_use_qwen_legacy_gumbel(
+        logits,
+        metadata,
+        "raw_logprobs",
+        None,
+        False,
+    )
+
+
 def test_qwen_legacy_gumbel_gate_fails_closed(monkeypatch) -> None:
     monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
     monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
