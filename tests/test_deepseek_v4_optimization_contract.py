@@ -100,6 +100,15 @@ def test_flash_base_tp4_is_supported_but_not_tp8_preferred() -> None:
     assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_NATIVE_SPARSE_INDEXER)
 
 
+def test_model_config_without_execution_topology_is_support_only() -> None:
+    config = _flash_base_config()
+
+    contract = resolve_optimization_contract(model_config=config.model_config)
+
+    assert contract.supports(OptimizationFeature.DEEPSEEK_V4_NATIVE_SPARSE_INDEXER)
+    assert not contract.preferred_features
+
+
 def test_incomplete_deepseek_identity_fails_closed() -> None:
     config = _flash_base_config()
     config.model_config.architectures = []

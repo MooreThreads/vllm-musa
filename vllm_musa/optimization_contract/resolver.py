@@ -349,18 +349,10 @@ def bind_optimization_contract(
 ) -> MusaOptimizationContract:
     """Resolve once and bind an immutable contract to a runtime owner."""
 
-    contract = (
-        getattr(vllm_config, "_musa_optimization_contract", None)
-        if vllm_config is not None
-        else None
+    contract = resolve_optimization_contract(
+        vllm_config,
+        model_config=model_config,
+        is_pooling_model=is_pooling_model,
     )
-    if not isinstance(contract, MusaOptimizationContract):
-        contract = resolve_optimization_contract(
-            vllm_config,
-            model_config=model_config,
-            is_pooling_model=is_pooling_model,
-        )
-        if vllm_config is not None:
-            vllm_config._musa_optimization_contract = contract
     owner._musa_optimization_contract = contract
     return contract

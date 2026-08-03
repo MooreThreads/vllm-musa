@@ -91,12 +91,13 @@ def resolve_deepseek_v4_contract(
                 OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256,
             }
         )
-        preferred.update(
-            {
-                OptimizationFeature.DEEPSEEK_V4_NATIVE_SPARSE_INDEXER,
-                OptimizationFeature.DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER,
-            }
-        )
+        if execution.has_parallel_config:
+            preferred.update(
+                {
+                    OptimizationFeature.DEEPSEEK_V4_NATIVE_SPARSE_INDEXER,
+                    OptimizationFeature.DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER,
+                }
+            )
         if _matches_tp8_reference(execution):
             preferred.update(
                 {
