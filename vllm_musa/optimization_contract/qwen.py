@@ -66,21 +66,24 @@ def matches_qwen35_moe_bf16_prefill_layer(
     def dtype_name(value) -> str:
         return str(value).lower().removeprefix("torch.")
 
-    return (
-        global_num_experts == 256
-        and hidden_states.ndim == 2
-        and dtype_name(hidden_states.dtype) == "bfloat16"
-        and dtype_name(w1.dtype) == "bfloat16"
-        and dtype_name(w2.dtype) == "bfloat16"
-        and hidden_states.shape[0] >= min_tokens
-        and hidden_states.shape[1] == 2048
-        and tuple(w1.shape) == (256, 256, 2048)
-        and tuple(w2.shape) == (256, 2048, 128)
-        and topk_weights.ndim == 2
-        and topk_ids.ndim == 2
-        and topk_weights.shape == topk_ids.shape
-        and topk_ids.shape[1] == 8
-    )
+    try:
+        return (
+            global_num_experts == 256
+            and hidden_states.ndim == 2
+            and dtype_name(hidden_states.dtype) == "bfloat16"
+            and dtype_name(w1.dtype) == "bfloat16"
+            and dtype_name(w2.dtype) == "bfloat16"
+            and hidden_states.shape[0] >= min_tokens
+            and hidden_states.shape[1] == 2048
+            and tuple(w1.shape) == (256, 256, 2048)
+            and tuple(w2.shape) == (256, 2048, 128)
+            and topk_weights.ndim == 2
+            and topk_ids.ndim == 2
+            and topk_weights.shape == topk_ids.shape
+            and topk_ids.shape[1] == 8
+        )
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
 
 
 def _has_architecture(model: ModelSignature, allowed: frozenset[str]) -> bool:
