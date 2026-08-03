@@ -42,6 +42,22 @@ def _int_attr(config: Any, *names: str) -> int | None:
     return None
 
 
+def _float_attr(config: Any, *names: str) -> float | None:
+    for name in names:
+        value = getattr(config, name, None)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
+def _str_attr(config: Any, *names: str) -> str | None:
+    for name in names:
+        value = getattr(config, name, None)
+        if value is not None:
+            return str(value).lower()
+    return None
+
+
 def _text_config(model_config: Any) -> Any:
     text_config = getattr(model_config, "hf_text_config", None)
     if text_config is not None:
@@ -132,7 +148,9 @@ def _model_signature(model_config: Any, vllm_config: Any | None) -> ModelSignatu
             quantization_config.get("weight_block_size")
             or quantization_config.get("weight_block_shape")
         )
-    uses_mla = getattr(text_config, "use_mla", None)
+    uses_mla = getattr(model_config, "use_mla", None)
+    if not isinstance(uses_mla, bool):
+        uses_mla = getattr(text_config, "use_mla", None)
     if not isinstance(uses_mla, bool):
         uses_mla = getattr(text_config, "kv_lora_rank", None) is not None
     is_hybrid = getattr(model_config, "is_hybrid", None)
@@ -170,7 +188,15 @@ def _model_signature(model_config: Any, vllm_config: Any | None) -> ModelSignatu
             "num_experts_per_token",
             "top_k",
         ),
+        num_shared_experts=_int_attr(
+            text_config,
+            "num_shared_experts",
+            "n_shared_experts",
+        ),
         moe_intermediate_size=_int_attr(text_config, "moe_intermediate_size"),
+        expert_dtype=_str_attr(text_config, "expert_dtype"),
+        hidden_act=_str_attr(text_config, "hidden_act"),
+        swiglu_limit=_float_attr(text_config, "swiglu_limit"),
         gdn_conv_width=gdn_width,
         gdn_conv_dim=gdn_dim,
         has_routed_experts=_has_routed_experts(model_config, text_config),
@@ -201,6 +227,13 @@ def _execution_signature(
         return value if isinstance(value, int) and value > 0 else 1
 
     block_size = getattr(cache_config, "block_size", None)
+    try:
+        import vllm.envs as vllm_envs
+
+        batch_invariant_enabled = bool(vllm_envs.VLLM_BATCH_INVARIANT)
+    except (AttributeError, ImportError):
+        batch_invariant_enabled = False
+
     return ExecutionSignature(
         tensor_parallel_size=size("tensor_parallel_size"),
         pipeline_parallel_size=size("pipeline_parallel_size"),
@@ -224,6 +257,7 @@ def _execution_signature(
         cudagraph_mode=_normalize_name(
             getattr(compilation_config, "cudagraph_mode", None)
         ),
+        batch_invariant_enabled=batch_invariant_enabled,
     )
 
 
@@ -256,7 +290,11 @@ def resolve_optimization_contract(
             vocab_size=None,
             num_experts=None,
             num_experts_per_tok=None,
+            num_shared_experts=None,
             moe_intermediate_size=None,
+            expert_dtype=None,
+            hidden_act=None,
+            swiglu_limit=None,
             gdn_conv_width=None,
             gdn_conv_dim=None,
             has_routed_experts=False,
@@ -300,3 +338,29 @@ def prefers_optimization(owner: Any, feature: OptimizationFeature) -> bool:
     return contract is not None and feature in getattr(
         contract, "preferred_features", ()
     )
+
+
+def bind_optimization_contract(
+    owner: Any,
+    vllm_config: Any | None = None,
+    *,
+    model_config: Any | None = None,
+    is_pooling_model: bool = False,
+) -> MusaOptimizationContract:
+    """Resolve once and bind an immutable contract to a runtime owner."""
+
+    contract = (
+        getattr(vllm_config, "_musa_optimization_contract", None)
+        if vllm_config is not None
+        else None
+    )
+    if not isinstance(contract, MusaOptimizationContract):
+        contract = resolve_optimization_contract(
+            vllm_config,
+            model_config=model_config,
+            is_pooling_model=is_pooling_model,
+        )
+        if vllm_config is not None:
+            vllm_config._musa_optimization_contract = contract
+    owner._musa_optimization_contract = contract
+    return contract

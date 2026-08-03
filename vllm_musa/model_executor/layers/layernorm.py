@@ -3,9 +3,14 @@
 
 import torch
 import torch.nn as nn
+from vllm.config import get_current_vllm_config_or_none
 from vllm.model_executor.layers.layernorm import GemmaRMSNorm, RMSNorm, RMSNormGated
 
 from vllm_musa.jit_kernel.csrc import norm as musa_jit_norm
+from vllm_musa.optimization_contract import (
+    OptimizationFeature,
+    bind_optimization_contract,
+)
 from vllm_musa.utils.environ import envs
 
 
@@ -31,6 +36,17 @@ def _can_use_musa_jit_rmsnorm(
 
 @RMSNorm.register_oot
 class MusaRMSNorm(RMSNorm):
+    def __init__(
+        self,
+        hidden_size: int,
+        eps: float = 1e-6,
+        var_hidden_size: int | None = None,
+        has_weight: bool = True,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        super().__init__(hidden_size, eps, var_hidden_size, has_weight, dtype)
+        bind_optimization_contract(self, get_current_vllm_config_or_none())
+
     def forward_oot(
         self,
         x: torch.Tensor,
@@ -43,6 +59,36 @@ class MusaRMSNorm(RMSNorm):
             return self.forward_native(x, residual)
 
         if residual is not None:
+            contract = self._musa_optimization_contract
+            weight = self.weight.data
+            if (
+                envs.VLLM_MUSA_FUSED_ADD_RMSNORM.get()
+                and contract.prefers(
+                    OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
+                )
+                and x.device.type == "musa"
+                and x.dim() == 2
+                and residual.shape == x.shape
+                and x.shape[1] == 4096
+                and weight.shape == (4096,)
+                and x.dtype == torch.bfloat16
+                and residual.dtype == x.dtype
+                and weight.dtype == x.dtype
+                and x.is_contiguous()
+                and residual.is_contiguous()
+                and weight.is_contiguous()
+            ):
+                from vllm_musa import _custom_ops as musa_ops
+
+                musa_ops.musa_fused_add_rms_norm(
+                    x,
+                    residual,
+                    weight,
+                    self.variance_epsilon,
+                    block_x=256,
+                )
+                return x, residual
+
             # All residual calls use IR. It validates donation and selects the
             # measured JIT kernel, the broad C-extension kernel, or native.
             return self.forward_native(x, residual)

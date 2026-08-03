@@ -30,6 +30,7 @@ else:
 import pymtml as pynvml
 
 from vllm_musa.optimization_contract import (
+    ModelFamily,
     OptimizationFeature,
     resolve_optimization_contract,
 )
@@ -39,23 +40,6 @@ logger = init_logger(__name__)
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
-_DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV = "VLLM_MUSA_GEMV_MOE_BLOCK"
-_DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK = "32x8"
-
-
-def _is_deepseek_v4_model(model_config: Any | None) -> bool:
-    if model_config is None:
-        return False
-
-    hf_config = getattr(model_config, "hf_config", None)
-    model_type = getattr(hf_config, "model_type", None)
-    if model_type == "deepseek_v4":
-        return True
-
-    architectures = getattr(model_config, "architectures", None)
-    if architectures is None and hf_config is not None:
-        architectures = getattr(hf_config, "architectures", None)
-    return any("DeepseekV4" in str(arch) for arch in architectures or ())
 
 
 def _has_routed_experts(model_config: Any | None) -> bool:
@@ -115,8 +99,7 @@ def _is_qwen3_qk_rope_kv_fusion_config(vllm_config: Any) -> bool:
 
 
 def _deepseek_v4_flashmla_sparse_block_size(
-    model_config: Any | None,
-    tensor_parallel_size: int | None,
+    vllm_config: Any,
 ) -> int:
     """Return the validated FlashMLA sparse page size for DeepSeek-V4.
 
@@ -124,7 +107,9 @@ def _deepseek_v4_flashmla_sparse_block_size(
     the generic 64-token page for other models and parallel layouts; this is a
     model/shape decision rather than a process-wide environment switch.
     """
-    if _is_deepseek_v4_model(model_config) and tensor_parallel_size == 8:
+    if resolve_optimization_contract(vllm_config).prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
+    ):
         return 256
     return 64
 
@@ -583,32 +568,6 @@ class MUSAPlatformBase(Platform):
                 FUSED_ADD_RMSNORM_MIN_ROWS - 1,
             )
 
-        if _is_deepseek_v4_model(model_config):
-            # Keep the generic GEMV selector available for other models, but
-            # make the validated DeepSeek-V4 TP8 choice independent of a
-            # DeepSeek-specific profile environment variable. Explicit
-            # generic overrides still win for A/B diagnostics.
-            tensor_parallel_size = getattr(
-                parallel_config, "tensor_parallel_size", None
-            )
-            if (
-                tensor_parallel_size == 8
-                and "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X" not in os.environ
-            ):
-                os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] = "256"
-            if _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV not in os.environ:
-                os.environ[_DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV] = (
-                    "16x8"
-                    if tensor_parallel_size == 8
-                    else _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK
-                )
-                logger.info(
-                    "Defaulting DeepSeek-V4 MUSA GEMV/MoE block selector to "
-                    "%s=%s (set it explicitly to override).",
-                    _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV,
-                    os.environ[_DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV],
-                )
-
         if parallel_config.worker_cls == "auto":
             parallel_config.worker_cls = "vllm_musa.worker.MTGPUWorker"
 
@@ -658,8 +617,7 @@ class MUSAPlatformBase(Platform):
                     use_flashmla_sparse = True
 
                 sparse_block_size = _deepseek_v4_flashmla_sparse_block_size(
-                    model_config,
-                    getattr(parallel_config, "tensor_parallel_size", None),
+                    vllm_config,
                 )
                 if use_flashmla_sparse and cache_config.block_size != sparse_block_size:
                     cache_config.block_size = sparse_block_size
@@ -736,7 +694,10 @@ class MUSAPlatformBase(Platform):
             or model_config.is_hybrid
         ):
             return
-        if _is_deepseek_v4_model(model_config):
+        if (
+            resolve_optimization_contract(vllm_config).model.family
+            is ModelFamily.DEEPSEEK_V4
+        ):
             return
         backend_cls = cls._find_non_ssm_backend(vllm_config)
         if backend_cls is None:

@@ -24,7 +24,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
 
   musa_ops.def(
       "musa_fused_add_rms_norm(Tensor! input, Tensor! residual, Tensor weight, "
-      "float eps) -> ()");
+      "float eps, int block_x=0) -> ()");
   musa_ops.impl("musa_fused_add_rms_norm", torch::kMUSA,
                 &musa_fused_add_rms_norm);
 

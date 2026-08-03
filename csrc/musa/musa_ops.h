@@ -35,7 +35,8 @@ void musa_fused_add_rms_norm(
     torch::Tensor &input,
     torch::Tensor &residual,
     torch::Tensor &weight,
-    double eps);
+    double eps,
+    int64_t block_x);
 
 void musa_reshape_and_cache_flash_nhd(
     torch::Tensor &key,

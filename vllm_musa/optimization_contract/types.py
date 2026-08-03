@@ -6,6 +6,7 @@ from enum import Enum
 
 class ModelFamily(str, Enum):
     UNKNOWN = "unknown"
+    DEEPSEEK_V4 = "deepseek_v4"
     QWEN2 = "qwen2"
     QWEN3 = "qwen3"
     QWEN35_36 = "qwen3.5_3.6"
@@ -18,6 +19,15 @@ class ModelRole(str, Enum):
 
 
 class OptimizationFeature(str, Enum):
+    DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8 = "deepseek_v4.shared_mlp_clamp_fp8"
+    DEEPSEEK_V4_NATIVE_SPARSE_INDEXER = "deepseek_v4.native_sparse_indexer"
+    DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER = (
+        "deepseek_v4.materialized_prefill_indexer"
+    )
+    DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256 = "deepseek_v4.tp8_flashmla_sparse_page256"
+    DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256 = (
+        "deepseek_v4.tp8_fused_add_rmsnorm_block256"
+    )
     QWEN_V2_SAMPLING = "qwen.v2_sampling"
     QWEN_LEGACY_SAMPLING = "qwen.legacy_sampling"
     QWEN_FA3_SCHEDULER = "qwen.fa3_scheduler"
@@ -56,7 +66,11 @@ class ModelSignature:
     vocab_size: int | None
     num_experts: int | None
     num_experts_per_tok: int | None
+    num_shared_experts: int | None
     moe_intermediate_size: int | None
+    expert_dtype: str | None
+    hidden_act: str | None
+    swiglu_limit: float | None
     gdn_conv_width: int | None
     gdn_conv_dim: int | None
     has_routed_experts: bool | None
@@ -86,6 +100,7 @@ class ExecutionSignature:
     attention_backend: str | None = None
     compilation_mode: str | None = None
     cudagraph_mode: str | None = None
+    batch_invariant_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)

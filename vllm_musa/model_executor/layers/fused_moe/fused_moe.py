@@ -1366,6 +1366,22 @@ def _musa_fused_moe_shape(
 ) -> MusaFusedMoeShape:
     block_n = block_shape[0] if block_shape else 0
     block_k = block_shape[1] if block_shape and len(block_shape) > 1 else 0
+    gemv_block = os.environ.get("VLLM_MUSA_GEMV_MOE_BLOCK")
+    if gemv_block is None:
+        # DeepSeek-V4 Flash TP8 has a unique per-rank routed-expert shape.
+        # Keep this launch choice op-local: the generic env remains an explicit
+        # diagnostic override, while the normal path no longer receives a
+        # process-global model-derived default from platform.py.
+        is_deepseek_v4_flash_tp8_shape = (
+            w1.shape[0] == 256
+            and w1.shape[1] == 512
+            and w2.shape[2] == 256
+            and hidden_states.shape[1] == 4096
+            and topk_ids.shape[1] == 6
+            and block_n == 128
+            and block_k == 128
+        )
+        gemv_block = "16x8" if is_deepseek_v4_flash_tp8_shape else "auto"
     return MusaFusedMoeShape(
         device_capability=device_capability,
         multiprocessor_count=multiprocessor_count,
@@ -1383,7 +1399,7 @@ def _musa_fused_moe_shape(
         scale_dtype=str(w1_scale.dtype) if w1_scale is not None else "none",
         w1_scale_shape=tuple(w1_scale.shape) if w1_scale is not None else (),
         w2_scale_shape=tuple(w2_scale.shape) if w2_scale is not None else (),
-        gemv_block=os.environ.get("VLLM_MUSA_GEMV_MOE_BLOCK", "auto"),
+        gemv_block=gemv_block,
         graph_mode="capture" if stream_is_capturing else "eager",
     )
 

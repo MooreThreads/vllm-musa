@@ -17,9 +17,10 @@ is pre-patched.
   the highest prefix. Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **103 patches**: this branch adds the DeepSeek-V4 shared-expert SwiGLU
-FP8 patch and removes the obsolete auxiliary-overlap patch after making that
-path the model default, so the upstream total remains unchanged. These are MUSA
+Currently **104 patches**: this stack adds one follow-up patch that binds the
+DeepSeek-V4 shared-MLP and sparse-indexer decisions to the MUSA optimization
+contract. The base branch adds the shared-expert SwiGLU FP8 patch and removes
+the obsolete auxiliary-overlap patch, leaving its total unchanged. These are MUSA
 source edits against the immutable vLLM commit recorded as `VLLM_COMMIT` in
 `third_party/PINS` (release label `v0.24.0`), applied at build. Runtime
 object/registration patches (which patch live objects at import) are kept

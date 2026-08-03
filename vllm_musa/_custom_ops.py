@@ -142,12 +142,14 @@ def musa_fused_add_rms_norm(
     residual: torch.Tensor,
     weight: torch.Tensor,
     eps: float,
+    block_x: int = 0,
 ) -> None:
     return torch.ops._C_musa_ops.musa_fused_add_rms_norm(
         input,
         residual,
         weight,
         eps,
+        block_x,
     )
 
 

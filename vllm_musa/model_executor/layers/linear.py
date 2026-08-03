@@ -6,6 +6,11 @@ from vllm.distributed import tensor_model_parallel_all_reduce
 from vllm.model_executor.layers.linear import RowParallelLinear
 from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
 
+from vllm_musa.optimization_contract import (
+    OptimizationFeature,
+    prefers_optimization,
+)
+
 
 def _deepgemm_block_fp8(quant_method) -> bool:
     # MUSA: the DeepGemm block-FP8 kernel writes the GEMM result into a caller
@@ -32,7 +37,10 @@ class MusaRowParallelLinear(RowParallelLinear):
         activation and linear path unchanged.
         """
         fast = (
-            not envs.VLLM_BATCH_INVARIANT
+            prefers_optimization(
+                self,
+                OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8,
+            )
             and self.input_is_parallel
             and _deepgemm_block_fp8(self.quant_method)
             and self.bias is None

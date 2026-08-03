@@ -126,13 +126,15 @@ __global__ void __launch_bounds__(BLOCK_X, 1) fused_add_rmsnorm_kernel(
 template <typename T>
 void dispatch_fused_add_rmsnorm(T* input, T* residual, const T* weight,
                                 int rows, int hidden_size, float epsilon,
-                                musaStream_t stream) {
+                                musaStream_t stream, int requested_block) {
   const int vec_hidden_size = hidden_size / 8;
 
-  static const int forced_block = []() {
+  static const int env_forced_block = []() {
     const char* env = std::getenv("VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X");
     return env == nullptr ? 0 : std::atoi(env);
   }();
+  const int forced_block =
+      env_forced_block > 0 ? env_forced_block : requested_block;
 
   int block_x;
   if (forced_block > 0) {
@@ -202,7 +204,8 @@ void dispatch_fused_add_rmsnorm(T* input, T* residual, const T* weight,
 }  // namespace vllm_musa
 
 void musa_fused_add_rms_norm(torch::Tensor& input, torch::Tensor& residual,
-                             torch::Tensor& weight, double epsilon) {
+                             torch::Tensor& weight, double epsilon,
+                             int64_t block_x) {
   TORCH_CHECK(input.device().is_privateuseone(), "input must be a MUSA tensor");
   TORCH_CHECK(residual.device().is_privateuseone(),
               "residual must be a MUSA tensor");
@@ -234,13 +237,13 @@ void musa_fused_add_rms_norm(torch::Tensor& input, torch::Tensor& residual,
         static_cast<__half*>(input.data_ptr()),
         static_cast<__half*>(residual.data_ptr()),
         static_cast<const __half*>(weight.data_ptr()), rows, hidden_size,
-        static_cast<float>(epsilon), stream);
+        static_cast<float>(epsilon), stream, static_cast<int>(block_x));
   } else if (input.scalar_type() == at::ScalarType::BFloat16) {
     vllm_musa::dispatch_fused_add_rmsnorm<__mt_bfloat16>(
         static_cast<__mt_bfloat16*>(input.data_ptr()),
         static_cast<__mt_bfloat16*>(residual.data_ptr()),
         static_cast<const __mt_bfloat16*>(weight.data_ptr()), rows, hidden_size,
-        static_cast<float>(epsilon), stream);
+        static_cast<float>(epsilon), stream, static_cast<int>(block_x));
   } else {
     TORCH_CHECK(false, "only fp16 and bf16 are supported");
   }
