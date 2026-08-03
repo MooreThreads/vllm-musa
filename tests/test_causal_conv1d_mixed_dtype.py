@@ -94,8 +94,14 @@ def test_decode_kernel_keeps_supported_mixed_dtypes(monkeypatch):
         "float32",
         "bfloat16",
     )
-    assert captured["kernel_config"][13] is True
-    assert captured["kernel_config"][16] is True
+    assert captured["kernel_config"][13:19] == (
+        False,  # has_bias
+        True,  # has_cache_indices
+        False,  # has_cache_index_mapping
+        True,  # has_initial_states
+        True,  # use_pad_slot
+        True,  # silu_activation
+    )
     assert captured["scalars"][-1] == causal_conv1d.NULL_BLOCK_ID
 
 
@@ -134,8 +140,14 @@ def test_decode_kernel_preserves_same_dtype_path(monkeypatch):
     assert captured["x"] is not None
     assert captured["x"].dtype == torch.float32
     assert captured["kernel_config"][:5] == ("float32",) * 5
-    assert captured["kernel_config"][13] is False
-    assert captured["kernel_config"][16] is False
+    assert captured["kernel_config"][13:19] == (
+        False,  # has_bias
+        False,  # has_cache_indices
+        False,  # has_cache_index_mapping
+        True,  # has_initial_states
+        False,  # use_pad_slot
+        False,  # silu_activation
+    )
     assert captured["scalars"][-1] == causal_conv1d.PAD_SLOT_ID
 
 
