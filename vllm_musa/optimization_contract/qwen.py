@@ -321,11 +321,13 @@ def resolve_qwen_contract(
             preferred.add(OptimizationFeature.QWEN_TP4_SHARDED_GUMBEL)
 
     profile = f"{family.value}.{'moe' if model.has_routed_experts else role.value}"
-    features = frozenset(preferred)
     return MusaOptimizationContract(
         model=model,
         execution=execution,
         profile=profile,
-        supported_features=features,
-        preferred_features=features,
+        # Keep the two sets independent even while the first Qwen rollout
+        # promotes every proven feature automatically. Future providers can
+        # expose a supported-but-not-yet-preferred implementation safely.
+        supported_features=frozenset(preferred),
+        preferred_features=frozenset(preferred),
     )

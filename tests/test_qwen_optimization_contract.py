@@ -141,6 +141,14 @@ def test_unknown_or_future_families_fail_closed(architecture: str) -> None:
     assert not contract.preferred_features
 
 
+def test_supported_and_preferred_feature_sets_are_independent() -> None:
+    contract = resolve_optimization_contract(
+        _config(architecture="Qwen3ForCausalLM", model_type="qwen3")
+    )
+    assert contract.supported_features == contract.preferred_features
+    assert contract.supported_features is not contract.preferred_features
+
+
 def test_deepseek_v4_facts_are_normalized_without_enabling_a_provider() -> None:
     text_config = SimpleNamespace(
         model_type="deepseek_v4",
