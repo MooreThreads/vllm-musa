@@ -19,7 +19,8 @@ def test_qwen_model_specific_env_gates_are_removed() -> None:
         for path in MUSA_ROOT.rglob("*")
         if path.suffix in {".py", ".patch"}
     )
-    assert forbidden.isdisjoint(production_sources)
+    for gate in forbidden:
+        assert gate not in production_sources
 
 
 def test_qwen_patch_consumers_bind_contract_features() -> None:

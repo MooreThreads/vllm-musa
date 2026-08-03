@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import torch
-
 from qwen_contract_test_utils import qwen_sampler
+
 from vllm_musa.v1.worker import qwen_identity_logits_view as identity_view
 
 

@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-
 from qwen_contract_test_utils import qwen_sampler
+
 from vllm_musa.jit_kernel import fa3_metadata
 
 
