@@ -297,4 +297,4 @@ def resolve_optimization_contract(
 
 def prefers_optimization(owner: Any, feature: OptimizationFeature) -> bool:
     contract = getattr(owner, "_musa_optimization_contract", None)
-    return isinstance(contract, MusaOptimizationContract) and contract.prefers(feature)
+    return contract is not None and feature in contract.preferred_features
