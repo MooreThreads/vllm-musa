@@ -63,7 +63,6 @@ _DEEPGEMM_PREFILL_MIN_TOKENS_ENV = "VLLM_MUSA_MOE_DEEPGEMM_PREFILL_MIN_TOKENS"
 _DEEPGEMM_PREFILL_WARNED = False
 _DEEPGEMM_BF16_PREFILL_MIN_TOKENS = 1024
 _DEEPGEMM_BF16_PREFILL_WARNED = False
-_QWEN_MOE_UPSTREAM_PREFILL_ENV = "VLLM_MUSA_QWEN_MOE_UPSTREAM_PREFILL"
 _MUSA_GROUPED_GEMM_AVAILABLE = True
 _MUSA_FUSED_MOE_REQUESTED_BACKEND = parse_dispatch_backend()
 
@@ -85,11 +84,6 @@ def _env_flag_disabled(name: str) -> bool:
 
 
 _MOE_SHAPE_INVENTORY_ENABLED = _env_flag_enabled(_MOE_SHAPE_INVENTORY_ENV)
-_QWEN_MOE_UPSTREAM_PREFILL_ENABLED = not _env_flag_disabled(
-    _QWEN_MOE_UPSTREAM_PREFILL_ENV
-)
-
-
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, default))
@@ -553,8 +547,7 @@ def _is_calibrated_qwen_moe_bf16_prefill_shape(
 ) -> bool:
     """Match the TP4 Qwen3.5/3.6-35B-A3B BF16 prefill shape."""
     return (
-        _QWEN_MOE_UPSTREAM_PREFILL_ENABLED
-        and global_num_experts == 256
+        global_num_experts == 256
         and hidden_states.ndim == 2
         and hidden_states.dtype == torch.bfloat16
         and w1.dtype == torch.bfloat16

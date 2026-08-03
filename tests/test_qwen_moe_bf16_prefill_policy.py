@@ -30,7 +30,6 @@ def _inputs(
 
 
 def test_qwen_moe_bf16_prefill_shape_is_enabled_by_default() -> None:
-    assert fused_moe._QWEN_MOE_UPSTREAM_PREFILL_ENABLED
     assert fused_moe._is_calibrated_qwen_moe_bf16_prefill_shape(
         *_inputs(), global_num_experts=256
     )
@@ -54,13 +53,6 @@ def test_qwen_moe_bf16_prefill_shape_rejects_other_contracts(
     )
 
 
-def test_qwen_moe_bf16_prefill_shape_respects_rollback_gate(monkeypatch) -> None:
-    monkeypatch.setattr(fused_moe, "_QWEN_MOE_UPSTREAM_PREFILL_ENABLED", False)
-    assert not fused_moe._is_calibrated_qwen_moe_bf16_prefill_shape(
-        *_inputs(), global_num_experts=256
-    )
-
-
 def test_qwen_moe_bf16_prefill_policy_wires_upstream_fallback() -> None:
     root = Path(__file__).resolve().parents[1]
     source = (
@@ -68,4 +60,4 @@ def test_qwen_moe_bf16_prefill_policy_wires_upstream_fallback() -> None:
     ).read_text(encoding="utf-8")
     assert "prefer_upstream_qwen_prefill" in source
     assert "and not prefer_upstream_qwen_prefill" in source
-    assert "VLLM_MUSA_QWEN_MOE_UPSTREAM_PREFILL" in source
+    assert "VLLM_MUSA_QWEN_MOE_UPSTREAM_PREFILL" not in source
