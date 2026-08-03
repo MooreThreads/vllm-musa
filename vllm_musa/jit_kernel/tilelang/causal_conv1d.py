@@ -1210,6 +1210,7 @@ def _causal_conv1d_fwd_impl(
     cache_index_mapping: torch.Tensor | None = None,
     activation: str | bool | None = "silu",
     pad_slot_id: int = PAD_SLOT_ID,
+    allow_width4_prefill_split: bool = False,
 ) -> torch.Tensor:
     if isinstance(activation, bool) and activation:
         activation = "silu"
@@ -1320,7 +1321,7 @@ def _causal_conv1d_fwd_impl(
         )
         return out
 
-    if _should_use_width4_prefill_split(
+    if allow_width4_prefill_split and _should_use_width4_prefill_split(
         width=width,
         dim=dim,
         dtype=x.dtype,
@@ -1532,6 +1533,7 @@ def causal_conv1d_fwd(
     activation: str | bool | None = "silu",
     pad_slot_id: int = PAD_SLOT_ID,
     cache_index_mapping: torch.Tensor | None = None,
+    allow_width4_prefill_split: bool = False,
 ) -> torch.Tensor:
     if isinstance(seq_lens_cpu, torch.Tensor) and seq_lens_cpu.device.type != "cpu":
         # Backward-compatible positional form used by the generic mamba wrapper:
@@ -1562,6 +1564,7 @@ def causal_conv1d_fwd(
         cache_index_mapping=cache_index_mapping,
         activation=activation,
         pad_slot_id=pad_slot_id,
+        allow_width4_prefill_split=allow_width4_prefill_split,
     )
 
 
@@ -1577,6 +1580,7 @@ def causal_conv1d_fn(
     activation: str | bool | None = "silu",
     pad_slot_id: int = PAD_SLOT_ID,
     cache_index_mapping: torch.Tensor | None = None,
+    allow_width4_prefill_split: bool = False,
     **_: object,
 ) -> torch.Tensor:
     return causal_conv1d_fwd(
@@ -1591,6 +1595,7 @@ def causal_conv1d_fn(
         cache_index_mapping=cache_index_mapping,
         activation=activation,
         pad_slot_id=pad_slot_id,
+        allow_width4_prefill_split=allow_width4_prefill_split,
     )
 
 
@@ -1606,6 +1611,7 @@ def musa_tilelang_causal_conv1d_fn(
     pad_slot_id=PAD_SLOT_ID,
     cache_index_mapping=None,
     metadata=None,
+    allow_width4_prefill_split=False,
     **_,
 ):
     """Drop-in for vllm Triton causal_conv1d_fn (prefill). Synthesizes
@@ -1630,6 +1636,7 @@ def musa_tilelang_causal_conv1d_fn(
         activation=activation,
         pad_slot_id=pad_slot_id,
         cache_index_mapping=cache_index_mapping,
+        allow_width4_prefill_split=allow_width4_prefill_split,
     )
     return out.to(orig_dtype)
 

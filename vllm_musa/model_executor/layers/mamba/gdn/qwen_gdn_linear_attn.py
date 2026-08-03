@@ -13,6 +13,11 @@ from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
     QwenGatedDeltaNetAttention,
 )
 
+from vllm_musa.optimization_contract import (
+    OptimizationFeature,
+    resolve_optimization_contract,
+)
+
 logger = init_logger(__name__)
 
 _MATE_GDN_PREFILL_HAS_OUTPUT = (
@@ -40,6 +45,16 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
     Keeps upstream construction and the qwen_gdn_attention_core call chain, but
     routes the core recurrent path through MATE kernels when available.
     """
+
+    def __init__(
+        self,
+        config,
+        vllm_config,
+        prefix: str = "",
+        gqa_interleaved_layout: bool = False,
+    ) -> None:
+        super().__init__(config, vllm_config, prefix, gqa_interleaved_layout)
+        self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
 
     def _forward_core(
         self,
@@ -433,9 +448,16 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             causal_conv1d_update,
         )
 
+        causal_conv1d_kwargs = {}
         try:
             from vllm_musa.jit_kernel.tilelang.causal_conv1d import (
                 musa_tilelang_causal_conv1d_fn as causal_conv1d_fn,
+            )
+
+            causal_conv1d_kwargs["allow_width4_prefill_split"] = (
+                self._musa_optimization_contract.prefers(
+                    OptimizationFeature.QWEN35_GDN_WIDTH4_PREFILL
+                )
             )
         except Exception:
             pass  # MUSA: fall back to Triton causal_conv1d_fn on import failure
@@ -507,6 +529,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             cache_indices=non_spec_state_indices_tensor,
             query_start_loc=non_spec_query_start_loc,
             metadata=attn_metadata,
+            **causal_conv1d_kwargs,
         ).transpose(0, 1)
 
         query_spec, key_spec, value_spec = self.rearrange_mixed_qkv(mixed_qkv_spec)

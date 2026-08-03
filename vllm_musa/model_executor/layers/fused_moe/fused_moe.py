@@ -27,6 +27,7 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
 from vllm.platforms import current_platform
 
 from vllm_musa import _custom_ops as musa_ops
+from vllm_musa.jit_kernel.csrc.moe import maybe_fast_moe_sum
 from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     MusaFusedMoeBackend,
     MusaFusedMoeShape,
@@ -35,7 +36,7 @@ from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     select_fused_moe_backend,
     thresholds_for_shape,
 )
-from vllm_musa.jit_kernel.csrc.moe import maybe_fast_moe_sum
+from vllm_musa.optimization_contract import matches_qwen35_moe_bf16_prefill_layer
 
 logger = init_logger(__name__)
 
@@ -84,6 +85,8 @@ def _env_flag_disabled(name: str) -> bool:
 
 
 _MOE_SHAPE_INVENTORY_ENABLED = _env_flag_enabled(_MOE_SHAPE_INVENTORY_ENV)
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, default))
@@ -546,20 +549,14 @@ def _is_calibrated_qwen_moe_bf16_prefill_shape(
     global_num_experts: int | None,
 ) -> bool:
     """Match the TP4 Qwen3.5/3.6-35B-A3B BF16 prefill shape."""
-    return (
-        global_num_experts == 256
-        and hidden_states.ndim == 2
-        and hidden_states.dtype == torch.bfloat16
-        and w1.dtype == torch.bfloat16
-        and w2.dtype == torch.bfloat16
-        and hidden_states.shape[0] >= _DEEPGEMM_BF16_PREFILL_MIN_TOKENS
-        and hidden_states.shape[1] == 2048
-        and w1.shape == (256, 256, 2048)
-        and w2.shape == (256, 2048, 128)
-        and topk_weights.ndim == 2
-        and topk_ids.ndim == 2
-        and topk_weights.shape == topk_ids.shape
-        and topk_ids.shape[1] == 8
+    return matches_qwen35_moe_bf16_prefill_layer(
+        hidden_states,
+        w1,
+        w2,
+        topk_weights,
+        topk_ids,
+        global_num_experts,
+        min_tokens=_DEEPGEMM_BF16_PREFILL_MIN_TOKENS,
     )
 
 
@@ -946,9 +943,7 @@ def _moe_deepgemm_bf16_prefill_impl(
         (src2dst_numel + E * (block_m - 1) + block_m - 1) // block_m
     ) * block_m
 
-    hidden_perm = torch.empty(
-        (all_tokens, K), device=device, dtype=hidden_states.dtype
-    )
+    hidden_perm = torch.empty((all_tokens, K), device=device, dtype=hidden_states.dtype)
     m_indices = torch.empty(all_tokens, device=device, dtype=torch.int32)
     src2dst = torch.empty(src2dst_numel, device=device, dtype=torch.int32)
     topk_ids_for_combine = torch.empty_like(topk_ids)
@@ -969,9 +964,7 @@ def _moe_deepgemm_bf16_prefill_impl(
     )
 
     with mk_alignment_scope(block_m):
-        mm1_out = torch.empty(
-            (all_tokens, N), device=device, dtype=hidden_states.dtype
-        )
+        mm1_out = torch.empty((all_tokens, N), device=device, dtype=hidden_states.dtype)
         deep_gemm.m_grouped_bf16_gemm_nt_contiguous(
             hidden_perm,
             w1,
@@ -985,9 +978,7 @@ def _moe_deepgemm_bf16_prefill_impl(
         )
         torch.ops._C.silu_and_mul(act_out, mm1_out)
 
-        mm2_out = torch.empty(
-            (all_tokens, K), device=device, dtype=hidden_states.dtype
-        )
+        mm2_out = torch.empty((all_tokens, K), device=device, dtype=hidden_states.dtype)
         deep_gemm.m_grouped_bf16_gemm_nt_contiguous(
             act_out,
             w2,
