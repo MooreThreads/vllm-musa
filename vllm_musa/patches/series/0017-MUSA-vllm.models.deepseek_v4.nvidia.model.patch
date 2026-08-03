@@ -4,27 +4,14 @@ Date: Wed, 3 Jun 2026 11:47:35 +0000
 Subject: [PATCH] MUSA: vllm.models.deepseek_v4.nvidia.model
 
 ---
- vllm/models/deepseek_v4/nvidia/model.py | 19 ++++++++++++++++++-
- 1 file changed, 18 insertions(+), 1 deletion(-)
+ vllm/models/deepseek_v4/nvidia/model.py | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
 index aa60ad34c..ce73743da 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
-@@ -1,5 +1,5 @@
- # SPDX-License-Identifier: Apache-2.0
- # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
- import typing
- from collections.abc import Callable, Iterable, MutableSequence, Sequence
- from itertools import islice
-@@ -70,6 +70,7 @@ from vllm.utils.math_utils import cdiv
- from vllm.v1.attention.backends.registry import AttentionBackendEnum
- 
- 
- class DeepseekV4MLP(nn.Module):
-     def __init__(
-         self,
-@@ -945,7 +953,16 @@ class DeepseekV4Model(nn.Module):
+@@ -945,7 +945,15 @@ class DeepseekV4Model(nn.Module):
          # DeepseekV4Attention.attn_gemm_parallel_execute
          # (compressor kv_score, indexer.weights_proj, indexer.compressor
          # kv_score). fused_wqa_wkv stays on the default stream.

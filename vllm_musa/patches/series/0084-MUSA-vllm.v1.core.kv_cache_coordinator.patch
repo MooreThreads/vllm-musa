@@ -18,7 +18,7 @@ diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordi
      SingleTypeKVCacheManager,
      get_manager_for_kv_cache_spec,
  )
-@@ -96,6 +98,22 @@
+@@ -96,6 +98,26 @@
              metrics_collector=metrics_collector,
          )
 

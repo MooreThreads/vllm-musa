@@ -14,7 +14,7 @@ diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
 
 
  @dataclass
-@@ -895,6 +896,11 @@
+@@ -895,6 +896,12 @@
      see `_get_kv_cache_config_uniform_page_size` for more details.
      """
 

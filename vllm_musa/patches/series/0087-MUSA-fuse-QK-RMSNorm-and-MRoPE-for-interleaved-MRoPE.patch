@@ -18,7 +18,7 @@ diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/mode
 index f7907f3c4..d73dfa9e4 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
-@@ -267,6 +267,30 @@
+@@ -267,6 +267,28 @@
          return final_hidden_states.view(orig_shape)
  
  
@@ -47,7 +47,7 @@ index f7907f3c4..d73dfa9e4 100644
  class Qwen3NextAttention(nn.Module):
      def __init__(
          self,
-@@ -379,6 +403,26 @@
+@@ -379,6 +403,35 @@
          self.mrope_interleaved = bool(
              getattr(self.rotary_emb, "mrope_interleaved", False)
          )

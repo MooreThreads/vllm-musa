@@ -23,7 +23,7 @@ diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/mode
 index acce2a767..de163b0e6 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
-@@ -88,6 +89,42 @@
+@@ -88,6 +89,39 @@
  KVCache = tuple[torch.Tensor, torch.Tensor]
  
  
@@ -63,7 +63,7 @@ index acce2a767..de163b0e6 100644
  class Qwen3NextSparseMoeBlock(nn.Module):
      def __init__(self, vllm_config: VllmConfig, prefix: str = ""):
          super().__init__()
-@@ -159,8 +196,24 @@
+@@ -159,8 +196,31 @@
                  prefix=f"{prefix}.shared_expert",
              )
  

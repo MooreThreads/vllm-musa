@@ -24,7 +24,7 @@ index fe2b268cd..eadc6f533 100644
  from vllm import _custom_ops as ops
  from vllm._aiter_ops import rocm_aiter_ops
  from vllm.compilation.breakable_cudagraph import eager_break_during_capture
-@@ -31,6 +34,1311 @@ from vllm.v1.worker.workspace import current_workspace_manager
+@@ -31,6 +34,1291 @@ from vllm.v1.worker.workspace import current_workspace_manager
  
  logger = init_logger(__name__)
  
@@ -1316,7 +1316,7 @@ index fe2b268cd..eadc6f533 100644
  RADIX_TOPK_WORKSPACE_SIZE = 1024 * 1024
  
  # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
-@@ -452,17 +1760,19 @@ class SparseAttnIndexer(CustomOp):
+@@ -452,19 +1740,21 @@ class SparseAttnIndexer(CustomOp):
          max_total_seq_len: int,
          topk_indices_buffer: torch.Tensor,
          skip_k_cache_insert: bool = False,
@@ -1338,7 +1338,7 @@ index fe2b268cd..eadc6f533 100644
          if current_platform.is_cuda() and not has_deep_gemm():
              raise RuntimeError(
                  "Sparse Attention Indexer CUDA op requires DeepGEMM support in "
-@@ -482,6 +1790,46 @@ class SparseAttnIndexer(CustomOp):
+@@ -482,6 +1772,42 @@ class SparseAttnIndexer(CustomOp):
              return self.forward_cuda(hidden_states, q_quant, k, weights)
          elif current_platform.is_rocm():
              return self.forward_hip(hidden_states, q_quant, k, weights)

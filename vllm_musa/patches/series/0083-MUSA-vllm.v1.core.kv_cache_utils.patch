@@ -17,7 +17,7 @@ diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
 index 3ea89d5af..c8425baa5 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
-@@ -1357,6 +1357,69 @@
+@@ -1357,6 +1357,74 @@
  _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
  
  
