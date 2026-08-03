@@ -128,7 +128,6 @@ def test_resolves_qwen_family_without_model_name(
     [
         "Qwen3VLForConditionalGeneration",
         "Qwen3OmniMoeForConditionalGeneration",
-        "DeepseekV4ForCausalLM",
         "LlamaForCausalLM",
     ],
 )
@@ -149,7 +148,7 @@ def test_supported_and_preferred_feature_sets_are_independent() -> None:
     assert contract.supported_features is not contract.preferred_features
 
 
-def test_deepseek_v4_facts_are_normalized_without_enabling_a_provider() -> None:
+def test_deepseek_v4_incomplete_facts_are_normalized_but_fail_closed() -> None:
     text_config = SimpleNamespace(
         model_type="deepseek_v4",
         kv_lora_rank=512,
@@ -179,12 +178,13 @@ def test_deepseek_v4_facts_are_normalized_without_enabling_a_provider() -> None:
             quant_config=None,
         )
     )
-    assert contract.model.family is ModelFamily.UNKNOWN
+    assert contract.model.family is ModelFamily.DEEPSEEK_V4
     assert contract.model.uses_mla is True
     assert contract.model.index_topk == 2048
     assert contract.model.quant_block_shape == (128, 128)
     assert contract.execution.attention_backend == "flashmla"
     assert contract.execution.cudagraph_mode == "full_decode_only"
+    assert not contract.supported_features
     assert not contract.preferred_features
 
 

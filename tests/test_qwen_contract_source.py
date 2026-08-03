@@ -42,7 +42,8 @@ def test_qwen_patch_consumers_bind_contract_features() -> None:
     assert "+    return True" in mamba_pool
 
 
-def test_deepseek_provider_is_not_registered_yet() -> None:
+def test_deepseek_provider_is_registered_explicitly() -> None:
     providers = _source("vllm_musa/optimization_contract/providers.py")
     assert "resolve_qwen_contract" in providers
-    assert "resolve_deepseek" not in providers
+    assert "resolve_deepseek_v4_contract" in providers
+    assert "resolve_deepseek_v4_contract," in providers

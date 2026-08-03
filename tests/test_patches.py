@@ -681,6 +681,8 @@ class TestMUSANativeKernelReviewHardening:
         # (avoid brittle cross-literal substring matching).
         assert "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X must be one of" in source
         assert "128, 256, 512, or 1024" in source
+        assert "int requested_block" in source
+        assert "env_forced_block > 0 ? env_forced_block : requested_block" in source
 
     def test_fused_rmsnorm_qwen2_small_hidden_uses_256_threads(self):
         source = (
@@ -733,9 +735,33 @@ class TestMUSAPlatformDefaults:
     ):
         from types import SimpleNamespace
 
+        is_deepseek_v4 = architectures == ["DeepseekV4ForCausalLM"]
+        if is_deepseek_v4 and attention_backend is None:
+            attention_backend = "FLASHMLA"
+        if is_deepseek_v4 and cudagraph_mode is None:
+            cudagraph_mode = "FULL_DECODE_ONLY"
+        if is_deepseek_v4 and quantization_config is None:
+            quantization_config = {
+                "quant_method": "fp8",
+                "weight_block_size": [128, 128],
+            }
         hf_config = SimpleNamespace(
             architectures=architectures,
+            model_type="deepseek_v4" if is_deepseek_v4 else None,
             quantization_config=quantization_config,
+            hidden_size=4096 if is_deepseek_v4 else None,
+            num_hidden_layers=43 if is_deepseek_v4 else None,
+            num_attention_heads=64 if is_deepseek_v4 else None,
+            num_key_value_heads=1 if is_deepseek_v4 else None,
+            head_dim=512 if is_deepseek_v4 else None,
+            vocab_size=129280 if is_deepseek_v4 else None,
+            n_routed_experts=256 if is_deepseek_v4 else None,
+            num_experts_per_tok=6 if is_deepseek_v4 else None,
+            n_shared_experts=1 if is_deepseek_v4 else None,
+            moe_intermediate_size=2048 if is_deepseek_v4 else None,
+            expert_dtype="fp8" if is_deepseek_v4 else None,
+            hidden_act="silu" if is_deepseek_v4 else None,
+            swiglu_limit=10.0 if is_deepseek_v4 else None,
         )
         if index_topk is not None:
             hf_config.index_topk = index_topk
@@ -743,22 +769,32 @@ class TestMUSAPlatformDefaults:
             model_config=SimpleNamespace(
                 architectures=architectures,
                 hf_config=hf_config,
+                hf_text_config=hf_config,
+                dtype="bfloat16",
                 quantization=quantization,
                 use_mla=use_mla,
+                is_hybrid=False,
+                is_moe=is_deepseek_v4,
+                enforce_eager=False,
                 is_mm_prefix_lm=False,
             ),
             parallel_config=SimpleNamespace(
                 tensor_parallel_size=tensor_parallel_size,
                 worker_cls="auto",
             ),
-            cache_config=SimpleNamespace(block_size=cache_block_size),
+            cache_config=SimpleNamespace(
+                block_size=cache_block_size,
+                cache_dtype="fp8" if is_deepseek_v4 else "auto",
+            ),
             scheduler_config=SimpleNamespace(
                 is_multimodal_model=False,
                 disable_chunked_mm_input=False,
+                max_num_seqs=1 if is_deepseek_v4 else 64,
             ),
             attention_config=SimpleNamespace(backend=attention_backend),
             compilation_config=SimpleNamespace(
                 custom_ops=[],
+                mode="NONE",
                 cudagraph_mode=cudagraph_mode,
                 max_cudagraph_capture_size=max_cudagraph_capture_size,
                 cudagraph_capture_sizes=cudagraph_capture_sizes,
@@ -852,7 +888,7 @@ class TestMUSAPlatformDefaults:
         assert vllm_config.compilation_config.max_cudagraph_capture_size == 512
         assert vllm_config.compilation_config.cudagraph_capture_sizes == [1, 2, 4, 8]
 
-    def test_deepseek_v4_defaults_moe_gemv_block32x8(self):
+    def test_deepseek_v4_does_not_default_generic_kernel_envs(self):
         from vllm_musa.platform import MUSAPlatformBase
 
         vllm_config = self._make_vllm_config(
@@ -860,13 +896,13 @@ class TestMUSAPlatformDefaults:
         )
 
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV", None)
             os.environ.pop("VLLM_MUSA_GEMV_MOE_BLOCK", None)
+            os.environ.pop("VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X", None)
 
             MUSAPlatformBase.check_and_update_config(vllm_config)
 
-            assert "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV" not in os.environ
-            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "32x8"
+            assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
+            assert "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X" not in os.environ
 
     def test_deepseek_v4_preserves_user_moe_gemv_block(self):
         from vllm_musa.platform import MUSAPlatformBase
@@ -906,12 +942,18 @@ class TestMUSAPlatformDefaults:
 
             assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
 
-    def test_deepseek_v4_tp8_uses_validated_defaults_without_profile_env(self):
+    def test_deepseek_v4_tp8_uses_contract_without_profile_env(self):
+        from vllm_musa.optimization_contract import (
+            OptimizationFeature,
+            resolve_optimization_contract,
+        )
         from vllm_musa.platform import MUSAPlatformBase
 
         vllm_config = self._make_vllm_config(
             architectures=["DeepseekV4ForCausalLM"],
             tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
         )
 
         with patch.dict(os.environ, {}, clear=False):
@@ -928,8 +970,15 @@ class TestMUSAPlatformDefaults:
 
             MUSAPlatformBase.check_and_update_config(vllm_config)
 
-            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "16x8"
-            assert os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] == "256"
+            contract = resolve_optimization_contract(vllm_config)
+            assert contract.prefers(
+                OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
+            )
+            assert contract.prefers(
+                OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
+            )
+            assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
+            assert "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X" not in os.environ
             assert "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE" not in os.environ
             assert (
                 os.environ.get("VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE")
