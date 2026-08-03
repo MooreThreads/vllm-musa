@@ -34,6 +34,9 @@ class OptimizationFeature(str, Enum):
     QWEN_V2_GUMBEL = "qwen.v2_gumbel"
     QWEN_TP_LOGITS_IPC_GATHER = "qwen.tp_logits_ipc_gather"
     QWEN_TP4_SHARDED_GUMBEL = "qwen.tp4_sharded_gumbel"
+    QWEN35_SHARED_EXPERT_FOLD = "qwen3.5_3.6.shared_expert_fold"
+    QWEN35_INTERLEAVED_MROPE_QK = "qwen3.5_3.6.interleaved_mrope_qk"
+    HYBRID_SEPARATE_MAMBA_POOL = "hybrid.separate_mamba_pool"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,10 +62,12 @@ class ModelSignature:
     has_routed_experts: bool | None
     enforce_eager: bool
     outer_architectures: tuple[str, ...] = ()
+    text_architectures: tuple[str, ...] = ()
     outer_model_type: str | None = None
     uses_mla: bool | None = None
     index_topk: int | None = None
     quant_block_shape: tuple[int, ...] | None = None
+    is_hybrid: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

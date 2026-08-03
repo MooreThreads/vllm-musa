@@ -43,3 +43,26 @@ def qwen_sampler(*, enabled: bool = True, legacy: bool = True):
             )
         )
     return SimpleNamespace(_musa_optimization_contract=contract)
+
+
+def qwen_hybrid_contract():
+    return resolve_optimization_contract(
+        SimpleNamespace(
+            model_config=SimpleNamespace(
+                architectures=["Qwen3_5ForConditionalGeneration"],
+                hf_text_config=SimpleNamespace(
+                    model_type="qwen3_5_text",
+                    vocab_size=248320,
+                ),
+                dtype="bfloat16",
+                quantization=None,
+                is_hybrid=True,
+            ),
+            parallel_config=SimpleNamespace(
+                tensor_parallel_size=1,
+                pipeline_parallel_size=1,
+                data_parallel_size=1,
+                decode_context_parallel_size=1,
+            ),
+        )
+    )

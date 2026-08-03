@@ -9,7 +9,7 @@ keeps routed MoE on native, so they otherwise run the eager rotary path and
 issue a long tail of elementwise kernels.
 
 The IR operation stays as the fallback for every shape this kernel declines.
-Set VLLM_MUSA_FUSED_QK_MROPE=0 to disable.
+The MUSA optimization contract selects the Qwen3.5/3.6 BF16 scope.
 ---
  vllm/model_executor/models/qwen3_next.py | 77 +++---
  1 file changed, 77 insertions(+), 0 deletions(-)
@@ -22,8 +22,6 @@ index f7907f3c4..d73dfa9e4 100644
          return final_hidden_states.view(orig_shape)
  
  
-+MUSA_FUSED_QK_MROPE_ENV = "VLLM_MUSA_FUSED_QK_MROPE"
-+
 +_MUSA_MROPE_COS_SIN_CACHE: dict[tuple[int, torch.dtype], torch.Tensor] = {}
 +
 +
@@ -56,11 +54,20 @@ index f7907f3c4..d73dfa9e4 100644
 +        # MUSA: interleaved-MRoPE models reject the text-only NeoX fusion above
 +        # and the IR provider keeps routed MoE on native, leaving the eager
 +        # rotary path. Fuse QK-RMSNorm + MRoPE for them in one kernel.
++        from vllm_musa.optimization_contract import (
++            OptimizationFeature,
++            resolve_optimization_contract,
++        )
++
++        optimization_contract = resolve_optimization_contract(
++            model_config=model_config
++        )
 +        self._musa_fused_qk_mrope = (
 +            self.attn_output_gate
 +            and current_platform.is_musa()
-+            and os.environ.get(MUSA_FUSED_QK_MROPE_ENV, "1").strip().lower()
-+            not in ("0", "false", "off", "no")
++            and optimization_contract.prefers(
++                OptimizationFeature.QWEN35_INTERLEAVED_MROPE_QK
++            )
 +            and len(self.mrope_section) == 3
 +            and self.mrope_interleaved
 +        )

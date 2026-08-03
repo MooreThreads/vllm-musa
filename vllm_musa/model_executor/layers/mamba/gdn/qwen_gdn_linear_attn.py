@@ -263,9 +263,9 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         # whole-pool contiguity copy.
         if ssm_state.dtype == torch.float32:
             try:
-                import os as _os
-
-                _musa_sep = _os.environ.get("VLLM_MUSA_MAMBA_SEPARATE_POOL", "1") == "1"
+                _musa_sep = self._musa_optimization_contract.prefers(
+                    OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
+                )
                 # MUSA: write the mate decode output straight into the
                 # preallocated core_attn_out buffer (bf16) to skip a per-layer copy.
                 _out_view = core_attn_out[:num_decode_tokens].view(

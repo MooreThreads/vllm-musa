@@ -8,7 +8,7 @@ never bind, and keep them out of the attention pool's proportional shrink. The
 mamba groups then own small contiguous block-id spaces and mate's GDN decode
 updates the recurrent state in place instead of gathering and scattering it.
 
-On by default; set VLLM_MUSA_MAMBA_SEPARATE_POOL=0 to fall back to the shared pool.
+Hybrid models select the dedicated pool automatically from the resolved policy.
 ---
  vllm/v1/core/kv_cache_utils.py | 80 ++++++++
  1 file changed, 80 insertions(+), 0 deletions(-)
@@ -23,8 +23,8 @@ index 3ea89d5af..c8425baa5 100644
  
 +def musa_mamba_separate_pool_enabled() -> bool:
 +    """MUSA: give mamba state its own contiguous BlockPool so mate's GDN
-+    decode runs in place (no gather/scatter). On by default."""
-+    return os.environ.get("VLLM_MUSA_MAMBA_SEPARATE_POOL", "1") == "1"
++    decode runs in place (no gather/scatter)."""
++    return True
 +
 +
 +def _musa_has_mamba_and_attention(kv_cache_groups) -> bool:

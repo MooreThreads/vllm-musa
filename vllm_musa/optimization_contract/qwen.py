@@ -287,6 +287,11 @@ def resolve_qwen_contract(
         preferred.add(OptimizationFeature.QWEN35_GDN_WIDTH4_PREFILL)
     if _qwen35_moe_prefill_preferred(model, execution):
         preferred.add(OptimizationFeature.QWEN35_MOE_BF16_PREFILL)
+    if model.family is ModelFamily.QWEN35_36:
+        if model.has_routed_experts is True:
+            preferred.add(OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD)
+        if model.dtype == "bfloat16":
+            preferred.add(OptimizationFeature.QWEN35_INTERLEAVED_MROPE_QK)
 
     if model.vocab_size in (151936, 152064, 248320):
         if OptimizationFeature.QWEN_V2_SAMPLING in preferred:
@@ -307,8 +312,7 @@ def resolve_qwen_contract(
             )
         if (
             OptimizationFeature.QWEN_LEGACY_SAMPLING in preferred
-            and
-            execution.tensor_parallel_size == 4
+            and execution.tensor_parallel_size == 4
             and execution.pipeline_parallel_size == 1
         ):
             preferred.add(OptimizationFeature.QWEN_TP4_SHARDED_GUMBEL)

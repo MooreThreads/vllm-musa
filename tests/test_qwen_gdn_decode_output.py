@@ -10,10 +10,13 @@ import torch
 
 # isort: on
 
+from qwen_contract_test_utils import qwen_hybrid_contract, qwen_sampler
 from vllm_musa.model_executor.layers.mamba.gdn import qwen_gdn_linear_attn as gdn
 
 
-def _fake_attention() -> gdn.MusaQwenGatedDeltaNetAttention:
+def _fake_attention(
+    *, separate_pool: bool = True
+) -> gdn.MusaQwenGatedDeltaNetAttention:
     attention = object.__new__(gdn.MusaQwenGatedDeltaNetAttention)
     attention.key_dim = 4
     attention.value_dim = 4
@@ -28,6 +31,11 @@ def _fake_attention() -> gdn.MusaQwenGatedDeltaNetAttention:
     attention.kv_cache = (
         torch.zeros(2, 4, 1),
         torch.zeros(4, 2, 2, 2, dtype=torch.float32),
+    )
+    attention._musa_optimization_contract = (
+        qwen_hybrid_contract()
+        if separate_pool
+        else qwen_sampler(enabled=False)._musa_optimization_contract
     )
     return attention
 
@@ -72,8 +80,6 @@ def test_mate_decode_writes_caller_output_and_ignores_decoy(monkeypatch) -> None
 
     monkeypatch.setattr(gdn, "gated_delta_rule_decode", fake_decode)
     monkeypatch.setattr(gdn, "_MATE_GDN_DECODE_HAS_OUTPUT", True)
-    monkeypatch.setenv("VLLM_MUSA_MAMBA_SEPARATE_POOL", "1")
-
     assert attention._try_mate_decode(mixed_qkv, b, a, core_attn_out, metadata)
 
     assert captured["output"].shape == (num_tokens, 1, 2, 2)
@@ -100,8 +106,6 @@ def test_mate_decode_legacy_api_copies_returned_output(monkeypatch) -> None:
 
     monkeypatch.setattr(gdn, "gated_delta_rule_decode", fake_decode)
     monkeypatch.setattr(gdn, "_MATE_GDN_DECODE_HAS_OUTPUT", False)
-    monkeypatch.setenv("VLLM_MUSA_MAMBA_SEPARATE_POOL", "1")
-
     assert attention._try_mate_decode(mixed_qkv, b, a, core_attn_out, metadata)
 
     assert "output" not in captured
@@ -111,7 +115,7 @@ def test_mate_decode_legacy_api_copies_returned_output(monkeypatch) -> None:
 def test_mate_decode_gather_scatter_reuses_output_and_updates_active_state(
     monkeypatch,
 ) -> None:
-    attention = _fake_attention()
+    attention = _fake_attention(separate_pool=False)
     num_tokens = 2
     mixed_qkv = torch.randn(num_tokens, 12)
     a = torch.ones(num_tokens, 2)
@@ -128,8 +132,6 @@ def test_mate_decode_gather_scatter_reuses_output_and_updates_active_state(
 
     monkeypatch.setattr(gdn, "gated_delta_rule_decode", fake_decode)
     monkeypatch.setattr(gdn, "_MATE_GDN_DECODE_HAS_OUTPUT", True)
-    monkeypatch.setenv("VLLM_MUSA_MAMBA_SEPARATE_POOL", "0")
-
     assert attention._try_mate_decode(mixed_qkv, b, a, core_attn_out, metadata)
 
     assert torch.equal(core_attn_out, torch.full_like(core_attn_out, 7))
@@ -155,8 +157,6 @@ def test_mate_decode_output_reuse_only_writes_decode_prefix(monkeypatch) -> None
 
     monkeypatch.setattr(gdn, "gated_delta_rule_decode", fake_decode)
     monkeypatch.setattr(gdn, "_MATE_GDN_DECODE_HAS_OUTPUT", True)
-    monkeypatch.setenv("VLLM_MUSA_MAMBA_SEPARATE_POOL", "1")
-
     assert attention._try_mate_decode(mixed_qkv, b, a, core_attn_out, metadata)
 
     assert torch.equal(core_attn_out[:num_decode_tokens], torch.full((2, 2, 2), 7.0))

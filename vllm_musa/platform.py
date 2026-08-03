@@ -696,7 +696,9 @@ class MUSAPlatformBase(Platform):
             and cache_config is not None
             and model_config.is_hybrid
             and cache_config.mamba_cache_mode == "none"
-            and os.environ.get("VLLM_MUSA_MAMBA_SEPARATE_POOL", "1") == "1"
+            and resolve_optimization_contract(vllm_config).prefers(
+                OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
+            )
         )
         if separate_mamba_pages:
             backend_cls = cls._find_non_ssm_backend(vllm_config)

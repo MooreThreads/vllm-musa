@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from .providers import CONTRACT_PROVIDERS
@@ -69,6 +70,11 @@ def _outer_model_type(model_config: Any, text_config: Any) -> str | None:
     return str(value) if value is not None else None
 
 
+def _text_architectures(text_config: Any) -> tuple[str, ...]:
+    values = getattr(text_config, "architectures", None)
+    return tuple(str(value) for value in values or ())
+
+
 def _quantization(model_config: Any, text_config: Any) -> str | None:
     value = getattr(model_config, "quantization", None)
     if value is not None:
@@ -129,6 +135,14 @@ def _model_signature(model_config: Any, vllm_config: Any | None) -> ModelSignatu
     uses_mla = getattr(text_config, "use_mla", None)
     if not isinstance(uses_mla, bool):
         uses_mla = getattr(text_config, "kv_lora_rank", None) is not None
+    is_hybrid = getattr(model_config, "is_hybrid", None)
+    if callable(is_hybrid):
+        try:
+            is_hybrid = bool(is_hybrid())
+        except (AttributeError, TypeError, ValueError):
+            is_hybrid = None
+    if not isinstance(is_hybrid, bool) and gdn_dim is not None:
+        is_hybrid = True
     return ModelSignature(
         family=ModelFamily.UNKNOWN,
         role=ModelRole.UNKNOWN,
@@ -162,10 +176,12 @@ def _model_signature(model_config: Any, vllm_config: Any | None) -> ModelSignatu
         has_routed_experts=_has_routed_experts(model_config, text_config),
         enforce_eager=bool(getattr(model_config, "enforce_eager", False)),
         outer_architectures=architectures,
+        text_architectures=_text_architectures(text_config),
         outer_model_type=_outer_model_type(model_config, text_config),
         uses_mla=uses_mla,
         index_topk=_int_attr(text_config, "index_topk"),
         quant_block_shape=quant_block_shape,
+        is_hybrid=is_hybrid if isinstance(is_hybrid, bool) else None,
     )
 
 
@@ -246,10 +262,12 @@ def resolve_optimization_contract(
             has_routed_experts=False,
             enforce_eager=False,
             outer_architectures=(),
+            text_architectures=(),
             outer_model_type=None,
             uses_mla=None,
             index_topk=None,
             quant_block_shape=None,
+            is_hybrid=None,
         )
     else:
         model = _model_signature(model_config, vllm_config)
@@ -257,14 +275,24 @@ def resolve_optimization_contract(
     for provider in CONTRACT_PROVIDERS:
         contract = provider(model, execution)
         if contract is not None:
-            return contract
-    return MusaOptimizationContract(
-        model=model,
-        execution=execution,
-        profile="unknown",
-        supported_features=frozenset(),
-        preferred_features=frozenset(),
-    )
+            break
+    else:
+        contract = MusaOptimizationContract(
+            model=model,
+            execution=execution,
+            profile="unknown",
+            supported_features=frozenset(),
+            preferred_features=frozenset(),
+        )
+
+    if model.is_hybrid is True:
+        feature = OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
+        contract = replace(
+            contract,
+            supported_features=contract.supported_features | {feature},
+            preferred_features=contract.preferred_features | {feature},
+        )
+    return contract
 
 
 def prefers_optimization(owner: Any, feature: OptimizationFeature) -> bool:

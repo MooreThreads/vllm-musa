@@ -295,6 +295,9 @@ def test_qwen35_dense_gdn_and_moe_prefill_static_contracts() -> None:
     dense_contract = resolve_optimization_contract(dense)
     assert dense_contract.model.gdn_conv_dim == 10240
     assert dense_contract.prefers(OptimizationFeature.QWEN35_GDN_WIDTH4_PREFILL)
+    assert dense_contract.prefers(OptimizationFeature.QWEN35_INTERLEAVED_MROPE_QK)
+    assert dense_contract.prefers(OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL)
+    assert not dense_contract.prefers(OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD)
 
     moe = _config(
         architecture="Qwen3_5MoeForConditionalGeneration",
@@ -313,6 +316,8 @@ def test_qwen35_dense_gdn_and_moe_prefill_static_contracts() -> None:
     moe_contract = resolve_optimization_contract(moe)
     assert moe_contract.model.gdn_conv_dim == 8192
     assert moe_contract.prefers(OptimizationFeature.QWEN35_MOE_BF16_PREFILL)
+    assert moe_contract.prefers(OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD)
+    assert moe_contract.prefers(OptimizationFeature.QWEN35_INTERLEAVED_MROPE_QK)
     assert not moe_contract.prefers(OptimizationFeature.QWEN35_GDN_WIDTH4_PREFILL)
 
 
