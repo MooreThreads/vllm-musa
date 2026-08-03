@@ -198,6 +198,7 @@ def _qwen35_gdn_prefill_preferred(
         and model.dtype == "bfloat16"
         and model.gdn_conv_width == 4
         and model.gdn_conv_dim == 10240
+        and execution.has_parallel_config
         and execution.tensor_parallel_size == 1
     )
 
@@ -214,6 +215,7 @@ def _qwen35_moe_prefill_preferred(
         and model.num_experts == 256
         and model.num_experts_per_tok == 8
         and model.moe_intermediate_size == 512
+        and execution.has_parallel_config
         and execution.tensor_parallel_size == 4
         and execution.pipeline_parallel_size == 1
     )
