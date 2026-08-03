@@ -622,10 +622,14 @@ def can_use_qwen_legacy_gumbel(
         return False
     if top_k is None and logits.shape[0] < _QWEN_LEGACY_UNFILTERED_GUMBEL_MIN_ROWS:
         return False
+    generators = sampling_metadata.generators
+    rows = logits.shape[0]
+    if not generators or any(row < 0 or row >= rows for row in generators):
+        return False
     if top_k is None:
         generator_state = _get_qwen_legacy_generator_state_for_rows(
-            sampling_metadata.generators,
-            list(range(logits.shape[0])),
+            generators,
+            list(range(rows)),
         )
         if generator_state is None or min(generator_state[1]) < (
             _QWEN_LEGACY_UNFILTERED_GUMBEL_MIN_OFFSET
@@ -636,10 +640,6 @@ def can_use_qwen_legacy_gumbel(
     if spec_token_ids and any(spec_token_ids):
         return False
 
-    generators = sampling_metadata.generators
-    rows = logits.shape[0]
-    if not generators or any(row < 0 or row >= rows for row in generators):
-        return False
     return all(
         hasattr(generator, "initial_seed")
         and hasattr(generator, "get_offset")

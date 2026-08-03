@@ -611,6 +611,13 @@ def test_qwen_legacy_gumbel_gate_fails_closed(monkeypatch) -> None:
         False,
     )
     assert not _can_use_qwen_legacy_gumbel(
+        torch.randn((16, 248320)),
+        _legacy_gumbel_metadata(16, top_k=None, generators={}),
+        "raw_logprobs",
+        None,
+        False,
+    )
+    assert not _can_use_qwen_legacy_gumbel(
         logits,
         _legacy_gumbel_metadata(4, generators={4: _FakeGenerator(1)}),
         "raw_logprobs",
