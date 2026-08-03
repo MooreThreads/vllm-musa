@@ -45,7 +45,7 @@ The plugin leverages the following key components:
 
 | vLLM Version | PyTorch Version | Engine  | Status       |
 |--------------|-----------------|---------|--------------|
-| v0.24.0       | 2.9.x           | V1 only | ✅ Supported |
+| v0.24.0       | 2.11.x          | V1 only | ✅ Supported |
 
 > **Note**: This plugin uses vLLM's V1 engine architecture (the V0 engine is not supported). Within the V1 engine, vLLM v0.24.0 auto-selects its **Model Runner V2** for certain architectures (e.g. Qwen3, DeepSeek-V2, Llama) and the V1 model runner for others; both are supported on MUSA. Set `VLLM_USE_V2_MODEL_RUNNER=1` or `0` to force one.
 
@@ -79,7 +79,7 @@ install below.
 
 Most of the MUSA wheels are not published on public PyPI, so installing
 `requirements/musa.txt` with pip's default index fails with
-`No matching distribution found for torch==2.9.1.post1+musa5.2.0s5000`.
+`No matching distribution found for torch==2.11.0.post1+musa5.2.0`.
 
 The MUSA wheels must be **resolved** with the Moore Threads index as the sole
 `--index-url`, which is why the install below starts with a pass that installs

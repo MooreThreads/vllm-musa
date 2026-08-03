@@ -45,7 +45,7 @@
 
 | vLLM 版本 | PyTorch 版本 | 引擎    | 状态         |
 |-----------|--------------|---------|--------------|
-| v0.24.0    | 2.9.x        | 仅 V1   | ✅ 已支持    |
+| v0.24.0    | 2.11.x       | 仅 V1   | ✅ 已支持    |
 
 > **注意**：本插件使用 vLLM 的 V1 引擎架构（不支持 V0 引擎）。在 V1 引擎内部，vLLM v0.24.0 会为部分架构（如 Qwen3、DeepSeek-V2、Llama）自动选用 **Model Runner V2**，其余架构使用 V1 model runner；两者在 MUSA 上均受支持。设置 `VLLM_USE_V2_MODEL_RUNNER=1` 或 `0` 可强制指定其一。
 
@@ -76,7 +76,7 @@ MUSA SDK 的主机上，请使用下面的源码安装。
 
 大部分 MUSA wheel 并未发布到公共 PyPI，因此用 pip 默认索引安装
 `requirements/musa.txt` 会失败并报
-`No matching distribution found for torch==2.9.1.post1+musa5.2.0s5000`。
+`No matching distribution found for torch==2.11.0.post1+musa5.2.0`。
 
 MUSA wheel 必须在摩尔线程索引作为**唯一** `--index-url` 的前提下解析，因此下面的
 安装步骤以“只装 MUSA wheel”的一步开始。

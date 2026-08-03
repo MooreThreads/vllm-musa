@@ -68,7 +68,7 @@ RUN apt-get update && \
     python -m pip install --upgrade pip && \
     rm -rf /var/lib/apt/lists/*
 
-# The torch 2.9.x MUSA wheel links MKL with .so.2 sonames. Ubuntu 22.04 apt
+# The MUSA PyTorch wheel links MKL with .so.2 sonames. Ubuntu 22.04 apt
 # ships the same logical MKL components without that suffix.
 RUN ln -sf /usr/lib/x86_64-linux-gnu/libmkl_intel_lp64.so \
         /usr/lib/x86_64-linux-gnu/libmkl_intel_lp64.so.2 && \
