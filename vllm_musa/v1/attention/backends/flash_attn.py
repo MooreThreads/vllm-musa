@@ -45,6 +45,10 @@ from vllm.v1.attention.ops.dcp_alltoall import dcp_a2a_lse_reduce
 from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
 from vllm.v1.kv_cache_interface import AttentionSpec
 
+from vllm_musa.optimization_contract import (
+    OptimizationFeature,
+    resolve_optimization_contract,
+)
 from vllm_musa.v1.attention.backends.fa_utils import (
     flash_attn_supports_fp8,
     get_flash_attn_version,
@@ -62,24 +66,10 @@ if is_flash_attn_varlen_func_available():
 
 logger = init_logger(__name__)
 
-_MUSA_QWEN_TEXT_GENERATION_ARCHITECTURES = frozenset(
-    {
-        "Qwen2ForCausalLM",
-        "Qwen2MoeForCausalLM",
-        "Qwen3ForCausalLM",
-        "Qwen3MoeForCausalLM",
-        "Qwen3_5ForConditionalGeneration",
-        "Qwen3_5MoeForConditionalGeneration",
-        "CosyVoice3Model",
-    }
-)
-
 
 def _is_musa_qwen_text_generation_architecture(model_config: Any) -> bool:
-    architectures = getattr(model_config, "architectures", None) or ()
-    return any(
-        architecture in _MUSA_QWEN_TEXT_GENERATION_ARCHITECTURES
-        for architecture in architectures
+    return resolve_optimization_contract(model_config=model_config).prefers(
+        OptimizationFeature.QWEN_FA3_SCHEDULER
     )
 
 
@@ -120,17 +110,16 @@ def _is_qwen_family_scheduler_lookup_base_config(
     vllm_config: VllmConfig,
 ) -> bool:
     """Check the Qwen FA3 scheduler configuration envelope."""
-    model_config = getattr(vllm_config, "model_config", None)
     scheduler_config = getattr(vllm_config, "scheduler_config", None)
     parallel_config = getattr(vllm_config, "parallel_config", None)
-    if model_config is None or scheduler_config is None or parallel_config is None:
+    if scheduler_config is None or parallel_config is None:
         return False
 
     max_num_seqs = getattr(scheduler_config, "max_num_seqs", None)
-    is_qwen_family = _is_musa_qwen_text_generation_architecture(model_config)
+    contract = resolve_optimization_contract(vllm_config)
 
     return (
-        is_qwen_family
+        contract.prefers(OptimizationFeature.QWEN_FA3_SINGLE_REQUEST_METADATA)
         and isinstance(max_num_seqs, int)
         and max_num_seqs >= 1
         and getattr(vllm_config, "speculative_config", None) is None
@@ -510,9 +499,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
 
         self.max_num_splits = 0  # No upper bound on the number of splits.
         self.aot_schedule = get_flash_attn_version() == 3
-        self._musa_qwen_family = _is_musa_qwen_text_generation_architecture(
-            self.model_config
-        )
+        self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
 
         try:
             from vllm.distributed.parallel_state import get_dcp_group
@@ -725,7 +712,9 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
                 self.model_config.dtype == torch.bfloat16
                 and self.kv_cache_dtype in ("auto", "bfloat16", torch.bfloat16)
             ),
-            is_qwen_family=self._musa_qwen_family,
+            is_qwen_family=self._musa_optimization_contract.prefers(
+                OptimizationFeature.QWEN_FA3_SCHEDULER
+            ),
             use_full_cuda_graph=self.use_full_cuda_graph,
             common_prefix_len=common_prefix_len,
             dcp_world_size=self.dcp_world_size,

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from qwen_contract_test_utils import qwen_sampler
 from vllm_musa.jit_kernel import fa3_metadata
 
 
@@ -33,7 +34,7 @@ def _make_builder(flash_attn):
     builder.block_size = 64
     builder.kv_cache_dtype = torch.bfloat16
     builder.model_config = SimpleNamespace(dtype=torch.bfloat16)
-    builder._musa_qwen_family = True
+    builder._musa_optimization_contract = qwen_sampler()._musa_optimization_contract
     builder.cache_config = SimpleNamespace(cache_dtype="auto")
     return builder
 
