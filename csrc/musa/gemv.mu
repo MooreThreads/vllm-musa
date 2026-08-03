@@ -800,7 +800,9 @@ void musa_fused_gemv_moe(
     bool mul_routed_weight,
     int64_t topk,
     bool use_int4_w4a16,
-    bool use_swigelu) {
+    bool use_swigelu,
+    int64_t requested_block_n,
+    int64_t requested_block_k) {
 
     TORCH_CHECK(A.dim() == 2, "A must be dim 2.")
     TORCH_CHECK(B.dim() == 3, "B must be dim 3.")
@@ -897,6 +899,29 @@ void musa_fused_gemv_moe(
         fallback_config = BlockConfig{128, 1, -1.0f, false};
     }
     BlockConfig forced_config{0, 0, 0.f, false};
+    BlockConfig requested_config{0, 0, 0.f, false};
+    TORCH_CHECK(
+        (requested_block_n == 0) == (requested_block_k == 0),
+        "requested GEMV block must provide both block_n and block_k, got ",
+        requested_block_n, "x", requested_block_k);
+    if (requested_block_n != 0) {
+        TORCH_CHECK(
+            requested_block_n > 0 && requested_block_k > 0 &&
+                requested_block_n * requested_block_k <= 512,
+            "requested GEMV block must use positive sizes with block_n * "
+            "block_k <= 512, got ",
+            requested_block_n, "x", requested_block_k);
+        requested_config = BlockConfig{
+            static_cast<int>(requested_block_n),
+            static_cast<int>(requested_block_k),
+            0.f,
+            true};
+        TORCH_CHECK(
+            IsForcedBlockConfigValid(requested_config, nr_n, hidden_size, vlen),
+            "requested GEMV block=", requested_block_n, "x",
+            requested_block_k, " is invalid for nr_n=", nr_n,
+            ", hidden_size=", hidden_size, ", vlen=", vlen);
+    }
     BlockConfig qwen_fp8_moe_config{32, 4, 0.f, true};
     BlockConfig deepseek_fp8_w1_config{32, 4, 0.f, true};
     BlockConfig deepseek_v4_fp8_moe_config =
@@ -923,6 +948,11 @@ void musa_fused_gemv_moe(
             forced_config.block_k, " is invalid for nr_n=", nr_n,
             ", hidden_size=", hidden_size, ", vlen=", vlen);
         best_config = &forced_config;
+    } else if (requested_config.valid) {
+        // The model-contract path passes this as a graph-static scalar. Keep
+        // the explicit environment override above for A/B diagnostics and
+        // preserve the DSV4 one-token split-tile rule ahead of both choices.
+        best_config = &requested_config;
     } else if (ShouldUseQwenFp8Moe32x4(
                    current_arch,
                    is_fp8,

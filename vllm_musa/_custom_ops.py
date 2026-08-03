@@ -31,6 +31,8 @@ def musa_fused_gemv_moe(
     topk: int,
     use_int4_w4a16: bool,
     use_swigelu: bool,
+    block_n: int = 0,
+    block_k: int = 0,
 ) -> None:
     return torch.ops._C_musa_ops.musa_fused_gemv_moe(
         A,
@@ -44,6 +46,8 @@ def musa_fused_gemv_moe(
         topk,
         use_int4_w4a16,
         use_swigelu,
+        block_n,
+        block_k,
     )
 
 

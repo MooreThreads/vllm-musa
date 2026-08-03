@@ -66,6 +66,7 @@ _DEEPGEMM_BF16_PREFILL_MIN_TOKENS = 1024
 _DEEPGEMM_BF16_PREFILL_WARNED = False
 _MUSA_GROUPED_GEMM_AVAILABLE = True
 _MUSA_FUSED_MOE_REQUESTED_BACKEND = parse_dispatch_backend()
+_GEMV_MOE_BLOCK_ENV = "VLLM_MUSA_GEMV_MOE_BLOCK"
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -92,6 +93,25 @@ def _env_int(name: str, default: int) -> int:
         return int(os.environ.get(name, default))
     except ValueError:
         return default
+
+
+def _requested_gemv_block(shape: MusaFusedMoeShape | None) -> tuple[int, int]:
+    """Return a graph-static tile request for a contract-selected GEMV shape.
+
+    The legacy environment override remains owned by the C++ op.  Passing
+    zeroes here lets that override (and the one-token DeepSeek-V4 split-tile
+    rule) retain their existing precedence.  Only a selector produced by the
+    Python policy, with no explicit environment override, is forwarded.
+    """
+
+    if shape is None or os.environ.get(_GEMV_MOE_BLOCK_ENV) is not None:
+        return 0, 0
+    # The only contract-backed scalar today is the DeepSeek-V4 TP8 profile.
+    # Keep unknown policy labels on the C++ heuristic until they have their
+    # own kernel evidence.
+    if shape.gemv_block != "16x8":
+        return 0, 0
+    return 16, 8
 
 
 def _tensors_share_device(
@@ -1477,6 +1497,7 @@ def fused_experts_impl(
     *,
     inplace: bool = False,
     _allow_deepgemm_prefill: bool = True,
+    _gemv_block: tuple[int, int] = (0, 0),
 ) -> torch.Tensor:
     # Check constraints.
     if use_int4_w4a16:
@@ -1636,6 +1657,7 @@ def fused_experts_impl(
         "Triton MoE JSON config lookup.",
         scope="global",
     )
+    gemv_block_n, gemv_block_k = _gemv_block
     CHUNK_SIZE = 16384
     M = min(num_tokens, CHUNK_SIZE)
     for chunk in range((num_tokens // CHUNK_SIZE) + 1):
@@ -1670,6 +1692,8 @@ def fused_experts_impl(
             topk_ids.shape[1],
             use_int4_w4a16,
             use_swigelu=True,
+            block_n=gemv_block_n,
+            block_k=gemv_block_k,
         )
         musa_ops.musa_fused_gemv_moe(
             curr_intermediate_cache2,
@@ -1683,6 +1707,8 @@ def fused_experts_impl(
             1,
             use_int4_w4a16,
             use_swigelu=False,
+            block_n=gemv_block_n,
+            block_k=gemv_block_k,
         )
         # ========================== END ====================
         moe_sum_input = curr_intermediate_cache3.view(*curr_intermediate_cache3.size())
@@ -1730,6 +1756,7 @@ def _musa_fused_experts_impl_dispatch(
     backend = MusaFusedMoeBackend.UPSTREAM
     policy = None
     shape = None
+    requested_gemv_block = (0, 0)
 
     # Skip all shape construction and capture queries for non-FP8 callers and
     # for the explicit rollback path. This wrapper sits on every MoE layer.
@@ -1850,6 +1877,8 @@ def _musa_fused_experts_impl_dispatch(
                     requested=_MUSA_FUSED_MOE_REQUESTED_BACKEND,
                     thresholds=policy,
                 )
+                if backend == MusaFusedMoeBackend.GEMV:
+                    requested_gemv_block = _requested_gemv_block(shape)
 
     # Native GEMV records inside ``fused_experts_impl`` after expanding any
     # per-tensor scales.  Record every other dispatcher outcome here so the
@@ -1925,6 +1954,12 @@ def _musa_fused_experts_impl_dispatch(
         if grouped_output is not None:
             return grouped_output
     elif backend == MusaFusedMoeBackend.GEMV:
+        gemv_kwargs = {
+            "inplace": False,
+            "_allow_deepgemm_prefill": False,
+        }
+        if requested_gemv_block != (0, 0):
+            gemv_kwargs["_gemv_block"] = requested_gemv_block
         return fused_experts_impl(
             hidden_states,
             w1,
@@ -1950,8 +1985,7 @@ def _musa_fused_experts_impl_dispatch(
             block_shape,
             w1_bias,
             w2_bias,
-            inplace=False,
-            _allow_deepgemm_prefill=False,
+            **gemv_kwargs,
         )
 
     prefer_upstream_qwen_prefill = (
