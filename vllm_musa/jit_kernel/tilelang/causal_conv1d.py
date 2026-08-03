@@ -13,7 +13,6 @@ from vllm_musa.jit_kernel.tilelang.utils import (
     storage_window,
     tilelang_dtype,
 )
-from vllm_musa.utils.environ import envs
 
 PAD_SLOT_ID = -1  # MUSA: match vllm mamba causal_conv1d PAD_SLOT_ID
 NULL_BLOCK_ID = 0  # MUSA: match vllm mamba causal_conv1d NULL_BLOCK_ID
@@ -27,7 +26,6 @@ def register_custom_op(fn=None, **_kw):
 
 
 _LOG2E = 1.4426950408889634
-_ENABLE_WIDTH4_PREFILL_SPLIT = envs.VLLM_MUSA_QWEN_GDN_WIDTH4_PREFILL_SPLIT.get()
 _WIDTH4_PREFILL_SPLIT_DIMS = frozenset((10240,))
 _WIDTH4_PREFILL_SPLIT_LOGGED = False
 logger = init_logger(__name__)
@@ -48,8 +46,7 @@ def _should_use_width4_prefill_split(
     weight_inner_stride: int,
 ) -> bool:
     return (
-        _ENABLE_WIDTH4_PREFILL_SPLIT
-        and width == 4
+        width == 4
         and dtype is torch.bfloat16
         # The split is beneficial only once the local channel width is large
         # enough to amortize its two launches on MP31.

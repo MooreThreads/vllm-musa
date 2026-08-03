@@ -23,26 +23,25 @@ def _prefill_gate(**overrides):
     return causal_conv1d._should_use_width4_prefill_split(**kwargs)
 
 
-def test_prefill_split_gate_accepts_validated_tp1_width(monkeypatch):
-    monkeypatch.setattr(causal_conv1d, "_ENABLE_WIDTH4_PREFILL_SPLIT", True)
+def test_prefill_split_gate_accepts_validated_tp1_width():
     assert _prefill_gate(dim=10240)
 
 
-def test_prefill_split_gate_rejects_tp4_and_small_prefill(monkeypatch):
-    monkeypatch.setattr(causal_conv1d, "_ENABLE_WIDTH4_PREFILL_SPLIT", True)
+def test_prefill_split_gate_rejects_other_shapes_and_small_prefill():
+    assert not _prefill_gate(width=3)
     assert not _prefill_gate(dim=2048)
     assert not _prefill_gate(dim=2560)
     assert not _prefill_gate(dim=12288)
     assert not _prefill_gate(dim=8192)
     assert not _prefill_gate(max_seq_len=2048)
     assert not _prefill_gate(batch_size=1)
+    assert not _prefill_gate(has_conv_states=False)
+    assert not _prefill_gate(has_cache_indices=False)
     assert not _prefill_gate(cache_indices_stride=2)
+    assert not _prefill_gate(x_inner_stride=2)
+    assert not _prefill_gate(out_inner_stride=2)
+    assert not _prefill_gate(weight_inner_stride=2)
     assert not _prefill_gate(dtype=torch.float16)
-
-
-def test_prefill_split_gate_honors_kill_switch(monkeypatch):
-    monkeypatch.setattr(causal_conv1d, "_ENABLE_WIDTH4_PREFILL_SPLIT", False)
-    assert not _prefill_gate()
 
 
 def test_decode_kernel_keeps_supported_mixed_dtypes(monkeypatch):

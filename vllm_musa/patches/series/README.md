@@ -11,13 +11,17 @@ is pre-patched.
 - **Generated/regenerated** by `make -f Makefile.sync format-patches`
   (`git format-patch --no-signature --no-numbered --zero-commit`, keeping `index`
   blob lines so `git am -3` 3-way works across version bumps). Regeneration stages
-  a complete replacement, so filenames always form one contiguous `0001`–`NNNN`
-  sequence and patches removed from the commit stack cannot leave stale files.
-  Author headers are normalized to the synthetic `musa <musa@local>` identity.
+  a complete replacement so patches removed from the commit stack cannot leave
+  stale files. Historical duplicate numeric prefixes remain until the next full
+  regeneration; count the `.patch` files rather than inferring the count from
+  the highest prefix. Author headers are normalized to the synthetic
+  `musa <musa@local>` identity.
 
-Currently **103 patches** — the MUSA source edits against the immutable vLLM commit
-recorded as `VLLM_COMMIT` in `third_party/PINS` (release label `v0.24.0`), applied
-at build. Runtime object/registration patches (which patch live objects at import)
-are kept separately in `vllm_musa/patches/`, not in this build-time series. Run
-`python3 tools/musa_sync.py verify` to replay and verify the complete manifest
-against that exact pinned commit.
+Currently **103 patches**: the base tree already contained 102 after the ModelOpt
+FP8 `0099` patch was added without updating this count, and the sharded-Qwen
+`0100` patch brings the total to 103. These are MUSA source edits against the
+immutable vLLM commit recorded as `VLLM_COMMIT` in `third_party/PINS` (release
+label `v0.24.0`), applied at build. Runtime object/registration patches (which
+patch live objects at import) are kept separately in `vllm_musa/patches/`, not
+in this build-time series. Run `python3 tools/musa_sync.py verify` to replay and
+verify the complete manifest against that exact pinned commit.

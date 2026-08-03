@@ -765,110 +765,6 @@ class TestMUSAPlatformDefaults:
             ),
         )
 
-    def _make_hybrid_spec_config(
-        self,
-        *,
-        is_hybrid=True,
-        cudagraph_mode=None,
-        compilation_mode=None,
-        enable_sp=False,
-        fuse_gemm_comms=False,
-        fuse_attn_quant=False,
-    ):
-        from types import SimpleNamespace
-
-        from vllm.config import CompilationMode
-
-        vllm_config = self._make_vllm_config(cudagraph_mode=cudagraph_mode)
-        vllm_config.model_config.is_hybrid = is_hybrid
-        vllm_config.speculative_config = SimpleNamespace(
-            method="qwen3_5_mtp",
-            num_speculative_tokens=2,
-            use_dflash=lambda: False,
-        )
-        vllm_config.compilation_config.mode = (
-            CompilationMode.VLLM_COMPILE
-            if compilation_mode is None
-            else compilation_mode
-        )
-        vllm_config.compilation_config.pass_config = SimpleNamespace(
-            enable_sp=enable_sp,
-            fuse_gemm_comms=fuse_gemm_comms,
-            fuse_attn_quant=fuse_attn_quant,
-        )
-        return vllm_config
-
-    def test_hybrid_mtp_full_cudagraph_coerced_to_piecewise(self):
-        from vllm.config import CUDAGraphMode
-
-        from vllm_musa.platform import MUSAPlatformBase
-
-        os.environ.pop("VLLM_MUSA_HYBRID_SPEC_ALLOW_FULL", None)
-        vllm_config = self._make_hybrid_spec_config(
-            cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-            enable_sp=True,
-            fuse_gemm_comms=True,
-            fuse_attn_quant=True,
-        )
-
-        MUSAPlatformBase.check_and_update_config(vllm_config)
-
-        pc = vllm_config.compilation_config.pass_config
-        assert vllm_config.compilation_config.cudagraph_mode == CUDAGraphMode.PIECEWISE
-        assert pc.enable_sp is False
-        assert pc.fuse_gemm_comms is False
-        assert pc.fuse_attn_quant is False
-
-    def test_hybrid_mtp_compilation_none_disables_cudagraph(self):
-        from vllm.config import CompilationMode, CUDAGraphMode
-
-        from vllm_musa.platform import MUSAPlatformBase
-
-        os.environ.pop("VLLM_MUSA_HYBRID_SPEC_ALLOW_FULL", None)
-        vllm_config = self._make_hybrid_spec_config(
-            cudagraph_mode=CUDAGraphMode.FULL_DECODE_ONLY,
-            compilation_mode=CompilationMode.NONE,
-        )
-
-        MUSAPlatformBase.check_and_update_config(vllm_config)
-
-        assert vllm_config.compilation_config.cudagraph_mode == CUDAGraphMode.NONE
-
-    def test_non_hybrid_spec_keeps_full_cudagraph(self):
-        from vllm.config import CUDAGraphMode
-
-        from vllm_musa.platform import MUSAPlatformBase
-
-        os.environ.pop("VLLM_MUSA_HYBRID_SPEC_ALLOW_FULL", None)
-        vllm_config = self._make_hybrid_spec_config(
-            is_hybrid=False,
-            cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-        )
-
-        MUSAPlatformBase.check_and_update_config(vllm_config)
-
-        assert (
-            vllm_config.compilation_config.cudagraph_mode
-            == CUDAGraphMode.FULL_AND_PIECEWISE
-        )
-
-    def test_hybrid_spec_full_cudagraph_diagnostic_override(self):
-        from vllm.config import CUDAGraphMode
-
-        from vllm_musa.platform import MUSAPlatformBase
-
-        os.environ["VLLM_MUSA_HYBRID_SPEC_ALLOW_FULL"] = "1"
-        vllm_config = self._make_hybrid_spec_config(
-            cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-        )
-
-        MUSAPlatformBase.check_and_update_config(vllm_config)
-
-        assert (
-            vllm_config.compilation_config.cudagraph_mode
-            == CUDAGraphMode.FULL_AND_PIECEWISE
-        )
-
     def test_qwen3_moe_does_not_cap_default_cudagraph_capture_size(self):
         # The FP8-only cudagraph capture-size cap was removed; the platform no
         # longer caps Qwen3-MoE capture size. Defaults leave it unset (use
@@ -1483,7 +1379,7 @@ class TestMUSAPlatformDefaults:
 
         assert vllm_config.cache_config.block_size == 64
 
-    def test_update_block_size_for_backend_defaults_to_64_for_non_hybrid(
+    def test_update_block_size_for_backend_defaults_and_hybrid_modes(
         self, monkeypatch
     ):
         # The MUSA platform seeds a 64-element KV page for non-hybrid,
@@ -1514,12 +1410,20 @@ class TestMUSAPlatformDefaults:
             def get_name():
                 return "STUB_256"
 
-        def _cfg(*, is_hybrid=False, user_specified=False, block_size=16):
+        def _cfg(
+            *,
+            is_hybrid=False,
+            user_specified=False,
+            block_size=16,
+            mamba_cache_mode="none",
+        ):
             return SimpleNamespace(
                 model_config=SimpleNamespace(is_hybrid=is_hybrid),
                 cache_config=SimpleNamespace(
                     block_size=block_size,
                     user_specified_block_size=user_specified,
+                    mamba_cache_mode=mamba_cache_mode,
+                    mamba_page_size_padded=1056,
                 ),
             )
 
@@ -1548,16 +1452,23 @@ class TestMUSAPlatformDefaults:
         MUSAPlatformBase.update_block_size_for_backend(cfg)
         assert cfg.cache_config.block_size == 32
 
-        # hybrid models are not forced to 64 (upstream mamba-aligned path)
+        # Separate-pool hybrid models keep 64-token attention pages.
+        _use_backend(_MultipleOf16Backend)
+        cfg = _cfg(is_hybrid=True)
+        MUSAPlatformBase.update_block_size_for_backend(cfg)
+        assert cfg.cache_config.block_size == 64
+        assert cfg.cache_config.mamba_page_size_padded is None
+
+        # The legacy aligned-cache mode still follows the upstream page size.
         monkeypatch.setattr(
             MUSAPlatformBase,
             "_align_hybrid_block_size",
             classmethod(lambda cls, vllm_config, backend_cls: None),
         )
-        _use_backend(_MultipleOf16Backend)
-        cfg = _cfg(is_hybrid=True)
+        cfg = _cfg(is_hybrid=True, mamba_cache_mode="align")
         MUSAPlatformBase.update_block_size_for_backend(cfg)
         assert cfg.cache_config.block_size == 16
+        assert cfg.cache_config.mamba_page_size_padded == 1056
 
     def test_dense_fp8_does_not_cap_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase
@@ -1579,13 +1490,13 @@ class TestMUSAFusedMoEFP8Scales:
             _maybe_expand_fp8_moe_per_tensor_scale,
         )
 
-        weight = torch.empty((2, 260, 320), dtype=torch.float8_e4m3fn)
+        weight = torch.empty((2, 256, 320), dtype=torch.float8_e4m3fn)
         scale = torch.tensor([0.5, 1.5], dtype=torch.float32)
 
         expanded = _maybe_expand_fp8_moe_per_tensor_scale(scale, weight)
 
         assert expanded is not None
-        assert expanded.shape == (2, 5, 5)
+        assert expanded.shape == (2, 4, 5)
         assert expanded.is_contiguous()
         assert torch.all(expanded[0] == scale[0])
         assert torch.all(expanded[1] == scale[1])
@@ -1595,7 +1506,7 @@ class TestMUSAFusedMoEFP8Scales:
             _maybe_expand_fp8_moe_per_tensor_scale,
         )
 
-        weight = torch.empty((2, 260, 256), dtype=torch.float8_e4m3fn)
+        weight = torch.empty((2, 384, 256), dtype=torch.float8_e4m3fn)
         scale = torch.tensor([0.5, 1.5], dtype=torch.float32)
 
         expanded = _maybe_expand_fp8_moe_per_tensor_scale(scale, weight)
@@ -1603,6 +1514,20 @@ class TestMUSAFusedMoEFP8Scales:
         assert expanded is not None
         assert expanded.shape == (2, 3, 2)
         assert expanded.is_contiguous()
+
+    def test_static_tensor_fp8_moe_scales_reject_partial_output_blocks(self):
+        from vllm_musa.model_executor.layers.fused_moe.fused_moe import (
+            _maybe_expand_fp8_moe_per_tensor_scale,
+        )
+
+        weight = torch.empty((2, 260, 320), dtype=torch.float8_e4m3fn)
+        scale = torch.tensor([0.5, 1.5], dtype=torch.float32)
+
+        with pytest.raises(
+            ValueError,
+            match="requires the weight output dimension to be divisible",
+        ):
+            _maybe_expand_fp8_moe_per_tensor_scale(scale, weight)
 
     def test_block_fp8_moe_scales_are_left_unchanged(self):
         from vllm_musa.model_executor.layers.fused_moe.fused_moe import (

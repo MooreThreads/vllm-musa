@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Exact gates for the MUSA Qwen direct FA3 decode schedule."""
 
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -80,6 +81,26 @@ def test_qwen_direct_decode_schedule_gate(kwargs, expected: bool) -> None:
     assert _use_musa_qwen_direct_decode_schedule(**values) is expected
 
 
+def test_mtp_decode_threshold_includes_speculative_tokens() -> None:
+    source = " ".join(
+        inspect.getsource(flash_attn.FlashAttentionMetadataBuilder.__init__).split()
+    )
+
+    assert (
+        "self.decode_threshold = ( self.reorder_batch_threshold "
+        "+ self.num_speculative_tokens )" in source
+    )
+
+
+def test_mtp_verify_uses_graph_safe_kvcache_kernel() -> None:
+    source = inspect.getsource(flash_attn.FlashAttentionImpl.forward)
+    branch = source[source.index("if use_fused_kv_verify:") :]
+
+    assert "num_decode_tokens > num_decodes" in source
+    assert "max_seqlen_q > 1" in source
+    assert branch.index("flash_attn_with_kvcache(") < branch.index("else:")
+
+
 def _make_graph_size_64_builder(*, is_qwen_family: bool):
     builder = object.__new__(FlashAttentionMetadataBuilder)
     builder.aot_schedule = True
@@ -95,6 +116,9 @@ def _make_graph_size_64_builder(*, is_qwen_family: bool):
     builder.dcp_world_size = 1
     builder.dcp_rank = 0
     builder.cp_kv_cache_interleave_size = 1
+    builder.reorder_batch_threshold = 1
+    builder.num_speculative_tokens = 0
+    builder.decode_threshold = 1
     builder.kv_cache_dtype = torch.bfloat16
     builder.model_config = SimpleNamespace(dtype=torch.bfloat16)
     builder.cache_config = SimpleNamespace(cache_dtype="auto")
