@@ -18,7 +18,7 @@ import torch
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.worker.gpu_input_batch import InputBatch
 
-from qwen_contract_test_utils import qwen_sampler
+from tests.qwen_contract_test_utils import qwen_sampler
 from vllm_musa.v1.sample import topk_topp_sampler as sampler
 
 requires_musa = pytest.mark.skipif(

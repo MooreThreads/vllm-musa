@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from qwen_contract_test_utils import qwen_sampler
 
 import vllm_musa.v1.attention.backends.flash_attn as flash_attn
+from tests.qwen_contract_test_utils import qwen_sampler
 from vllm_musa.v1.attention.backends.flash_attn import (
     FlashAttentionMetadataBuilder,
     _is_musa_qwen_text_generation_architecture,

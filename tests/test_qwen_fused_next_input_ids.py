@@ -8,7 +8,7 @@ import numpy as np
 import torchada  # noqa: F401
 import torch
 
-from qwen_contract_test_utils import qwen_sampler
+from tests.qwen_contract_test_utils import qwen_sampler
 from vllm_musa.v1.worker import qwen_fused_next_input_ids as fused_inputs
 
 

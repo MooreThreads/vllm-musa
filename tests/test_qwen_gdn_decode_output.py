@@ -10,7 +10,7 @@ import torch
 
 # isort: on
 
-from qwen_contract_test_utils import qwen_hybrid_contract, qwen_sampler
+from tests.qwen_contract_test_utils import qwen_hybrid_contract, qwen_sampler
 from vllm_musa.model_executor.layers.mamba.gdn import qwen_gdn_linear_attn as gdn
 
 
