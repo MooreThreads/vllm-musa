@@ -98,7 +98,7 @@ def _env_int(name: str, default: int) -> int:
 def _requested_gemv_block(shape: MusaFusedMoeShape | None) -> tuple[int, int]:
     """Return a graph-static tile request for a contract-selected GEMV shape.
 
-    The legacy environment override remains owned by the C++ op.  Passing
+    The explicit environment override remains owned by the C++ op. Passing
     zeroes here lets that override (and the one-token DeepSeek-V4 split-tile
     rule) retain their existing precedence.  Only a selector produced by the
     Python policy, with no explicit environment override, is forwarded.
@@ -106,9 +106,8 @@ def _requested_gemv_block(shape: MusaFusedMoeShape | None) -> tuple[int, int]:
 
     if shape is None or os.environ.get(_GEMV_MOE_BLOCK_ENV) is not None:
         return 0, 0
-    # The only contract-backed scalar today is the DeepSeek-V4 TP8 profile.
-    # Keep unknown policy labels on the C++ heuristic until they have their
-    # own kernel evidence.
+    # Only the DeepSeek-V4 TP8 profile has end-to-end evidence for this scalar.
+    # Unknown policy labels stay on the C++ heuristic.
     if shape.gemv_block != "16x8":
         return 0, 0
     return 16, 8
@@ -1388,10 +1387,9 @@ def _musa_fused_moe_shape(
     block_k = block_shape[1] if block_shape and len(block_shape) > 1 else 0
     gemv_block = os.environ.get("VLLM_MUSA_GEMV_MOE_BLOCK")
     if gemv_block is None:
-        # DeepSeek-V4 Flash TP8 has a unique per-rank routed-expert shape.
-        # Keep this launch choice op-local: the generic env remains an explicit
-        # diagnostic override, while the normal path no longer receives a
-        # process-global model-derived default from platform.py.
+        # DeepSeek-V4 Flash TP8 has a unique per-rank routed-expert shape. The
+        # explicit generic override wins in C++; otherwise this label forwards
+        # the validated 16x8 tile for multi-token GEMV dispatch.
         is_deepseek_v4_flash_tp8_shape = (
             w1.shape[0] == 256
             and w1.shape[1] == 512

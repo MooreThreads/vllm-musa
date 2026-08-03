@@ -130,6 +130,90 @@ def test_incomplete_deepseek_identity_fails_closed() -> None:
 
 
 @pytest.mark.parametrize(
+    ("owner", "field", "value", "expected_supported"),
+    [
+        ("model_config", "architectures", ["Qwen3ForCausalLM"], frozenset()),
+        ("text_config", "model_type", "qwen3", frozenset()),
+        (
+            "model_config",
+            "dtype",
+            "float16",
+            frozenset(
+                {OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}
+            ),
+        ),
+        (
+            "model_config",
+            "quantization",
+            "compressed-tensors",
+            frozenset(
+                {OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}
+            ),
+        ),
+        (
+            "model_config",
+            "use_mla",
+            False,
+            frozenset(
+                {OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}
+            ),
+        ),
+    ],
+)
+def test_identity_and_model_traits_fail_closed(
+    owner: str,
+    field: str,
+    value: object,
+    expected_supported: frozenset[OptimizationFeature],
+) -> None:
+    config = _flash_base_config()
+    target = (
+        config.model_config.hf_text_config
+        if owner == "text_config"
+        else config.model_config
+    )
+    setattr(target, field, value)
+
+    contract = resolve_optimization_contract(config)
+
+    assert contract.supported_features == expected_supported
+    assert not contract.preferred_features
+
+
+def test_hybrid_deepseek_v4_does_not_enable_flash_base_features() -> None:
+    config = _flash_base_config()
+    config.model_config.is_hybrid = True
+
+    contract = resolve_optimization_contract(config)
+
+    assert contract.supported_features == frozenset(
+        {
+            OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD,
+            OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL,
+        }
+    )
+    assert contract.preferred_features == frozenset(
+        {OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL}
+    )
+
+
+def test_non_block128_quantization_fails_closed() -> None:
+    config = _flash_base_config()
+    config.quant_config.weight_block_size = [64, 128]
+    config.model_config.hf_text_config.quantization_config["weight_block_size"] = [
+        64,
+        128,
+    ]
+
+    contract = resolve_optimization_contract(config)
+
+    assert contract.supported_features == frozenset(
+        {OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}
+    )
+    assert not contract.preferred_features
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("hidden_size", 7168),
@@ -158,7 +242,9 @@ def test_one_field_model_mismatch_disables_flash_base_features(
     contract = resolve_optimization_contract(config)
 
     assert contract.model.family is ModelFamily.DEEPSEEK_V4
-    assert not contract.supported_features
+    assert contract.supported_features == frozenset(
+        {OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}
+    )
     assert not contract.preferred_features
 
 
@@ -205,6 +291,46 @@ def test_one_field_execution_mismatch_disables_tp8_profile(
 
     assert contract.supports(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
     assert not contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
+    assert not contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
+    )
+    assert not contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("pipeline_parallel_size", 2),
+        ("data_parallel_size", 2),
+        ("decode_context_parallel_size", 2),
+    ],
+)
+def test_non_reference_parallel_topology_disables_tp8_profile(
+    field: str,
+    value: int,
+) -> None:
+    config = _flash_base_config()
+    setattr(config.parallel_config, field, value)
+
+    contract = resolve_optimization_contract(config)
+
+    assert not contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
+    )
+    assert not contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
+    )
+
+
+def test_pooling_and_missing_quant_runtime_disable_tp8_profile() -> None:
+    config = _flash_base_config()
+    config.quant_config = None
+
+    contract = resolve_optimization_contract(config, is_pooling_model=True)
+
+    assert contract.supports(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
     assert not contract.prefers(
         OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
     )

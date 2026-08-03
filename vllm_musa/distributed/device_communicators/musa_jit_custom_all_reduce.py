@@ -42,10 +42,10 @@ def _use_graph_registered_inputs_for_current_model() -> bool:
 
     contract = resolve_optimization_contract(vllm_config)
     feature = OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD
-    if contract.model.family is not ModelFamily.DEEPSEEK_V4 or not contract.supports(
-        feature
-    ):
+    if contract.model.family is not ModelFamily.DEEPSEEK_V4:
         return True
+    if not contract.supports(feature):
+        return False
 
     compilation_config = getattr(vllm_config, "compilation_config", None)
     capture_sizes = getattr(compilation_config, "cudagraph_capture_sizes", None)

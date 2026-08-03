@@ -56,12 +56,13 @@ def test_clamp_swiglu_group_quant_is_bit_exact(rows: int) -> None:
             10.0,
             20.0,
             float("inf"),
+            float("nan"),
         ],
         device="musa",
         dtype=torch.bfloat16,
     )
-    gate_up[0, :8] = boundary
-    gate_up[0, 256:264] = boundary.flip(0)
+    gate_up[0, :9] = boundary
+    gate_up[0, 256:265] = boundary.flip(0)
 
     reference_q, reference_s = _quant_outputs(rows)
     fused_q, fused_s = _quant_outputs(rows)

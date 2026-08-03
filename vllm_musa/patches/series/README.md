@@ -17,12 +17,10 @@ is pre-patched.
   the highest prefix. Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **104 patches**: this stack adds one follow-up patch that binds the
-DeepSeek-V4 shared-MLP and sparse-indexer decisions to the MUSA optimization
-contract. The base branch adds the shared-expert SwiGLU FP8 patch and removes
-the obsolete auxiliary-overlap patch, leaving its total unchanged. These are MUSA
-source edits against the immutable vLLM commit recorded as `VLLM_COMMIT` in
-`third_party/PINS` (release label `v0.24.0`), applied at build. Runtime
+Currently **104 patches**. The final patch binds DeepSeek-V4 shared-MLP and
+sparse-indexer policy to the MUSA optimization contract. The series contains
+MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
+in `third_party/PINS` (release label `v0.24.0`), applied at build. Runtime
 object/registration patches (which patch live objects at import) are kept
 separately in `vllm_musa/patches/`, not in this build-time series. Run
 `python3 tools/musa_sync.py verify` to replay and verify the complete manifest

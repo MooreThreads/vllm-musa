@@ -57,6 +57,7 @@ def _matches_tp8_reference(execution: ExecutionSignature) -> bool:
         and execution.data_parallel_size == 1
         and execution.decode_context_parallel_size == 1
         and not execution.has_speculative_config
+        and execution.has_quant_config
         and not execution.is_pooling_model
         and execution.cache_dtype == "fp8"
         and execution.max_num_seqs == 1
@@ -81,6 +82,9 @@ def resolve_deepseek_v4_contract(
     supported: set[OptimizationFeature] = set()
     preferred: set[OptimizationFeature] = set()
 
+    if _has_complete_identity(model):
+        supported.add(OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD)
+
     if _matches_flash_base(model):
         supported.update(
             {
@@ -89,7 +93,6 @@ def resolve_deepseek_v4_contract(
                 OptimizationFeature.DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER,
                 OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256,
                 OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256,
-                OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD,
             }
         )
         if execution.has_parallel_config:

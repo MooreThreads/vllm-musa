@@ -90,33 +90,43 @@ def test_graph_registered_inputs_preserve_deepseek_capture_guard(
 
 
 @pytest.mark.parametrize(
-    ("model_type", "architectures", "model_field", "model_value"),
+    ("model_type", "architectures", "expected"),
     [
-        ("deepseek_v4", ("Qwen3ForCausalLM",), None, None),
-        ("qwen3", ("FakeDeepseekV4ForCausalLM",), None, None),
-        ("deepseek_v4", ("DeepseekV4ForCausalLM",), "hidden_size", 7168),
+        ("deepseek_v4", ("Qwen3ForCausalLM",), False),
+        ("qwen3", ("DeepseekV4ForCausalLM",), False),
+        ("qwen3", ("FakeDeepseekV4ForCausalLM",), True),
     ],
 )
-def test_graph_registered_inputs_reject_incomplete_deepseek_identity(
+def test_graph_registered_inputs_fail_closed_for_partial_deepseek_identity(
     monkeypatch: pytest.MonkeyPatch,
     model_type: str,
     architectures: tuple[str, ...],
-    model_field: str | None,
-    model_value: object,
+    expected: bool,
 ) -> None:
     vllm_config = _deepseek_v4_config((1, 2, 4))
     text_config = vllm_config.model_config.hf_text_config
     text_config.model_type = model_type
     text_config.architectures = architectures
     vllm_config.model_config.architectures = architectures
-    if model_field is not None:
-        setattr(text_config, model_field, model_value)
     monkeypatch.setattr(
         "vllm.config.get_current_vllm_config_or_none",
         lambda: vllm_config,
     )
 
-    assert custom_ar._use_graph_registered_inputs_for_current_model() is True
+    assert custom_ar._use_graph_registered_inputs_for_current_model() is expected
+
+
+def test_graph_registered_inputs_guard_all_exact_deepseek_v4_configs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vllm_config = _deepseek_v4_config((1, 2, 4))
+    vllm_config.model_config.hf_text_config.hidden_size = 7168
+    monkeypatch.setattr(
+        "vllm.config.get_current_vllm_config_or_none",
+        lambda: vllm_config,
+    )
+
+    assert custom_ar._use_graph_registered_inputs_for_current_model() is False
 
 
 def test_register_graph_buffers_populates_persistent_rank_data(monkeypatch):
