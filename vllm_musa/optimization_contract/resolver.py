@@ -51,12 +51,12 @@ def _text_config(model_config: Any) -> Any:
 
 
 def _architectures(model_config: Any, text_config: Any) -> tuple[str, ...]:
-    values = getattr(model_config, "architectures", None)
-    if values is None:
+    values = getattr(model_config, "architectures", None) or None
+    if not values:
         hf_config = getattr(model_config, "hf_config", None)
-        values = getattr(hf_config, "architectures", None)
-    if values is None:
-        values = getattr(text_config, "architectures", None)
+        values = getattr(hf_config, "architectures", None) or None
+    if not values:
+        values = getattr(text_config, "architectures", None) or ()
     return tuple(str(value) for value in values or ())
 
 
@@ -71,7 +71,7 @@ def _outer_model_type(model_config: Any, text_config: Any) -> str | None:
 
 
 def _text_architectures(text_config: Any) -> tuple[str, ...]:
-    values = getattr(text_config, "architectures", None)
+    values = getattr(text_config, "architectures", None) or ()
     return tuple(str(value) for value in values or ())
 
 

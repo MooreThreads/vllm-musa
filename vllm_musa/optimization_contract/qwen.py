@@ -274,7 +274,8 @@ def resolve_qwen_contract(
             execution.has_parallel_config
             and not execution.has_speculative_config
             and _single_device(execution, include_dcp=True)
-            and (execution.max_num_seqs is None or execution.max_num_seqs > 0)
+            and execution.max_num_seqs is not None
+            and execution.max_num_seqs > 0
         ):
             preferred.add(OptimizationFeature.QWEN_FA3_SINGLE_REQUEST_METADATA)
     if _qwen2_rope_kv_preferred(model, execution):
