@@ -12,6 +12,11 @@ from vllm.logger import init_logger
 from vllm.utils.torch_utils import direct_register_custom_op
 
 from vllm_musa.jit_kernel.csrc import allreduce as jit_ar
+from vllm_musa.optimization_contract import (
+    ModelFamily,
+    OptimizationFeature,
+    resolve_optimization_contract,
+)
 from vllm_musa.utils.environ import envs
 
 logger = init_logger(__name__)
@@ -35,18 +40,11 @@ def _use_graph_registered_inputs_for_current_model() -> bool:
     except (ImportError, RuntimeError):
         return True
 
-    model_config = getattr(vllm_config, "model_config", None)
-    if model_config is None:
-        return True
-
-    hf_config = getattr(model_config, "hf_config", None)
-    architectures = getattr(model_config, "architectures", None)
-    if architectures is None and hf_config is not None:
-        architectures = getattr(hf_config, "architectures", None)
-    is_deepseek_v4 = getattr(hf_config, "model_type", None) == "deepseek_v4" or any(
-        "DeepseekV4" in str(arch) for arch in architectures or ()
-    )
-    if not is_deepseek_v4:
+    contract = resolve_optimization_contract(vllm_config)
+    feature = OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD
+    if contract.model.family is not ModelFamily.DEEPSEEK_V4 or not contract.supports(
+        feature
+    ):
         return True
 
     compilation_config = getattr(vllm_config, "compilation_config", None)

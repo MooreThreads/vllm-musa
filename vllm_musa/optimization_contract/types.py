@@ -28,6 +28,9 @@ class OptimizationFeature(str, Enum):
     DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256 = (
         "deepseek_v4.tp8_fused_add_rmsnorm_block256"
     )
+    DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD = (
+        "deepseek_v4.car_graph_input_capture_guard"
+    )
     QWEN_V2_SAMPLING = "qwen.v2_sampling"
     QWEN_LEGACY_SAMPLING = "qwen.legacy_sampling"
     QWEN_FA3_SCHEDULER = "qwen.fa3_scheduler"

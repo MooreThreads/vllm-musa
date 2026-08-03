@@ -11,36 +11,112 @@ custom_ar = pytest.importorskip(
 )
 
 
+def _deepseek_v4_config(capture_sizes: tuple[object, ...]) -> SimpleNamespace:
+    text_config = SimpleNamespace(
+        model_type="deepseek_v4",
+        architectures=("DeepseekV4ForCausalLM",),
+        hidden_size=4096,
+        num_hidden_layers=43,
+        num_attention_heads=64,
+        num_key_value_heads=1,
+        head_dim=512,
+        vocab_size=129280,
+        n_routed_experts=256,
+        num_experts_per_tok=6,
+        n_shared_experts=1,
+        moe_intermediate_size=2048,
+        expert_dtype="fp8",
+        hidden_act="silu",
+        swiglu_limit=10.0,
+        index_topk=512,
+        quantization_config={
+            "quant_method": "fp8",
+            "weight_block_size": [128, 128],
+        },
+    )
+    model_config = SimpleNamespace(
+        architectures=("DeepseekV4ForCausalLM",),
+        hf_config=text_config,
+        hf_text_config=text_config,
+        dtype="bfloat16",
+        quantization="deepseek_v4_fp8",
+        use_mla=True,
+        is_hybrid=False,
+        is_moe=True,
+        enforce_eager=False,
+    )
+    return SimpleNamespace(
+        model_config=model_config,
+        parallel_config=SimpleNamespace(
+            tensor_parallel_size=8,
+            pipeline_parallel_size=1,
+            data_parallel_size=1,
+            decode_context_parallel_size=1,
+        ),
+        cache_config=SimpleNamespace(cache_dtype="fp8", block_size=64),
+        scheduler_config=SimpleNamespace(max_num_seqs=1),
+        attention_config=SimpleNamespace(backend="FLASHMLA"),
+        compilation_config=SimpleNamespace(
+            mode="NONE",
+            cudagraph_mode="FULL_DECODE_ONLY",
+            cudagraph_capture_sizes=capture_sizes,
+        ),
+        speculative_config=None,
+        quant_config=SimpleNamespace(weight_block_size=[128, 128]),
+    )
+
+
 @pytest.mark.parametrize(
-    ("model_type", "architectures", "capture_sizes", "expected"),
+    ("capture_sizes", "expected"),
     [
-        ("deepseek_v4", ("DeepseekV4ForCausalLM",), (1,), True),
-        ("deepseek_v4", ("DeepseekV4ForCausalLM",), (1, 2, 4), False),
-        (None, ("DeepseekV4ForCausalLM",), (1, 2, 4), False),
-        ("qwen3", ("Qwen3ForCausalLM",), (1, 2, 4), True),
+        ((1,), True),
+        ((1, 2, 4), False),
+        ((), False),
+        ((1, "invalid"), False),
     ],
 )
-def test_graph_registered_inputs_model_gate(
-    monkeypatch, model_type, architectures, capture_sizes, expected
-):
-    model_config = SimpleNamespace(
-        hf_config=SimpleNamespace(
-            model_type=model_type,
-            architectures=architectures,
-        ),
-        architectures=architectures,
-    )
+def test_graph_registered_inputs_preserve_deepseek_capture_guard(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_sizes: tuple[object, ...],
+    expected: bool,
+) -> None:
+    vllm_config = _deepseek_v4_config(capture_sizes)
     monkeypatch.setattr(
         "vllm.config.get_current_vllm_config_or_none",
-        lambda: SimpleNamespace(
-            model_config=model_config,
-            compilation_config=SimpleNamespace(
-                cudagraph_capture_sizes=capture_sizes,
-            ),
-        ),
+        lambda: vllm_config,
     )
 
     assert custom_ar._use_graph_registered_inputs_for_current_model() is expected
+
+
+@pytest.mark.parametrize(
+    ("model_type", "architectures", "model_field", "model_value"),
+    [
+        ("deepseek_v4", ("Qwen3ForCausalLM",), None, None),
+        ("qwen3", ("FakeDeepseekV4ForCausalLM",), None, None),
+        ("deepseek_v4", ("DeepseekV4ForCausalLM",), "hidden_size", 7168),
+    ],
+)
+def test_graph_registered_inputs_reject_incomplete_deepseek_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    model_type: str,
+    architectures: tuple[str, ...],
+    model_field: str | None,
+    model_value: object,
+) -> None:
+    vllm_config = _deepseek_v4_config((1, 2, 4))
+    text_config = vllm_config.model_config.hf_text_config
+    text_config.model_type = model_type
+    text_config.architectures = architectures
+    vllm_config.model_config.architectures = architectures
+    if model_field is not None:
+        setattr(text_config, model_field, model_value)
+    monkeypatch.setattr(
+        "vllm.config.get_current_vllm_config_or_none",
+        lambda: vllm_config,
+    )
+
+    assert custom_ar._use_graph_registered_inputs_for_current_model() is True
 
 
 def test_register_graph_buffers_populates_persistent_rank_data(monkeypatch):

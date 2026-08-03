@@ -89,6 +89,7 @@ def resolve_deepseek_v4_contract(
                 OptimizationFeature.DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER,
                 OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256,
                 OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256,
+                OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD,
             }
         )
         if execution.has_parallel_config:

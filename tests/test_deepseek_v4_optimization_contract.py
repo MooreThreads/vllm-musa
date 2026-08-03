@@ -84,12 +84,18 @@ def test_flash_base_tp8_resolves_validated_profile() -> None:
     assert contract.prefers(
         OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
     )
+    assert contract.supports(
+        OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD
+    )
 
 
 def test_flash_base_tp4_is_supported_but_not_tp8_preferred() -> None:
     contract = resolve_optimization_contract(_flash_base_config(tp=4))
 
     assert contract.supports(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
+    assert contract.supports(
+        OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD
+    )
     assert not contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
     assert not contract.prefers(
         OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256

@@ -60,3 +60,16 @@ def test_deepseek_tp8_moe_tile_is_selected_by_exact_runtime_shape() -> None:
     assert "is_deepseek_v4_flash_tp8_shape" in source
     assert 'gemv_block = "16x8" if is_deepseek_v4_flash_tp8_shape else "auto"' in source
     assert 'os.environ.get("VLLM_MUSA_GEMV_MOE_BLOCK")' in source
+
+
+def test_custom_all_reduce_uses_contract_identity_and_dynamic_capture_guard() -> None:
+    source = _source(
+        "vllm_musa/distributed/device_communicators/musa_jit_custom_all_reduce.py"
+    )
+
+    assert "DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD" in source
+    assert "contract.model.family is not ModelFamily.DEEPSEEK_V4" in source
+    assert "contract.supports(" in source
+    assert "cudagraph_capture_sizes" in source
+    assert '"DeepseekV4" in str(arch)' not in source
+    assert 'getattr(hf_config, "model_type", None)' not in source
