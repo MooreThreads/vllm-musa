@@ -18,6 +18,8 @@ def _make_builder(flash_attn):
     builder.dcp_rank = 0
     builder.cp_kv_cache_interleave_size = 1
     builder.reorder_batch_threshold = 1
+    builder.num_speculative_tokens = 0
+    builder.decode_threshold = 1
     builder.use_full_cuda_graph = True
     builder.max_cudagraph_size = 8
     builder.max_num_splits = 32
