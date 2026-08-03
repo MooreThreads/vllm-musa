@@ -1,4 +1,4 @@
-"""Source contract for attribute-gated Qwen sampler fast paths."""
+"""Source contract for contract-bound Qwen sampler fast paths."""
 
 from pathlib import Path
 
@@ -19,24 +19,14 @@ AUTO_FAST_PATH_SOURCES = (
 )
 
 
-def test_sampler_traits_are_derived_from_model_architecture() -> None:
+def test_sampler_traits_are_resolved_by_the_contract() -> None:
     source = PATCH.read_text()
 
     assert "VLLM_MUSA_QWEN" not in source
-    assert (
-        "+        self.sampler._musa_qwen_family = is_musa_qwen_text_generation"
-        in source
-    )
-    assert "+            qwen_sampling_architectures = {" in source
-    assert "+            self.sampler._musa_qwen_family = any(" in source
-    for architecture in (
-        "Qwen2ForCausalLM",
-        "Qwen3ForCausalLM",
-        "Qwen3MoeForCausalLM",
-        "Qwen3_5ForConditionalGeneration",
-        "Qwen3_5MoeForConditionalGeneration",
-    ):
-        assert architecture in source
+    assert "resolve_optimization_contract" in source
+    assert "_musa_optimization_contract" in source
+    assert "QWEN_LEGACY_SAMPLING" in source
+    assert "_musa_qwen_family" not in source
 
 
 def test_both_runner_generations_propagate_qwen_traits() -> None:
@@ -56,10 +46,11 @@ def test_followup_qwen_fast_paths_use_model_traits_without_env_flags() -> None:
     sources = {path: path.read_text() for path in AUTO_FAST_PATH_SOURCES}
 
     assert all("VLLM_MUSA_QWEN" not in source for source in sources.values())
-    assert "_musa_qwen_family" in sources[AUTO_FAST_PATH_SOURCES[0]]
-    assert "_musa_qwen_family" in sources[AUTO_FAST_PATH_SOURCES[1]]
-    assert "_musa_qwen_family" in sources[AUTO_FAST_PATH_SOURCES[2]]
-    assert "_musa_qwen_family" in sources[AUTO_FAST_PATH_SOURCES[3]]
+    assert "prefers_optimization" in sources[AUTO_FAST_PATH_SOURCES[0]]
+    assert "QWEN_UNIFORM_SAMPLE_COUNTS" in sources[AUTO_FAST_PATH_SOURCES[1]]
+    assert "QWEN_SAMPLE_INPUT_VIEWS" in sources[AUTO_FAST_PATH_SOURCES[2]]
+    assert "QWEN_UNIFORM_DECODE_VIEWS" in sources[AUTO_FAST_PATH_SOURCES[3]]
+    assert "_is_qwen_runner" in sources[AUTO_FAST_PATH_SOURCES[4]]
     assert "_is_qwen_runner(runner)" in sources[AUTO_FAST_PATH_SOURCES[4]]
     assert "worker_cls.sample = _worker_sample" in sources[AUTO_FAST_PATH_SOURCES[0]]
     assert "_worker_sample_unfiltered_gumbel" not in sources[AUTO_FAST_PATH_SOURCES[0]]

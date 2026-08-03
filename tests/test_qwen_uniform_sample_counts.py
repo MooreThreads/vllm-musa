@@ -9,6 +9,7 @@ import numpy as np
 import torchada  # noqa: F401
 import torch
 
+from qwen_contract_test_utils import qwen_sampler
 from vllm_musa.v1.sample import uniform_sample_counts as sample_counts
 
 
@@ -30,7 +31,7 @@ def install_test_gates(monkeypatch) -> None:
 
 def test_qwen_uniform_sample_counts_accepts_and_reuses(monkeypatch) -> None:
     install_test_gates(monkeypatch)
-    sampler = SimpleNamespace(_musa_qwen_family=True)
+    sampler = qwen_sampler()
     logits = torch.empty((4, 151936), dtype=torch.bfloat16)
     first = sample_counts.select_qwen_uniform_sample_counts(
         sampler, logits, make_batch()
@@ -58,7 +59,7 @@ def test_qwen_uniform_sample_counts_accepts_supported_qwen_vocab_sizes(
     monkeypatch.setattr(sample_counts, "is_musa_tensor", lambda _tensor: True)
     for vocab_size in (151936, 248320):
         output = sample_counts.select_qwen_uniform_sample_counts(
-            SimpleNamespace(_musa_qwen_family=True),
+            qwen_sampler(),
             torch.empty((2, vocab_size), dtype=torch.bfloat16),
             make_batch(2),
         )
@@ -67,7 +68,7 @@ def test_qwen_uniform_sample_counts_accepts_supported_qwen_vocab_sizes(
 
     assert (
         sample_counts.select_qwen_uniform_sample_counts(
-            SimpleNamespace(_musa_qwen_family=True),
+            qwen_sampler(),
             torch.empty((2, 32000), dtype=torch.bfloat16),
             make_batch(2),
         )
@@ -77,7 +78,7 @@ def test_qwen_uniform_sample_counts_accepts_supported_qwen_vocab_sizes(
 
 def test_qwen_uniform_sample_counts_grows_and_changes_dtype(monkeypatch) -> None:
     install_test_gates(monkeypatch)
-    sampler = SimpleNamespace(_musa_qwen_family=True)
+    sampler = qwen_sampler()
     logits = torch.empty((4, 151936), dtype=torch.bfloat16)
     first = sample_counts.select_qwen_uniform_sample_counts(
         sampler, logits, make_batch()
@@ -118,7 +119,7 @@ def test_qwen_uniform_sample_counts_bound_hook(monkeypatch) -> None:
         raising=False,
     )
     sampler = sample_counts.Sampler.__new__(sample_counts.Sampler)
-    sampler._musa_qwen_family = True
+    sampler._musa_optimization_contract = qwen_sampler()._musa_optimization_contract
     logits = torch.empty((4, 151936), dtype=torch.bfloat16)
 
     counts = sampler._musa_select_num_sampled_and_rejected(logits, make_batch())
@@ -153,7 +154,7 @@ def test_qwen_uniform_sample_counts_fails_closed(monkeypatch) -> None:
     for candidate_logits, batch in cases:
         assert (
             sample_counts.select_qwen_uniform_sample_counts(
-                SimpleNamespace(_musa_qwen_family=True), candidate_logits, batch
+                qwen_sampler(), candidate_logits, batch
             )
             is None
         )
@@ -163,7 +164,7 @@ def test_qwen_uniform_sample_counts_rejects_non_qwen_trait(monkeypatch) -> None:
     logits = torch.empty((4, 151936), dtype=torch.bfloat16)
     assert (
         sample_counts.select_qwen_uniform_sample_counts(
-            SimpleNamespace(_musa_qwen_family=False), logits, make_batch()
+            qwen_sampler(enabled=False), logits, make_batch()
         )
         is None
     )
@@ -177,9 +178,7 @@ def test_qwen_uniform_sample_counts_rejects_unsupported_count_dtype(
     batch.seq_lens = batch.seq_lens.to(torch.float32)
     logits = torch.empty((2, 151936), dtype=torch.bfloat16)
     assert (
-        sample_counts.select_qwen_uniform_sample_counts(
-            SimpleNamespace(_musa_qwen_family=True), logits, batch
-        )
+        sample_counts.select_qwen_uniform_sample_counts(qwen_sampler(), logits, batch)
         is None
     )
 
@@ -201,7 +200,7 @@ def test_qwen_async_output_patch_is_tag_gated() -> None:
 def test_qwen_uniform_count_host_tag_is_automatic(monkeypatch) -> None:
     install_test_gates(monkeypatch)
     output = sample_counts.select_qwen_uniform_sample_counts(
-        SimpleNamespace(_musa_qwen_family=True),
+        qwen_sampler(),
         torch.empty((2, 151936), dtype=torch.bfloat16),
         make_batch(2),
     )

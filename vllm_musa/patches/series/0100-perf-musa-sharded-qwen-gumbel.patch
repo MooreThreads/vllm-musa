@@ -113,7 +113,7 @@ index f342e99..f51dae0 100644
                      sample_hidden_states = hidden_states[logits_indices]
 -                logits = self.model.compute_logits(sample_hidden_states)
 +                if current_platform.is_musa() and getattr(
-+                    self.sampler, "_musa_qwen_family", False
++                    self.sampler, "_musa_qwen_legacy_sampling", False
 +                ):
 +                    from vllm_musa.v1.sample.topk_topp_sampler import (
 +                        musa_compute_logits_if_eligible,
@@ -145,7 +145,7 @@ index f342e99..f51dae0 100644
                  else:
 -                    logits = self.model.compute_logits(sample_hidden_states)
 +                    if current_platform.is_musa() and getattr(
-+                        self.sampler, "_musa_qwen_family", False
++                        self.sampler, "_musa_qwen_legacy_sampling", False
 +                    ):
 +                        from vllm_musa.v1.sample.topk_topp_sampler import (
 +                            musa_compute_logits_if_eligible,

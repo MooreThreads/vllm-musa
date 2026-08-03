@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
+from qwen_contract_test_utils import qwen_sampler
+from vllm_musa.optimization_contract import OptimizationFeature
 from vllm_musa.v1.sample import qwen_sample_input_views as sample_views
 
 
@@ -23,12 +25,14 @@ def make_batch(batch_size: int = 4, padded: int = 8):
 def select(monkeypatch, batch=None, *, is_qwen_family=True, **kwargs):
     monkeypatch.setattr(
         "vllm_musa.v1.sample.topk_topp_sampler.can_use_qwen_v2_unfiltered_gumbel",
-        lambda sampler, *args, **kw: sampler._musa_qwen_family,
+        lambda sampler, *args, **kw: sampler._musa_optimization_contract.prefers(
+            OptimizationFeature.QWEN_V2_SAMPLING
+        ),
     )
     batch = batch or make_batch()
     logits = torch.zeros(batch.num_reqs, 16, dtype=torch.bfloat16)
     return sample_views._select_qwen_sample_input_views(
-        SimpleNamespace(_musa_qwen_family=is_qwen_family),
+        qwen_sampler(enabled=is_qwen_family),
         logits,
         batch,
         torch.arange(batch.num_reqs, dtype=torch.int32),

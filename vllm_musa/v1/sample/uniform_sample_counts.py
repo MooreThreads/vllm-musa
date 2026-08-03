@@ -9,6 +9,10 @@ from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.v1.worker.gpu.sample.sampler import Sampler
 
+from vllm_musa.optimization_contract import (
+    OptimizationFeature,
+    prefers_optimization,
+)
 from vllm_musa.v1.sample.topk_topp_sampler import (
     _is_qwen_sampler_vocab,
     is_musa_tensor,
@@ -23,7 +27,10 @@ def select_qwen_uniform_sample_counts(
     sampler: Any, logits: torch.Tensor, input_batch: Any
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
     """Return cached one/zero counts for non-prefill Qwen decode."""
-    if not getattr(sampler, "_musa_qwen_family", False):
+    if not prefers_optimization(
+        sampler,
+        OptimizationFeature.QWEN_UNIFORM_SAMPLE_COUNTS,
+    ):
         return None
     if not current_platform.is_musa() or not is_musa_tensor(logits):
         return None

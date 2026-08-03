@@ -24,25 +24,16 @@ def test_qwen_unit_temperature_metadata_gate_is_fail_closed() -> None:
     assert "temperature_cpu == np.float32(1.0)" in source
     assert "VLLM_MUSA_QWEN_SKIP_UNIT_TEMPERATURE" not in source
     assert "uniform_temperature=uniform_temperature" in source
-    assert "current_platform.is_musa()" in source
-    assert "not self.is_pooling_model" in source
-    assert "self.speculative_config is None" in source
-    for architecture in (
-        "Qwen2ForCausalLM",
-        "Qwen2MoeForCausalLM",
-        "Qwen3ForCausalLM",
-        "Qwen3MoeForCausalLM",
-        "Qwen3_5ForConditionalGeneration",
-        "Qwen3_5MoeForConditionalGeneration",
-    ):
-        assert architecture in source
+    assert "resolve_optimization_contract" in source
+    assert "QWEN_LEGACY_SAMPLING" in source
 
 
 def test_qwen_unit_temperature_sampler_keeps_original_fallback() -> None:
     source = SAMPLER.read_text()
 
     assert "def _can_skip_legacy_qwen_unit_temperature" in source
-    assert 'getattr(sampler, "_musa_qwen_skip_unit_temperature", False)' in source
+    assert "prefers_optimization" in source
+    assert "QWEN_LEGACY_SAMPLING" in source
     assert 'getattr(sampling_metadata, "all_random", False)' in source
     assert "_is_qwen_sampler_vocab(logits)" in source
     assert 'sampling_metadata, "uniform_temperature", None' in source

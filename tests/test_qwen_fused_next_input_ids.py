@@ -8,6 +8,7 @@ import numpy as np
 import torchada  # noqa: F401
 import torch
 
+from qwen_contract_test_utils import qwen_sampler
 from vllm_musa.v1.worker import qwen_fused_next_input_ids as fused_inputs
 
 
@@ -17,7 +18,7 @@ def make_runner(capacity: int = 8, *, is_qwen_family: bool = True):
             input_ids=torch.zeros(capacity, dtype=torch.int32)
         ),
         model_state=SimpleNamespace(num_new_sampled_tokens_per_step=1),
-        sampler=SimpleNamespace(_musa_qwen_family=is_qwen_family),
+        sampler=qwen_sampler(enabled=is_qwen_family),
         use_pp=False,
     )
 

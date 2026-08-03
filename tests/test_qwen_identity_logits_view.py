@@ -3,12 +3,13 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
+from qwen_contract_test_utils import qwen_sampler
 from vllm_musa.v1.worker import qwen_identity_logits_view as identity_view
 
 
 def make_runner(architecture: str = "Qwen3ForCausalLM", sampled_tokens: int = 1):
     return SimpleNamespace(
-        sampler=SimpleNamespace(_musa_qwen_family=architecture.startswith("Qwen")),
+        sampler=qwen_sampler(enabled=architecture.startswith("Qwen")),
         model_state=SimpleNamespace(num_new_sampled_tokens_per_step=sampled_tokens),
     )
 

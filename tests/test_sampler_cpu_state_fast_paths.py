@@ -18,6 +18,7 @@ import torch
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.worker.gpu_input_batch import InputBatch
 
+from qwen_contract_test_utils import qwen_sampler
 from vllm_musa.v1.sample import topk_topp_sampler as sampler
 
 requires_musa = pytest.mark.skipif(
@@ -71,7 +72,7 @@ def test_uniform_sampler_metadata_patch_is_active_and_qwen_gated() -> None:
 
 
 def test_legacy_qwen_unit_temperature_skip_is_exact_and_vocab_gated() -> None:
-    enabled_sampler = SimpleNamespace(_musa_qwen_skip_unit_temperature=True)
+    enabled_sampler = qwen_sampler()
     metadata = SimpleNamespace(all_random=True, uniform_temperature=1.0)
     assert sampler._can_skip_legacy_qwen_unit_temperature(
         enabled_sampler, torch.empty((4, 248320)), metadata
@@ -98,7 +99,7 @@ def test_legacy_qwen_unit_temperature_skip_is_exact_and_vocab_gated() -> None:
     )
     metadata.all_random = True
     assert not sampler._can_skip_legacy_qwen_unit_temperature(
-        SimpleNamespace(_musa_qwen_skip_unit_temperature=False),
+        qwen_sampler(enabled=False),
         torch.empty((4, 248320)),
         metadata,
     )
@@ -120,7 +121,7 @@ def test_legacy_sample_skips_only_cpu_proven_qwen_unit_temperature(
             forward=SimpleNamespace(__name__="forward_native")
         ),
         use_fp64_gumbel=False,
-        _musa_qwen_skip_unit_temperature=True,
+        _musa_optimization_contract=qwen_sampler()._musa_optimization_contract,
     )
     metadata = SimpleNamespace(
         all_greedy=False,
@@ -150,7 +151,9 @@ def test_legacy_sample_skips_only_cpu_proven_qwen_unit_temperature(
     sampler._sample(fake_sampler, torch.empty((4, 32000)), metadata)
     assert len(temperature_calls) == 2
 
-    fake_sampler._musa_qwen_skip_unit_temperature = False
+    fake_sampler._musa_optimization_contract = qwen_sampler(
+        enabled=False
+    )._musa_optimization_contract
     sampler._sample(fake_sampler, torch.empty((4, 248320)), metadata)
     assert len(temperature_calls) == 3
 
@@ -190,7 +193,9 @@ def _gumbel_gate_sampler(
         num_speculative_tokens=num_speculative_tokens,
         use_fp64_gumbel=use_fp64_gumbel,
         logprobs_mode=logprobs_mode,
-        _musa_qwen_family=is_qwen_family,
+        _musa_optimization_contract=qwen_sampler(
+            enabled=is_qwen_family
+        )._musa_optimization_contract,
     )
 
 
@@ -210,7 +215,9 @@ def _unfiltered_gumbel_gate_sampler(
         num_speculative_tokens=1,
         use_fp64_gumbel=False,
         logprobs_mode="raw_logprobs",
-        _musa_qwen_family=is_qwen_family,
+        _musa_optimization_contract=qwen_sampler(
+            enabled=is_qwen_family
+        )._musa_optimization_contract,
         logit_bias_state=SimpleNamespace(use_logit_bias=np.zeros(rows, dtype=np.bool_)),
         penalties_state=SimpleNamespace(use_penalty=np.zeros(rows, dtype=np.bool_)),
         bad_words_state=SimpleNamespace(
@@ -1200,7 +1207,8 @@ def test_seeded_large_uniform_top_k_top_p_uses_cpu_scalar(monkeypatch) -> None:
         apply_min_p=lambda *_args: None,
     )
     fake_sampler = SimpleNamespace(
-        sampling_states=sampling_states, _musa_qwen_family=True
+        sampling_states=sampling_states,
+        _musa_optimization_contract=qwen_sampler()._musa_optimization_contract,
     )
     mapping = torch.arange(rows, dtype=torch.int64)
     mapping_np = np.arange(rows, dtype=np.int64)
@@ -1235,7 +1243,8 @@ def test_seeded_small_batch_qwen_vocab_uses_cpu_scalar(monkeypatch) -> None:
         apply_min_p=lambda *_args: None,
     )
     fake_sampler = SimpleNamespace(
-        sampling_states=sampling_states, _musa_qwen_family=True
+        sampling_states=sampling_states,
+        _musa_optimization_contract=qwen_sampler()._musa_optimization_contract,
     )
     mapping = torch.arange(rows, dtype=torch.int64)
     mapping_np = np.arange(rows, dtype=np.int64)
@@ -1302,7 +1311,8 @@ def test_non_qwen_vocab_keeps_tensor_top_k_path(monkeypatch) -> None:
         apply_min_p=lambda *_args: None,
     )
     fake_sampler = SimpleNamespace(
-        sampling_states=sampling_states, _musa_qwen_family=True
+        sampling_states=sampling_states,
+        _musa_optimization_contract=qwen_sampler()._musa_optimization_contract,
     )
     mapping = torch.arange(rows, dtype=torch.int64)
     mapping_np = np.arange(rows, dtype=np.int64)

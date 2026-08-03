@@ -91,23 +91,16 @@ diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runne
 index 30ca2ddc56..4905fe7516 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
-@@ -341,6 +341,20 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -341,6 +341,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                      self.speculative_config,
                      self.device,
                  )
-+            qwen_sampling_architectures = {
-+                "Qwen2ForCausalLM",
-+                "Qwen2MoeForCausalLM",
-+                "Qwen3ForCausalLM",
-+                "Qwen3MoeForCausalLM",
-+                "Qwen3_5ForConditionalGeneration",
-+                "Qwen3_5MoeForConditionalGeneration",
-+                "Qwen3_5ForCausalLM",
-+                "Qwen3_5MoeForCausalLM",
-+            }
-+            self.sampler._musa_qwen_family = any(
-+                architecture in qwen_sampling_architectures
-+                for architecture in (self.model_config.architectures or ())
++            from vllm_musa.optimization_contract import (
++                resolve_optimization_contract,
++            )
++
++            self.sampler._musa_optimization_contract = (
++                resolve_optimization_contract(model_config=self.model_config)
 +            )
              self.prompt_logprobs_worker = PromptLogprobsWorker(self.max_num_reqs)
              self.structured_outputs_worker = StructuredOutputsWorker(
@@ -149,40 +142,35 @@ diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runne
 index c1f1b43606..487ceda13c 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -812,6 +812,36 @@ class GPUModelRunner(
+@@ -812,6 +812,31 @@ class GPUModelRunner(
          self.query_pos = self._make_buffer(arange_size, dtype=torch.int64)
          self._arange_scratch = np.empty(arange_size, dtype=np.int64)
 
-+        qwen_text_generation_architectures = {
-+            "Qwen2ForCausalLM",
-+            "Qwen2MoeForCausalLM",
-+            "Qwen3ForCausalLM",
-+            "Qwen3MoeForCausalLM",
-+            "Qwen3_5ForConditionalGeneration",
-+            "Qwen3_5MoeForConditionalGeneration",
-+        }
++        from vllm_musa.optimization_contract import (
++            OptimizationFeature,
++            resolve_optimization_contract,
++        )
++
++        optimization_contract = resolve_optimization_contract(
++            self.vllm_config,
++            is_pooling_model=self.is_pooling_model,
++        )
 +        is_musa_qwen_text_generation = (
 +            current_platform.is_musa()
-+            and not self.is_pooling_model
-+            and self.speculative_config is None
-+            and any(
-+                architecture in qwen_text_generation_architectures
-+                for architecture in (self.model_config.architectures or ())
++            and optimization_contract.prefers(
++                OptimizationFeature.QWEN_LEGACY_SAMPLING
 +            )
 +        )
-+        self.sampler._musa_qwen_family = is_musa_qwen_text_generation
-+        self.sampler.topk_topp_sampler._musa_qwen_family = (
-+            is_musa_qwen_text_generation
++        self.sampler._musa_qwen_legacy_sampling = is_musa_qwen_text_generation
++        self.sampler._musa_optimization_contract = optimization_contract
++        self.sampler.topk_topp_sampler._musa_optimization_contract = (
++            optimization_contract
 +        )
 +        self._musa_qwen_uniform_decode_logits_indices = (
 +            torch.arange(self.max_num_reqs, dtype=torch.int32, device=self.device)
 +            if is_musa_qwen_text_generation
 +            else None
 +        )
-+        self.sampler._musa_qwen_skip_unit_temperature = (
-+            is_musa_qwen_text_generation
-+        )
-+
          # MUSA-3406: reusable CPU/GPU buffers for speculative metadata indices.
          # Avoid per-step torch.from_numpy(...).to(device) pageable uploads in
          # _calc_spec_decode_metadata on the TP8 DeepSeek-V4 decode path.

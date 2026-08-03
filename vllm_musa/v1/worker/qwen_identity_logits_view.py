@@ -6,6 +6,11 @@ from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.v1.worker.gpu.model_runner import GPUModelRunner
 
+from vllm_musa.optimization_contract import (
+    OptimizationFeature,
+    prefers_optimization,
+)
+
 logger = init_logger(__name__)
 
 
@@ -14,7 +19,10 @@ def _is_musa_tensor(tensor: torch.Tensor) -> bool:
 
 
 def _is_qwen_runner(runner: Any) -> bool:
-    return bool(getattr(getattr(runner, "sampler", None), "_musa_qwen_family", False))
+    return prefers_optimization(
+        getattr(runner, "sampler", None),
+        OptimizationFeature.QWEN_UNIFORM_DECODE_VIEWS,
+    )
 
 
 def select_qwen_identity_logits_view(

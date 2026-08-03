@@ -10,6 +10,11 @@ import torchada  # noqa: F401
 import torch
 # isort: on
 
+from vllm_musa.optimization_contract import (
+    OptimizationFeature,
+    prefers_optimization,
+)
+
 
 def _select_qwen_sample_input_views(
     sampler: Any,
@@ -19,7 +24,10 @@ def _select_qwen_sample_input_views(
     idx_mapping_np: np.ndarray,
     return_logprobs: bool,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
-    if not getattr(sampler, "_musa_qwen_family", False):
+    if not prefers_optimization(
+        sampler,
+        OptimizationFeature.QWEN_SAMPLE_INPUT_VIEWS,
+    ):
         return None
     if return_logprobs:
         return None
