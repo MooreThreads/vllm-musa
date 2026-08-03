@@ -735,11 +735,14 @@ class TestMUSAPlatformDefaults:
     ):
         from types import SimpleNamespace
 
+        from vllm.config import CUDAGraphMode
+        from vllm.config.compilation import CompilationMode
+
         is_deepseek_v4 = architectures == ["DeepseekV4ForCausalLM"]
         if is_deepseek_v4 and attention_backend is None:
             attention_backend = "FLASHMLA"
         if is_deepseek_v4 and cudagraph_mode is None:
-            cudagraph_mode = "FULL_DECODE_ONLY"
+            cudagraph_mode = CUDAGraphMode.FULL_DECODE_ONLY
         if is_deepseek_v4 and quantization_config is None:
             quantization_config = {
                 "quant_method": "fp8",
@@ -780,6 +783,9 @@ class TestMUSAPlatformDefaults:
             ),
             parallel_config=SimpleNamespace(
                 tensor_parallel_size=tensor_parallel_size,
+                pipeline_parallel_size=1,
+                data_parallel_size=1,
+                decode_context_parallel_size=1,
                 worker_cls="auto",
             ),
             cache_config=SimpleNamespace(
@@ -792,9 +798,12 @@ class TestMUSAPlatformDefaults:
                 max_num_seqs=1 if is_deepseek_v4 else 64,
             ),
             attention_config=SimpleNamespace(backend=attention_backend),
+            quant_config=SimpleNamespace(weight_block_size=[128, 128])
+            if is_deepseek_v4
+            else None,
             compilation_config=SimpleNamespace(
                 custom_ops=[],
-                mode="NONE",
+                mode=CompilationMode.NONE if is_deepseek_v4 else "NONE",
                 cudagraph_mode=cudagraph_mode,
                 max_cudagraph_capture_size=max_cudagraph_capture_size,
                 cudagraph_capture_sizes=cudagraph_capture_sizes,

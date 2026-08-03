@@ -524,6 +524,7 @@ def test_musa_dispatcher_routes_forced_backends(monkeypatch):
     assert native_calls[0][1] == {
         "inplace": False,
         "_allow_deepgemm_prefill": False,
+        "_gemv_block": (16, 8),
     }
 
     grouped_calls = []
