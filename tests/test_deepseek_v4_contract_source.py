@@ -9,8 +9,10 @@ def _source(path: str) -> str:
 
 def test_platform_uses_contract_without_model_derived_kernel_envs() -> None:
     source = _source("vllm_musa/platform.py")
+    policy = _source("vllm_musa/optimization_contract/policy.py")
 
-    assert "DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256" in source
+    assert "DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256" in policy
+    assert "deepseek_v4_flashmla_sparse_page_size" in policy
     assert "_is_deepseek_v4_model" not in source
     assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in source
     assert "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X" not in source

@@ -36,6 +36,7 @@ class TestCustomOpsRuntimePatches:
         # the dflash fallback is now the vllm._custom_ops cat-6 object
         # patch; load + apply() it and assert it rebinds to the _shared helpers.
         import vllm
+
         from vllm_musa.patches import _get_patch_files, _load_patch_module, _shared
 
         vllm_ops = ModuleType("vllm._custom_ops")
@@ -145,17 +146,15 @@ class TestCompilationBackendPatch:
         )
 
     def test_qwen2_presplit_keeps_baseline_split_and_hashes_helper(self, monkeypatch):
-        from vllm_musa import platform
         from vllm_musa.compilation import qwen2_rope_kv_presplit as presplit
+        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(
-            platform, "_is_qwen2_rope_kv_fusion_config", lambda _config: True
-        )
+        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
         monkeypatch.setattr(
             presplit, "qwen2_rope_kv_backend_supported", lambda _config: True
         )
@@ -190,17 +189,15 @@ class TestCompilationBackendPatch:
         )
 
     def test_qwen2_presplit_mismatch_keeps_baseline_config(self, monkeypatch):
-        from vllm_musa import platform
         from vllm_musa.compilation import qwen2_rope_kv_presplit as presplit
+        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(
-            platform, "_is_qwen2_rope_kv_fusion_config", lambda _config: True
-        )
+        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
         monkeypatch.setattr(
             presplit, "qwen2_rope_kv_backend_supported", lambda _config: True
         )
@@ -222,17 +219,15 @@ class TestCompilationBackendPatch:
         assert compilation_config.traced_files == set()
 
     def test_qwen2_presplit_rejects_unsupported_attention_backend(self, monkeypatch):
-        from vllm_musa import platform
         from vllm_musa.compilation import qwen2_rope_kv_presplit as presplit
+        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(
-            platform, "_is_qwen2_rope_kv_fusion_config", lambda _config: True
-        )
+        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
         monkeypatch.setattr(
             presplit, "qwen2_rope_kv_backend_supported", lambda _config: False
         )
@@ -256,17 +251,15 @@ class TestCompilationBackendPatch:
         monkeypatch,
         text_config_source: str,
     ):
-        from vllm_musa import platform
         from vllm_musa.compilation import qwen3_qk_rope_kv_presplit as presplit
+        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(
-            platform, "_is_qwen3_qk_rope_kv_fusion_config", lambda _config: True
-        )
+        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
         monkeypatch.setattr(
             presplit,
             "qwen3_qk_rope_kv_backend_supported",
@@ -310,17 +303,15 @@ class TestCompilationBackendPatch:
         )
 
     def test_qwen3_presplit_missing_layer_count_is_fail_closed(self, monkeypatch):
-        from vllm_musa import platform
         from vllm_musa.compilation import qwen3_qk_rope_kv_presplit as presplit
+        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(
-            platform, "_is_qwen3_qk_rope_kv_fusion_config", lambda _config: True
-        )
+        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
 
         def unexpected_backend_check(*_args, **_kwargs):
             pytest.fail("backend support must not run without a layer count")
@@ -348,17 +339,15 @@ class TestCompilationBackendPatch:
         assert compilation_config.traced_files == set()
 
     def test_qwen3_presplit_site_mismatch_is_atomic(self, monkeypatch):
-        from vllm_musa import platform
         from vllm_musa.compilation import qwen3_qk_rope_kv_presplit as presplit
+        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(
-            platform, "_is_qwen3_qk_rope_kv_fusion_config", lambda _config: True
-        )
+        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
         monkeypatch.setattr(
             presplit,
             "qwen3_qk_rope_kv_backend_supported",
@@ -396,17 +385,15 @@ class TestCompilationBackendPatch:
         assert compilation_config.traced_files == set()
 
     def test_qwen3_presplit_rejects_unsupported_attention_backend(self, monkeypatch):
-        from vllm_musa import platform
         from vllm_musa.compilation import qwen3_qk_rope_kv_presplit as presplit
+        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(
-            platform, "_is_qwen3_qk_rope_kv_fusion_config", lambda _config: True
-        )
+        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
         monkeypatch.setattr(
             presplit,
             "qwen3_qk_rope_kv_backend_supported",
@@ -517,9 +504,9 @@ class TestMUSAFlashAttentionReshapeCache:
     """
 
     def _load_fa_utils_with_musa_platform(self, monkeypatch, musa_ops_namespace):
+        import vllm
         import vllm.platforms as vllm_platforms
 
-        import vllm
         import vllm_musa
 
         monkeypatch.setenv("VLLM_MUSA_RESHAPE_CACHE_FLASH", "1")
@@ -1077,9 +1064,7 @@ class TestMUSAPlatformDefaults:
             assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "32x8"
             assert os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] == "128"
 
-    def test_update_block_size_for_backend_defaults_and_hybrid_modes(
-        self, monkeypatch
-    ):
+    def test_update_block_size_for_backend_defaults_and_hybrid_modes(self, monkeypatch):
         # The MUSA platform seeds a 64-element KV page for non-hybrid,
         # non-user-specified configs so paged FMHA/MLA decode takes the TME
         # bulk-gather path. Fixed-page kernels and explicit user overrides are
@@ -1254,7 +1239,11 @@ class TestMUSAFp8MoEPadding:
         monkeypatch.setattr(
             musa_fp8,
             "_ORIGINAL_FP8_MOE_MAYBE_ROUNDUP_SIZES",
-            lambda self, hidden_size, intermediate_size_per_partition, act_dtype, moe_parallel_config: (
+            lambda self,
+            hidden_size,
+            intermediate_size_per_partition,
+            act_dtype,
+            moe_parallel_config: (
                 hidden_size,
                 intermediate_size_per_partition,
             ),

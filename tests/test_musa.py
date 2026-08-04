@@ -140,7 +140,8 @@ class TestMUSAPlatformBase:
     def test_gated_qkv_inductor_priority_excludes_routed_moe(self):
         from vllm.config.compilation import CompilationMode
 
-        from vllm_musa.platform import MUSAPlatformBase, _has_routed_experts
+        from vllm_musa.optimization_contract.policy import model_has_routed_experts
+        from vllm_musa.platform import MUSAPlatformBase
 
         compilation_config = SimpleNamespace(
             backend="inductor",
@@ -155,18 +156,18 @@ class TestMUSAPlatformBase:
         )
         priority = MUSAPlatformBase.get_default_ir_op_priority(dense_config)
         assert priority.gated_qkv_rms_norm_rope == ["musa_inductor", "native"]
-        assert not _has_routed_experts(dense_model)
+        assert not model_has_routed_experts(dense_model)
 
         authoritative_moe = SimpleNamespace(
             is_moe=True,
             hf_text_config=SimpleNamespace(model_type="heterogeneous_blocks"),
         )
-        assert _has_routed_experts(authoritative_moe)
+        assert model_has_routed_experts(authoritative_moe)
         authoritative_dense = SimpleNamespace(
             is_moe=False,
             hf_text_config=SimpleNamespace(num_experts=8),
         )
-        assert not _has_routed_experts(authoritative_dense)
+        assert not model_has_routed_experts(authoritative_dense)
 
         for expert_count_name in (
             "num_experts",
@@ -183,7 +184,7 @@ class TestMUSAPlatformBase:
             )
             priority = MUSAPlatformBase.get_default_ir_op_priority(moe_config)
             assert priority.gated_qkv_rms_norm_rope == ["native"]
-            assert _has_routed_experts(moe_model)
+            assert model_has_routed_experts(moe_model)
 
         compilation_config.mode = CompilationMode.NONE
         priority = MUSAPlatformBase.get_default_ir_op_priority(dense_config)
@@ -256,7 +257,13 @@ class TestMUSAPlatformBase:
     def test_qwen2_rope_kv_fusion_exact_config_gate(self):
         import torch
 
-        from vllm_musa.platform import _is_qwen2_rope_kv_fusion_config
+        from vllm_musa.optimization_contract import policy
+        from vllm_musa.optimization_contract.types import OptimizationFeature
+
+        def is_eligible(config):
+            return policy.prefers_feature(
+                config, OptimizationFeature.QWEN2_ROPE_KV_PRESPLIT
+            )
 
         def make_config(model_type: str, kv_heads, intermediate_size):
             return SimpleNamespace(
@@ -283,22 +290,28 @@ class TestMUSAPlatformBase:
                 speculative_config=None,
             )
 
-        assert not _is_qwen2_rope_kv_fusion_config(make_config("qwen2", None, None))
-        assert _is_qwen2_rope_kv_fusion_config(make_config("cosyvoice3", None, None))
+        assert not is_eligible(make_config("qwen2", None, None))
+        assert is_eligible(make_config("cosyvoice3", None, None))
         config = make_config("qwen2", 2, 4864)
-        assert _is_qwen2_rope_kv_fusion_config(config)
+        assert is_eligible(config)
         config.cache_config = SimpleNamespace(cache_dtype="bfloat16", block_size=64)
-        assert _is_qwen2_rope_kv_fusion_config(config)
+        assert is_eligible(config)
         config.cache_config.block_size = 128
-        assert not _is_qwen2_rope_kv_fusion_config(config)
+        assert not is_eligible(config)
         config.cache_config.block_size = 64
         config.quant_config = object()
-        assert not _is_qwen2_rope_kv_fusion_config(config)
+        assert not is_eligible(config)
 
     def test_qwen3_qk_rope_kv_fusion_exact_config_gate(self):
         import torch
 
-        from vllm_musa.platform import _is_qwen3_qk_rope_kv_fusion_config
+        from vllm_musa.optimization_contract import policy
+        from vllm_musa.optimization_contract.types import OptimizationFeature
+
+        def is_eligible(config):
+            return policy.prefers_feature(
+                config, OptimizationFeature.QWEN3_QK_ROPE_KV_PRESPLIT
+            )
 
         def make_config(
             *,
@@ -357,10 +370,10 @@ class TestMUSAPlatformBase:
             num_attention_heads=32,
         )
 
-        assert _is_qwen3_qk_rope_kv_fusion_config(qwen3_0_6b)
-        assert _is_qwen3_qk_rope_kv_fusion_config(qwen3_8b)
+        assert is_eligible(qwen3_0_6b)
+        assert is_eligible(qwen3_8b)
 
-        assert not _is_qwen3_qk_rope_kv_fusion_config(
+        assert not is_eligible(
             make_config(
                 hidden_size=1024,
                 intermediate_size=3072,
@@ -370,7 +383,7 @@ class TestMUSAPlatformBase:
                 architecture="Qwen2ForCausalLM",
             )
         )
-        assert not _is_qwen3_qk_rope_kv_fusion_config(
+        assert not is_eligible(
             make_config(
                 hidden_size=2048,
                 intermediate_size=6144,
@@ -382,7 +395,7 @@ class TestMUSAPlatformBase:
                 architecture="Qwen3_5ForCausalLM",
             )
         )
-        assert not _is_qwen3_qk_rope_kv_fusion_config(
+        assert not is_eligible(
             make_config(
                 hidden_size=4096,
                 intermediate_size=12288,
@@ -391,7 +404,7 @@ class TestMUSAPlatformBase:
                 tensor_parallel_size=2,
             )
         )
-        assert not _is_qwen3_qk_rope_kv_fusion_config(
+        assert not is_eligible(
             make_config(
                 hidden_size=4096,
                 intermediate_size=12288,
@@ -400,7 +413,7 @@ class TestMUSAPlatformBase:
                 quantization="fp8",
             )
         )
-        assert not _is_qwen3_qk_rope_kv_fusion_config(
+        assert not is_eligible(
             make_config(
                 hidden_size=4096,
                 intermediate_size=12288,
@@ -409,7 +422,7 @@ class TestMUSAPlatformBase:
                 quant_config=object(),
             )
         )
-        assert not _is_qwen3_qk_rope_kv_fusion_config(
+        assert not is_eligible(
             make_config(
                 hidden_size=4096,
                 intermediate_size=12288,

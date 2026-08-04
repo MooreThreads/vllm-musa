@@ -145,12 +145,12 @@ def _validated_qwen3_config(**overrides):
     ],
 )
 def test_validated_qwen3_8b_auto_scope(overrides) -> None:
-    from vllm_musa.platform import _is_validated_qwen3_8b_fp8_single_gpu
+    from vllm_musa.optimization_contract import policy
+    from vllm_musa.optimization_contract.types import OptimizationFeature
 
-    assert _is_validated_qwen3_8b_fp8_single_gpu(_validated_qwen3_config())
-    assert not _is_validated_qwen3_8b_fp8_single_gpu(
-        _validated_qwen3_config(**overrides)
-    )
+    feature = OptimizationFeature.QWEN3_DENSE_FP8_POST_GRAD_FUSIONS
+    assert policy.prefers_feature(_validated_qwen3_config(), feature)
+    assert not policy.prefers_feature(_validated_qwen3_config(**overrides), feature)
 
 
 def test_default_auto_scope_is_evaluated_per_config() -> None:

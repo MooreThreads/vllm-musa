@@ -36,12 +36,20 @@ QWEN_LEGACY_SAMPLING_ARCHITECTURES = frozenset(
 QWEN_FA3_ARCHITECTURES = frozenset(
     {*QWEN_LEGACY_SAMPLING_ARCHITECTURES, "CosyVoice3Model"}
 )
-_QWEN35_ARCHITECTURES = frozenset(
+_QWEN35_36_ARCHITECTURES = frozenset(
     {
         "Qwen3_5ForConditionalGeneration",
         "Qwen3_5MoeForConditionalGeneration",
         "Qwen3_5ForCausalLM",
         "Qwen3_5MoeForCausalLM",
+    }
+)
+_QWEN35_36_MODEL_TYPES = frozenset(
+    {
+        "qwen3_5",
+        "qwen3_5_text",
+        "qwen3_5_moe",
+        "qwen3_5_moe_text",
     }
 )
 
@@ -232,12 +240,13 @@ def resolve_qwen_contract(
     if "CosyVoice3Model" in architectures or model.model_type == "cosyvoice3":
         family = ModelFamily.QWEN2
         role = ModelRole.COSYVOICE_TALKER
-    elif architectures & _QWEN35_ARCHITECTURES or model.model_type in {
-        "qwen3_5",
-        "qwen3_5_text",
-        "qwen3_5_moe",
-        "qwen3_5_moe_text",
-    }:
+    # Current Qwen3.6 checkpoints deliberately reuse the Qwen3.5 HF schema:
+    # Qwen3_5[Moe]ForConditionalGeneration with qwen3_5[_moe][_text].
+    # A future Qwen3.6 schema change fails closed until explicitly added.
+    elif (
+        architectures & _QWEN35_36_ARCHITECTURES
+        or model.model_type in _QWEN35_36_MODEL_TYPES
+    ):
         family = ModelFamily.QWEN35_36
         role = ModelRole.TEXT
     elif (

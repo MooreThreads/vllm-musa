@@ -22,9 +22,12 @@ def _try_qwen2_rope_kv_presplit(backend, graph) -> int:
         return 0
 
     from vllm_musa.compilation import qwen2_rope_kv_presplit as presplit
-    from vllm_musa.platform import _is_qwen2_rope_kv_fusion_config
+    from vllm_musa.optimization_contract import policy
+    from vllm_musa.optimization_contract.types import OptimizationFeature
 
-    if not _is_qwen2_rope_kv_fusion_config(vllm_config):
+    if not policy.prefers_feature(
+        vllm_config, OptimizationFeature.QWEN2_ROPE_KV_PRESPLIT
+    ):
         return 0
 
     if not presplit.qwen2_rope_kv_backend_supported(vllm_config):
@@ -81,9 +84,12 @@ def _try_qwen3_qk_rope_kv_presplit(backend, graph) -> int:
         return 0
 
     from vllm_musa.compilation import qwen3_qk_rope_kv_presplit as presplit
-    from vllm_musa.platform import _is_qwen3_qk_rope_kv_fusion_config
+    from vllm_musa.optimization_contract import policy
+    from vllm_musa.optimization_contract.types import OptimizationFeature
 
-    if not _is_qwen3_qk_rope_kv_fusion_config(vllm_config):
+    if not policy.prefers_feature(
+        vllm_config, OptimizationFeature.QWEN3_QK_ROPE_KV_PRESPLIT
+    ):
         return 0
     model_config = getattr(vllm_config, "model_config", None)
     hf_text_config = getattr(model_config, "hf_text_config", None)

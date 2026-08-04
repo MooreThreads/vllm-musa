@@ -34,84 +34,13 @@ from vllm_musa.optimization_contract import (
     OptimizationFeature,
     resolve_optimization_contract,
 )
+from vllm_musa.optimization_contract import policy as contract_policy
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
-
-
-def _has_routed_experts(model_config: Any | None) -> bool:
-    """Return whether the text model uses routed MoE experts.
-
-    Real vLLM ``ModelConfig`` objects expose the authoritative ``is_moe``
-    property, including heterogeneous ``block_configs``. The remaining checks
-    only support lightweight config doubles and older integrations.
-    """
-    if model_config is None:
-        return False
-
-    is_moe = getattr(model_config, "is_moe", None)
-    if is_moe is not None:
-        return bool(is_moe)
-
-    hf_text_config = getattr(model_config, "hf_text_config", None)
-    if hf_text_config is None:
-        hf_config = getattr(model_config, "hf_config", None)
-        hf_text_config = getattr(hf_config, "text_config", hf_config)
-    for name in (
-        "num_experts",
-        "moe_num_experts",
-        "n_routed_experts",
-        "num_local_experts",
-    ):
-        if getattr(hf_text_config, name, 0):
-            return True
-
-    architectures = getattr(model_config, "architectures", None)
-    if architectures is None:
-        architectures = getattr(hf_text_config, "architectures", None)
-    return any(
-        "moe" in str(architecture).lower() for architecture in architectures or ()
-    )
-
-
-def _is_validated_qwen3_8b_fp8_single_gpu(vllm_config: Any) -> bool:
-    """Return whether the validated Qwen3-8B FP8 single-GPU scope is selected."""
-    return resolve_optimization_contract(vllm_config).prefers(
-        OptimizationFeature.QWEN3_DENSE_FP8_POST_GRAD_FUSIONS
-    )
-
-
-def _is_qwen2_rope_kv_fusion_config(vllm_config: Any) -> bool:
-    """Return whether the config is eligible for the exact MP31 Qwen2 fusion."""
-    return resolve_optimization_contract(vllm_config).prefers(
-        OptimizationFeature.QWEN2_ROPE_KV_PRESPLIT
-    )
-
-
-def _is_qwen3_qk_rope_kv_fusion_config(vllm_config: Any) -> bool:
-    """Return whether config is in the validated dense Qwen3 TP1 scope."""
-    return resolve_optimization_contract(vllm_config).prefers(
-        OptimizationFeature.QWEN3_QK_ROPE_KV_PRESPLIT
-    )
-
-
-def _deepseek_v4_flashmla_sparse_block_size(
-    vllm_config: Any,
-) -> int:
-    """Return the validated FlashMLA sparse page size for DeepSeek-V4.
-
-    The 256-token page is part of the DeepSeek-V4 TP8 kernel contract.  Keep
-    the generic 64-token page for other models and parallel layouts; this is a
-    model/shape decision rather than a process-wide environment switch.
-    """
-    if resolve_optimization_contract(vllm_config).prefers(
-        OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
-    ):
-        return 256
-    return 64
 
 
 @cache
@@ -387,10 +316,10 @@ class MUSAPlatformBase(Platform):
         # MoE on native by default because a 100-prompt Qwen3.6 TP8 sweep
         # regressed 2.81% as eager-faithful BF16 rounding changed expert routes.
         # Users can still explicitly select the generic provider for A/B work.
+        contract = resolve_optimization_contract(vllm_config)
         gated_qkv_rms_norm_rope = (
             ["musa_inductor", "native"]
-            if using_inductor
-            and not _has_routed_experts(getattr(vllm_config, "model_config", None))
+            if using_inductor and contract.model.has_routed_experts is not True
             else ["native"]
         )
         return IrOpPriorityConfig.with_default(
@@ -616,8 +545,8 @@ class MUSAPlatformBase(Platform):
                 if not use_flashmla_sparse:
                     use_flashmla_sparse = True
 
-                sparse_block_size = _deepseek_v4_flashmla_sparse_block_size(
-                    vllm_config,
+                sparse_block_size = (
+                    contract_policy.deepseek_v4_flashmla_sparse_page_size(vllm_config)
                 )
                 if use_flashmla_sparse and cache_config.block_size != sparse_block_size:
                     cache_config.block_size = sparse_block_size

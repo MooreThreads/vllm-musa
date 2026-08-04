@@ -39,15 +39,21 @@ def _is_dense_model(config: VllmConfig) -> bool:
 
 
 def _silu_deepgemm_fusion_requested(config: VllmConfig) -> bool:
-    from vllm_musa.platform import _is_validated_qwen3_8b_fp8_single_gpu
+    from vllm_musa.optimization_contract import policy
+    from vllm_musa.optimization_contract.types import OptimizationFeature
 
-    return _is_validated_qwen3_8b_fp8_single_gpu(config)
+    return policy.prefers_feature(
+        config, OptimizationFeature.QWEN3_DENSE_FP8_POST_GRAD_FUSIONS
+    )
 
 
 def _rms_deepgemm_fusion_requested(config: VllmConfig) -> bool:
-    from vllm_musa.platform import _is_validated_qwen3_8b_fp8_single_gpu
+    from vllm_musa.optimization_contract import policy
+    from vllm_musa.optimization_contract.types import OptimizationFeature
 
-    return _is_validated_qwen3_8b_fp8_single_gpu(config)
+    return policy.prefers_feature(
+        config, OptimizationFeature.QWEN3_DENSE_FP8_POST_GRAD_FUSIONS
+    )
 
 
 class MusaPostGradPassManager(PostGradPassManager):

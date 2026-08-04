@@ -124,6 +124,66 @@ def test_resolves_qwen_family_without_model_name(
 
 
 @pytest.mark.parametrize(
+    "checkpoint",
+    [
+        "Qwen3.5-35B-A3B",
+        "Qwen3.6-35B-A3B",
+    ],
+)
+def test_qwen35_and_qwen36_share_the_current_hf_schema(checkpoint: str) -> None:
+    """Both released checkpoints use the Qwen3.5 HF architecture/schema."""
+    contract = resolve_optimization_contract(
+        _config(
+            architecture="Qwen3_5MoeForConditionalGeneration",
+            model_type="qwen3_5_moe",
+            hidden_size=2048,
+            num_experts=256,
+            num_experts_per_tok=8,
+            moe_intermediate_size=512,
+            linear_num_key_heads=16,
+            linear_num_value_heads=32,
+            linear_key_head_dim=128,
+            linear_value_head_dim=128,
+            linear_conv_kernel_dim=4,
+            tp=4,
+        )
+    )
+
+    assert contract.model.family is ModelFamily.QWEN35_36, checkpoint
+    assert contract.prefers(OptimizationFeature.QWEN35_MOE_BF16_PREFILL)
+    assert contract.prefers(OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD)
+    assert contract.prefers(OptimizationFeature.QWEN35_INTERLEAVED_MROPE_QK)
+
+
+def test_future_distinct_qwen36_schema_fails_closed() -> None:
+    contract = resolve_optimization_contract(
+        _config(
+            architecture="Qwen3_6MoeForConditionalGeneration",
+            model_type="qwen3_6_moe",
+            hidden_size=2048,
+            num_experts=256,
+            num_experts_per_tok=8,
+            moe_intermediate_size=512,
+            linear_num_key_heads=16,
+            linear_num_value_heads=32,
+            linear_key_head_dim=128,
+            linear_value_head_dim=128,
+            linear_conv_kernel_dim=4,
+            tp=4,
+        )
+    )
+
+    assert contract.model.family is ModelFamily.UNKNOWN
+    for feature in (
+        OptimizationFeature.QWEN35_MOE_BF16_PREFILL,
+        OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD,
+        OptimizationFeature.QWEN35_INTERLEAVED_MROPE_QK,
+    ):
+        assert not contract.supports(feature)
+        assert not contract.prefers(feature)
+
+
+@pytest.mark.parametrize(
     "architecture",
     [
         "Qwen3VLForConditionalGeneration",
@@ -184,7 +244,9 @@ def test_deepseek_v4_incomplete_facts_are_normalized_but_fail_closed() -> None:
     assert contract.model.quant_block_shape == (128, 128)
     assert contract.execution.attention_backend == "flashmla"
     assert contract.execution.cudagraph_mode == "full_decode_only"
-    assert not contract.supported_features
+    assert contract.supported_features == frozenset(
+        {OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}
+    )
     assert not contract.preferred_features
 
 
