@@ -16,16 +16,11 @@ torch==2.9.1.post1+musa5.2.0
 torch_musa==2.9.1.post1+musa5.2.0
 torchvision==0.24.1.post1+musa5.2.0
 torchaudio==2.9.1+musa5.2.0
-mate==0.2.5
-# Pre-generated MATE assembly (MUBIN) objects. MATE can download these lazily
-# at runtime when this optional package is absent; installing it here keeps the
-# vLLM-MUSA image usable offline and avoids first-request download latency.
-mate-mubin==0.2.5
-# MATE wrappers have an exact mate dependency and must stay on the same release.
-flash_attn_3==0.2.5
-flash_mla==0.2.5
-deep-gemm==0.2.5
-sageattention==0.2.5
+mate==0.2.4
+flash_attn_3==0.2.4
+flash_mla==0.2.4
+deep-gemm==0.2.4
+sageattention==0.2.4
 deep_ep==1.1.0+musa5.2.0torch2.9.1.post1s5000
 tilelang_musa==0.1.8+musa.3
 # torch 2.9.1 Inductor reads KernelMetadata.cluster_dims. The MUSA backend in

@@ -316,8 +316,7 @@ class MUSAFlashAttentionBackend(AttentionBackend):
             return torch.float8_e4m3fn
         raise NotImplementedError(
             f"kv_cache_dtype {kv_cache_dtype!r} is not supported for "
-            "FlashAttention on MUSA; vLLM query quantization currently emits "
-            "E4M3, while MATE requires matching Q/K/V FP8 dtypes."
+            "FlashAttention on MUSA; mate provides an e4m3 FMHA kernel only."
         )
 
     @classmethod
@@ -328,10 +327,7 @@ class MUSAFlashAttentionBackend(AttentionBackend):
     def supports_kv_cache_dtype(cls, kv_cache_dtype: CacheDType | None) -> bool:
         if kv_cache_dtype is None:
             return True
-        # MATE 0.2.5 has E5M2 FMHA, but vLLM currently quantizes queries to
-        # E4M3. Enabling an E5M2 KV cache would violate MATE's same-dtype Q/K/V
-        # requirement, so keep the backend gate closed until query quantization
-        # can emit E5M2 for this cache type.
+        # MUSA: e4m3 only — mate has no e5m2 FMHA kernel.
         if kv_cache_dtype in ("fp8", "fp8_e4m3"):
             return flash_attn_supports_fp8()
         return kv_cache_dtype in ["auto", "float16", "bfloat16"]
