@@ -88,7 +88,6 @@ class EnvBool(EnvField):
 
 class Envs:
     VLLM_MUSA_CUSTOM_OP_USE_NATIVE = EnvBool(False)
-    VLLM_MUSA_FUSED_ADD_RMSNORM = EnvBool(True)
     # Enable the MUSA custom all-reduce and RMSNorm fused path.
     VLLM_MUSA_FUSED_AR_RMSNORM = EnvBool(True)
     # Use registered graph inputs when eligible. Explicitly disabling this

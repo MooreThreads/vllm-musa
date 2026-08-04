@@ -219,14 +219,14 @@ def test_ir_fused_add_rmsnorm_dispatch_rejects_unsafe_inputs() -> None:
     )
 
 
-def test_ir_fused_add_rmsnorm_c_ext_branch_preserves_broad_shapes() -> None:
+def test_ir_fused_add_rmsnorm_c_ext_branch_preserves_broad_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from vllm_musa.kernels.musa_ops import (
         _c_ext_fused_add_rms_norm_supports_args,
         _fused_add_rms_norm_supports_args,
         _select_musa_fused_add_rms_norm_impl,
     )
-    from vllm_musa.utils.environ import envs
-
     device = torch.device("musa")
     x = torch.empty((1, 5376), device=device, dtype=torch.bfloat16)
     residual = torch.empty_like(x)
@@ -240,9 +240,9 @@ def test_ir_fused_add_rmsnorm_c_ext_branch_preserves_broad_shapes() -> None:
     assert not _c_ext_fused_add_rms_norm_supports_args(
         x, residual, weight.float(), 1e-6
     )
-    with envs.VLLM_MUSA_FUSED_ADD_RMSNORM.override(False):
-        assert not _c_ext_fused_add_rms_norm_supports_args(x, residual, weight, 1e-6)
-        assert not _fused_add_rms_norm_supports_args(x, residual, weight, 1e-6)
+    monkeypatch.setenv("VLLM_MUSA_FUSED_ADD_RMSNORM", "0")
+    assert _c_ext_fused_add_rms_norm_supports_args(x, residual, weight, 1e-6)
+    assert _fused_add_rms_norm_supports_args(x, residual, weight, 1e-6)
 
 
 def test_ir_fused_add_rmsnorm_dispatch_uses_compile_range_not_shape_hint() -> None:

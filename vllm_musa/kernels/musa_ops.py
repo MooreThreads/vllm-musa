@@ -30,7 +30,6 @@ from vllm import ir
 from vllm.platforms import current_platform
 
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
-from vllm_musa.utils.environ import envs
 
 # vllm._C must be loaded before torch.ops._C.rms_norm is resolvable.
 current_platform.import_kernels()
@@ -152,8 +151,7 @@ def _c_ext_fused_add_rms_norm_supports_args(
 
     hidden_size = x.shape[1]
     return (
-        envs.VLLM_MUSA_FUSED_ADD_RMSNORM.get()
-        and variance_size is None
+        variance_size is None
         and x.device.type == "musa"
         and x_residual.device.type == "musa"
         and weight.device.type == "musa"

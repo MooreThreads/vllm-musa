@@ -62,8 +62,7 @@ class MusaRMSNorm(RMSNorm):
             contract = self._musa_optimization_contract
             weight = self.weight.data
             if (
-                envs.VLLM_MUSA_FUSED_ADD_RMSNORM.get()
-                and contract.prefers(
+                contract.prefers(
                     OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
                 )
                 and x.device.type == "musa"
