@@ -34,7 +34,12 @@ def _can_use_musa_jit_topk(
         and hidden_states.shape[0] == gating_output.shape[0]
         and gating_output.is_contiguous()
         and gating_output.dtype in (torch.float32, torch.float16, torch.bfloat16)
-        and 0 < topk <= gating_output.shape[1] <= 1024
+        # Keep dispatch to the launch geometries with dedicated, validated
+        # one-warp implementations. The generic fallback rounds arbitrary
+        # expert counts to a power-of-two thread block and is not part of the
+        # production capability contract.
+        and gating_output.shape[1] in (128, 256, 512, 1024)
+        and 0 < topk <= gating_output.shape[1]
         and (
             correction_bias is None
             or (
@@ -76,6 +81,14 @@ def _musa_jit_fused_topk(
     ):
         return None
     if not _can_use_musa_jit_topk(hidden_states, gating_output, topk, correction_bias):
+        return None
+
+    # The MUSA softmax kernel's correction-bias ABI currently returns
+    # probabilities of ``logits + bias``.  vLLM's grouped-top-k contract
+    # selects experts with ``softmax(logits) + bias`` but returns the unbiased
+    # softmax weights.  Keep this combination on the upstream implementation
+    # until the kernel can expose both semantics without a numerical change.
+    if correction_bias is not None and scoring_func == "softmax":
         return None
 
     musa_jit_topk = _maybe_import_musa_jit_topk()
@@ -159,9 +172,11 @@ def _compute_routing(
             topk_weights, topk_ids = fused_topk_bias(
                 hidden_states=hidden_states,
                 gating_output=router_logits,
+                scoring_func=scoring_func,
                 e_score_correction_bias=self.e_score_correction_bias.data,
                 topk=self.top_k,
                 renormalize=self.renormalize,
+                indices_type=indices_type,
             )
             if self.routed_scaling_factor != 1.0:
                 topk_weights *= self.routed_scaling_factor
