@@ -34,12 +34,7 @@ def _can_use_musa_jit_topk(
         and hidden_states.shape[0] == gating_output.shape[0]
         and gating_output.is_contiguous()
         and gating_output.dtype in (torch.float32, torch.float16, torch.bfloat16)
-        # Keep dispatch to the launch geometries with dedicated, validated
-        # one-warp implementations. The generic fallback rounds arbitrary
-        # expert counts to a power-of-two thread block and is not part of the
-        # production capability contract.
-        and gating_output.shape[1] in (128, 256, 512, 1024)
-        and 0 < topk <= gating_output.shape[1]
+        and 0 < topk <= gating_output.shape[1] <= 1024
         and (
             correction_bias is None
             or (
@@ -337,6 +332,4 @@ def grouped_topk(
 
 import vllm.model_executor.layers.fused_moe.router.grouped_topk_router
 
-vllm.model_executor.layers.fused_moe.router.grouped_topk_router.GroupedTopKRouter._compute_routing = (
-    _compute_routing
-)
+vllm.model_executor.layers.fused_moe.router.grouped_topk_router.GroupedTopKRouter._compute_routing = _compute_routing

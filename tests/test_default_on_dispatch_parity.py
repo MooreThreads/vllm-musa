@@ -97,14 +97,17 @@ def test_jit_topk_capability_and_missing_provider_are_env_invariant(monkeypatch)
     assert not router._can_use_musa_jit_topk(
         hidden, _FakeTensor((4, 2048), torch.bfloat16), 8, None
     )
-    assert not router._can_use_musa_jit_topk(
+    assert router._can_use_musa_jit_topk(
         hidden, _FakeTensor((4, 768), torch.bfloat16), 8, None
     )
-    assert not router._can_use_musa_jit_topk(
+    assert router._can_use_musa_jit_topk(
         hidden, _FakeTensor((4, 1000), torch.bfloat16), 8, None
     )
     assert router._can_use_musa_jit_topk(
         hidden, _FakeTensor((4, 1024), torch.bfloat16), 8, None
+    )
+    assert not router._can_use_musa_jit_topk(
+        hidden, _FakeTensor((4, 1025), torch.bfloat16), 8, None
     )
     assert not router._can_use_musa_jit_topk(hidden, logits, 0, None)
 
