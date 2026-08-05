@@ -88,7 +88,6 @@ class EnvBool(EnvField):
 
 class Envs:
     VLLM_MUSA_CUSTOM_OP_USE_NATIVE = EnvBool(False)
-    VLLM_MUSA_RESHAPE_CACHE_FLASH = EnvBool(True)
 
 
 envs = Envs()

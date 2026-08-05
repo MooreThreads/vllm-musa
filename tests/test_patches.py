@@ -509,7 +509,6 @@ class TestMUSAFlashAttentionReshapeCache:
 
         import vllm_musa
 
-        monkeypatch.setenv("VLLM_MUSA_RESHAPE_CACHE_FLASH", "1")
         monkeypatch.setattr(
             vllm_platforms,
             "current_platform",
