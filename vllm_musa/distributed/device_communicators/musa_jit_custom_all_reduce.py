@@ -17,7 +17,6 @@ from vllm_musa.optimization_contract import (
     OptimizationFeature,
     resolve_optimization_contract,
 )
-from vllm_musa.utils.environ import envs
 
 logger = init_logger(__name__)
 _INT32_MAX = (1 << 31) - 1
@@ -433,11 +432,7 @@ class _MusaJitCustomAllreduceImpl:
         self._graph_peer_bases: dict[tuple[int, bytes], int] = {}
         self._graph_opened_ptrs: list[int] = []
         self._next_graph_slot = 0
-        self._graph_registered_input_enabled = (
-            self._use_graph_registered_inputs
-            and envs.VLLM_MUSA_FUSED_AR_RMSNORM.get()
-            and envs.VLLM_MUSA_FUSED_AR_RMSNORM_GRAPH_REGISTERED_INPUT.get()
-        )
+        self._graph_registered_input_enabled = self._use_graph_registered_inputs
 
         if isinstance(device, int):
             device = torch.device(f"musa:{device}")
@@ -712,8 +707,6 @@ class _MusaJitCustomAllreduceImpl:
     def _reject_fused_allreduce_rmsnorm_reason(
         self, inp: torch.Tensor, weight: torch.Tensor
     ) -> str | None:
-        if not envs.VLLM_MUSA_FUSED_AR_RMSNORM.get():
-            return "VLLM_MUSA_FUSED_AR_RMSNORM is disabled"
         if self.disabled:
             return "communicator is disabled"
         if inp.device.type != "musa" or weight.device.type != "musa":

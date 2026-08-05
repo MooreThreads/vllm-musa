@@ -26,9 +26,8 @@ from typing import Any
 import torch
 import torch._inductor.pattern_matcher as pm
 import torch.fx as fx
-from torch._inductor.pattern_matcher import PatternMatcherPass
-
 import vllm.ir.ops
+from torch._inductor.pattern_matcher import PatternMatcherPass
 from vllm.compilation.passes.inductor_pass import enable_fake_mode
 from vllm.compilation.passes.vllm_inductor_pass import (
     VllmInductorPass,
@@ -40,12 +39,12 @@ from vllm.distributed import get_tp_group
 from vllm.distributed.parallel_state import get_tensor_model_parallel_world_size
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
+
 from vllm_musa.fused_allreduce_rmsnorm_ops import (
     musa_fused_allreduce_residual_rms_norm,
     musa_fused_allreduce_residual_rms_norm_no_raw,
     musa_fused_allreduce_rms_norm,
 )
-from vllm_musa.utils.environ import envs as musa_envs
 
 logger = init_logger(__name__)
 
@@ -261,9 +260,6 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
         self.max_tokens_by_comm: int | None = None
         self.jit_comm_max_size: int | None = None
         if not current_platform.is_musa():
-            return
-
-        if not musa_envs.VLLM_MUSA_FUSED_AR_RMSNORM.get():
             return
 
         self.tp_size = get_tensor_model_parallel_world_size()

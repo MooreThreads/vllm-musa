@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 import ast
-import os
-import runpy
 from pathlib import Path
-from unittest.mock import patch
-
 
 ROOT = Path(__file__).parents[1]
 COMM = ROOT / (
@@ -241,31 +237,24 @@ def _cpp_braced_block(source: str, marker: str, start: int = 0) -> tuple[str, in
     raise AssertionError(f"unterminated C++ block after: {marker}")
 
 
-def test_fused_path_gates_can_be_disabled_independently() -> None:
-    namespace = runpy.run_path(str(ENVIRON))
-    envs = namespace["envs"]
-    fused = envs.VLLM_MUSA_FUSED_AR_RMSNORM
-    registered = envs.VLLM_MUSA_FUSED_AR_RMSNORM_GRAPH_REGISTERED_INPUT
-
-    with patch.dict(os.environ, {}, clear=True):
-        assert fused.get() is True
-        assert registered.get() is True
-        with fused.override(False):
-            assert fused.get() is False
-            assert registered.get() is True
-        with registered.override(False):
-            assert fused.get() is True
-            assert registered.get() is False
+def test_fused_path_has_no_process_environment_gate() -> None:
+    sources = (ENVIRON.read_text(), COMM.read_text(), FUSION_PASS.read_text())
+    assert all("VLLM_MUSA_FUSED_AR_RMSNORM" not in source for source in sources)
+    assert all(
+        "VLLM_MUSA_FUSED_AR_RMSNORM_GRAPH_REGISTERED_INPUT" not in source
+        for source in sources
+    )
 
 
-def test_fusion_uses_one_canonical_feature_gate() -> None:
-    env_source = ENVIRON.read_text()
+def test_fusion_uses_standard_pass_and_runtime_capability_gates() -> None:
     comm_source = COMM.read_text()
     fusion_source = FUSION_PASS.read_text()
-    canonical = "VLLM_MUSA_FUSED_AR_RMSNORM"
-    assert canonical in env_source
-    assert canonical in comm_source
-    assert canonical in fusion_source
+    pass_manager_source = PASS_MANAGER_PATCH.read_text()
+
+    assert "self.pass_config.fuse_allreduce_rms" in pass_manager_source
+    assert "if self.disabled:" in comm_source
+    assert "if self.tp_size <= 1:" in fusion_source
+    assert "_graph_registered_input_eligible" in comm_source
 
 
 def test_python_registered_path_uses_shared_graph_lifecycle() -> None:
