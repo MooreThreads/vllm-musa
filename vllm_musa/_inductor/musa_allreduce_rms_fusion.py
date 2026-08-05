@@ -40,7 +40,6 @@ from vllm.distributed import get_tp_group
 from vllm.distributed.parallel_state import get_tensor_model_parallel_world_size
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
-
 from vllm_musa.fused_allreduce_rmsnorm_ops import (
     musa_fused_allreduce_residual_rms_norm,
     musa_fused_allreduce_residual_rms_norm_no_raw,
