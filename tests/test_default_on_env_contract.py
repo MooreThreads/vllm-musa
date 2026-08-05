@@ -48,6 +48,13 @@ def test_default_on_process_gates_are_absent_from_runtime() -> None:
         for legacy_gate in LEGACY_BOOLEAN_GATES:
             assert legacy_gate.search(source) is None, path.relative_to(ROOT)
 
+    # Patch payloads are also shipped runtime input.  Keep this a separate
+    # scan so a deleted upstream hunk cannot hide a live gate in a patch file.
+    for path in sorted((ROOT / "vllm_musa/patches/series").glob("*.patch")):
+        source = path.read_text(encoding="utf-8")
+        for legacy_gate in LEGACY_BOOLEAN_GATES:
+            assert legacy_gate.search(source) is None, path.relative_to(ROOT)
+
 
 def test_block_size_env_remains_an_explicit_kernel_tuning_override() -> None:
     kernel = _source("csrc/musa/fused_add_rmsnorm.mu")

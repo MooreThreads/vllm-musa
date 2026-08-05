@@ -38,7 +38,11 @@ class _FakeDevice:
     index = 0
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, _FakeDevice) and other.type == self.type
+        return (
+            isinstance(other, _FakeDevice)
+            and other.type == self.type
+            and other.index == self.index
+        )
 
 
 class _FakeTensor:
@@ -96,6 +100,51 @@ def test_jit_topk_capability_and_missing_provider_are_env_invariant(monkeypatch)
     assert not router._can_use_musa_jit_topk(hidden, logits, 0, None)
 
 
+def test_jit_topk_unsupported_scoring_stays_on_upstream_fallback(monkeypatch):
+    from vllm_musa.model_executor.layers.fused_moe.router import (
+        grouped_topk_router as router,
+    )
+
+    monkeypatch.setattr(router.current_platform, "is_musa", lambda: True)
+    hidden = _FakeTensor((1, 128), torch.bfloat16)
+    logits = _FakeTensor((1, 256), torch.bfloat16)
+
+    class _FakeOutput:
+        dtype = torch.int32
+
+        def to(self, _dtype):
+            return self
+
+    class _FakeProvider:
+        def topk_softmax(self, *_args, **_kwargs):
+            return None
+
+        def topk_sigmoid(self, *_args, **_kwargs):
+            return None
+
+    # Avoid allocating a real MUSA tensor while still exercising the provider
+    # selection branch.
+    monkeypatch.setattr(
+        router.torch,
+        "empty",
+        lambda *_args, **_kwargs: _FakeOutput(),
+    )
+    monkeypatch.setattr(router, "_maybe_import_musa_jit_topk", lambda: _FakeProvider())
+    for value in LEGACY_ENV_VALUES:
+        _with_legacy_env(monkeypatch, value)
+        assert (
+            router._musa_jit_fused_topk(
+                hidden,
+                logits,
+                8,
+                True,
+                None,
+                scoring_func="unsupported",
+            )
+            is None
+        )
+
+
 def _worker_sampling_states(*, seeded: bool) -> SimpleNamespace:
     return SimpleNamespace(
         has_user_seed=np.asarray([seeded, seeded], dtype=np.bool_),
@@ -132,12 +181,16 @@ def test_worker_seeded_sampler_and_fallback_guards_are_env_invariant(monkeypatch
 
 
 @pytest.mark.skipif(
-    not hasattr(torch, "musa") or not torch.musa.is_available(),
+    not hasattr(torch, "musa")
+    or not torch.musa.is_available()
+    or not getattr(torch.musa, "is_available", lambda: False)(),
     reason="requires a MUSA device",
 )
 def test_native_reshape_cache_and_fallback_guards_are_env_invariant(monkeypatch):
     from vllm_musa.v1.attention.backends import fa_utils
 
+    if not hasattr(fa_utils, "_can_use_musa_reshape_and_cache_flash_nhd"):
+        pytest.skip("MUSA FlashAttention provider is not loaded")
     monkeypatch.setattr(fa_utils, "_HAS_NATIVE_RESHAPE_CACHE_FLASH", True)
     key = torch.empty((2, 4, 64), dtype=torch.bfloat16, device="musa")
     value = torch.empty_like(key)
@@ -169,8 +222,39 @@ def test_native_reshape_cache_and_fallback_guards_are_env_invariant(monkeypatch)
             scale,
         )
 
+        native_calls = []
+        fallback_calls = []
+        monkeypatch.setattr(
+            fa_utils.musa_ops,
+            "musa_reshape_and_cache_flash_nhd",
+            lambda *args: native_calls.append(args),
+        )
+        monkeypatch.setattr(
+            fa_utils.ops,
+            "reshape_and_cache_flash",
+            lambda *args: fallback_calls.append(args),
+        )
+        fa_utils.reshape_and_cache_flash(
+            key, value, key_cache, value_cache, slots, "auto", scale, scale
+        )
+        assert len(native_calls) == 1
+        assert not fallback_calls
+        fa_utils.reshape_and_cache_flash(
+            key,
+            value.to(torch.float16),
+            key_cache,
+            value_cache,
+            slots,
+            "auto",
+            scale,
+            scale,
+        )
+        assert len(fallback_calls) == 1
 
-def test_ar_unavailable_comm_and_pass_config_are_fail_closed(monkeypatch):
+
+def test_ar_unavailable_comm_is_fail_closed_and_pass_config_is_preserved(
+    monkeypatch,
+):
     from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (
         MusaJitCustomAllreduce,
     )
@@ -195,3 +279,21 @@ def test_ar_unavailable_comm_and_pass_config_are_fail_closed(monkeypatch):
         "if current_platform.is_musa() and self.pass_config.fuse_allreduce_rms"
         in source
     )
+
+
+def test_ar_available_comm_dispatch_is_env_invariant(monkeypatch):
+    from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (
+        MusaJitCustomAllreduce,
+    )
+
+    sentinel = (object(), object())
+    jit_comm = SimpleNamespace(
+        disabled=False,
+        should_fused_allreduce_rmsnorm=lambda *_args: True,
+        fused_allreduce_rmsnorm=lambda *_args: sentinel,
+    )
+    comm = MusaJitCustomAllreduce.__new__(MusaJitCustomAllreduce)
+    comm._jit_comm = jit_comm
+    for value in LEGACY_ENV_VALUES:
+        _with_legacy_env(monkeypatch, value)
+        assert comm.fused_allreduce_rmsnorm(object(), object(), 1e-5) is sentinel
