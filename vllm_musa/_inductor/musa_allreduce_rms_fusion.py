@@ -26,8 +26,9 @@ from typing import Any
 import torch
 import torch._inductor.pattern_matcher as pm
 import torch.fx as fx
-import vllm.ir.ops
 from torch._inductor.pattern_matcher import PatternMatcherPass
+
+import vllm.ir.ops
 from vllm.compilation.passes.inductor_pass import enable_fake_mode
 from vllm.compilation.passes.vllm_inductor_pass import (
     VllmInductorPass,
