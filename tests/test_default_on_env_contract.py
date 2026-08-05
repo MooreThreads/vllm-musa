@@ -20,12 +20,28 @@ def _source(path: str) -> str:
 
 
 def test_default_on_process_gates_are_absent_from_runtime() -> None:
-    runtime_paths = list((ROOT / "vllm_musa").rglob("*.py"))
-    runtime_paths.extend(
+    # Scan source extensions rather than just Python and the hand-written
+    # csrc suffix subset.  In particular, MUSA headers (`.muh`) can contain
+    # provider dispatch and must not silently retain a process gate.
+    source_suffixes = {
+        ".c",
+        ".cc",
+        ".cpp",
+        ".cu",
+        ".cuh",
+        ".h",
+        ".mu",
+        ".muh",
+        ".py",
+    }
+    runtime_paths = [
         path
-        for path in (ROOT / "csrc").rglob("*")
-        if path.suffix in {".cpp", ".cu", ".cuh", ".h", ".mu"}
-    )
+        for root in (ROOT / "vllm_musa", ROOT / "csrc")
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.suffix in source_suffixes
+        and "patches/series" not in path.as_posix()
+    ]
 
     for path in sorted(runtime_paths):
         source = path.read_text(encoding="utf-8")
