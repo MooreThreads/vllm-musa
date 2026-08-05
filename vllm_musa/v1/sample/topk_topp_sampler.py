@@ -24,7 +24,6 @@ from vllm_musa.optimization_contract import (
     prefers_optimization,
     resolve_optimization_contract,
 )
-from vllm_musa.utils.environ import envs
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +84,6 @@ def _can_skip_legacy_qwen_unit_temperature(
     )
 
 
-def musa_seeded_multinomial_enabled() -> bool:
-    return envs.VLLM_MUSA_SEEDED_MULTINOMIAL.get()
-
-
 def is_musa_tensor(tensor: torch.Tensor) -> bool:
     return tensor.device.type == "musa"
 
@@ -113,7 +108,6 @@ def can_use_musa_seeded_multinomial(
     """Gate the legacy per-request multinomial path to validated vocabularies."""
     return (
         bool(generators)
-        and musa_seeded_multinomial_enabled()
         and current_platform.is_musa()
         and is_musa_tensor(logits)
         # Keep non-Qwen and small codec vocabularies on the upstream sampler.
@@ -1267,8 +1261,6 @@ def can_use_worker_seeded_multinomial(
     sampling_states: Any,
     idx_mapping_np: np.ndarray,
 ) -> bool:
-    if not musa_seeded_multinomial_enabled():
-        return False
     if not current_platform.is_musa() or not is_musa_tensor(logits):
         return False
     if logprobs_mode == "processed_logprobs":

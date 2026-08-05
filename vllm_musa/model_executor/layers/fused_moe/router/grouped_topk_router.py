@@ -9,8 +9,6 @@ from vllm.model_executor.layers.fused_moe.router.grouped_topk_router import (
 from vllm.model_executor.utils import maybe_disable_graph_partition
 from vllm.platforms import current_platform
 
-from vllm_musa.utils.environ import envs as musa_envs
-
 try:
     from mate import moe_fused_gate as mate_moe_fused_gate
 
@@ -28,8 +26,7 @@ def _can_use_musa_jit_topk(
     correction_bias: torch.Tensor | None,
 ) -> bool:
     return (
-        musa_envs.VLLM_MUSA_ENABLE_JIT_TOPK.get()
-        and current_platform.is_musa()
+        current_platform.is_musa()
         and hidden_states.device == gating_output.device
         and gating_output.device.type == "musa"
         and hidden_states.dim() == 2

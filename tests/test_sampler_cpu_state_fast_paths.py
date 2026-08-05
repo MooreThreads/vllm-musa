@@ -30,7 +30,7 @@ requires_musa = pytest.mark.skipif(
 def test_legacy_seeded_multinomial_is_limited_to_qwen_text_vocabs(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(sampler, "musa_seeded_multinomial_enabled", lambda: True)
+    monkeypatch.setenv("VLLM_MUSA_SEEDED_MULTINOMIAL", "0")
     monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
     monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
     generators = {0: object()}
