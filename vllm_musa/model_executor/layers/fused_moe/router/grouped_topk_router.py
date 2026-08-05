@@ -332,4 +332,6 @@ def grouped_topk(
 
 import vllm.model_executor.layers.fused_moe.router.grouped_topk_router
 
-vllm.model_executor.layers.fused_moe.router.grouped_topk_router.GroupedTopKRouter._compute_routing = _compute_routing
+vllm.model_executor.layers.fused_moe.router.grouped_topk_router.GroupedTopKRouter._compute_routing = (
+    _compute_routing
+)
