@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """MUSA: route the plain (non-grouped, no-bias) top-k through the fused one-warp
 topk_softmax kernel instead of the built-in ``topkGating``, matching the grouped
-router. Falls back to the upstream path when the JIT kernel is disabled or ineligible.
+router. Falls back to the upstream path when the JIT kernel is unavailable or
+ineligible.
 """
 
 import torch
