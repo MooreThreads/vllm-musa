@@ -545,6 +545,68 @@ def test_musa_dispatcher_routes_forced_backends(monkeypatch):
     assert grouped_calls[0]["inplace"] is False
 
 
+@pytest.mark.parametrize(("tokens", "expect_gemv"), [(5, True), (6, False)])
+def test_musa_dispatcher_auto_preserves_dsv4_fp8_gemv_threshold(
+    monkeypatch, tokens, expect_gemv
+):
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    monkeypatch.delenv("VLLM_MUSA_GEMV_MOE_BLOCK", raising=False)
+    kwargs = _deepgemm_gate_kwargs(torch)
+    kwargs.update(
+        hidden_states=torch.empty(
+            (tokens, 4096), device="meta", dtype=torch.bfloat16
+        ),
+        topk_ids=torch.empty((tokens, 6), device="meta", dtype=torch.int32),
+        topk_weights=torch.empty(
+            (tokens, 6), device="meta", dtype=torch.float32
+        ),
+    )
+    native_output = torch.empty((1,), device="meta")
+    upstream_output = torch.empty((2,), device="meta")
+    native_calls = []
+    upstream_calls = []
+    monkeypatch.setattr(
+        fused_moe,
+        "_MUSA_FUSED_MOE_REQUESTED_BACKEND",
+        fused_moe.MusaFusedMoeBackend.AUTO,
+    )
+    monkeypatch.setattr(
+        fused_moe,
+        "_musa_device_fingerprint",
+        lambda *_args, **_kwargs: ((3, 1), 60),
+    )
+    monkeypatch.setattr(fused_moe, "_musa_stream_is_capturing", lambda: True)
+    monkeypatch.setattr(
+        fused_moe,
+        "fused_experts_impl",
+        lambda *args, **call_kwargs: native_calls.append((args, call_kwargs))
+        or native_output,
+    )
+    monkeypatch.setattr(
+        fused_moe._upstream_fused_moe,
+        "_musa_original_fused_experts_impl",
+        lambda *args, **call_kwargs: upstream_calls.append((args, call_kwargs))
+        or upstream_output,
+    )
+
+    result = fused_moe._musa_fused_experts_impl_dispatch(**kwargs)
+
+    if expect_gemv:
+        assert result is native_output
+        assert len(native_calls) == 1
+        assert native_calls[0][1] == {
+            "inplace": False,
+            "_allow_deepgemm_prefill": False,
+            "_gemv_block": (16, 8),
+        }
+        assert not upstream_calls
+    else:
+        assert result is upstream_output
+        assert not native_calls
+        assert len(upstream_calls) == 1
+
+
 def test_musa_dispatcher_rejects_gemv_input_router_weighting(monkeypatch):
     from vllm_musa.model_executor.layers.fused_moe import fused_moe
 
