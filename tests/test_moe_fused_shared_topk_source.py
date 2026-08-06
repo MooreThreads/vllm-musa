@@ -31,3 +31,14 @@ def test_fused_shared_topk_has_no_runtime_gate() -> None:
     source = (REPO_ROOT / "vllm_musa/utils/environ.py").read_text()
 
     assert "VLLM_MUSA_MOE_FUSED_SHARED_TOPK" not in source
+
+
+def test_qwen35_tp_only_fold_uses_explicit_ep_setting() -> None:
+    patch = (
+        REPO_ROOT
+        / "vllm_musa/patches/series/"
+        "0104-MUSA-enable-qwen35-shared-fold-tp-only.patch"
+    ).read_text()
+
+    assert "+            and not parallel_config.enable_expert_parallel" in patch
+    assert "-            and self.ep_size <= 1" in patch
