@@ -261,6 +261,12 @@ _SHADOW_MODULES = [
     ),
     (
         "5",
+        "vllm_musa/model_executor/layers/attention/mm_encoder_attention.py",
+        "vllm/model_executor/layers/attention/mm_encoder_attention.py",
+        "OOT MM encoder attention routing with MUSA FlashAttention",
+    ),
+    (
+        "5",
         "vllm_musa/model_executor/kernels/linear/scaled_mm/deep_gemm.py",
         "vllm/model_executor/kernels/linear/scaled_mm/deep_gemm.py",
         "OOT subclass/register seam",

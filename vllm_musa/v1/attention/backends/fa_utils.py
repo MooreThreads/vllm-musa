@@ -2,18 +2,20 @@
 # 2026 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from typing import Any
+
 import torch
+from vllm.logger import init_logger
 from vllm.platforms import current_platform
-from vllm.v1.attention.backends.fa_utils import logger
+
+logger = init_logger(__name__)
 
 if current_platform.is_musa():
     from flash_attn_interface import (  # noqa: F401
-        flash_attn_varlen_func,
-        flash_attn_with_kvcache,
-        get_scheduler_metadata,
+        flash_attn_varlen_func as _musa_flash_attn_varlen_func,
     )
-    from vllm import _custom_ops as ops
 
+    from vllm import _custom_ops as ops
     from vllm_musa import _custom_ops as musa_ops
     from vllm_musa.utils.environ import envs
 
@@ -22,6 +24,18 @@ if current_platform.is_musa():
     _HAS_NATIVE_RESHAPE_CACHE_FLASH = hasattr(
         _MUSA_OPS_NAMESPACE, "musa_reshape_and_cache_flash_nhd"
     )
+
+    def flash_attn_varlen_func(*args: Any, **kwargs: Any) -> Any:
+        dropout_p = kwargs.pop("dropout_p", 0.0)
+        if dropout_p not in (0, 0.0, None):
+            raise ValueError("MUSA flash attention does not support non-zero dropout.")
+
+        kwargs.pop("fa_version", None)
+        alibi_slopes = kwargs.pop("alibi_slopes", None)
+        if alibi_slopes is not None:
+            raise ValueError("MUSA flash attention does not support ALiBi.")
+
+        return _musa_flash_attn_varlen_func(*args, **kwargs)
 
     def _can_use_musa_reshape_and_cache_flash_nhd(
         key,
@@ -105,15 +119,17 @@ if current_platform.is_musa():
 
 
 def get_flash_attn_version(
-    requires_alibi: bool = False, head_size: int | None = None
+    requires_alibi: bool = False,
+    head_size: int | None = None,
+    head_size_v: int | None = None,
+    has_sinks: bool = False,
 ) -> int | None:
     logger.info_once("MUSA platform use FLASH_ATTN with version 3.")
     return 3
 
 
 def flash_attn_supports_fp8() -> bool:
-    # mate's FMHA takes fp8 e4m3 q/k/v with per-(batch, kv-head) descale, which is
-    # the shape vllm builds for an fp8 KV cache. e5m2 has no mate kernel.
+    # MATE FMHA supports e4m3 Q/K/V with per-(batch, KV-head) descales.
     return True
 
 
@@ -121,8 +137,7 @@ def flash_attn_supports_sinks() -> bool:
     return True
 
 
-def flash_attn_supports_mla():
-    # XXX (MUSA): Requires adaptation for MLA models
+def flash_attn_supports_mla() -> bool:
     return True
 
 
