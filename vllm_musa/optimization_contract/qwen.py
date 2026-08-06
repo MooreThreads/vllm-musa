@@ -94,6 +94,53 @@ def matches_qwen35_moe_bf16_prefill_layer(
         return False
 
 
+def matches_qwen35_moe_bf16_decode_gemv_layer(
+    hidden_states,
+    w1,
+    w2,
+    topk_weights,
+    topk_ids,
+    global_num_experts: int | None,
+    *,
+    max_tokens: int,
+) -> bool:
+    """Match the TP4-local Qwen3.5/3.6 BF16 decode GEMV shape.
+
+    The local TP4 weights have two supported runtime forms.  With shared
+    expert folding they are ``E=257`` and ``top_k=9``; without folding they
+    are ``E=256`` and ``top_k=8``.  Both use the same local ``N/K/V`` sizes.
+    Keeping this shape contract at the dispatch boundary makes the small-M
+    native GEMV opt-in fail closed for other MoE families and for prefill.
+    """
+
+    def dtype_name(value) -> str:
+        return str(value).lower().removeprefix("torch.")
+
+    try:
+        folded = global_num_experts == 257
+        unfolded = global_num_experts == 256
+        expected_experts = 257 if folded else 256
+        expected_top_k = 9 if folded else 8
+        return (
+            (folded or unfolded)
+            and hidden_states.ndim == 2
+            and dtype_name(hidden_states.dtype) == "bfloat16"
+            and dtype_name(w1.dtype) == "bfloat16"
+            and dtype_name(w2.dtype) == "bfloat16"
+            and 0 < hidden_states.shape[0] <= max_tokens
+            and hidden_states.shape[1] == 2048
+            and tuple(w1.shape) == (expected_experts, 256, 2048)
+            and tuple(w2.shape) == (expected_experts, 2048, 128)
+            and topk_weights.ndim == 2
+            and topk_ids.ndim == 2
+            and topk_weights.shape == topk_ids.shape
+            and topk_ids.shape[0] == hidden_states.shape[0]
+            and topk_ids.shape[1] == expected_top_k
+        )
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+
+
 def _has_architecture(model: ModelSignature, allowed: frozenset[str]) -> bool:
     architectures = model.outer_architectures or model.architectures
     return any(architecture in allowed for architecture in architectures)

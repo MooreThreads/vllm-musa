@@ -255,6 +255,64 @@ def test_pr113_folded_qwen_shape_requires_fresh_calibration():
     assert thresholds_for_shape(folded_qwen).source == "uncalibrated-shape"
 
 
+def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
+    shape = _shape(
+        multiprocessor_count=60,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        block_n=0,
+        block_k=0,
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+    )
+
+    assert thresholds_for_shape(shape).gemv_max_tokens == 12
+    for token_count in (1, 4, 8, 12):
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=token_count,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=False,
+            )
+            == MusaFusedMoeBackend.GEMV
+        )
+    assert (
+        select_fused_moe_backend(
+            shape=shape,
+            num_tokens=16,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=False,
+        )
+        == MusaFusedMoeBackend.UPSTREAM
+    )
+    capture_shape = _shape(**{**shape.__dict__, "graph_mode": "capture"})
+    assert thresholds_for_shape(capture_shape).gemv_max_tokens == 12
+
+    unfolded = _shape(
+        multiprocessor_count=60,
+        local_experts=256,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=8,
+        block_n=0,
+        block_k=0,
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+    )
+    assert thresholds_for_shape(unfolded).gemv_max_tokens == 12
+
+
 def test_force_modes_preserve_eligibility_checks():
     shape = _shape()
 

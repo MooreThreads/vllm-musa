@@ -36,7 +36,10 @@ from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     select_fused_moe_backend,
     thresholds_for_shape,
 )
-from vllm_musa.optimization_contract import matches_qwen35_moe_bf16_prefill_layer
+from vllm_musa.optimization_contract import (
+    matches_qwen35_moe_bf16_decode_gemv_layer,
+    matches_qwen35_moe_bf16_prefill_layer,
+)
 
 logger = init_logger(__name__)
 
@@ -1368,6 +1371,69 @@ def _can_use_musa_native_fp8_moe_gemv(
     ) and _musa_fp8_moe_scale_layout_is_supported(w2_scale, w2)
 
 
+def _can_use_qwen35_bf16_moe_decode_gemv(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    global_num_experts: int,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    w1_zp: torch.Tensor | None,
+    w2_zp: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> bool:
+    if (
+        use_fp8_w8a8
+        or use_int8_w8a8
+        or use_int8_w8a16
+        or use_int4_w4a16
+        or ocp_mx_scheme is not None
+        or per_channel_quant
+        or expert_map is not None
+        or w1_scale is not None
+        or w2_scale is not None
+        or w1_zp is not None
+        or w2_zp is not None
+        or a1_scale is not None
+        or a2_scale is not None
+        or w1_bias is not None
+        or w2_bias is not None
+        or activation != "silu"
+    ):
+        return False
+    if not (
+        hidden_states.is_contiguous()
+        and w1.is_contiguous()
+        and w2.is_contiguous()
+        and topk_weights.is_contiguous()
+        and topk_ids.is_contiguous()
+    ):
+        return False
+    return matches_qwen35_moe_bf16_decode_gemv_layer(
+        hidden_states,
+        w1,
+        w2,
+        topk_weights,
+        topk_ids,
+        global_num_experts,
+        max_tokens=12,
+    )
+
+
 def _musa_fused_moe_shape(
     *,
     hidden_states: torch.Tensor,
@@ -1756,11 +1822,49 @@ def _musa_fused_experts_impl_dispatch(
     shape = None
     requested_gemv_block = (0, 0)
 
-    # Skip all shape construction and capture queries for non-FP8 callers and
-    # for the explicit rollback path. This wrapper sits on every MoE layer.
+    # Keep the expensive contract matcher off unrelated MoE calls.  The
+    # tensor geometry is the runtime half of the Qwen3.5/3.6 model contract;
+    # all non-matching models take the old upstream path.
+    qwen35_bf16_decode_gemv = False
+    if (
+        hidden_states.ndim == 2
+        and 0 < hidden_states.shape[0] <= 12
+        and w1.ndim == 3
+        and w1.shape[0] in (256, 257)
+        and hidden_states.dtype == torch.bfloat16
+        and w1.dtype == torch.bfloat16
+        and w2.dtype == torch.bfloat16
+    ):
+        qwen35_bf16_decode_gemv = _can_use_qwen35_bf16_moe_decode_gemv(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            activation=activation,
+            use_fp8_w8a8=use_fp8_w8a8,
+            use_int8_w8a8=use_int8_w8a8,
+            use_int8_w8a16=use_int8_w8a16,
+            use_int4_w4a16=use_int4_w4a16,
+            ocp_mx_scheme=ocp_mx_scheme,
+            per_channel_quant=per_channel_quant,
+            global_num_experts=global_num_experts,
+            expert_map=expert_map,
+            w1_scale=w1_scale,
+            w2_scale=w2_scale,
+            w1_zp=w1_zp,
+            w2_zp=w2_zp,
+            a1_scale=a1_scale,
+            a2_scale=a2_scale,
+            w1_bias=w1_bias,
+            w2_bias=w2_bias,
+        )
+
+    # Skip all shape construction and capture queries for unsupported callers
+    # and for the explicit rollback path. This wrapper sits on every MoE layer.
     if (
         _MUSA_FUSED_MOE_REQUESTED_BACKEND != MusaFusedMoeBackend.UPSTREAM
-        and use_fp8_w8a8
+        and (use_fp8_w8a8 or qwen35_bf16_decode_gemv)
         and not use_int8_w8a8
         and not use_int8_w8a16
         and not use_int4_w4a16
@@ -1822,6 +1926,7 @@ def _musa_fused_experts_impl_dispatch(
                     w1_bias=w1_bias,
                     w2_bias=w2_bias,
                 )
+                or (not apply_router_weight_on_input and qwen35_bf16_decode_gemv)
             )
             can_use_grouped_gemm = _can_use_musa_fp8_moe_grouped_gemm(
                 hidden_states=hidden_states,

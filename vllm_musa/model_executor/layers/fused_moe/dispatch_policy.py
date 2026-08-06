@@ -97,6 +97,36 @@ def _s5000_fp8_shape(
     )
 
 
+def _s5000_qwen35_bf16_decode_shape(
+    *, graph_mode: str, folded_shared_expert: bool
+) -> MusaFusedMoeShape:
+    """TP4-local Qwen3.5/3.6 BF16 decode shape."""
+
+    experts = 257 if folded_shared_expert else 256
+    top_k = 9 if folded_shared_expert else 8
+
+    return MusaFusedMoeShape(
+        device_capability=(3, 1),
+        multiprocessor_count=60,
+        local_experts=experts,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=top_k,
+        block_n=0,
+        block_k=0,
+        activation="silu",
+        expert_parallel=False,
+        hidden_dtype="torch.bfloat16",
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+        gemv_block="auto",
+        graph_mode=graph_mode,
+    )
+
+
 def _thresholds(
     gemv_max_tokens: int | None,
     grouped_gemm_min_tokens: int | None,
@@ -198,6 +228,26 @@ _CALIBRATED_THRESHOLDS.update(
             ),
         )
         for graph_mode in ("eager", "capture")
+    }
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
+        _s5000_qwen35_bf16_decode_shape(
+            graph_mode=graph_mode,
+            folded_shared_expert=folded_shared_expert,
+        ): _thresholds(
+            # Exact TP4-local Qwen crossover: M=1/2/4/8/12 are faster on
+            # native GEMV, while M>=16 is not a stable production win.
+            gemv_max_tokens=12,
+            grouped_gemm_min_tokens=None,
+            source=(
+                f"s5000-mp60-20260806-qwen35-36-bf16-e"
+                f"{257 if folded_shared_expert else 256}-"
+                f"n256-k2048-v128-{graph_mode}-crossover-v1"
+            ),
+        )
+        for graph_mode in ("eager", "capture")
+        for folded_shared_expert in (False, True)
     }
 )
 
