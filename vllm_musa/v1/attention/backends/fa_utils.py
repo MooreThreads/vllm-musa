@@ -13,6 +13,8 @@ logger = init_logger(__name__)
 if current_platform.is_musa():
     from flash_attn_interface import (  # noqa: F401
         flash_attn_varlen_func as _musa_flash_attn_varlen_func,
+        flash_attn_with_kvcache,
+        get_scheduler_metadata,
     )
 
     from vllm import _custom_ops as ops
