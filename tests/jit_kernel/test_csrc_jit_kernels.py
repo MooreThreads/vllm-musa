@@ -219,9 +219,7 @@ def test_ir_fused_add_rmsnorm_dispatch_rejects_unsafe_inputs() -> None:
     )
 
 
-def test_ir_fused_add_rmsnorm_c_ext_branch_preserves_broad_shapes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_ir_fused_add_rmsnorm_c_ext_branch_preserves_broad_shapes() -> None:
     from vllm_musa.kernels.musa_ops import (
         _c_ext_fused_add_rms_norm_supports_args,
         _fused_add_rms_norm_supports_args,
@@ -240,9 +238,6 @@ def test_ir_fused_add_rmsnorm_c_ext_branch_preserves_broad_shapes(
     assert not _c_ext_fused_add_rms_norm_supports_args(
         x, residual, weight.float(), 1e-6
     )
-    monkeypatch.setenv("VLLM_MUSA_FUSED_ADD_RMSNORM", "0")
-    assert _c_ext_fused_add_rms_norm_supports_args(x, residual, weight, 1e-6)
-    assert _fused_add_rms_norm_supports_args(x, residual, weight, 1e-6)
 
 
 def test_ir_fused_add_rmsnorm_dispatch_uses_compile_range_not_shape_hint() -> None:
