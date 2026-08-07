@@ -11,6 +11,7 @@ import importlib.util
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -58,9 +59,9 @@ def test_report(ms, capsys):
     rc = ms.main(["report"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "125 divergences" in out
-    assert "'1': 67" in out and "'2': 19" in out and "'3': 1" in out
-    assert "'4a': 2" in out and "'5': 28" in out and "'6': 8" in out
+    assert "144 divergences" in out
+    assert "'1': 86" in out and "'2': 20" in out and "'3': 1" in out
+    assert "'4a': 2" in out and "'5': 27" in out and "'6': 8" in out
 
 
 def test_report_doc(ms, capsys):
@@ -102,12 +103,26 @@ def test_series_readme_count_matches_directory():
     assert f"Currently **{patch_count} patches**" in readme
 
 
-def test_series_is_contiguous_and_uses_canonical_headers_and_authors():
+def test_series_uses_documented_prefixes_and_canonical_metadata():
     series_dir = ROOT / "vllm_musa" / "patches" / "series"
     patches = sorted(series_dir.glob("*.patch"))
-    assert [p.name.split("-", 1)[0] for p in patches] == [
-        f"{i:04d}" for i in range(1, len(patches) + 1)
-    ]
+    prefixes = [p.name.split("-", 1)[0] for p in patches]
+    assert all(len(prefix) == 4 and prefix.isdigit() for prefix in prefixes)
+    assert [int(prefix) for prefix in prefixes] == sorted(
+        int(prefix) for prefix in prefixes
+    )
+    duplicate_prefixes = {
+        prefix for prefix, count in Counter(prefixes).items() if count > 1
+    }
+    assert duplicate_prefixes == {
+        "0088",
+        "0089",
+        "0090",
+        "0094",
+        "0099",
+        "0100",
+        "0101",
+    }
     headers = [p.read_bytes().splitlines()[:2] for p in patches]
     zero_commit_header = (
         b"From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001"

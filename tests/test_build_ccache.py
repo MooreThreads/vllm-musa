@@ -6,7 +6,40 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from build_utils.ccache import configure_compiler_cache
+
+_CONFIGURE_ENV_KEYS = (
+    "PATH",
+    "CXX",
+    "PYTORCH_MCC",
+    "CCACHE_DIR",
+    "CCACHE_BASEDIR",
+    "CCACHE_COMPILERCHECK",
+    "CCACHE_NOHASHDIR",
+    "CCACHE_SLOPPINESS",
+    "CCACHE_MAXSIZE",
+    "VLLM_MUSA_REAL_CCACHE",
+    "VLLM_MUSA_REAL_MCC",
+    "VLLM_MUSA_CCACHE_MUSA_COMPILER",
+    "VLLM_MUSA_CCACHE_SOURCE_DIR",
+)
+
+
+@pytest.fixture(autouse=True)
+def _restore_compiler_cache_environment():
+    before = {
+        name: os.environ[name]
+        for name in _CONFIGURE_ENV_KEYS
+        if name in os.environ
+    }
+    yield
+    for name in _CONFIGURE_ENV_KEYS:
+        if name in before:
+            os.environ[name] = before[name]
+        else:
+            os.environ.pop(name, None)
 
 
 def _write_executable(path: Path, content: str) -> None:

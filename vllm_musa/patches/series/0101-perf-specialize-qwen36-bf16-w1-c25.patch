@@ -1,5 +1,5 @@
-From 0000000000000000000000000000000000000101 Mon Sep 17 00:00:00 2001
-From: codex <codex@local>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
 Date: Tue, 4 Aug 2026 06:30:00 +0800
 Subject: [PATCH] perf: specialize Qwen3.6 BF16 W1 tile at C25
 

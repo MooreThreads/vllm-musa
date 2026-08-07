@@ -1,5 +1,5 @@
-From 0000000000000000000000000000000000000100 Mon Sep 17 00:00:00 2001
-From: codex <codex@local>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
 Date: Mon, 3 Aug 2026 07:15:00 +0000
 Subject: [PATCH] perf: skip SSM slot mapping in uniform decode
 
@@ -69,4 +69,3 @@ diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runne
      ) -> None:
 -- 
 2.34.1
-

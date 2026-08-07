@@ -3,11 +3,14 @@
 
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_native_kernel_keeps_cuda_spelling_for_torchada() -> None:
+    if not (ROOT / ".git").exists():
+        pytest.skip("pre-build source contract requires a Git worktree")
     kernel = (
         ROOT
         / "csrc"

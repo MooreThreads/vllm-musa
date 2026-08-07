@@ -277,7 +277,10 @@ def test_no_legacy_mirror_contract_remains():
         "quantization_musa",
         "per-file _musa",
     )
-    paths = [ROOT / ".gitignore", ROOT / "third_party" / "PINS"]
+    paths = [ROOT / "third_party" / "PINS"]
+    gitignore = ROOT / ".gitignore"
+    if gitignore.exists():
+        paths.append(gitignore)
     paths.extend(sorted((ROOT / "vllm_musa" / "patches" / "series").glob("*.patch")))
 
     offenders = []

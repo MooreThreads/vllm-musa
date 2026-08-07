@@ -405,6 +405,7 @@ def test_static_contract_rejects_one_field_mismatches() -> None:
     config.speculative_config = object()
     contract = resolve_optimization_contract(config)
     assert not contract.prefers(OptimizationFeature.QWEN3_QK_ROPE_KV_PRESPLIT)
+    assert not contract.prefers(OptimizationFeature.QWEN_LEGACY_SAMPLING)
 
     config.speculative_config = None
     config.cache_config.block_size = 16

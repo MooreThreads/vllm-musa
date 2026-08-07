@@ -1,5 +1,5 @@
-From e21ebcc656c5973792ccc6cfef0fa7b1205b9986 Mon Sep 17 00:00:00 2001
-From: codex <codex@local>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
 Date: Fri, 31 Jul 2026 14:28:18 +0800
 Subject: [PATCH] perf: add gated sharded Qwen Gumbel logits path
 

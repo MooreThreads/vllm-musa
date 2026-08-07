@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Elon Gao <elon.gao@mthread.com>
+From: musa <musa@local>
 Date: Wed, 3 Jun 2026 11:47:35 +0000
 Subject: [PATCH] MUSA: vllm.compilation.passes.pass_manager
 
