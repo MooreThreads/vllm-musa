@@ -3,6 +3,7 @@
 
 import torch
 from torch import fx
+from torch._higher_order_ops.auto_functionalize import auto_functionalized
 from vllm.compilation.passes.fusion.matcher_utils import MatcherSiluAndMul
 from vllm.compilation.passes.vllm_inductor_pass import (
     VllmFusionPatternMatcherPass,
@@ -39,13 +40,15 @@ class MusaSiluDeepGemmPattern(VllmPatternReplacement):
             weight_scale: torch.Tensor,
         ) -> torch.Tensor:
             activated = self.silu_and_mul_matcher(input)
-            return torch.ops.vllm.musa_deepgemm_fp8_op(
-                activated,
-                weight,
-                weight_scale,
-                128,
-                False,
-            )
+            return auto_functionalized(
+                torch.ops.vllm.musa_deepgemm_fp8_op.default,
+                input=activated,
+                weight=weight,
+                weight_scale=weight_scale,
+                group_size=128,
+                use_deep_gemm_e8m0=False,
+                output=None,
+            )[0]
 
         return _pattern
 

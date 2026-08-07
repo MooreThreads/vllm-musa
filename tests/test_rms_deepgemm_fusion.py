@@ -12,10 +12,21 @@ import pytest
 pytest.importorskip("torchada")
 torch = pytest.importorskip("torch")
 pytest.importorskip("torch_musa")
+auto_functionalized = pytest.importorskip(
+    "torch._higher_order_ops.auto_functionalize"
+).auto_functionalized
 
 HIDDEN = 4096
 GROUP_SIZE = 128
 EPSILON = 1e-6
+
+
+def _logical_graph_targets(graph) -> set[object]:
+    targets = {node.target for node in graph.nodes}
+    for node in graph.nodes:
+        if node.target is auto_functionalized and node.args:
+            targets.add(node.args[0])
+    return targets
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -273,10 +284,10 @@ def test_rewrites_the_native_production_graph() -> None:
             self.inductor_config["post_grad_custom_post_pass"] = self.post_pass
 
         def post_pass(self, graph):
-            self.targets_before = {node.target for node in graph.nodes}
+            self.targets_before = _logical_graph_targets(graph)
             if self.fusion is not None:
                 self.fusion(graph)
-            self.targets_after = {node.target for node in graph.nodes}
+            self.targets_after = _logical_graph_targets(graph)
 
         def __call__(self, graph_module, example_inputs):
             return compile_fx(

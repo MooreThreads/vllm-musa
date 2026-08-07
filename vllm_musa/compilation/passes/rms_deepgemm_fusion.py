@@ -3,6 +3,7 @@
 
 import torch
 from torch import fx
+from torch._higher_order_ops.auto_functionalize import auto_functionalized
 from vllm.compilation.passes.vllm_inductor_pass import (
     VllmFusionPatternMatcherPass,
     VllmPatternReplacement,
@@ -39,13 +40,15 @@ class MusaRMSDeepGemmPattern(VllmPatternReplacement):
             normalized, residual_out = torch.ops.vllm_ir.fused_add_rms_norm(
                 input, residual, norm_weight, 1e-6, None
             )
-            output = torch.ops.vllm.musa_deepgemm_fp8_op(
-                normalized,
-                weight,
-                weight_scale,
-                128,
-                False,
-            )
+            output = auto_functionalized(
+                torch.ops.vllm.musa_deepgemm_fp8_op.default,
+                input=normalized,
+                weight=weight,
+                weight_scale=weight_scale,
+                group_size=128,
+                use_deep_gemm_e8m0=False,
+                output=None,
+            )[0]
             return output, residual_out
 
         return _pattern
