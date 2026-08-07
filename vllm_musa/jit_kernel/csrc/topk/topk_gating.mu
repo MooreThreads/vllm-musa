@@ -366,6 +366,95 @@ __global__ __launch_bounds__(
   }
 }
 
+template <typename T, typename SharedT, int NumExperts, int ValuesPerThread,
+          int TopK>
+__global__
+__launch_bounds__(kWarpsPerCta *kWarpSize, 1) void topk_softmax_no_bias_warp_shared1_kernel_fixed_k(
+    const T *__restrict__ gating_output,
+    const SharedT *__restrict__ shared_gate_output,
+    float *__restrict__ topk_weights, int32_t *__restrict__ topk_ids,
+    int num_tokens, bool renormalize) {
+  constexpr int OutTopK = TopK + 1;
+  const int tid = threadIdx.x;
+  const int warp_id = tid / kWarpSize;
+  const int lane = lane_id();
+  const int row = blockIdx.x * kWarpsPerCta + warp_id;
+  if (row >= num_tokens) {
+    return;
+  }
+
+  float probs[ValuesPerThread];
+  float thread_max = kFloatMinimum;
+
+#pragma unroll
+  for (int i = 0; i < ValuesPerThread; ++i) {
+    const int expert = lane + i * kWarpSize;
+    const float val = to_float(gating_output[row * NumExperts + expert]);
+    probs[i] = val;
+    thread_max = fmaxf(thread_max, val);
+  }
+
+  const float row_max = warp_max(thread_max);
+  float thread_sum = 0.0f;
+#pragma unroll
+  for (int i = 0; i < ValuesPerThread; ++i) {
+    probs[i] = __expf(probs[i] - row_max);
+    thread_sum += probs[i];
+  }
+  const float inv_row_sum = 1.0f / warp_sum(thread_sum);
+#pragma unroll
+  for (int i = 0; i < ValuesPerThread; ++i) {
+    probs[i] *= inv_row_sum;
+  }
+
+  float selected_sum = 0.0f;
+#pragma unroll
+  for (int k_idx = 0; k_idx < TopK; ++k_idx) {
+    float max_val = probs[0];
+    int max_idx = lane;
+#pragma unroll
+    for (int i = 1; i < ValuesPerThread; ++i) {
+      const int expert = lane + i * kWarpSize;
+      const float val = probs[i];
+      if (val > max_val) {
+        max_val = val;
+        max_idx = expert;
+      }
+    }
+    warp_argmax(max_val, max_idx);
+
+    if (lane == 0) {
+      const int out_idx = row * OutTopK + k_idx;
+      topk_weights[out_idx] = max_val;
+      topk_ids[out_idx] = max_idx;
+      selected_sum += max_val;
+    }
+
+#pragma unroll
+    for (int i = 0; i < ValuesPerThread; ++i) {
+      const int expert = lane + i * kWarpSize;
+      if (expert == max_idx) {
+        probs[i] = kFloatMinimum;
+      }
+    }
+  }
+
+  if (lane == 0) {
+    if (renormalize) {
+      const float inv_selected_sum = 1.0f / selected_sum;
+#pragma unroll
+      for (int k_idx = 0; k_idx < TopK; ++k_idx) {
+        topk_weights[row * OutTopK + k_idx] *= inv_selected_sum;
+      }
+    }
+    const int shared_out_idx = row * OutTopK + TopK;
+    const SharedT shared_weight =
+        from_float<SharedT>(stable_sigmoid(to_float(shared_gate_output[row])));
+    topk_weights[shared_out_idx] = to_float(shared_weight);
+    topk_ids[shared_out_idx] = NumExperts;
+  }
+}
+
 template <typename T, int NumExperts, int ValuesPerThread, int TopK>
 __global__
 __launch_bounds__(kWarpsPerCta *kWarpSize, 1) void topk_softmax_no_bias_renorm_warp_kernel_fixed_k(
@@ -807,6 +896,33 @@ int next_power_of_2(int value) {
   return out;
 }
 
+template <typename T, typename SharedT>
+void launch_topk_shared1(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
+                         ffi::TensorView gating_output, bool renormalize,
+                         ffi::TensorView shared_gate_output) {
+  const int num_tokens = static_cast<int>(gating_output.size(0));
+  if (num_tokens == 0) {
+    return;
+  }
+
+  const T *input_ptr = static_cast<const T *>(gating_output.data_ptr());
+  const SharedT *shared_ptr =
+      static_cast<const SharedT *>(shared_gate_output.data_ptr());
+  float *weights_ptr = static_cast<float *>(topk_weights.data_ptr());
+  int32_t *ids_ptr = static_cast<int32_t *>(topk_ids.data_ptr());
+  ffi::MUSADeviceGuard device_guard(gating_output.device().device_id);
+  musaStream_t stream = get_stream(gating_output.device());
+  const int blocks = (num_tokens + kWarpsPerCta - 1) / kWarpsPerCta;
+  topk_softmax_no_bias_warp_shared1_kernel_fixed_k<T, SharedT, 256, 8, 8>
+      <<<blocks, kWarpsPerCta * kWarpSize, 0, stream>>>(
+          input_ptr, shared_ptr, weights_ptr, ids_ptr, num_tokens, renormalize);
+
+  const musaError_t err = musaGetLastError();
+  TVM_FFI_ICHECK_EQ(err, musaSuccess)
+      << "MUSA topk fused shared-expert kernel failed: "
+      << musaGetErrorString(err);
+}
+
 template <typename T, bool IsSoftmax>
 void launch_topk(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
                  ffi::TensorView gating_output, bool renormalize,
@@ -869,7 +985,8 @@ void launch_topk(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
       if (topk == 8 && !has_correction_bias && moe_softcapping <= 0.0f) {
         if (renormalize) {
           // MUSA: e256 renorm goes one-warp-per-row, matching the e1024 path.
-          topk_softmax_no_bias_renorm_warp_kernel_fixed_k<T, 256, values_per_thread, 8>
+          topk_softmax_no_bias_renorm_warp_kernel_fixed_k<T, 256,
+                                                          values_per_thread, 8>
               <<<blocks, kWarpsPerCta * kWarpSize, 0, stream>>>(
                   input_ptr, weights_ptr, ids_ptr, num_tokens);
         } else {
@@ -989,7 +1106,9 @@ void launch_topk(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
 void check_topk_inputs(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
                        ffi::TensorView gating_output,
                        ffi::TensorView correction_bias,
-                       bool has_correction_bias) {
+                       bool has_correction_bias,
+                       ffi::TensorView shared_gate_output,
+                       int num_fused_shared_experts, bool has_shared_experts) {
   CHECK_MUSA_CONTIGUOUS(topk_weights);
   CHECK_MUSA_CONTIGUOUS(topk_ids);
   CHECK_MUSA_CONTIGUOUS(gating_output);
@@ -1003,7 +1122,12 @@ void check_topk_inputs(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
   TVM_FFI_ICHECK_EQ(topk_weights.size(0), gating_output.size(0));
   TVM_FFI_ICHECK_EQ(topk_ids.size(0), gating_output.size(0));
   TVM_FFI_ICHECK_EQ(topk_ids.size(1), topk_weights.size(1));
-  TVM_FFI_ICHECK_LE(topk_weights.size(1), gating_output.size(1));
+  const int routed_topk =
+      has_shared_experts
+          ? static_cast<int>(topk_weights.size(1)) - num_fused_shared_experts
+          : static_cast<int>(topk_weights.size(1));
+  TVM_FFI_ICHECK_GE(routed_topk, 0);
+  TVM_FFI_ICHECK_LE(routed_topk, gating_output.size(1));
   TVM_FFI_ICHECK_LE(gating_output.size(1), 1024);
   TVM_FFI_ICHECK(dtype_equal(topk_weights.dtype(), dl_float32));
   TVM_FFI_ICHECK(dtype_equal(topk_ids.dtype(), dl_int32));
@@ -1015,13 +1139,66 @@ void check_topk_inputs(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
     TVM_FFI_ICHECK_EQ(correction_bias.size(0), gating_output.size(1));
     TVM_FFI_ICHECK(dtype_equal(correction_bias.dtype(), dl_float32));
   }
+  if (has_shared_experts) {
+    CHECK_MUSA_CONTIGUOUS(shared_gate_output);
+    TVM_FFI_ICHECK_EQ(shared_gate_output.device().device_id,
+                      gating_output.device().device_id);
+    TVM_FFI_ICHECK_EQ(shared_gate_output.ndim(), 2);
+    TVM_FFI_ICHECK_EQ(shared_gate_output.size(0), gating_output.size(0));
+    TVM_FFI_ICHECK_EQ(shared_gate_output.size(1), 1);
+    TVM_FFI_ICHECK_EQ(num_fused_shared_experts, 1);
+    TVM_FFI_ICHECK_EQ(gating_output.size(1), 256);
+    TVM_FFI_ICHECK_EQ(routed_topk, 8);
+    TVM_FFI_ICHECK_EQ(topk_weights.size(1), 9);
+    TVM_FFI_ICHECK(dtype_equal(shared_gate_output.dtype(), dl_float32) ||
+                   dtype_equal(shared_gate_output.dtype(), dl_float16) ||
+                   dtype_equal(shared_gate_output.dtype(), dl_bfloat16));
+  }
 }
 
 template <bool IsSoftmax>
 void dispatch_topk(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
                    ffi::TensorView gating_output, bool renormalize,
                    float moe_softcapping, ffi::TensorView correction_bias,
-                   bool has_correction_bias) {
+                   bool has_correction_bias, ffi::TensorView shared_gate_output,
+                   int num_fused_shared_experts, bool has_shared_experts) {
+  if (has_shared_experts) {
+    if constexpr (!IsSoftmax) {
+      TVM_FFI_THROW(ValueError)
+          << "Fused shared-expert topk only supports softmax routing";
+    }
+    TVM_FFI_ICHECK(!has_correction_bias);
+    TVM_FFI_ICHECK(!renormalize);
+    TVM_FFI_ICHECK(moe_softcapping <= 0.0f);
+
+#define DISPATCH_SHARED(GateT)                                                 \
+  if (dtype_equal(shared_gate_output.dtype(), dl_float32)) {                   \
+    launch_topk_shared1<GateT, float>(topk_weights, topk_ids, gating_output,   \
+                                      renormalize, shared_gate_output);        \
+  } else if (dtype_equal(shared_gate_output.dtype(), dl_float16)) {            \
+    launch_topk_shared1<GateT, half>(topk_weights, topk_ids, gating_output,    \
+                                     renormalize, shared_gate_output);         \
+  } else if (dtype_equal(shared_gate_output.dtype(), dl_bfloat16)) {           \
+    launch_topk_shared1<GateT, __mt_bfloat16>(topk_weights, topk_ids,          \
+                                              gating_output, renormalize,      \
+                                              shared_gate_output);             \
+  } else {                                                                     \
+    TVM_FFI_THROW(ValueError) << "Unsupported shared_gate_output dtype";       \
+  }
+
+    if (dtype_equal(gating_output.dtype(), dl_float32)) {
+      DISPATCH_SHARED(float)
+    } else if (dtype_equal(gating_output.dtype(), dl_float16)) {
+      DISPATCH_SHARED(half)
+    } else if (dtype_equal(gating_output.dtype(), dl_bfloat16)) {
+      DISPATCH_SHARED(__mt_bfloat16)
+    } else {
+      TVM_FFI_THROW(ValueError) << "Unsupported gating_output dtype";
+    }
+#undef DISPATCH_SHARED
+    return;
+  }
+
   if (dtype_equal(gating_output.dtype(), dl_float32)) {
     launch_topk<float, IsSoftmax>(topk_weights, topk_ids, gating_output,
                                   renormalize, moe_softcapping, correction_bias,
@@ -1039,28 +1216,35 @@ void dispatch_topk(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
   }
 }
 
-void sgl_musa_topk_softmax(ffi::TensorView topk_weights,
-                           ffi::TensorView topk_ids,
-                           ffi::TensorView gating_output, bool renormalize,
-                           double moe_softcapping,
-                           ffi::TensorView correction_bias,
-                           bool has_correction_bias) {
+void sgl_musa_topk_softmax(
+    ffi::TensorView topk_weights, ffi::TensorView topk_ids,
+    ffi::TensorView gating_output, bool renormalize, double moe_softcapping,
+    ffi::TensorView correction_bias, bool has_correction_bias,
+    ffi::TensorView shared_gate_output, int num_fused_shared_experts,
+    bool has_shared_experts) {
   check_topk_inputs(topk_weights, topk_ids, gating_output, correction_bias,
-                    has_correction_bias);
+                    has_correction_bias, shared_gate_output,
+                    num_fused_shared_experts, has_shared_experts);
   dispatch_topk<true>(topk_weights, topk_ids, gating_output, renormalize,
                       static_cast<float>(moe_softcapping), correction_bias,
-                      has_correction_bias);
+                      has_correction_bias, shared_gate_output,
+                      num_fused_shared_experts, has_shared_experts);
 }
 
 void sgl_musa_topk_sigmoid(ffi::TensorView topk_weights,
                            ffi::TensorView topk_ids,
                            ffi::TensorView gating_output, bool renormalize,
                            ffi::TensorView correction_bias,
-                           bool has_correction_bias) {
+                           bool has_correction_bias,
+                           ffi::TensorView shared_gate_output,
+                           int num_fused_shared_experts,
+                           bool has_shared_experts) {
   check_topk_inputs(topk_weights, topk_ids, gating_output, correction_bias,
-                    has_correction_bias);
+                    has_correction_bias, shared_gate_output,
+                    num_fused_shared_experts, has_shared_experts);
   dispatch_topk<false>(topk_weights, topk_ids, gating_output, renormalize, 0.0f,
-                       correction_bias, has_correction_bias);
+                       correction_bias, has_correction_bias, shared_gate_output,
+                       num_fused_shared_experts, has_shared_experts);
 }
 
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_musa_topk_softmax, sgl_musa_topk_softmax);

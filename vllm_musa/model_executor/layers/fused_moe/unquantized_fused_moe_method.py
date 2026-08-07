@@ -103,13 +103,18 @@ class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             assert (
                 shared_experts_input is None
             ), "folded shared expert expects shared_experts=None"
-            shared_logits, _ = layer._musa_shared_gate(x)
-            topk_weights, topk_ids = extend_topk_with_shared(
-                topk_weights,
-                topk_ids,
-                shared_logits,
-                layer._musa_shared_expert_id,
-            )
+            routed_topk = layer.moe_config.top_k
+            if topk_ids.shape[-1] == routed_topk:
+                shared_logits, _ = layer._musa_shared_gate(x)
+                topk_weights, topk_ids = extend_topk_with_shared(
+                    topk_weights,
+                    topk_ids,
+                    shared_logits,
+                    layer._musa_shared_expert_id,
+                )
+            else:
+                assert topk_ids.shape[-1] == routed_topk + 1
+                assert topk_weights.shape == topk_ids.shape
             global_num_experts = layer._musa_shared_expert_id + 1
         else:
             global_num_experts = layer.global_num_experts
@@ -155,6 +160,10 @@ def _fold_shared_expert_weights(layer: torch.nn.Module) -> None:
     layer.w2_weight = torch.nn.Parameter(w2, requires_grad=False)
     layer._musa_shared_expert_id = int(num_routed)
     layer._musa_shared_folded = True
+    router = getattr(layer, "_musa_shared_router", None)
+    if router is not None:
+        router._musa_shared_gate = layer._musa_shared_gate
+        router._musa_shared_expert_id = int(num_routed)
     logger.info_once(
         "MUSA shared-expert fold active: shared expert folded into the routed "
         "grouped GEMM as slot %d (%d routed + 1 shared).",

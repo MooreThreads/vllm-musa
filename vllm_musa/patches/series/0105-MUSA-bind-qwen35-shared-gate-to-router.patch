@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 7 Aug 2026 18:00:00 +0800
+Subject: [PATCH] MUSA: bind Qwen3.5 folded shared gate to router
+
+The folded shared expert currently appends its routing column after top-k,
+which costs one extra captured launch per layer.  Give the routed-expert
+weight hook a reference to the owning router so it can move the existing
+shared-gate projection before top-k and let the MUSA top-k kernel write the
+shared column directly.
+
+---
+ vllm/model_executor/models/qwen3_next.py | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
+--- a/vllm/model_executor/models/qwen3_next.py
++++ b/vllm/model_executor/models/qwen3_next.py
+@@ -240,2 +240,3 @@ class Qwen3NextSparseMoeBlock(nn.Module):
+             routed._musa_shared_mlp = self.shared_expert
++            routed._musa_shared_router = self.experts.router
+             routed._musa_shared_gate = self.shared_expert_gate

@@ -67,23 +67,45 @@ def _musa_jit_fused_topk(
     indices_type: torch.dtype | None,
     correction_bias: torch.Tensor | None = None,
     scoring_func: str = "softmax",
+    shared_expert_gate_output: torch.Tensor | None = None,
+    num_fused_shared_experts: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
     if not _can_use_musa_jit_topk(hidden_states, gating_output, topk, correction_bias):
+        return None
+
+    has_shared_experts = (
+        shared_expert_gate_output is not None and num_fused_shared_experts > 0
+    )
+    if has_shared_experts and not (
+        scoring_func == "softmax"
+        and not renormalize
+        and correction_bias is None
+        and gating_output.shape[1] == 256
+        and topk == 8
+        and num_fused_shared_experts == 1
+        and shared_expert_gate_output.device == gating_output.device
+        and shared_expert_gate_output.dim() == 2
+        and shared_expert_gate_output.shape == (gating_output.shape[0], 1)
+        and shared_expert_gate_output.dtype
+        in (torch.float32, torch.float16, torch.bfloat16)
+        and shared_expert_gate_output.is_contiguous()
+    ):
         return None
 
     musa_jit_topk = _maybe_import_musa_jit_topk()
     if musa_jit_topk is None:
         return None
 
+    output_topk = topk + (num_fused_shared_experts if has_shared_experts else 0)
     topk_weights = torch.empty(
         gating_output.shape[0],
-        topk,
+        output_topk,
         dtype=torch.float32,
         device=gating_output.device,
     )
     topk_ids = torch.empty(
         gating_output.shape[0],
-        topk,
+        output_topk,
         dtype=torch.int32,
         device=gating_output.device,
     )
@@ -95,6 +117,8 @@ def _musa_jit_fused_topk(
             gating_output,
             renormalize,
             correction_bias=correction_bias,
+            shared_expert_gate_output=shared_expert_gate_output,
+            num_fused_shared_experts=num_fused_shared_experts,
         )
     elif scoring_func == "sigmoid":
         musa_jit_topk.topk_sigmoid(
@@ -103,6 +127,8 @@ def _musa_jit_fused_topk(
             gating_output,
             renormalize,
             correction_bias=correction_bias,
+            shared_expert_gate_output=shared_expert_gate_output,
+            num_fused_shared_experts=num_fused_shared_experts,
         )
     else:
         return None
