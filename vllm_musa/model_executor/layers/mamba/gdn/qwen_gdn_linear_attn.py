@@ -121,7 +121,9 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                 self.head_v_dim,
             )
 
-        core_attn_out = torch.zeros(
+        # Every decode/prefill core path writes the complete output buffer;
+        # avoid a redundant zero-fill launch before the recurrent kernel.
+        core_attn_out = torch.empty(
             (num_tokens, self.num_v_heads // self.tp_size, self.head_v_dim),
             dtype=hidden_states.dtype,
             device=hidden_states.device,
