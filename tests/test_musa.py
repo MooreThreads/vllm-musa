@@ -432,19 +432,31 @@ class TestMUSAPlatformBase:
             )
         )
 
-    @pytest.mark.parametrize(("layout", "expected"), [("NHD", True), ("HND", False)])
+    @pytest.mark.parametrize(
+        ("layout", "shape", "expected"),
+        [
+            ("NHD", (16, 8, 128), True),
+            ("NHD", (32, 8, 128), True),
+            ("NHD", (4, 1, 256), True),
+            ("NHD", (32, 2, 256), True),
+            ("HND", (32, 2, 256), False),
+            ("NHD", (32, 4, 256), False),
+        ],
+    )
     def test_qwen3_qk_rope_kv_provider_layout_gate(
         self,
         monkeypatch,
         layout: str,
+        shape: tuple[int, int, int],
         expected: bool,
     ) -> None:
         from vllm_musa.v1.attention.backends import flash_attn
 
+        num_heads, num_kv_heads, head_size = shape
         impl = SimpleNamespace(
-            num_heads=16,
-            num_kv_heads=8,
-            head_size=128,
+            num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
+            head_size=head_size,
             attn_type=flash_attn.AttentionType.DECODER,
             kv_cache_dtype="auto",
             alibi_slopes=None,

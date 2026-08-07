@@ -109,6 +109,106 @@ def test_qwen3_cache_out_wrapper_registers_and_preserves_padding(q_heads: int) -
     assert torch.equal(value_cache[1:], torch.full_like(value_cache[1:], sentinel))
 
 
+@pytest.mark.parametrize("tokens", [1, 2, 8, 16])
+def test_qwen35_cache_out_matches_no_cache_across_page_boundaries(
+    tokens: int,
+) -> None:
+    from vllm_musa.jit_kernel.csrc.norm import (
+        fused_qk_rmsnorm_mrope,
+        fused_qk_rmsnorm_mrope_cache_out,
+    )
+
+    device = torch.device("musa")
+    q_heads, kv_heads, head_dim, rot_dim = 32, 2, 256, 64
+    q_weight = torch.randn((head_dim,), device=device, dtype=torch.bfloat16)
+    k_weight = torch.randn((head_dim,), device=device, dtype=torch.bfloat16)
+    angles = torch.randn((128, rot_dim // 2), device=device, dtype=torch.float32)
+    cos_sin_cache = torch.cat((angles.cos(), angles.sin()), dim=-1).to(
+        torch.bfloat16
+    )
+    sentinel = -9.0
+    key_cache = torch.full(
+        (160, kv_heads * head_dim), sentinel, device=device, dtype=torch.bfloat16
+    )
+    value_cache = torch.full_like(key_cache, sentinel)
+    touched: set[int] = set()
+
+    first_slots = [63 + index for index in range(tokens)]
+    if tokens > 1:
+        first_slots[-1] = -1
+    second_slots = [127 - index for index in range(tokens)]
+    second_slots[0] = first_slots[0]
+    for step, slot_values in enumerate((first_slots, second_slots)):
+        q = torch.randn(
+            (tokens, q_heads, head_dim), device=device, dtype=torch.bfloat16
+        )
+        k = torch.randn(
+            (tokens, kv_heads, head_dim), device=device, dtype=torch.bfloat16
+        )
+        v = torch.randn_like(k)
+        positions = (
+            torch.arange(step * tokens, (step + 1) * tokens, device=device)
+            .to(torch.int64)
+            .repeat(3, 1)
+        )
+        slots = torch.tensor(slot_values, device=device, dtype=torch.int32)
+        q_ref, k_ref = fused_qk_rmsnorm_mrope(
+            q,
+            k,
+            q_weight,
+            k_weight,
+            positions,
+            cos_sin_cache,
+            True,
+            11,
+            11,
+            10,
+            True,
+            1e-6,
+            True,
+        )
+        q_out = torch.empty_like(q)
+        k_out = torch.empty_like(k)
+        fused_qk_rmsnorm_mrope_cache_out(
+            q,
+            k,
+            v,
+            q_weight,
+            k_weight,
+            positions,
+            cos_sin_cache,
+            q_out,
+            k_out,
+            key_cache,
+            value_cache,
+            slots,
+            True,
+            11,
+            11,
+            10,
+            True,
+            1e-6,
+            True,
+        )
+        torch.musa.synchronize()
+
+        torch.testing.assert_close(q_out, q_ref)
+        torch.testing.assert_close(k_out, k_ref)
+        for token, slot in enumerate(slot_values):
+            if slot >= 0:
+                touched.add(slot)
+                torch.testing.assert_close(key_cache[slot], k_out[token].reshape(-1))
+                torch.testing.assert_close(value_cache[slot], v[token].reshape(-1))
+
+    untouched = sorted(set(range(key_cache.shape[0])) - touched)
+    torch.testing.assert_close(
+        key_cache[untouched], torch.full_like(key_cache[untouched], sentinel)
+    )
+    torch.testing.assert_close(
+        value_cache[untouched], torch.full_like(value_cache[untouched], sentinel)
+    )
+
+
 def test_qwen3_hnd_runtime_falls_back_before_cache_view(monkeypatch) -> None:
     from vllm_musa.jit_kernel.csrc import norm
     from vllm_musa.v1.attention.backends import flash_attn
