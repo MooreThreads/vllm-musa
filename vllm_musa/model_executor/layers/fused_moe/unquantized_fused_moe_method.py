@@ -103,7 +103,7 @@ class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             assert (
                 shared_experts_input is None
             ), "folded shared expert expects shared_experts=None"
-            routed_topk = layer.moe_config.top_k
+            routed_topk = layer.top_k
             if topk_ids.shape[-1] == routed_topk:
                 shared_logits, _ = layer._musa_shared_gate(x)
                 topk_weights, topk_ids = extend_topk_with_shared(
