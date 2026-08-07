@@ -1168,7 +1168,6 @@ void dispatch_topk(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
           << "Fused shared-expert topk only supports softmax routing";
     }
     TVM_FFI_ICHECK(!has_correction_bias);
-    TVM_FFI_ICHECK(!renormalize);
     TVM_FFI_ICHECK(moe_softcapping <= 0.0f);
 
 #define DISPATCH_SHARED(GateT)                                                 \

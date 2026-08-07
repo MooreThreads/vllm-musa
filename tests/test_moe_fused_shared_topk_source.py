@@ -41,6 +41,8 @@ def test_jit_topk_writes_shared_column_with_input_dtype_rounding() -> None:
     assert "const SharedT shared_weight" in source
     assert "from_float<SharedT>(stable_sigmoid" in source
     assert "topk_ids[shared_out_idx] = NumExperts" in source
+    assert "if (renormalize)" in source
+    assert "TVM_FFI_ICHECK(!renormalize)" not in source
 
 
 def test_fused_shared_topk_preserves_bf16_sigmoid_rounding() -> None:

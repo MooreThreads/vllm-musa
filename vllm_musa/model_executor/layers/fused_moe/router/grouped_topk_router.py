@@ -78,7 +78,6 @@ def _musa_jit_fused_topk(
     )
     if has_shared_experts and not (
         scoring_func == "softmax"
-        and not renormalize
         and correction_bias is None
         and gating_output.shape[1] == 256
         and topk == 8

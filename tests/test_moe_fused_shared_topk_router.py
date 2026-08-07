@@ -75,7 +75,7 @@ def _run_contract_checks() -> None:
             hidden_states=hidden_states,
             gating_output=router_logits,
             topk=8,
-            renormalize=False,
+            renormalize=True,
             indices_type=None,
             scoring_func="softmax",
             shared_expert_gate_output=shared_logits,
@@ -89,7 +89,7 @@ def _run_contract_checks() -> None:
     assert fake_topk.calls == [
         {
             "shape": (2, 9),
-            "renormalize": False,
+            "renormalize": True,
             "correction_bias": None,
             "shared": shared_logits,
             "num_shared": 1,
@@ -109,7 +109,7 @@ def _run_contract_checks() -> None:
             side_effect=unexpected_import,
         ),
     ):
-        for experts, renormalize in ((255, False), (256, True)):
+        for experts, renormalize in ((255, False), (257, True)):
             result = grouped_router._musa_jit_fused_topk(
                 hidden_states=hidden_states,
                 gating_output=torch.empty(2, experts),
