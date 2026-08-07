@@ -22,6 +22,8 @@ def test_musa_image_runtime_dependency_contract():
     dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
 
     assert "triton==3.2.0" in private_requirements
+    assert "torchvision==0.26.0.post1+musa5.2.0" in private_requirements
+    assert "deep_ep==1.1.0+musa5.2.0torch2.11.0.post1" in private_requirements
     assert "fastapi[standard]" in runtime_requirements
     assert "pycountry" in runtime_requirements
     assert '("triton", "triton", requirement_prefix("triton"))' in dockerfile
