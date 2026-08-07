@@ -1,8 +1,7 @@
 # Runtime Python dependencies that are portable across MUSA images.
-# 0.1.78 is the torch 2.11-compatible torchada release used by this stack.
-# Compiled vLLM on torch 2.11 additionally requires the torchada streams
-# compatibility fix from torchada PR #98 (or its released successor).
-torchada==0.1.78
+# 0.1.79 contains the torch 2.11-compatible streams path used by compiled
+# vLLM-MUSA.
+torchada==0.1.79
 mthreads-ml-py>=2.4.1
 numpy==1.26
 openai>=2.24.0
