@@ -22,6 +22,13 @@ def qwen3_qk_rope_and_unified_kv_cache_update_impl(
     cos_sin_cache: torch.Tensor,
     q_out: torch.Tensor,
     k_out: torch.Tensor,
+    is_neox: bool,
+    mrope_section_t: int,
+    mrope_section_h: int,
+    mrope_section_w: int,
+    is_interleaved: bool,
+    eps: float,
+    gemma: bool,
     layer_name: LayerNameType,
 ) -> torch.Tensor:
     """Populate Q/K outputs and the current layer's paged KV cache."""
@@ -40,6 +47,13 @@ def qwen3_qk_rope_and_unified_kv_cache_update_impl(
         k_out,
         kv_cache,
         layer_slot_mapping,
+        is_neox,
+        mrope_section_t,
+        mrope_section_h,
+        mrope_section_w,
+        is_interleaved,
+        eps,
+        gemma,
     )
     return torch.empty(0, device=kv_cache.device, dtype=kv_cache.dtype)
 
@@ -54,8 +68,33 @@ def qwen3_qk_rope_and_unified_kv_cache_update_fake(
     cos_sin_cache: torch.Tensor,
     q_out: torch.Tensor,
     k_out: torch.Tensor,
+    is_neox: bool,
+    mrope_section_t: int,
+    mrope_section_h: int,
+    mrope_section_w: int,
+    is_interleaved: bool,
+    eps: float,
+    gemma: bool,
     layer_name: LayerNameType,
 ) -> torch.Tensor:
+    del (
+        k,
+        v,
+        q_weight,
+        k_weight,
+        positions,
+        cos_sin_cache,
+        q_out,
+        k_out,
+        is_neox,
+        mrope_section_t,
+        mrope_section_h,
+        mrope_section_w,
+        is_interleaved,
+        eps,
+        gemma,
+        layer_name,
+    )
     return torch.empty(0, device=q.device, dtype=q.dtype)
 
 
