@@ -31,10 +31,16 @@ def test_fusion_matches_the_production_native_swiglu_deepgemm_pair():
     ).read_text()
 
     assert "MatcherSiluAndMul(enabled=False)" in source
-    assert "torch.ops.vllm.musa_deepgemm_fp8_op(" in source
+    assert "from torch._higher_order_ops.auto_functionalize import" in source
+    assert "return auto_functionalized(" in source
+    assert "torch.ops.vllm.musa_deepgemm_fp8_op.default," in source
+    assert "group_size=128," in source
+    assert "use_deep_gemm_e8m0=False," in source
+    assert "output=None," in source
+    assert ")[0]" in source
     assert "torch.ops.vllm.musa_silu_deepgemm_fp8_op(" in source
-    assert source.count("\n                128,") == 2
-    assert source.count("\n                False,") == 2
+    assert source.count("\n                128,") == 1
+    assert source.count("\n                False,") == 1
 
 
 def test_pass_manager_keeps_the_experimental_scope_narrow():
