@@ -92,8 +92,8 @@ void check_fused_qk_mrope_cache_inputs(
   TVM_FFI_ICHECK_EQ(k.ndim(), 3);
   TVM_FFI_ICHECK_EQ(v.ndim(), 3);
   TVM_FFI_ICHECK_EQ(q_out.ndim(), 3);
-  TVM_FFI_ICHECK_EQ(k_cache.ndim(), 2);
-  TVM_FFI_ICHECK_EQ(v_cache.ndim(), 2);
+  TVM_FFI_ICHECK(k_cache.ndim() == 2 || k_cache.ndim() == 4);
+  TVM_FFI_ICHECK_EQ(v_cache.ndim(), k_cache.ndim());
   TVM_FFI_ICHECK_EQ(positions.ndim(), 2);
   TVM_FFI_ICHECK_EQ(indices.ndim(), 1);
   TVM_FFI_ICHECK_EQ(positions.size(0), 3);
@@ -109,8 +109,17 @@ void check_fused_qk_mrope_cache_inputs(
   TVM_FFI_ICHECK_GT(cos_sin_cache.size(1), 0);
   TVM_FFI_ICHECK_LE(cos_sin_cache.size(1), q.size(2));
   TVM_FFI_ICHECK_EQ(cos_sin_cache.size(1) % 2, 0);
-  TVM_FFI_ICHECK_EQ(k_cache.size(1), k.size(1) * k.size(2));
-  TVM_FFI_ICHECK_EQ(v_cache.size(1), v.size(1) * v.size(2));
+  if (k_cache.ndim() == 2) {
+    TVM_FFI_ICHECK_EQ(k_cache.size(1), k.size(1) * k.size(2));
+    TVM_FFI_ICHECK_EQ(v_cache.size(1), v.size(1) * v.size(2));
+  } else {
+    TVM_FFI_ICHECK_EQ(k_cache.size(0), v_cache.size(0));
+    TVM_FFI_ICHECK_EQ(k_cache.size(1), v_cache.size(1));
+    TVM_FFI_ICHECK_EQ(k_cache.size(2), k.size(1));
+    TVM_FFI_ICHECK_EQ(v_cache.size(2), v.size(1));
+    TVM_FFI_ICHECK_EQ(k_cache.size(3), k.size(2));
+    TVM_FFI_ICHECK_EQ(v_cache.size(3), v.size(2));
+  }
   TVM_FFI_ICHECK_EQ(q_out.size(0), q.size(0));
   TVM_FFI_ICHECK_EQ(q_out.size(1), q.size(1));
   TVM_FFI_ICHECK_EQ(q_out.size(2), q.size(2));
@@ -118,8 +127,17 @@ void check_fused_qk_mrope_cache_inputs(
   TVM_FFI_ICHECK_EQ(k.stride(2), 1);
   TVM_FFI_ICHECK_EQ(v.stride(2), 1);
   TVM_FFI_ICHECK_EQ(q_out.stride(2), 1);
-  TVM_FFI_ICHECK_EQ(k_cache.stride(1), 1);
-  TVM_FFI_ICHECK_EQ(v_cache.stride(1), 1);
+  if (k_cache.ndim() == 2) {
+    TVM_FFI_ICHECK_EQ(k_cache.stride(1), 1);
+    TVM_FFI_ICHECK_EQ(v_cache.stride(1), 1);
+  } else {
+    TVM_FFI_ICHECK_EQ(k_cache.stride(3), 1);
+    TVM_FFI_ICHECK_EQ(v_cache.stride(3), 1);
+    TVM_FFI_ICHECK_EQ(k_cache.stride(2), k_cache.size(3));
+    TVM_FFI_ICHECK_EQ(v_cache.stride(2), v_cache.size(3));
+    TVM_FFI_ICHECK_EQ(k_cache.stride(1), k_cache.size(2) * k_cache.size(3));
+    TVM_FFI_ICHECK_EQ(v_cache.stride(1), v_cache.size(2) * v_cache.size(3));
+  }
   TVM_FFI_ICHECK_EQ(cos_sin_cache.stride(1), 1);
   TVM_FFI_ICHECK_EQ(q.device().device_id, k.device().device_id);
   TVM_FFI_ICHECK_EQ(q.device().device_id, v.device().device_id);
@@ -871,7 +889,9 @@ __global__ void fused_qk_rmsnorm_mrope_cache_h256r64_bf16_kernel(
     int64_t k_head_stride, int64_t v_batch_stride, int64_t v_head_stride,
     int64_t q_out_batch_stride, int64_t q_out_head_stride,
     int64_t k_out_batch_stride, int64_t k_out_head_stride,
-    int64_t k_cache_row_stride, int64_t v_cache_row_stride,
+    int cache_block_size, int64_t k_cache_block_stride,
+    int64_t k_cache_token_stride, int64_t v_cache_block_stride,
+    int64_t v_cache_token_stride,
     int64_t indices_stride, float eps) {
   constexpr int hidden = 256;
   constexpr int embed_dim = 32;
@@ -892,13 +912,21 @@ __global__ void fused_qk_rmsnorm_mrope_cache_h256r64_bf16_kernel(
   const int64_t cache_idx =
       static_cast<int64_t>(indices[(int64_t)token * indices_stride]);
   const bool write_cache = cache_idx >= 0;
+  const int64_t cache_block =
+      cache_block_size > 0 ? cache_idx / cache_block_size : 0;
+  const int64_t cache_token =
+      cache_block_size > 0 ? cache_idx % cache_block_size : cache_idx;
+  const int64_t k_cache_base =
+      cache_block * k_cache_block_stride + cache_token * k_cache_token_stride;
+  const int64_t v_cache_base =
+      cache_block * v_cache_block_stride + cache_token * v_cache_token_stride;
 
   if (group == 0 && write_cache) {
     constexpr int kVec = 8;
     constexpr int row_dim = K_HEADS * hidden;
     constexpr int vec_count = row_dim / kVec;
     const int64_t v_token_base = (int64_t)token * v_batch_stride;
-    const int64_t v_out_base = cache_idx * v_cache_row_stride;
+    const int64_t v_out_base = v_cache_base;
     for (int vec_idx = tid; vec_idx < vec_count; vec_idx += (int)blockDim.x) {
       const int head = vec_idx >> 5;
       const int col = (vec_idx & 31) * kVec;
@@ -978,16 +1006,15 @@ __global__ void fused_qk_rmsnorm_mrope_cache_h256r64_bf16_kernel(
     q_out[q_out_base + lane + 224] = out_7;
   } else {
     if (write_cache) {
-      const int64_t k_cache_base =
-          cache_idx * k_cache_row_stride + (int64_t)head * hidden;
-      k_cache[k_cache_base + lane] = x_rot;
-      k_cache[k_cache_base + lane + 32] = y_rot;
-      k_cache[k_cache_base + lane + 64] = out_2;
-      k_cache[k_cache_base + lane + 96] = out_3;
-      k_cache[k_cache_base + lane + 128] = out_4;
-      k_cache[k_cache_base + lane + 160] = out_5;
-      k_cache[k_cache_base + lane + 192] = out_6;
-      k_cache[k_cache_base + lane + 224] = out_7;
+      const int64_t head_cache_base = k_cache_base + (int64_t)head * hidden;
+      k_cache[head_cache_base + lane] = x_rot;
+      k_cache[head_cache_base + lane + 32] = y_rot;
+      k_cache[head_cache_base + lane + 64] = out_2;
+      k_cache[head_cache_base + lane + 96] = out_3;
+      k_cache[head_cache_base + lane + 128] = out_4;
+      k_cache[head_cache_base + lane + 160] = out_5;
+      k_cache[head_cache_base + lane + 192] = out_6;
+      k_cache[head_cache_base + lane + 224] = out_7;
     }
     if constexpr (STORE_K_OUT) {
       const int64_t k_out_base = (int64_t)token * k_out_batch_stride +
@@ -2235,7 +2262,7 @@ void launch_h256r64_mrope_cache_kernel(
           static_cast<int64_t>(v.stride(0)), static_cast<int64_t>(v.stride(1)),
           static_cast<int64_t>(q_out.stride(0)),
           static_cast<int64_t>(q_out.stride(1)), 0, 0,
-          static_cast<int64_t>(k_cache.stride(0)),
+          0, 0, static_cast<int64_t>(k_cache.stride(0)), 0,
           static_cast<int64_t>(v_cache.stride(0)),
           static_cast<int64_t>(indices.stride(0)), eps);
 }
@@ -2252,6 +2279,14 @@ void launch_h256r64_mrope_cache_out_kernel(
   constexpr int threads = 32 * heads_per_block;
   constexpr int groups_per_token =
       (Q_HEADS + K_HEADS + heads_per_block - 1) / heads_per_block;
+  const int cache_block_size =
+      k_cache.ndim() == 4 ? static_cast<int>(k_cache.size(1)) : 0;
+  const int64_t k_cache_token_stride =
+      k_cache.ndim() == 4 ? static_cast<int64_t>(k_cache.stride(1))
+                          : static_cast<int64_t>(k_cache.stride(0));
+  const int64_t v_cache_token_stride =
+      v_cache.ndim() == 4 ? static_cast<int64_t>(v_cache.stride(1))
+                          : static_cast<int64_t>(v_cache.stride(0));
   fused_qk_rmsnorm_mrope_cache_h256r64_bf16_kernel<
       index_t, Q_HEADS, K_HEADS, HEADS_PER_BLOCK>
       <<<batch * groups_per_token, threads, 0, stream>>>(
@@ -2275,8 +2310,9 @@ void launch_h256r64_mrope_cache_out_kernel(
           static_cast<int64_t>(q_out.stride(1)),
           static_cast<int64_t>(k_out.stride(0)),
           static_cast<int64_t>(k_out.stride(1)),
-          static_cast<int64_t>(k_cache.stride(0)),
-          static_cast<int64_t>(v_cache.stride(0)),
+          cache_block_size, static_cast<int64_t>(k_cache.stride(0)),
+          k_cache_token_stride, static_cast<int64_t>(v_cache.stride(0)),
+          v_cache_token_stride,
           static_cast<int64_t>(indices.stride(0)), eps);
 }
 
@@ -2681,6 +2717,8 @@ void launch_fused_qk_rmsnorm_mrope_cache_out_bf16(
       gemma && is_interleaved && hidden == 256 && rot_dim == 64 &&
       mrope_section_t == 11 && mrope_section_h == 11 &&
       mrope_section_w == 10;
+  TVM_FFI_ICHECK(k_cache.ndim() == 2 || use_h256r64_mrope_specialization)
+      << "paged cache-out requires the h256r64 specialization";
   if (use_h256r64_mrope_specialization) {
     if (q_heads == 4 && k_heads == 1) {
       launch_h256r64_mrope_cache_out_kernel<index_t, 4, 1>(
