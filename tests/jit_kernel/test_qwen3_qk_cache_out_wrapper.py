@@ -127,11 +127,17 @@ def test_qwen35_cache_out_matches_no_cache_across_page_boundaries(
         torch.bfloat16
     )
     sentinel = -9.0
-    key_cache = torch.full(
-        (160, kv_heads * head_dim), sentinel, device=device, dtype=torch.bfloat16
+    block_size = 64
+    interleaved_storage = torch.full(
+        (3, 3, 2, block_size, kv_heads, head_dim),
+        sentinel,
+        device=device,
+        dtype=torch.bfloat16,
     )
-    value_cache = torch.full_like(key_cache, sentinel)
-    touched: set[int] = set()
+    key_cache = interleaved_storage[:, 1, 0]
+    value_cache = interleaved_storage[:, 1, 1]
+    expected_key = key_cache.clone()
+    expected_value = value_cache.clone()
 
     first_slots = [63 + index for index in range(tokens)]
     if tokens > 1:
@@ -196,17 +202,12 @@ def test_qwen35_cache_out_matches_no_cache_across_page_boundaries(
         torch.testing.assert_close(k_out, k_ref)
         for token, slot in enumerate(slot_values):
             if slot >= 0:
-                touched.add(slot)
-                torch.testing.assert_close(key_cache[slot], k_out[token].reshape(-1))
-                torch.testing.assert_close(value_cache[slot], v[token].reshape(-1))
+                block, offset = divmod(slot, block_size)
+                expected_key[block, offset].copy_(k_out[token])
+                expected_value[block, offset].copy_(v[token])
 
-    untouched = sorted(set(range(key_cache.shape[0])) - touched)
-    torch.testing.assert_close(
-        key_cache[untouched], torch.full_like(key_cache[untouched], sentinel)
-    )
-    torch.testing.assert_close(
-        value_cache[untouched], torch.full_like(value_cache[untouched], sentinel)
-    )
+    torch.testing.assert_close(key_cache, expected_key)
+    torch.testing.assert_close(value_cache, expected_value)
 
 
 def test_qwen3_hnd_runtime_falls_back_before_cache_view(monkeypatch) -> None:

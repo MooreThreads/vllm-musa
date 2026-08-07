@@ -1666,7 +1666,38 @@ class FlashAttentionImpl(AttentionImpl):
                 and tuple(key_cache.shape[-2:]) == expected_tail
                 and tuple(value_cache.shape[-2:]) == expected_tail
             )
-            if flat_cache_supported:
+            h256_paged_specialization = (
+                gemma
+                and is_interleaved
+                and self.head_size == 256
+                and cos_sin_cache.shape[-1] == 64
+                and (mrope_section_t, mrope_section_h, mrope_section_w)
+                == (11, 11, 10)
+            )
+            paged_cache_supported = (
+                h256_paged_specialization
+                and key_cache.dim() == 4
+                and value_cache.dim() == 4
+                and tuple(key_cache.shape[-2:]) == expected_tail
+                and tuple(value_cache.shape[-2:]) == expected_tail
+                and key_cache.stride(3) == 1
+                and value_cache.stride(3) == 1
+                and key_cache.stride(2) == self.head_size
+                and value_cache.stride(2) == self.head_size
+                and key_cache.stride(1) == self.num_kv_heads * self.head_size
+                and value_cache.stride(1) == self.num_kv_heads * self.head_size
+            )
+            if flat_cache_supported or paged_cache_supported:
+                key_cache_out = (
+                    key_cache.view(-1, self.num_kv_heads * self.head_size)
+                    if flat_cache_supported
+                    else key_cache
+                )
+                value_cache_out = (
+                    value_cache.view(-1, self.num_kv_heads * self.head_size)
+                    if flat_cache_supported
+                    else value_cache
+                )
                 fused_qk_rmsnorm_mrope_cache_out(
                     q,
                     k,
@@ -1677,8 +1708,8 @@ class FlashAttentionImpl(AttentionImpl):
                     cos_sin_cache,
                     q_out,
                     k_out,
-                    key_cache.view(-1, self.num_kv_heads * self.head_size),
-                    value_cache.view(-1, self.num_kv_heads * self.head_size),
+                    key_cache_out,
+                    value_cache_out,
                     layer_slot_mapping,
                     is_neox,
                     mrope_section_t,
