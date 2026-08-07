@@ -26,6 +26,19 @@ def test_musa_image_runtime_dependency_contract():
     assert "deep_ep==1.1.0+musa5.2.0torch2.11.0.post1" in private_requirements
     assert "fastapi[standard]" in runtime_requirements
     assert "pycountry" in runtime_requirements
+    assert '"requirements/common.txt"' in dockerfile
+    torchada_gate = '("torchada", "torchada", requirement_prefix("torchada"))'
+    torch_gate = '("torch", "torch", requirement_prefix("torch"))'
+    assert torchada_gate in dockerfile
+    assert dockerfile.index(torchada_gate) < dockerfile.index(torch_gate)
+    assert (
+        '("torchvision", "torchvision", requirement_prefix("torchvision"))'
+        in dockerfile
+    )
+    assert (
+        '("torchaudio", "torchaudio", requirement_prefix("torchaudio"))' in dockerfile
+    )
+    assert '("deep_ep", "deep_ep", requirement_prefix("deep_ep"))' in dockerfile
     assert '("triton", "triton", requirement_prefix("triton"))' in dockerfile
     assert '("uvloop", "uvloop", "")' in dockerfile
     assert '("pycountry", "pycountry", "")' in dockerfile

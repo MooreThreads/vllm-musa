@@ -302,20 +302,29 @@ RUN printf '%s\n' \
         '' \
         'def requirement_prefix(dist_name):' \
         '    pattern = re.compile(rf"^{re.escape(dist_name)}==(.+)$")' \
-        '    for line in Path("requirements/musa_private.txt").read_text().splitlines():' \
-        '        match = pattern.match(line.strip())' \
-        '        if match:' \
-        '            return match.group(1).split("*", 1)[0]' \
-        '    raise RuntimeError(f"missing {dist_name} pin in requirements/musa_private.txt")' \
+        '    requirement_files = (' \
+        '        "requirements/musa_private.txt",' \
+        '        "requirements/common.txt",' \
+        '    )' \
+        '    for requirement_file in requirement_files:' \
+        '        for line in Path(requirement_file).read_text().splitlines():' \
+        '            match = pattern.match(line.strip())' \
+        '            if match:' \
+        '                return match.group(1).split("*", 1)[0]' \
+        '    raise RuntimeError(f"missing {dist_name} pin in {requirement_files}")' \
         '' \
         'expected = (' \
+        '    ("torchada", "torchada", requirement_prefix("torchada")),' \
         '    ("numpy", "numpy", "1.26."),' \
         '    ("torch", "torch", requirement_prefix("torch")),' \
         '    ("torch_musa", "torch_musa", requirement_prefix("torch_musa")),' \
+        '    ("torchvision", "torchvision", requirement_prefix("torchvision")),' \
+        '    ("torchaudio", "torchaudio", requirement_prefix("torchaudio")),' \
         '    ("mate", "mate", ""),' \
         '    ("flash_attn_3", "flash_attn_3", ""),' \
         '    ("flash_mla", "flash_mla", ""),' \
         '    ("deep-gemm", "deep_gemm", ""),' \
+        '    ("deep_ep", "deep_ep", requirement_prefix("deep_ep")),' \
         '    ("tilelang_musa", "tilelang", ""),' \
         '    ("triton", "triton", requirement_prefix("triton")),' \
         '    ("uvloop", "uvloop", ""),' \
@@ -332,7 +341,7 @@ RUN printf '%s\n' \
         '        raise RuntimeError(f"{dist_name} expected {prefix}, got {installed}")' \
         '    print(f"PASS import {module_name} version={installed}")' \
         '' \
-        'for module_name in ("torchada", "vllm", "vllm_musa"):' \
+        'for module_name in ("vllm", "vllm_musa"):' \
         '    module = importlib.import_module(module_name)' \
         '    print("PASS import %s version=%s" % (module_name, getattr(module, "__version__", "unknown")))' \
         > /tmp/vllm_musa_import_check.py && \
