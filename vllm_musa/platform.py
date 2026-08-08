@@ -9,6 +9,8 @@ from collections.abc import Callable
 from functools import cache, wraps
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from packaging.version import Version
+
 # isort: off
 import torchada  # noqa: F401
 import torch
@@ -38,6 +40,13 @@ from vllm_musa.optimization_contract import policy as contract_policy
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
+
+_QWEN3_VL_ARCHITECTURES = {"Qwen3VLForConditionalGeneration"}
+
+
+def _is_torch_211_or_newer() -> bool:
+    return Version(torch.__version__.split("+", 1)[0]) >= Version("2.11")
+
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -381,6 +390,30 @@ class MUSAPlatformBase(Platform):
         compilation_config = vllm_config.compilation_config
         if all(s not in compilation_config.custom_ops for s in ("all", "none")):
             compilation_config.custom_ops.append("all")
+
+        # torch 2.11's Inductor tiling heuristic turns Qwen3-VL's decode-time
+        # clone/index-select/split kernel into a slower 2D grid on MUSA. The
+        # torch 2.9 1D grid is restored by limiting this model's pointwise
+        # kernels to one tile dimension. Preserve an explicit user override.
+        architectures = set(
+            getattr(
+                getattr(vllm_config.model_config, "hf_config", None),
+                "architectures",
+                None,
+            )
+            or ()
+        )
+        inductor_config = compilation_config.inductor_compile_config
+        if (
+            _is_torch_211_or_newer()
+            and architectures & _QWEN3_VL_ARCHITECTURES
+            and "triton.max_tiles" not in inductor_config
+        ):
+            inductor_config["triton.max_tiles"] = 1
+            logger.info(
+                "Using triton.max_tiles=1 for Qwen3-VL on torch >= 2.11 "
+                "to preserve the MUSA decode pointwise layout"
+            )
 
     @classmethod
     def check_and_update_config(cls, vllm_config: "VllmConfig") -> None:

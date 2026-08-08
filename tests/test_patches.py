@@ -789,6 +789,7 @@ class TestMUSAPlatformDefaults:
             else None,
             compilation_config=SimpleNamespace(
                 custom_ops=[],
+                inductor_compile_config={},
                 mode=CompilationMode.NONE if is_deepseek_v4 else "NONE",
                 cudagraph_mode=cudagraph_mode,
                 max_cudagraph_capture_size=max_cudagraph_capture_size,
@@ -810,6 +811,57 @@ class TestMUSAPlatformDefaults:
 
         assert vllm_config.compilation_config.max_cudagraph_capture_size is None
         assert vllm_config.compilation_config.custom_ops == ["all"]
+
+    @pytest.mark.parametrize(
+        ("architectures", "torch211_or_newer", "expected"),
+        [
+            (["Qwen3VLForConditionalGeneration"], True, 1),
+            (["Qwen3VLForConditionalGeneration"], False, None),
+            (["Qwen3ForCausalLM"], True, None),
+        ],
+    )
+    def test_qwen3vl_inductor_tiling_default(
+        self, monkeypatch, architectures, torch211_or_newer, expected
+    ):
+        import vllm_musa.platform as musa_platform
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(architectures=architectures)
+        monkeypatch.setattr(
+            musa_platform,
+            "_is_torch_211_or_newer",
+            lambda: torch211_or_newer,
+        )
+
+        MUSAPlatformBase.apply_config_platform_defaults(vllm_config)
+
+        assert (
+            vllm_config.compilation_config.inductor_compile_config.get(
+                "triton.max_tiles"
+            )
+            == expected
+        )
+
+    def test_qwen3vl_preserves_user_tiling_override(self, monkeypatch):
+        import vllm_musa.platform as musa_platform
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["Qwen3VLForConditionalGeneration"]
+        )
+        vllm_config.compilation_config.inductor_compile_config["triton.max_tiles"] = 2
+        monkeypatch.setattr(
+            musa_platform,
+            "_is_torch_211_or_newer",
+            lambda: True,
+        )
+
+        MUSAPlatformBase.apply_config_platform_defaults(vllm_config)
+
+        assert (
+            vllm_config.compilation_config.inductor_compile_config["triton.max_tiles"]
+            == 2
+        )
 
     def test_qwen3_moe_fp8_preserves_user_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase
