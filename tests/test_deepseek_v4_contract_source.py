@@ -18,7 +18,7 @@ def test_platform_uses_contract_without_model_derived_kernel_envs() -> None:
     assert "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X" not in source
 
 
-def test_shared_mlp_and_rmsnorm_bind_instance_contracts() -> None:
+def test_shared_mlp_owner_guards_and_rmsnorm_instance_contract() -> None:
     linear = _source("vllm_musa/model_executor/layers/linear.py")
     layernorm = _source("vllm_musa/model_executor/layers/layernorm.py")
     model_patch = _source(
@@ -26,8 +26,14 @@ def test_shared_mlp_and_rmsnorm_bind_instance_contracts() -> None:
         "0101-MUSA-bind-DeepSeek-V4-optimization-contract.patch"
     )
 
-    assert "DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8" in linear
-    assert "prefers_optimization(" in linear
+    assert "def forward_swiglu_clamp(" in linear
+    assert "This hook is only called by DeepSeek-V4's MLP" in linear
+    assert "not envs.VLLM_BATCH_INVARIANT" in linear
+    assert "_deepgemm_block_fp8(self.quant_method)" in linear
+    assert (
+        'tuple(getattr(self, "weight_block_size", None) or ()) == (128, 128)' in linear
+    )
+    assert "swiglu_limit == 10.0" in linear
     assert "bind_optimization_contract(self.down_proj" in model_patch
     assert "bind_optimization_contract(self" in layernorm
     assert "DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256" in layernorm
@@ -45,6 +51,20 @@ def test_sparse_indexer_contract_keeps_glm_entry_shape_local() -> None:
     assert "use_musa_materialized_prefill" in patch
     assert "q_quant.shape[1] == 32" in patch
     assert "and self.use_musa_native_indexer" in patch
+
+
+def test_mtp_sparse_prefill_fixes_are_bound_at_the_dsv4_owner() -> None:
+    patch = _source(
+        "vllm_musa/patches/series/"
+        "0102-MUSA-preserve-DeepSeek-V4-MTP-sparse-prefill-headroom.patch"
+    )
+
+    assert "DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT" in patch
+    assert "allow_dsv4_tp8_mtp_direct_out=" in patch
+    assert 'attention_backend_hint="flashmla"' in patch
+    assert "deepseek_v4_mtp_sparse_prefill_headroom_bytes" in patch
+    assert "musa_workspace_headroom_bytes" in patch
+    assert "if current_platform.is_musa():" in patch
 
 
 def test_fused_add_rmsnorm_argument_is_graph_static_and_env_override_wins() -> None:

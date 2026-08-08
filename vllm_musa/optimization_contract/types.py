@@ -15,6 +15,7 @@ class ModelFamily(str, Enum):
 class ModelRole(str, Enum):
     UNKNOWN = "unknown"
     TEXT = "text_generation"
+    MTP_DRAFT = "mtp_draft"
     COSYVOICE_TALKER = "cosyvoice_talker"
 
 
@@ -25,6 +26,10 @@ class OptimizationFeature(str, Enum):
         "deepseek_v4.materialized_prefill_indexer"
     )
     DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256 = "deepseek_v4.tp8_flashmla_sparse_page256"
+    DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT = "deepseek_v4.tp8_mtp_sparse_direct_out"
+    DEEPSEEK_V4_TP8_MTP_SPARSE_PREFILL_HEADROOM = (
+        "deepseek_v4.tp8_mtp_sparse_prefill_headroom"
+    )
     DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256 = (
         "deepseek_v4.tp8_fused_add_rmsnorm_block256"
     )
@@ -104,6 +109,7 @@ class ExecutionSignature:
     compilation_mode: str | None = None
     cudagraph_mode: str | None = None
     batch_invariant_enabled: bool = False
+    speculative_method: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,6 +12,7 @@ from .types import (
 )
 
 _DEEPSEEK_V4_ARCHITECTURES = ("DeepseekV4ForCausalLM",)
+_DEEPSEEK_V4_MTP_ARCHITECTURES = ("DeepSeekV4MTPModel",)
 _DEEPSEEK_V4_QUANTIZATION = frozenset({"fp8", "deepseek_v4_fp8"})
 
 
@@ -23,10 +24,18 @@ def _has_complete_identity(model: ModelSignature) -> bool:
     )
 
 
-def _matches_flash_base(model: ModelSignature) -> bool:
+def _has_complete_mtp_draft_identity(model: ModelSignature) -> bool:
+    architectures = model.outer_architectures or model.architectures
     return (
-        _has_complete_identity(model)
-        and model.dtype == "bfloat16"
+        architectures == _DEEPSEEK_V4_MTP_ARCHITECTURES
+        and model.model_type == "deepseek_mtp"
+        and model.outer_model_type == "deepseek_mtp"
+    )
+
+
+def _matches_flash_shape(model: ModelSignature) -> bool:
+    return (
+        model.dtype == "bfloat16"
         and model.quantization in _DEEPSEEK_V4_QUANTIZATION
         and model.hidden_size == 4096
         and model.num_hidden_layers == 43
@@ -49,6 +58,14 @@ def _matches_flash_base(model: ModelSignature) -> bool:
     )
 
 
+def _matches_flash_base(model: ModelSignature) -> bool:
+    return _has_complete_identity(model) and _matches_flash_shape(model)
+
+
+def _matches_mtp_draft_flash_base(model: ModelSignature) -> bool:
+    return _has_complete_mtp_draft_identity(model) and _matches_flash_shape(model)
+
+
 def _matches_tp8_reference(
     execution: ExecutionSignature,
     *,
@@ -68,11 +85,38 @@ def _matches_tp8_reference(
         and not execution.has_speculative_config
         and execution.has_quant_config
         and not execution.is_pooling_model
-        and execution.cache_dtype == "fp8"
+        and execution.cache_dtype in {"fp8", "fp8_ds_mla"}
         and max_num_seqs_matches
         and execution.attention_backend == "flashmla"
         and execution.compilation_mode == "none"
         and execution.cudagraph_mode == "full_decode_only"
+    )
+
+
+def _matches_tp8_mtp(execution: ExecutionSignature) -> bool:
+    if not execution.has_speculative_config:
+        return False
+    if execution.speculative_method not in ("mtp", "deepseek_mtp"):
+        return False
+    if execution.max_num_seqs is None or execution.max_num_seqs <= 1:
+        return False
+    return _matches_tp8_reference(
+        replace(execution, has_speculative_config=False),
+        allow_multi_batch=True,
+    )
+
+
+def _matches_tp8_mtp_draft(execution: ExecutionSignature) -> bool:
+    # The draft-local VllmConfig no longer contains the outer
+    # speculative_config. Its exact DeepSeek-V4 MTP model role is the MTP
+    # proof; retain every other execution guard.
+    return execution.max_num_seqs > 1 and _matches_tp8_reference(
+        replace(
+            execution,
+            has_speculative_config=False,
+            speculative_method="",
+        ),
+        allow_multi_batch=True,
     )
 
 
@@ -84,10 +128,17 @@ def resolve_deepseek_v4_contract(
     if (
         "DeepseekV4ForCausalLM" not in architectures
         and model.model_type != "deepseek_v4"
+        and "DeepSeekV4MTPModel" not in architectures
+        and model.model_type != "deepseek_mtp"
     ):
         return None
 
-    model = replace(model, family=ModelFamily.DEEPSEEK_V4, role=ModelRole.TEXT)
+    is_mtp_draft = _has_complete_mtp_draft_identity(model)
+    model = replace(
+        model,
+        family=ModelFamily.DEEPSEEK_V4,
+        role=ModelRole.MTP_DRAFT if is_mtp_draft else ModelRole.TEXT,
+    )
     supported: set[OptimizationFeature] = set()
     preferred: set[OptimizationFeature] = set()
 
@@ -102,6 +153,8 @@ def resolve_deepseek_v4_contract(
                 OptimizationFeature.DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER,
                 OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256,
                 OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256,
+                OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT,
+                OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_PREFILL_HEADROOM,
             }
         )
         if execution.has_parallel_config:
@@ -121,7 +174,14 @@ def resolve_deepseek_v4_contract(
         ):
             preferred.add(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
 
-        if _matches_tp8_reference(execution):
+        if _matches_tp8_mtp(execution):
+            preferred.update(
+                {
+                    OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT,
+                    OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_PREFILL_HEADROOM,
+                }
+            )
+        elif _matches_tp8_reference(execution):
             preferred.update(
                 {
                     OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256,
@@ -129,11 +189,23 @@ def resolve_deepseek_v4_contract(
                 }
             )
 
-    profile = (
-        "deepseek_v4.tp8_flash_base"
-        if _matches_flash_base(model) and _matches_tp8_reference(execution)
-        else "deepseek_v4.unvalidated"
-    )
+    if _matches_mtp_draft_flash_base(model):
+        mtp_draft_features = {
+            OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT,
+            OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_PREFILL_HEADROOM,
+        }
+        supported.update(mtp_draft_features)
+        if _matches_tp8_mtp_draft(execution):
+            preferred.update(mtp_draft_features)
+
+    if _matches_mtp_draft_flash_base(model) and _matches_tp8_mtp_draft(execution):
+        profile = "deepseek_v4.tp8_flash_mtp_draft"
+    elif _matches_flash_base(model) and _matches_tp8_mtp(execution):
+        profile = "deepseek_v4.tp8_flash_base_mtp"
+    elif _matches_flash_base(model) and _matches_tp8_reference(execution):
+        profile = "deepseek_v4.tp8_flash_base"
+    else:
+        profile = "deepseek_v4.unvalidated"
     return MusaOptimizationContract(
         model=model,
         execution=execution,

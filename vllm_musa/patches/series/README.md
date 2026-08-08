@@ -17,9 +17,10 @@ is pre-patched.
   the highest prefix. Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **107 patches**. This branch adds Qwen3.6 patches for common GDN
+Currently **108 patches**. This branch adds Qwen3.6 patches for common GDN
 decode metadata reuse, uniform-decode SSM slot-mapping removal, and the BF16 W1
-tile specialization on top of the upstream 104-patch series. The series contains
+tile specialization, plus the contract-bound DeepSeek-V4 MTP sparse-prefill
+headroom patch, on top of the upstream 104-patch series. The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.24.0`), applied at build. Runtime
 object/registration patches (which patch live objects at import) are kept

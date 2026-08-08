@@ -14,6 +14,10 @@ from typing import Any
 from .resolver import resolve_optimization_contract
 from .types import OptimizationFeature
 
+_DEEPSEEK_V4_SPARSE_PADDED_HEADS = 64
+_DEEPSEEK_V4_SPARSE_HEAD_DIM = 512
+_DEEPSEEK_V4_SPARSE_DTYPE_BYTES = 2
+
 
 def prefers_feature(vllm_config: Any, feature: OptimizationFeature) -> bool:
     """Return whether a config's frozen contract prefers ``feature``."""
@@ -69,3 +73,24 @@ def deepseek_v4_flashmla_sparse_page_size(vllm_config: Any) -> int:
     ):
         return 256
     return 64
+
+
+def deepseek_v4_mtp_sparse_prefill_headroom_bytes(vllm_config: Any) -> int:
+    """Return transient H64 query workspace omitted by MTP profiling."""
+    if not prefers_feature(
+        vllm_config,
+        OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_PREFILL_HEADROOM,
+    ):
+        return 0
+    scheduler_config = getattr(vllm_config, "scheduler_config", None)
+    max_num_batched_tokens = int(
+        getattr(scheduler_config, "max_num_batched_tokens", 0) or 0
+    )
+    if max_num_batched_tokens <= 0:
+        return 0
+    return (
+        max_num_batched_tokens
+        * _DEEPSEEK_V4_SPARSE_PADDED_HEADS
+        * _DEEPSEEK_V4_SPARSE_HEAD_DIM
+        * _DEEPSEEK_V4_SPARSE_DTYPE_BYTES
+    )

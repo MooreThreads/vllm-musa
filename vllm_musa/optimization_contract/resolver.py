@@ -221,6 +221,7 @@ def _execution_signature(
     scheduler_config = getattr(vllm_config, "scheduler_config", None)
     attention_config = getattr(vllm_config, "attention_config", None)
     compilation_config = getattr(vllm_config, "compilation_config", None)
+    speculative_config = getattr(vllm_config, "speculative_config", None)
 
     def size(name: str) -> int:
         value = getattr(parallel_config, name, 1)
@@ -258,6 +259,7 @@ def _execution_signature(
             getattr(compilation_config, "cudagraph_mode", None)
         ),
         batch_invariant_enabled=batch_invariant_enabled,
+        speculative_method=_normalize_name(getattr(speculative_config, "method", None)),
     )
 
 
@@ -266,6 +268,7 @@ def resolve_optimization_contract(
     *,
     model_config: Any | None = None,
     is_pooling_model: bool = False,
+    attention_backend_hint: str | None = None,
 ) -> MusaOptimizationContract:
     if model_config is None:
         model_config = getattr(vllm_config, "model_config", None)
@@ -273,6 +276,11 @@ def resolve_optimization_contract(
         vllm_config,
         is_pooling_model=is_pooling_model,
     )
+    if execution.attention_backend is None and attention_backend_hint is not None:
+        execution = replace(
+            execution,
+            attention_backend=_normalize_name(attention_backend_hint),
+        )
     if model_config is None:
         model = ModelSignature(
             family=ModelFamily.UNKNOWN,
