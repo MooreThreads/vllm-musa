@@ -313,6 +313,8 @@ RUN printf '%s\n' \
         '                return match.group(1).split("*", 1)[0]' \
         '    raise RuntimeError(f"missing {dist_name} pin in {requirement_files}")' \
         '' \
+        'exact_version_dists = frozenset({"torchada", "torch", "torch_musa", "torchvision", "torchaudio", "deep_ep"})' \
+        '' \
         'expected = (' \
         '    ("torchada", "torchada", requirement_prefix("torchada")),' \
         '    ("numpy", "numpy", "1.26."),' \
@@ -337,7 +339,9 @@ RUN printf '%s\n' \
         'for dist_name, module_name, prefix in expected:' \
         '    importlib.import_module(module_name)' \
         '    installed = version(dist_name)' \
-        '    if prefix and not installed.startswith(prefix):' \
+        '    if dist_name in exact_version_dists and installed != prefix:' \
+        '        raise RuntimeError(f"{dist_name} expected exactly {prefix}, got {installed}")' \
+        '    if dist_name not in exact_version_dists and prefix and not installed.startswith(prefix):' \
         '        raise RuntimeError(f"{dist_name} expected {prefix}, got {installed}")' \
         '    print(f"PASS import {module_name} version={installed}")' \
         '' \

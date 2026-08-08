@@ -99,18 +99,36 @@ def test_musa_image_runtime_dependency_contract():
     assert "fastapi[standard]" in runtime_requirements
     assert "pycountry" in runtime_requirements
     assert '"requirements/common.txt"' in dockerfile
+    exact_import_gates = (
+        ("torchada", "torchada"),
+        ("torch", "torch"),
+        ("torch_musa", "torch_musa"),
+        ("torchvision", "torchvision"),
+        ("torchaudio", "torchaudio"),
+        ("deep_ep", "deep_ep"),
+    )
+    for dist_name, module_name in exact_import_gates:
+        gate = f'("{dist_name}", "{module_name}", requirement_prefix("{dist_name}"))'
+        assert gate in dockerfile
+
+    exact_version_gate = (
+        'exact_version_dists = frozenset({"torchada", "torch", "torch_musa", '
+        '"torchvision", "torchaudio", "deep_ep"})'
+    )
+    assert exact_version_gate in dockerfile
     torchada_gate = '("torchada", "torchada", requirement_prefix("torchada"))'
     torch_gate = '("torch", "torch", requirement_prefix("torch"))'
     assert torchada_gate in dockerfile
     assert dockerfile.index(torchada_gate) < dockerfile.index(torch_gate)
+    import_statement = "importlib.import_module(module_name)"
+    version_statement = "installed = version(dist_name)"
+    assert import_statement in dockerfile
+    assert dockerfile.index(import_statement) < dockerfile.index(version_statement)
+    assert "if dist_name in exact_version_dists and installed != prefix:" in dockerfile
     assert (
-        '("torchvision", "torchvision", requirement_prefix("torchvision"))'
-        in dockerfile
-    )
-    assert (
-        '("torchaudio", "torchaudio", requirement_prefix("torchaudio"))' in dockerfile
-    )
-    assert '("deep_ep", "deep_ep", requirement_prefix("deep_ep"))' in dockerfile
+        "if dist_name not in exact_version_dists and prefix "
+        "and not installed.startswith(prefix):"
+    ) in dockerfile
     assert '("triton", "triton", requirement_prefix("triton"))' in dockerfile
     assert '("uvloop", "uvloop", "")' in dockerfile
     assert '("pycountry", "pycountry", "")' in dockerfile
