@@ -6,10 +6,82 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+SUPPORTED_MUSA_STACKS = {
+    "torch==2.9.1.post1+musa5.2.0": {
+        "private": (
+            "torch_musa==2.9.1.post1+musa5.2.0",
+            "torchvision==0.24.1.post1+musa5.2.0",
+            "torchaudio==2.9.1+musa5.2.0",
+            "deep_ep==1.1.0+musa5.2.0torch2.9.1.post1s5000",
+        ),
+        "torchada": "torchada==0.1.77",
+    },
+    "torch==2.11.0.post1+musa5.2.0": {
+        "private": (
+            "torch_musa==2.11.0.post1+musa5.2.0",
+            "torchvision==0.26.0.post1+musa5.2.0",
+            "torchaudio==2.11.0+musa5.2.0",
+            "deep_ep==1.1.0+musa5.2.0torch2.11.0.post1",
+        ),
+        "torchada": "torchada==0.1.79",
+    },
+}
+
+
+def _select_musa_stack(private_requirements):
+    torch_pins = sorted(
+        line for line in private_requirements if line.startswith("torch==")
+    )
+    assert len(torch_pins) == 1, f"expected one torch pin, got {torch_pins}"
+    torch_pin = torch_pins[0]
+    assert torch_pin in SUPPORTED_MUSA_STACKS, f"unsupported MUSA stack: {torch_pin}"
+    return SUPPORTED_MUSA_STACKS[torch_pin]
+
+
+def _declared_musa_stack():
+    private_requirements = set(
+        (ROOT / "requirements" / "musa_private.txt").read_text().splitlines()
+    )
+    common_requirements = set(
+        (ROOT / "requirements" / "common.txt").read_text().splitlines()
+    )
+    return (
+        private_requirements,
+        common_requirements,
+        _select_musa_stack(private_requirements),
+    )
+
+
+def test_supported_musa_stack_contract_cases_are_explicit():
+    assert set(SUPPORTED_MUSA_STACKS) == {
+        "torch==2.9.1.post1+musa5.2.0",
+        "torch==2.11.0.post1+musa5.2.0",
+    }
+    assert (
+        SUPPORTED_MUSA_STACKS["torch==2.9.1.post1+musa5.2.0"]["torchada"]
+        == "torchada==0.1.77"
+    )
+    assert (
+        SUPPORTED_MUSA_STACKS["torch==2.11.0.post1+musa5.2.0"]["torchada"]
+        == "torchada==0.1.79"
+    )
+    assert (
+        "torchvision==0.24.1.post1+musa5.2.0"
+        in SUPPORTED_MUSA_STACKS["torch==2.9.1.post1+musa5.2.0"]["private"]
+    )
+    assert (
+        "torchvision==0.26.0.post1+musa5.2.0"
+        in SUPPORTED_MUSA_STACKS["torch==2.11.0.post1+musa5.2.0"]["private"]
+    )
+    for torch_pin, expected in SUPPORTED_MUSA_STACKS.items():
+        assert _select_musa_stack({torch_pin}) is expected
+
 
 def test_torchada_floor_is_consistent():
     assert 'dynamic = ["dependencies"]' in (ROOT / "pyproject.toml").read_text()
-    assert "torchada==0.1.79" in (ROOT / "requirements" / "common.txt").read_text()
+    private_requirements, common_requirements, expected = _declared_musa_stack()
+    assert set(expected["private"]).issubset(private_requirements)
+    assert expected["torchada"] in common_requirements
 
 
 def test_musa_image_runtime_dependency_contract():
@@ -22,8 +94,8 @@ def test_musa_image_runtime_dependency_contract():
     dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
 
     assert "triton==3.2.0" in private_requirements
-    assert "torchvision==0.26.0.post1+musa5.2.0" in private_requirements
-    assert "deep_ep==1.1.0+musa5.2.0torch2.11.0.post1" in private_requirements
+    _, _, expected = _declared_musa_stack()
+    assert set(expected["private"]).issubset(private_requirements)
     assert "fastapi[standard]" in runtime_requirements
     assert "pycountry" in runtime_requirements
     assert '"requirements/common.txt"' in dockerfile
