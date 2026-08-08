@@ -58,7 +58,7 @@ class Qwen3QKRoPEKVCandidate:
     k_weight: fx.Node
     positions: fx.Node
     cos_sin_cache: fx.Node
-    layer_name: str
+    layer_name: str | fx.Node
 
 
 def _is_call(node: fx.Node, qualified_name: str) -> bool:
@@ -186,7 +186,7 @@ def plan_qwen3_qk_rope_kv_presplit(
 
     candidates: list[Qwen3QKRoPEKVCandidate] = []
     seen_rope: set[fx.Node] = set()
-    seen_layer_names: set[str] = set()
+    seen_layer_names: set[str | fx.Node] = set()
     for kv_update in all_kv:
         if len(kv_update.users) != 1:
             return None
@@ -197,14 +197,22 @@ def plan_qwen3_qk_rope_kv_presplit(
         key = _arg(attention, 1, "key")
         value = _arg(attention, 2, "value")
         layer_name = _arg(attention, 4, "layer_name")
+        kv_layer_name = _arg(kv_update, 2, "layer_name")
         dummy = _arg(attention, 7, "kv_cache_dummy_dep", None)
+        # torch >= 2.11 hoists vLLM's opaque LayerName into an FX placeholder.
+        # Preserve that node as the fused custom op already accepts LayerNameType.
+        same_layer_name = (
+            kv_layer_name is layer_name
+            if isinstance(layer_name, fx.Node)
+            else kv_layer_name == layer_name
+        )
         if (
             not all(isinstance(node, fx.Node) for node in (query, key, value))
             or dummy is not kv_update
-            or not isinstance(layer_name, str)
+            or not isinstance(layer_name, (str, fx.Node))
             or _arg(kv_update, 0, "key") is not key
             or _arg(kv_update, 1, "value") is not value
-            or _arg(kv_update, 2, "layer_name") != layer_name
+            or not same_layer_name
             or layer_name in seen_layer_names
         ):
             return None

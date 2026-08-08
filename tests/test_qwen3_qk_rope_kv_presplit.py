@@ -89,7 +89,12 @@ def _meta(node: fx.Node, shape: tuple[int, ...], dtype=torch.bfloat16) -> fx.Nod
     return node
 
 
-def _make_graph(*, q_heads: int = 16, extra_q_user: bool = False):
+def _make_graph(
+    *,
+    q_heads: int = 16,
+    extra_q_user: bool = False,
+    hoisted_layer_name: bool = False,
+):
     kv_heads = 8
     q_width = q_heads * 128
     kv_width = kv_heads * 128
@@ -100,6 +105,9 @@ def _make_graph(*, q_heads: int = 16, extra_q_user: bool = False):
     positions = _meta(graph.placeholder("positions"), (1,), torch.int64)
     cos = _meta(graph.placeholder("cos"), (32, 128))
     output = _meta(graph.placeholder("output"), (1, q_heads, 128))
+    layer_name: str | fx.Node = "model.layers.0.self_attn"
+    if hoisted_layer_name:
+        layer_name = graph.placeholder("layer_name")
     split = graph.call_method(
         "split",
         args=(qkv, [q_width, kv_width, kv_width]),
@@ -152,7 +160,7 @@ def _make_graph(*, q_heads: int = 16, extra_q_user: bool = False):
         graph.call_function(torch.ops.aten.clone.default, args=(q_flat,))
     kv_update = graph.call_function(
         torch.ops.vllm.unified_kv_cache_update,
-        kwargs={"key": key, "value": value, "layer_name": "model.layers.0.self_attn"},
+        kwargs={"key": key, "value": value, "layer_name": layer_name},
     )
     attention = graph.call_function(
         torch.ops.vllm.unified_attention_with_output,
@@ -161,7 +169,7 @@ def _make_graph(*, q_heads: int = 16, extra_q_user: bool = False):
             "key": key,
             "value": value,
             "output": output,
-            "layer_name": "model.layers.0.self_attn",
+            "layer_name": layer_name,
             "scale": 0.08838834764831845,
             "output_scale": 1.0,
             "kv_cache_dummy_dep": kv_update,
@@ -177,6 +185,14 @@ def test_plan_matches_qwen3_06b_and_8b_shapes():
         candidates = plan_qwen3_qk_rope_kv_presplit(graph_module, 1)
         assert candidates is not None
         assert len(candidates) == 1
+
+
+def test_plan_matches_torch211_hoisted_layer_name():
+    graph_module = _make_graph(hoisted_layer_name=True)
+    candidates = plan_qwen3_qk_rope_kv_presplit(graph_module, 1)
+    assert candidates is not None
+    assert len(candidates) == 1
+    assert isinstance(candidates[0].layer_name, fx.Node)
 
 
 def test_plan_is_atomic_on_extra_q_user():
@@ -199,7 +215,8 @@ def test_temporary_schema_is_order_isolated():
         assert _dispatch_has_schema(name) is registered_before
 
 
-def test_apply_replaces_norm_rope_and_cache(monkeypatch):
+@pytest.mark.parametrize("hoisted_layer_name", [False, True])
+def test_apply_replaces_norm_rope_and_cache(monkeypatch, hoisted_layer_name):
     module_name = "vllm_musa.kernels.qwen3_qk_rope_kv"
     if module_name not in sys.modules:
         kernels_package = sys.modules.get("vllm_musa.kernels")
@@ -219,7 +236,12 @@ def test_apply_replaces_norm_rope_and_cache(monkeypatch):
         )
 
     with _temporary_schema(_FUSED_OP_NAME, _FUSED_OP_SCHEMA):
-        graph_module = _make_graph()
+        graph_module = _make_graph(hoisted_layer_name=hoisted_layer_name)
+        layer_name = (
+            next(node for node in graph_module.graph.nodes if node.name == "layer_name")
+            if hoisted_layer_name
+            else None
+        )
         candidates = plan_qwen3_qk_rope_kv_presplit(graph_module, 1)
         assert candidates is not None
         assert apply_qwen3_qk_rope_kv_presplit(graph_module, candidates) == 1
@@ -247,3 +269,5 @@ def test_apply_replaces_norm_rope_and_cache(monkeypatch):
         assert len(attention_nodes) == 1
         assert len(fused_nodes) == 1
         assert fused_nodes[0] in attention_nodes[0].all_input_nodes
+        if layer_name is not None:
+            assert fused_nodes[0].kwargs["layer_name"] is layer_name
