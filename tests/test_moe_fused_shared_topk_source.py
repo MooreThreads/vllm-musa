@@ -6,7 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_unquantized_moe_uses_fused_shared_topk_extension() -> None:
+def test_unquantized_moe_keeps_shared_topk_extension_fallback() -> None:
     source = (
         REPO_ROOT
         / "vllm_musa/model_executor/layers/fused_moe/"
@@ -18,6 +18,55 @@ def test_unquantized_moe_uses_fused_shared_topk_extension() -> None:
     assert "VLLM_MUSA_MOE_FUSED_SHARED_TOPK" not in source
     assert "torch.cat([topk_weights, shared_weight]" not in source
     assert "topk_weights.shape[1] == routed_topk + 1" in source
+
+
+def test_plain_router_moves_shared_gate_before_jit_topk() -> None:
+    source = (
+        REPO_ROOT
+        / "vllm_musa/model_executor/layers/fused_moe/router/"
+        "fused_topk_router.py"
+    ).read_text()
+
+    assert 'shared_gate = getattr(self, "_musa_shared_gate", None)' in source
+    assert "shared_logits, _ = shared_gate(hidden_states)" in source
+    assert "shared_expert_gate_output=shared_logits" in source
+    assert "num_combined_shared_experts" in source
+    assert "1 if shared_logits is not None else num_combined_shared_experts" in source
+
+
+def test_combined_qwen_gate_output_remains_supported() -> None:
+    router = (
+        REPO_ROOT
+        / "vllm_musa/model_executor/layers/fused_moe/router/"
+        "grouped_topk_router.py"
+    ).read_text()
+    fallback = (
+        REPO_ROOT
+        / "vllm_musa/model_executor/layers/fused_moe/router/"
+        "fused_topk_router.py"
+    ).read_text()
+    kernel = (
+        REPO_ROOT / "vllm_musa/jit_kernel/csrc/topk/topk_gating.mu"
+    ).read_text()
+
+    assert "has_combined_shared_experts" in router
+    assert "router_logits[:, :routed_experts].contiguous()" in fallback
+    assert "router_logits[:, routed_experts:].contiguous()" in fallback
+    assert "num_experts == 257 && topk == 9" in kernel
+    assert "combined_shared1_kernel_fixed_k" in kernel
+
+
+def test_jit_topk_writes_shared_column_with_input_dtype_rounding() -> None:
+    source = (
+        REPO_ROOT / "vllm_musa/jit_kernel/csrc/topk/topk_gating.mu"
+    ).read_text()
+
+    assert "topk_softmax_no_bias_warp_shared1_kernel_fixed_k" in source
+    assert "const SharedT shared_weight" in source
+    assert "from_float<SharedT>(stable_sigmoid" in source
+    assert "topk_ids[shared_out_idx] = NumExperts" in source
+    assert "if (renormalize)" in source
+    assert "TVM_FFI_ICHECK(!renormalize)" not in source
 
 
 def test_fused_shared_topk_preserves_bf16_sigmoid_rounding() -> None:
@@ -34,37 +83,22 @@ def test_fused_shared_topk_has_no_runtime_gate() -> None:
     assert "VLLM_MUSA_MOE_FUSED_SHARED_TOPK" not in source
 
 
-def test_qwen_fold_combines_router_and_shared_gate_projection() -> None:
+def test_qwen35_tp_only_fold_uses_explicit_ep_setting() -> None:
     patch = (
         REPO_ROOT
         / "vllm_musa/patches/series/"
-        "0076-MUSA-model-fold-the-Qwen3.5-shared-expert-into-fused.patch"
+        "0104-MUSA-enable-qwen35-shared-fold-tp-only.patch"
     ).read_text()
-    assert "num_experts=self.n_routed_experts" in patch
-    assert "if self.shared_expert is None or self._musa_shared_fold" in patch
-    assert "self.experts.router._musa_num_fused_shared_experts = 1" in patch
+
+    assert "+            and not parallel_config.enable_expert_parallel" in patch
+    assert "-            and self.ep_size <= 1" in patch
 
 
-def test_musa_topk_consumes_combined_qwen_gate_output() -> None:
-    router = (
+def test_qwen35_fold_stashes_owning_router() -> None:
+    patch = (
         REPO_ROOT
-        / "vllm_musa/model_executor/layers/fused_moe/router/"
-        "grouped_topk_router.py"
+        / "vllm_musa/patches/series/"
+        "0105-MUSA-bind-qwen35-shared-gate-to-router.patch"
     ).read_text()
-    fallback = (
-        REPO_ROOT
-        / "vllm_musa/model_executor/layers/fused_moe/router/"
-        "fused_topk_router.py"
-    ).read_text()
-    wrapper = (REPO_ROOT / "vllm_musa/jit_kernel/csrc/topk.py").read_text()
-    kernel = (
-        REPO_ROOT / "vllm_musa/jit_kernel/csrc/topk/topk_gating.mu"
-    ).read_text()
-    assert "num_fused_shared_experts=num_fused_shared_experts" in router
-    assert "routed_experts = self.global_num_experts" in fallback
-    assert "router_logits[:, :routed_experts].contiguous()" in fallback
-    assert "router_logits[:, routed_experts:].contiguous()" in fallback
-    assert "int(num_fused_shared_experts)" in wrapper
-    assert "int num_fused_shared_experts" in kernel
-    assert "num_experts == 257 && topk == 9" in kernel
-    assert "topk_softmax_no_bias_renorm_warp_shared1_kernel_fixed_k" in kernel
+
+    assert "+            routed._musa_shared_router = self.experts.router" in patch
