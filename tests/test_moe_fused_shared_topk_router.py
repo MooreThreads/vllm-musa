@@ -192,6 +192,41 @@ def _run_contract_checks() -> None:
     assert result[1] is extended[1]
     assert extension_calls == [(routed_weights, routed_ids, shared_logits, 256)]
 
+    combined_logits = torch.empty(2, 257)
+    combined_jit_calls: list[dict[str, object]] = []
+    separate_gate_calls: list[torch.Tensor] = []
+
+    def fake_combined_jit(**kwargs):
+        combined_jit_calls.append(kwargs)
+        return expected
+
+    def should_not_run_separate_gate(states):
+        separate_gate_calls.append(states)
+        return shared_logits, None
+
+    router = SimpleNamespace(
+        top_k=8,
+        renormalize=True,
+        scoring_func="softmax",
+        global_num_experts=256,
+        _musa_num_fused_shared_experts=1,
+        _musa_shared_gate=should_not_run_separate_gate,
+        _musa_shared_expert_id=256,
+    )
+    with mock.patch.object(plain_router, "_musa_jit_fused_topk", fake_combined_jit):
+        result = plain_router._compute_routing(
+            router,
+            hidden_states,
+            combined_logits,
+            None,
+        )
+
+    assert result is expected
+    assert separate_gate_calls == []
+    assert combined_jit_calls[0]["gating_output"] is combined_logits
+    assert combined_jit_calls[0]["shared_expert_gate_output"] is None
+    assert combined_jit_calls[0]["num_fused_shared_experts"] == 1
+
 
 def test_router_contract_in_isolated_process() -> None:
     env = os.environ.copy()

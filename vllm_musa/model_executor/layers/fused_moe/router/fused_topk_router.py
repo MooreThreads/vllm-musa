@@ -32,7 +32,10 @@ def _compute_routing(
         getattr(self, "_musa_num_fused_shared_experts", 0)
     )
     shared_logits = None
-    if shared_gate is not None:
+    # The runner's combined gate already emits routed + shared logits in one
+    # projection. Prefer that path when both legacy and separate-gate markers
+    # are present after shared-expert folding.
+    if shared_gate is not None and not num_combined_shared_experts:
         shared_logits, _ = shared_gate(hidden_states)
 
     jit_result = _musa_jit_fused_topk(
