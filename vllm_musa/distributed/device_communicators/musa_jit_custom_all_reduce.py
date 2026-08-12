@@ -252,9 +252,7 @@ def get_musa_jit_custom_allreduce_comm(comm_id: int) -> Any:
     """Return the live JIT communicator referenced by compiled custom ops."""
     comm = _COMM_REGISTRY.get(int(comm_id))
     if comm is None:
-        raise RuntimeError(
-            f"MUSA JIT custom all-reduce communicator {comm_id} is gone"
-        )
+        raise RuntimeError(f"MUSA JIT custom all-reduce communicator {comm_id} is gone")
     return comm
 
 
@@ -263,9 +261,7 @@ def _musa_jit_custom_all_reduce(input: torch.Tensor, comm_id: int) -> torch.Tens
     return comm._custom_all_reduce_impl(input)
 
 
-def _musa_jit_custom_all_reduce_fake(
-    input: torch.Tensor, comm_id: int
-) -> torch.Tensor:
+def _musa_jit_custom_all_reduce_fake(input: torch.Tensor, comm_id: int) -> torch.Tensor:
     return torch.empty_like(input)
 
 
@@ -816,9 +812,11 @@ class _MusaJitCustomAllreduceImpl:
                 self.signal_ptrs_cpu,
                 self.meta_ptrs[self.rank],
                 self.buffer_ptrs[self.rank],
-                self._graph_staging_eager_reserve_bytes
-                if getattr(self, "_use_graph_staging_arena", False)
-                else self.max_size,
+                (
+                    self._graph_staging_eager_reserve_bytes
+                    if getattr(self, "_use_graph_staging_arena", False)
+                    else self.max_size
+                ),
             )
 
         descriptor = self._current_graph_staging_descriptor()
@@ -1115,6 +1113,7 @@ class _MusaJitCustomAllreduceImpl:
             return False
         if (
             self._IS_CAPTURING
+            and self._dsv4_mtp_graph_guard
             and self._use_graph_registered_inputs
             and not self._graph_registered_input_eligible(inp)
         ):
@@ -1256,7 +1255,9 @@ class _MusaJitCustomAllreduceImpl:
                 f"input_shape={tuple(inp.shape)} residual_shape={tuple(residual.shape)}"
             )
         if residual.dtype != inp.dtype:
-            return f"residual dtype mismatch: input={inp.dtype} residual={residual.dtype}"
+            return (
+                f"residual dtype mismatch: input={inp.dtype} residual={residual.dtype}"
+            )
         if not residual.is_contiguous():
             return f"non-contiguous residual: residual_stride={residual.stride()}"
         return None
@@ -1485,7 +1486,11 @@ class _MusaJitCustomAllreduceImpl:
         return norm_out, reduced
 
     def _fused_allreduce_residual_rmsnorm_custom_op(
-        self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         assert self._comm_id is not None
         return torch.ops.vllm.musa_jit_fused_allreduce_residual_rmsnorm(
@@ -1493,7 +1498,11 @@ class _MusaJitCustomAllreduceImpl:
         )
 
     def _fused_allreduce_residual_rmsnorm_no_raw_custom_op(
-        self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         assert self._comm_id is not None
         return torch.ops.vllm.musa_jit_fused_allreduce_residual_rmsnorm_no_raw(
@@ -1501,13 +1510,21 @@ class _MusaJitCustomAllreduceImpl:
         )
 
     def fused_allreduce_residual_rmsnorm(
-        self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
         if not self.should_fused_allreduce_residual_rmsnorm(input, residual, weight):
             return None
         if self._IS_CAPTURING:
             if not self._is_current_stream_capturing():
-                return torch.empty_like(input), torch.empty_like(input), torch.empty_like(input)
+                return (
+                    torch.empty_like(input),
+                    torch.empty_like(input),
+                    torch.empty_like(input),
+                )
             return self._fused_allreduce_residual_rmsnorm_custom_op(
                 input, residual, weight, eps
             )
@@ -1518,7 +1535,11 @@ class _MusaJitCustomAllreduceImpl:
         return self._fused_allreduce_residual_rmsnorm_impl(input, residual, weight, eps)
 
     def fused_allreduce_residual_rmsnorm_no_raw(
-        self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
         if not self.should_fused_allreduce_residual_rmsnorm(input, residual, weight):
             return None
@@ -1537,7 +1558,11 @@ class _MusaJitCustomAllreduceImpl:
         )
 
     def _fused_allreduce_residual_rmsnorm_impl(
-        self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         assert self.buffer_rank_data is not None
         self._require_custom_ar_graph_path()
@@ -1593,7 +1618,11 @@ class _MusaJitCustomAllreduceImpl:
         return norm_out, residual_out, reduced
 
     def _fused_allreduce_residual_rmsnorm_no_raw_impl(
-        self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         assert self.buffer_rank_data is not None
         self._require_custom_ar_graph_path()
@@ -1812,7 +1841,11 @@ class MusaJitCustomAllreduce:
         )
 
     def fused_allreduce_residual_rmsnorm(
-        self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
         if (
             self._jit_available
@@ -1832,9 +1865,12 @@ class MusaJitCustomAllreduce:
             )
         return None
 
-
     def fused_allreduce_residual_rmsnorm_no_raw(
-        self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
         if (
             self._jit_available
