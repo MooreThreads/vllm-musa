@@ -100,6 +100,12 @@ def _musa_jit_fused_topk(
     ):
         return None
 
+    # The MUSA softmax kernel's correction-bias ABI returns probabilities of
+    # ``logits + bias``. vLLM selects with ``softmax(logits) + bias`` while
+    # returning the unbiased softmax weights, so preserve the upstream path.
+    if correction_bias is not None and scoring_func == "softmax":
+        return None
+
     musa_jit_topk = _maybe_import_musa_jit_topk()
     if musa_jit_topk is None:
         return None
@@ -188,9 +194,11 @@ def _compute_routing(
             topk_weights, topk_ids = fused_topk_bias(
                 hidden_states=hidden_states,
                 gating_output=router_logits,
+                scoring_func=scoring_func,
                 e_score_correction_bias=self.e_score_correction_bias.data,
                 topk=self.top_k,
                 renormalize=self.renormalize,
+                indices_type=indices_type,
             )
             if self.routed_scaling_factor != 1.0:
                 topk_weights *= self.routed_scaling_factor
