@@ -87,7 +87,7 @@ def test_qwen35_tp_only_fold_uses_explicit_ep_setting() -> None:
     patch = (
         REPO_ROOT
         / "vllm_musa/patches/series/"
-        "0104-MUSA-enable-qwen35-shared-fold-tp-only.patch"
+        "0106-MUSA-enable-qwen35-shared-fold-tp-only.patch"
     ).read_text()
 
     assert "+            and not parallel_config.enable_expert_parallel" in patch
@@ -98,7 +98,7 @@ def test_qwen35_fold_stashes_owning_router() -> None:
     patch = (
         REPO_ROOT
         / "vllm_musa/patches/series/"
-        "0105-MUSA-bind-qwen35-shared-gate-to-router.patch"
+        "0107-MUSA-bind-qwen35-shared-gate-to-router.patch"
     ).read_text()
 
     assert "+            routed._musa_shared_router = self.experts.router" in patch
