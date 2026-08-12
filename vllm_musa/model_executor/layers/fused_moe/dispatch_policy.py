@@ -127,6 +127,39 @@ def _s5000_qwen35_bf16_decode_shape(
     )
 
 
+def _s5000_bf16_shape(
+    *,
+    local_experts: int,
+    w1_output_size: int,
+    w2_input_size: int,
+    hidden_size: int,
+    top_k: int,
+    graph_mode: str,
+) -> MusaFusedMoeShape:
+    """Generic S5000 BF16 decode shape for independently calibrated models."""
+
+    return MusaFusedMoeShape(
+        device_capability=(3, 1),
+        multiprocessor_count=60,
+        local_experts=local_experts,
+        w1_output_size=w1_output_size,
+        w2_input_size=w2_input_size,
+        hidden_size=hidden_size,
+        top_k=top_k,
+        block_n=0,
+        block_k=0,
+        activation="silu",
+        expert_parallel=False,
+        hidden_dtype="torch.bfloat16",
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+        gemv_block="auto",
+        graph_mode=graph_mode,
+    )
+
+
 def _thresholds(
     gemv_max_tokens: int | None,
     grouped_gemm_min_tokens: int | None,
@@ -248,6 +281,26 @@ _CALIBRATED_THRESHOLDS.update(
         )
         for graph_mode in ("eager", "capture")
         for folded_shared_expert in (False, True)
+    }
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
+        _s5000_bf16_shape(
+            local_experts=257,
+            w1_output_size=256,
+            w2_input_size=128,
+            hidden_size=3072,
+            top_k=9,
+            graph_mode=graph_mode,
+        ): _thresholds(
+            gemv_max_tokens=10,
+            grouped_gemm_min_tokens=None,
+            source=(
+                f"s5000-mp60-20260806-qwen35-bf16-folded-"
+                f"e257-n256-k3072-{graph_mode}"
+            ),
+        )
+        for graph_mode in ("eager", "capture")
     }
 )
 

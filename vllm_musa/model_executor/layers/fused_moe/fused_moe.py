@@ -1434,6 +1434,92 @@ def _can_use_qwen35_bf16_moe_decode_gemv(
     )
 
 
+def _can_use_musa_native_bf16_moe_gemv(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    global_num_experts: int,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    w1_zp: torch.Tensor | None,
+    w2_zp: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> bool:
+    """Match a separately calibrated native BF16 MoE GEMV shape."""
+
+    if (
+        use_fp8_w8a8
+        or use_int8_w8a8
+        or use_int8_w8a16
+        or use_int4_w4a16
+        or ocp_mx_scheme is not None
+        or per_channel_quant
+        or expert_map is not None
+        or apply_router_weight_on_input
+        or activation != "silu"
+        or any(
+            value is not None
+            for value in (
+                w1_scale,
+                w2_scale,
+                w1_zp,
+                w2_zp,
+                a1_scale,
+                a2_scale,
+                w1_bias,
+                w2_bias,
+            )
+        )
+    ):
+        return False
+    if (
+        hidden_states.dtype != torch.bfloat16
+        or w1.dtype != torch.bfloat16
+        or w2.dtype != torch.bfloat16
+        or topk_ids.dtype != torch.int32
+        or topk_weights.dtype != torch.float32
+        or hidden_states.dim() != 2
+        or w1.dim() != 3
+        or w2.dim() != 3
+    ):
+        return False
+    num_experts, w1_output_size, hidden_size = w1.shape
+    if global_num_experts not in (-1, num_experts):
+        return False
+    if w2.shape != (num_experts, hidden_size, w1_output_size // 2):
+        return False
+    if hidden_states.shape[1] != hidden_size:
+        return False
+    if w1_output_size % 2 or hidden_size % 64 or (w1_output_size // 2) % 64:
+        return False
+    if not _musa_moe_routes_are_supported(
+        hidden_states=hidden_states,
+        topk_weights=topk_weights,
+        topk_ids=topk_ids,
+        num_experts=num_experts,
+    ):
+        return False
+    return _tensors_share_device(hidden_states, w1, w2, topk_weights, topk_ids) and all(
+        tensor.is_contiguous()
+        for tensor in (hidden_states, w1, w2, topk_weights, topk_ids)
+    )
+
+
 def _musa_fused_moe_shape(
     *,
     hidden_states: torch.Tensor,
@@ -1826,6 +1912,7 @@ def _musa_fused_experts_impl_dispatch(
     # tensor geometry is the runtime half of the Qwen3.5/3.6 model contract;
     # all non-matching models take the old upstream path.
     qwen35_bf16_decode_gemv = False
+    musa_bf16_decode_gemv = False
     if (
         hidden_states.ndim == 2
         and 0 < hidden_states.shape[0] <= 12
@@ -1859,12 +1946,37 @@ def _musa_fused_experts_impl_dispatch(
             w1_bias=w1_bias,
             w2_bias=w2_bias,
         )
+        musa_bf16_decode_gemv = _can_use_musa_native_bf16_moe_gemv(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            activation=activation,
+            apply_router_weight_on_input=apply_router_weight_on_input,
+            use_fp8_w8a8=use_fp8_w8a8,
+            use_int8_w8a8=use_int8_w8a8,
+            use_int8_w8a16=use_int8_w8a16,
+            use_int4_w4a16=use_int4_w4a16,
+            ocp_mx_scheme=ocp_mx_scheme,
+            per_channel_quant=per_channel_quant,
+            global_num_experts=global_num_experts,
+            expert_map=expert_map,
+            w1_scale=w1_scale,
+            w2_scale=w2_scale,
+            w1_zp=w1_zp,
+            w2_zp=w2_zp,
+            a1_scale=a1_scale,
+            a2_scale=a2_scale,
+            w1_bias=w1_bias,
+            w2_bias=w2_bias,
+        )
 
     # Skip all shape construction and capture queries for unsupported callers
     # and for the explicit rollback path. This wrapper sits on every MoE layer.
     if (
         _MUSA_FUSED_MOE_REQUESTED_BACKEND != MusaFusedMoeBackend.UPSTREAM
-        and (use_fp8_w8a8 or qwen35_bf16_decode_gemv)
+        and (use_fp8_w8a8 or qwen35_bf16_decode_gemv or musa_bf16_decode_gemv)
         and not use_int8_w8a8
         and not use_int8_w8a16
         and not use_int4_w4a16
@@ -1926,7 +2038,10 @@ def _musa_fused_experts_impl_dispatch(
                     w1_bias=w1_bias,
                     w2_bias=w2_bias,
                 )
-                or (not apply_router_weight_on_input and qwen35_bf16_decode_gemv)
+                or (
+                    not apply_router_weight_on_input
+                    and (qwen35_bf16_decode_gemv or musa_bf16_decode_gemv)
+                )
             )
             can_use_grouped_gemm = _can_use_musa_fp8_moe_grouped_gemm(
                 hidden_states=hidden_states,
