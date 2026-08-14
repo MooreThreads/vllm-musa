@@ -1,0 +1,123 @@
+diff --git a/mate/mha_interface.py b/mate/mha_interface.py
+index 9f4db34..24b2e0d 100644
+--- a/mate/mha_interface.py
++++ b/mate/mha_interface.py
+@@ -41,20 +41,26 @@ def _check_valid_asm_input(
+ ):
+     enable_mubin = True
+ 
+-    enable_mubin &= q.is_musa
+-    enable_mubin &= k.is_musa
+-    enable_mubin &= v.is_musa
++    enable_mubin = enable_mubin & q.is_musa
++    enable_mubin = enable_mubin & k.is_musa
++    enable_mubin = enable_mubin & v.is_musa
+ 
+-    enable_mubin &= q.dtype == torch.float16 or q.dtype == torch.bfloat16
+-    enable_mubin &= k.dtype == torch.float16 or k.dtype == torch.bfloat16
+-    enable_mubin &= v.dtype == torch.float16 or v.dtype == torch.bfloat16
++    enable_mubin = enable_mubin & (
++        q.dtype == torch.float16 or q.dtype == torch.bfloat16
++    )
++    enable_mubin = enable_mubin & (
++        k.dtype == torch.float16 or k.dtype == torch.bfloat16
++    )
++    enable_mubin = enable_mubin & (
++        v.dtype == torch.float16 or v.dtype == torch.bfloat16
++    )
+ 
+-    enable_mubin &= q.dtype == k.dtype and q.dtype == v.dtype
++    enable_mubin = enable_mubin & (q.dtype == k.dtype and q.dtype == v.dtype)
+ 
+-    enable_mubin &= q.dim() == 3 or q.dim() == 4
+-    enable_mubin &= k.dim() == 3 or k.dim() == 4
+-    enable_mubin &= v.dim() == 3 or v.dim() == 4
+-    enable_mubin &= q.dim() == k.dim() and q.dim() == v.dim()
++    enable_mubin = enable_mubin & (q.dim() == 3 or q.dim() == 4)
++    enable_mubin = enable_mubin & (k.dim() == 3 or k.dim() == 4)
++    enable_mubin = enable_mubin & (v.dim() == 3 or v.dim() == 4)
++    enable_mubin = enable_mubin & (q.dim() == k.dim() and q.dim() == v.dim())
+ 
+     headdim_qk = q.shape[-1]
+     headdim_v = v.shape[-1]
+@@ -62,23 +68,23 @@ def _check_valid_asm_input(
+     is_192_128 = headdim_qk == 192 and headdim_v == 128
+     is_128_128_or_less = headdim_qk == headdim_v and headdim_qk <= 128
+ 
+-    enable_mubin &= is_192_128 or is_128_128_or_less
++    enable_mubin = enable_mubin & (is_192_128 or is_128_128_or_less)
+ 
+-    enable_mubin &= page_table is None
++    enable_mubin = enable_mubin & (page_table is None)
+ 
+-    enable_mubin &= seqused_q is None
+-    enable_mubin &= seqused_k is None
++    enable_mubin = enable_mubin & (seqused_q is None)
++    enable_mubin = enable_mubin & (seqused_k is None)
+ 
+     window_size_left, window_size_right = window_size
+-    enable_mubin &= window_size_left is None or window_size_left < 0
+-    enable_mubin &= window_size_right is None or window_size_right <= 0
++    enable_mubin = enable_mubin & (window_size_left is None or window_size_left < 0)
++    enable_mubin = enable_mubin & (window_size_right is None or window_size_right <= 0)
+ 
+-    enable_mubin &= qv is None
+-    enable_mubin &= softcap == 0.0
+-    enable_mubin &= learnable_sink is None
+-    enable_mubin &= attention_chunk == 0
++    enable_mubin = enable_mubin & (qv is None)
++    enable_mubin = enable_mubin & (softcap == 0.0)
++    enable_mubin = enable_mubin & (learnable_sink is None)
++    enable_mubin = enable_mubin & (attention_chunk == 0)
+ 
+-    enable_mubin &= cp_world_size == 1
++    enable_mubin = enable_mubin & (cp_world_size == 1)
+ 
+     if not enable_mubin:
+         return enable_mubin
+@@ -88,26 +94,34 @@ def _check_valid_asm_input(
+         total_seq_kv, nr_heads_kv, _ = k.shape
+         _, _, headdim_v = v.shape
+ 
+-        enable_mubin &= k.shape == (total_seq_kv, nr_heads_kv, headdim_qk)
+-        enable_mubin &= v.shape == (total_seq_kv, nr_heads_kv, headdim_v)
++        enable_mubin = enable_mubin & (
++            k.shape == (total_seq_kv, nr_heads_kv, headdim_qk)
++        )
++        enable_mubin = enable_mubin & (
++            v.shape == (total_seq_kv, nr_heads_kv, headdim_v)
++        )
+ 
+-        enable_mubin &= cu_seqlens_q.is_musa
+-        enable_mubin &= cu_seqlens_k.is_musa
++        enable_mubin = enable_mubin & cu_seqlens_q.is_musa
++        enable_mubin = enable_mubin & cu_seqlens_k.is_musa
+ 
+-        enable_mubin &= cu_seqlens_q is not None
+-        enable_mubin &= cu_seqlens_k is not None
+-        enable_mubin &= cu_seqlens_k.numel() == cu_seqlens_q.numel()
++        enable_mubin = enable_mubin & (cu_seqlens_q is not None)
++        enable_mubin = enable_mubin & (cu_seqlens_k is not None)
++        enable_mubin = enable_mubin & (cu_seqlens_k.numel() == cu_seqlens_q.numel())
+ 
+-        enable_mubin &= max_seqlen_q is not None
+-        enable_mubin &= max_seqlen_k is not None
++        enable_mubin = enable_mubin & (max_seqlen_q is not None)
++        enable_mubin = enable_mubin & (max_seqlen_k is not None)
+ 
+     if q.dim() == 4:
+         batch, seq_q, nr_heads, headdim_qk = q.shape
+         _, seq_kv, nr_heads_kv, _ = k.shape
+         _, _, _, headdim_v = v.shape
+ 
+-        enable_mubin &= k.shape == (batch, seq_kv, nr_heads_kv, headdim_qk)
+-        enable_mubin &= v.shape == (batch, seq_kv, nr_heads_kv, headdim_v)
++        enable_mubin = enable_mubin & (
++            k.shape == (batch, seq_kv, nr_heads_kv, headdim_qk)
++        )
++        enable_mubin = enable_mubin & (
++            v.shape == (batch, seq_kv, nr_heads_kv, headdim_v)
++        )
+ 
+     return enable_mubin
+ 

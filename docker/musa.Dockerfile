@@ -272,6 +272,13 @@ RUN python -m pip install \
         --extra-index-url "${PYPI_INDEX_URL}" \
         -r requirements/musa_private.txt
 
+# MATE <0.2.6 emits invalid FX code for boolean augmented assignment.
+COPY docker/patches/apply_mate_dynamo_bool_patch.py \
+     docker/patches/mate-dynamo-bool-augassign.patch \
+     /tmp/vllm-musa-mate-patch/
+RUN python /tmp/vllm-musa-mate-patch/apply_mate_dynamo_bool_patch.py && \
+    rm -rf /tmp/vllm-musa-mate-patch
+
 FROM vllm_musa_deps AS vllm_musa_installed
 
 # setup.py's develop_dynamic_library() installs the vendored vLLM with
