@@ -1,7 +1,5 @@
 # Runtime Python dependencies that are portable across MUSA images.
-# 0.1.79 contains the torch 2.11-compatible streams path used by compiled
-# vLLM-MUSA.
-torchada==0.1.79
+torchada==0.1.81
 mthreads-ml-py>=2.4.1
 numpy==1.26
 openai>=2.24.0
