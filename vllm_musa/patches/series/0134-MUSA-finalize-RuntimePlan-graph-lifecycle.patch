@@ -1,0 +1,212 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 27 Aug 2026 14:45:58 +0800
+Subject: [PATCH] MUSA: finalize RuntimePlan graph lifecycle
+
+---
+ vllm/config/vllm.py                             |  1 +
+ vllm/platforms/interface.py                     | 17 +++++++++++++++++
+ vllm/v1/worker/gpu/model_runner.py              | 15 +++++++++++++--
+ .../spec_decode/autoregressive/speculator.py    |  5 +++--
+ .../worker/gpu/spec_decode/dflash/speculator.py |  3 ++-
+ vllm/v1/worker/gpu/spec_decode/speculator.py    |  1 +
+ vllm/v1/worker/gpu_model_runner.py              |  8 +++++++-
+ 7 files changed, 44 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
+index b2078c18ae..7a595c06a6 100644
+--- a/vllm/config/vllm.py
++++ b/vllm/config/vllm.py
+@@ -1610,6 +1610,7 @@ class VllmConfig:
+         # Re-compute compile ranges after platform-specific config updates
+         # (e.g., XPU may lower max_num_batched_tokens when MLA is enabled)
+         self._set_compile_ranges()
++        current_platform.finalize_config(self)
+ 
+         # Do this after all the updates to compilation_config.mode
+         effective_dp_size = (
+diff --git a/vllm/platforms/interface.py b/vllm/platforms/interface.py
+index 5c041f1632..52ea05eee4 100644
+--- a/vllm/platforms/interface.py
++++ b/vllm/platforms/interface.py
+@@ -585,6 +585,23 @@ class Platform:
+         """
+         pass
+ 
++    @classmethod
++    def finalize_config(cls, vllm_config: "VllmConfig") -> None:
++        """Finalize platform-owned config after all update hooks have run."""
++
++        return None
++
++    @classmethod
++    def validate_cudagraph_config(
++        cls,
++        vllm_config: "VllmConfig",
++        *,
++        uniform_decode_query_len: int,
++    ) -> None:
++        """Validate config immediately before CUDAGraph runtime setup."""
++
++        return None
++
+     @classmethod
+     def _find_non_ssm_backend(
+         cls, vllm_config: "VllmConfig"
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 0fb1e58519..5baae5af2f 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -418,7 +418,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 )
+             from vllm_musa.runtime_plan import resolve_runtime_plan
+ 
+-            runtime_plan = resolve_runtime_plan(model_config=self.model_config)
++            runtime_plan = resolve_runtime_plan(
++                model_config=self.model_config
++            )
+             self.sampler._musa_runtime_plan = runtime_plan
+             topk_topp_sampler = getattr(self.sampler, "topk_topp_sampler", None)
+             if topk_topp_sampler is not None:
+@@ -641,6 +643,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         self,
+         num_tokens: int,
+         *args,
++        cudagraph_runtime_mode: CUDAGraphMode | None = None,
+         skip_attn: bool = False,
+         uniform_decode: bool = False,
+         context_len: int = 0,
+@@ -648,6 +651,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         is_profile: bool = False,
+         **kwargs,
+     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
++        if cudagraph_runtime_mode not in (None, CUDAGraphMode.NONE):
++            raise ValueError(
++                "V2 dummy runs only support an explicit NONE CUDAGraph mode."
++            )
++        force_eager_cudagraph = cudagraph_runtime_mode == CUDAGraphMode.NONE
+         if self.is_encoder_only:
+             empty = torch.empty(0, device=self.device)
+             return empty, empty
+@@ -706,6 +714,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 skip_attn_for_dummy_run=skip_attn,
+                 is_profile=is_profile,
+                 context_len=context_len,
++                force_eager_cudagraph=force_eager_cudagraph,
+             )
+         self.kv_connector.set_disabled(False)
+ 
+@@ -767,6 +776,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                     skip_attn_for_dummy_run=skip_attn,
+                     mm_inputs=mm_inputs,
+                     is_profile=is_profile,
++                    force_eager_cudagraph=force_eager_cudagraph,
+                 )
+             self.step_timing.drafter_end()
+ 
+@@ -1445,6 +1455,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         skip_attn_for_dummy_run: bool = False,
+         is_profile: bool = False,
+         context_len: int = 0,
++        force_eager_cudagraph: bool = False,
+     ) -> ModelRunnerOutput | IntermediateTensors | None:
+         if not dummy_run:
+             # Update the request states.
+@@ -1493,7 +1504,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             self.dp_size,
+             self.dp_rank,
+             max_query_len=max_query_len,
+-            need_eager=is_profile or skip_compiled,
++            need_eager=is_profile or skip_compiled or force_eager_cudagraph,
+             num_active_loras=num_active_loras,
+         )
+ 
+diff --git a/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py b/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py
+index 57430529f6..d22ed53dc8 100644
+--- a/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py
+@@ -224,6 +224,7 @@ class AutoRegressiveSpeculator(DraftModelSpeculator):
+         skip_attn_for_dummy_run: bool = False,
+         mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
+         is_profile: bool = False,
++        force_eager_cudagraph: bool = False,
+     ) -> torch.Tensor:
+         num_tokens = input_batch.num_tokens
+         num_tokens_padded = input_batch.num_tokens_after_padding
+@@ -286,7 +287,7 @@ class AutoRegressiveSpeculator(DraftModelSpeculator):
+             uniform_token_count,
+             dp_size=self.dp_size,
+             dp_rank=self.dp_rank,
+-            need_eager=is_profile,
++            need_eager=is_profile or force_eager_cudagraph,
+         )
+ 
+         self._prepare_eplb_forward(num_tokens)
+@@ -335,7 +336,7 @@ class AutoRegressiveSpeculator(DraftModelSpeculator):
+             uniform_token_count=1,
+             dp_size=self.dp_size,
+             dp_rank=self.dp_rank,
+-            need_eager=is_profile,
++            need_eager=is_profile or force_eager_cudagraph,
+         )
+ 
+         self.on_multi_step_decode_begin(num_reqs)
+diff --git a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+index eb5dc470b2..b5c0d4cd23 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+@@ -327,6 +327,7 @@ class DFlashSpeculator(DraftModelSpeculator):
+         skip_attn_for_dummy_run: bool = False,
+         mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
+         is_profile: bool = False,
++        force_eager_cudagraph: bool = False,
+     ) -> torch.Tensor:
+         num_reqs = input_batch.num_reqs
+         num_target_tokens = input_batch.num_tokens
+@@ -429,7 +430,7 @@ class DFlashSpeculator(DraftModelSpeculator):
+             uniform_token_count=self.num_query_per_req,
+             dp_size=self.dp_size,
+             dp_rank=self.dp_rank,
+-            need_eager=is_profile,
++            need_eager=is_profile or force_eager_cudagraph,
+         )
+ 
+         num_reqs_padded = batch_desc.num_reqs or num_reqs
+diff --git a/vllm/v1/worker/gpu/spec_decode/speculator.py b/vllm/v1/worker/gpu/spec_decode/speculator.py
+index fc4f78a81a..0df399c571 100644
+--- a/vllm/v1/worker/gpu/spec_decode/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/speculator.py
+@@ -65,6 +65,7 @@ class BaseSpeculator(ABC):
+         skip_attn_for_dummy_run: bool = False,
+         mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
+         is_profile: bool = False,
++        force_eager_cudagraph: bool = False,
+     ) -> torch.Tensor:
+         pass
+ 
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index be744e8887..9109905535 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -806,7 +806,9 @@ class GPUModelRunner(
+         )
+         is_musa_qwen_text_generation = (
+             current_platform.is_musa()
+-            and runtime_plan.enabled(RuntimeDecision.QWEN_LEGACY_SAMPLING)
++            and runtime_plan.enabled(
++                RuntimeDecision.QWEN_LEGACY_SAMPLING
++            )
+         )
+         self.sampler._musa_qwen_legacy_sampling = is_musa_qwen_text_generation
+         self.sampler._musa_runtime_plan = runtime_plan
+@@ -966,6 +968,10 @@ class GPUModelRunner(
+         self.uniform_decode_query_len = 1 + self.num_spec_tokens
+ 
+         # Cudagraph dispatcher for runtime cudagraph dispatching.
++        current_platform.validate_cudagraph_config(
++            self.vllm_config,
++            uniform_decode_query_len=self.uniform_decode_query_len,
++        )
+         self.cudagraph_dispatcher = CudagraphDispatcher(self.vllm_config)
+ 
+         self.mm_budget = (

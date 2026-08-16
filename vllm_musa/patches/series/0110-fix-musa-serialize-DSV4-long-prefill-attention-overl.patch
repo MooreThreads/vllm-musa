@@ -8,7 +8,7 @@ Subject: [PATCH] fix(musa): serialize DSV4 long-prefill attention overlap
  1 file changed, 17 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 0b80883196..0c7dd09282 100644
+index 2f5edb3347..52f7d6efc6 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
 @@ -93,6 +93,10 @@ def _fill_short_context_topk_indices(

@@ -4,11 +4,15 @@
 
 from types import SimpleNamespace
 
+# torchada must patch CUDA-facing symbols before torch is imported.
+# isort: off
 import numpy as np
 import torchada  # noqa: F401
 import torch
 
-from tests.qwen_contract_test_utils import qwen_sampler
+# isort: on
+
+from tests.qwen_runtime_plan_test_utils import qwen_sampler
 from vllm_musa.v1.worker import qwen_fused_next_input_ids as fused_inputs
 
 

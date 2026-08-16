@@ -1,0 +1,229 @@
+{
+  "schema_version": "musa.runtime_profile.v1",
+  "id": "qwen",
+  "priority": 100,
+  "reason": "declarative Qwen runtime profile",
+  "provider_when": {
+    "any": [
+      {"ref": "cosyvoice_identity"},
+      {"ref": "qwen35_identity"},
+      {"ref": "qwen3_identity"},
+      {"ref": "qwen2_identity"}
+    ]
+  },
+  "conditions": {
+    "cosyvoice_identity": {
+      "any": [
+        {"path": "model.effective_architectures", "op": "contains_any", "value": ["CosyVoice3Model"]},
+        {"path": "model.model_type", "op": "eq", "value": "cosyvoice3"}
+      ]
+    },
+    "qwen35_identity": {
+      "any": [
+        {"path": "model.effective_architectures", "op": "contains_any", "value": ["Qwen3_5ForCausalLM", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForCausalLM", "Qwen3_5MoeForConditionalGeneration"]},
+        {"path": "model.model_type", "op": "in", "value": ["qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text"]}
+      ]
+    },
+    "qwen3_identity": {
+      "any": [
+        {"path": "model.effective_architectures", "op": "contains_any", "value": ["Qwen3ForCausalLM", "Qwen3MoeForCausalLM"]},
+        {"path": "model.model_type", "op": "eq", "value": "qwen3"}
+      ]
+    },
+    "qwen2_identity": {
+      "any": [
+        {"path": "model.effective_architectures", "op": "contains_any", "value": ["Qwen2ForCausalLM", "Qwen2MoeForCausalLM"]},
+        {"path": "model.model_type", "op": "eq", "value": "qwen2"}
+      ]
+    },
+    "single_device": {
+      "all": [
+        {"path": "execution.tensor_parallel_size", "op": "eq", "value": 1},
+        {"path": "execution.pipeline_parallel_size", "op": "eq", "value": 1},
+        {"path": "execution.data_parallel_size", "op": "eq", "value": 1},
+        {"path": "execution.decode_context_parallel_size", "op": "eq", "value": 1}
+      ]
+    },
+    "bf16": {"path": "model.dtype", "op": "eq", "value": "bfloat16"},
+    "no_quantization": {"path": "model.quantization", "op": "in", "value": [null, "none"]},
+    "no_speculative": {"path": "execution.has_speculative_config", "op": "eq", "value": false},
+    "not_pooling": {"path": "execution.is_pooling_model", "op": "eq", "value": false},
+    "cache_supported": {
+      "all": [
+        {"path": "execution.cache_dtype", "op": "in", "value": [null, "auto", "bfloat16"]},
+        {"path": "execution.cache_block_size", "op": "in", "value": [null, 64]}
+      ]
+    },
+    "legacy_sampling": {
+      "all": [
+        {"path": "model.effective_architectures", "op": "contains_any", "value": ["Qwen2ForCausalLM", "Qwen2MoeForCausalLM", "Qwen3ForCausalLM", "Qwen3MoeForCausalLM", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration"]},
+        {"ref": "no_speculative"},
+        {"ref": "not_pooling"}
+      ]
+    },
+    "v2_sampling": {
+      "path": "model.effective_architectures",
+      "op": "contains_any",
+      "value": ["Qwen2ForCausalLM", "Qwen2MoeForCausalLM", "Qwen3ForCausalLM", "Qwen3MoeForCausalLM", "Qwen3_5ForCausalLM", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForCausalLM", "Qwen3_5MoeForConditionalGeneration"]
+    },
+    "fa3_architecture": {
+      "path": "model.effective_architectures",
+      "op": "contains_any",
+      "value": ["Qwen2ForCausalLM", "Qwen2MoeForCausalLM", "Qwen3ForCausalLM", "Qwen3MoeForCausalLM", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "CosyVoice3Model"]
+    },
+    "fa3_single_request": {
+      "all": [
+        {"ref": "fa3_architecture"},
+        {"path": "execution.has_parallel_config", "op": "eq", "value": true},
+        {"ref": "no_speculative"},
+        {"ref": "single_device"},
+        {"path": "execution.max_num_seqs", "op": "gt", "value": 0}
+      ]
+    },
+    "qwen2_rope_presplit": {
+      "all": [
+        {"path": "model.family", "op": "eq", "value": "qwen2"},
+        {"path": "model.model_type", "op": "in", "value": ["qwen2", "cosyvoice3"]},
+        {"path": "model.hidden_size", "op": "eq", "value": 896},
+        {"path": "model.num_hidden_layers", "op": "eq", "value": 24},
+        {"path": "model.num_attention_heads", "op": "eq", "value": 14},
+        {"ref": "bf16"},
+        {"ref": "no_quantization"},
+        {"path": "execution.has_quant_config", "op": "eq", "value": false},
+        {"ref": "no_speculative"},
+        {"path": "execution.has_parallel_config", "op": "eq", "value": true},
+        {"ref": "cache_supported"},
+        {"path": "model.enforce_eager", "op": "eq", "value": false},
+        {"ref": "single_device"},
+        {
+          "any": [
+            {
+              "all": [
+                {"path": "model.model_type", "op": "eq", "value": "qwen2"},
+                {"path": "model.num_key_value_heads", "op": "eq", "value": 2},
+                {"path": "model.intermediate_size", "op": "eq", "value": 4864}
+              ]
+            },
+            {
+              "all": [
+                {"path": "model.model_type", "op": "eq", "value": "cosyvoice3"},
+                {"path": "model.num_key_value_heads", "op": "in", "value": [null, 2]},
+                {"path": "model.intermediate_size", "op": "in", "value": [null, 4864]}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "qwen3_rope_presplit": {
+      "all": [
+        {"path": "model.family", "op": "eq", "value": "qwen3"},
+        {"path": "model.architectures", "op": "eq", "value": ["Qwen3ForCausalLM"]},
+        {"path": "model.model_type", "op": "eq", "value": "qwen3"},
+        {"paths": ["model.hidden_size", "model.intermediate_size", "model.num_hidden_layers", "model.num_attention_heads", "model.num_key_value_heads", "model.head_dim"], "op": "tuple_in", "value": [[1024, 3072, 28, 16, 8, 128], [4096, 12288, 36, 32, 8, 128]]},
+        {"ref": "bf16"},
+        {"ref": "no_quantization"},
+        {"path": "execution.has_quant_config", "op": "eq", "value": false},
+        {"ref": "no_speculative"},
+        {"path": "execution.has_parallel_config", "op": "eq", "value": true},
+        {"ref": "cache_supported"},
+        {"path": "model.enforce_eager", "op": "eq", "value": false},
+        {"ref": "single_device"}
+      ]
+    },
+    "qwen3_dense_fp8_post_grad": {
+      "all": [
+        {"path": "model.architectures", "op": "eq", "value": ["Qwen3ForCausalLM"]},
+        {"path": "model.model_type", "op": "eq", "value": "qwen3"},
+        {"path": "model.has_routed_experts", "op": "eq", "value": false},
+        {"paths": ["model.hidden_size", "model.intermediate_size", "model.num_hidden_layers"], "op": "tuple_in", "value": [[4096, 12288, 36]]},
+        {"path": "model.dtype", "op": "eq", "value": "bfloat16"},
+        {"path": "model.quantization", "op": "eq", "value": "fp8"},
+        {"ref": "no_speculative"},
+        {"path": "execution.tensor_parallel_size", "op": "eq", "value": 1},
+        {"path": "execution.pipeline_parallel_size", "op": "eq", "value": 1},
+        {"path": "execution.data_parallel_size", "op": "eq", "value": 1}
+      ]
+    },
+    "qwen35_gdn_prefill": {
+      "all": [
+        {"path": "model.family", "op": "eq", "value": "qwen3.5_3.6"},
+        {"path": "model.gdn_conv_width", "op": "eq", "value": 4},
+        {"path": "model.gdn_conv_dim", "op": "eq", "value": 10240},
+        {"path": "model.has_routed_experts", "op": "eq", "value": false},
+        {"ref": "bf16"},
+        {"path": "execution.has_parallel_config", "op": "eq", "value": true},
+        {"path": "execution.tensor_parallel_size", "op": "eq", "value": 1}
+      ]
+    },
+    "qwen35_moe_bf16": {
+      "all": [
+        {"path": "model.family", "op": "eq", "value": "qwen3.5_3.6"},
+        {"path": "model.has_routed_experts", "op": "eq", "value": true},
+        {"path": "model.dtype", "op": "eq", "value": "bfloat16"},
+        {"path": "model.hidden_size", "op": "eq", "value": 2048},
+        {"path": "model.num_experts", "op": "eq", "value": 256},
+        {"path": "model.moe_intermediate_size", "op": "eq", "value": 512},
+        {"path": "model.num_experts_per_tok", "op": "eq", "value": 8},
+        {"path": "execution.has_parallel_config", "op": "eq", "value": true},
+        {"path": "execution.tensor_parallel_size", "op": "eq", "value": 4},
+        {"path": "execution.pipeline_parallel_size", "op": "eq", "value": 1}
+      ]
+    },
+    "qwen35_shared_expert_fold": {
+      "all": [
+        {"path": "model.family", "op": "eq", "value": "qwen3.5_3.6"},
+        {"path": "model.has_routed_experts", "op": "eq", "value": true}
+      ]
+    },
+    "qwen35_interleaved_mrope": {
+      "all": [
+        {"path": "model.family", "op": "eq", "value": "qwen3.5_3.6"},
+        {"path": "model.dtype", "op": "eq", "value": "bfloat16"}
+      ]
+    },
+    "v2_vocab": {"path": "model.vocab_size", "op": "in", "value": [151936, 152064, 248320]},
+    "legacy_vocab": {"path": "model.vocab_size", "op": "in", "value": [151936, 152064, 248320]},
+    "legacy_tp4": {
+      "all": [
+        {"path": "execution.tensor_parallel_size", "op": "eq", "value": 4},
+        {"path": "execution.pipeline_parallel_size", "op": "eq", "value": 1}
+      ]
+    }
+  },
+  "classifications": [
+    {"when": {"ref": "cosyvoice_identity"}, "family": "qwen2", "role": "cosyvoice_talker"},
+    {"when": {"ref": "qwen35_identity"}, "family": "qwen3.5_3.6", "role": "text_generation"},
+    {"when": {"ref": "qwen3_identity"}, "family": "qwen3", "role": "text_generation"},
+    {"when": {"ref": "qwen2_identity"}, "family": "qwen2", "role": "text_generation"}
+  ],
+  "profiles": [
+    {"when": {"all": [{"path": "model.role", "op": "eq", "value": "cosyvoice_talker"}, {"path": "model.has_routed_experts", "op": "ne", "value": true}]}, "profile": "qwen2.cosyvoice_talker"},
+    {"when": {"all": [{"path": "model.family", "op": "eq", "value": "qwen3.5_3.6"}, {"path": "model.has_routed_experts", "op": "eq", "value": true}]}, "profile": "qwen3.5_3.6.moe"},
+    {"when": {"all": [{"path": "model.family", "op": "eq", "value": "qwen3.5_3.6"}, {"path": "model.has_routed_experts", "op": "ne", "value": true}]}, "profile": "qwen3.5_3.6.text_generation"},
+    {"when": {"all": [{"path": "model.family", "op": "eq", "value": "qwen3"}, {"path": "model.has_routed_experts", "op": "eq", "value": true}]}, "profile": "qwen3.moe"},
+    {"when": {"all": [{"path": "model.family", "op": "eq", "value": "qwen3"}, {"path": "model.has_routed_experts", "op": "ne", "value": true}]}, "profile": "qwen3.text_generation"},
+    {"when": {"all": [{"path": "model.family", "op": "eq", "value": "qwen2"}, {"path": "model.has_routed_experts", "op": "eq", "value": true}]}, "profile": "qwen2.moe"},
+    {"when": {"path": "model.family", "op": "eq", "value": "qwen2"}, "profile": "qwen2.text_generation"}
+  ],
+  "decisions": [
+    {"decision": "qwen.v2_sampling", "supported_when": {"ref": "v2_sampling"}, "value_when": {"ref": "v2_sampling"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen.legacy_sampling", "supported_when": {"ref": "legacy_sampling"}, "value_when": {"ref": "legacy_sampling"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen.fa3_scheduler", "supported_when": {"ref": "fa3_architecture"}, "value_when": {"ref": "fa3_architecture"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen.fa3_single_request_metadata", "supported_when": {"ref": "fa3_single_request"}, "value_when": {"ref": "fa3_single_request"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen2.rope_kv_presplit", "supported_when": {"ref": "qwen2_rope_presplit"}, "value_when": {"ref": "qwen2_rope_presplit"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen3.qk_rope_kv_presplit", "supported_when": {"ref": "qwen3_rope_presplit"}, "value_when": {"ref": "qwen3_rope_presplit"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen3.dense_fp8_post_grad_fusions", "supported_when": {"ref": "qwen3_dense_fp8_post_grad"}, "value_when": {"ref": "qwen3_dense_fp8_post_grad"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen3.5_3.6.gdn_width4_prefill", "supported_when": {"ref": "qwen35_gdn_prefill"}, "value_when": {"ref": "qwen35_gdn_prefill"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen3.5_3.6.moe_bf16_prefill", "supported_when": {"ref": "qwen35_moe_bf16"}, "value_when": {"ref": "qwen35_moe_bf16"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen3.5_3.6.shared_expert_fold", "supported_when": {"ref": "qwen35_shared_expert_fold"}, "value_when": {"ref": "qwen35_shared_expert_fold"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen3.5_3.6.interleaved_mrope_qk", "supported_when": {"ref": "qwen35_interleaved_mrope"}, "value_when": {"ref": "qwen35_interleaved_mrope"}, "value": true, "tunability": "profile"},
+    {"decision": "qwen.v2_gumbel", "supported_when": {"ref": "v2_vocab"}, "value_when": {"ref": "v2_vocab"}, "value": true, "tunability": "profile", "requires": ["qwen.v2_sampling"]},
+    {"decision": "qwen.uniform_decode_views", "supported_when": {"ref": "v2_vocab"}, "value_when": {"ref": "v2_vocab"}, "value": true, "tunability": "profile", "requires": ["qwen.v2_sampling"]},
+    {"decision": "qwen.uniform_sample_counts", "supported_when": {"ref": "v2_vocab"}, "value_when": {"ref": "v2_vocab"}, "value": true, "tunability": "profile", "requires": ["qwen.v2_sampling"]},
+    {"decision": "qwen.sample_input_views", "supported_when": {"ref": "v2_vocab"}, "value_when": {"ref": "v2_vocab"}, "value": true, "tunability": "profile", "requires": ["qwen.v2_sampling"]},
+    {"decision": "qwen.legacy_gumbel", "supported_when": {"ref": "legacy_vocab"}, "value_when": {"ref": "legacy_vocab"}, "value": true, "tunability": "profile", "requires": ["qwen.legacy_sampling"]},
+    {"decision": "qwen.tp_logits_ipc_gather", "supported_when": {"ref": "legacy_vocab"}, "value_when": {"ref": "legacy_vocab"}, "value": true, "tunability": "profile", "requires": ["qwen.legacy_sampling"]},
+    {"decision": "qwen.tp4_sharded_gumbel", "supported_when": {"all": [{"ref": "legacy_vocab"}, {"ref": "legacy_tp4"}]}, "value_when": {"all": [{"ref": "legacy_vocab"}, {"ref": "legacy_tp4"}]}, "value": true, "tunability": "profile", "requires": ["qwen.legacy_sampling"]}
+  ]
+}

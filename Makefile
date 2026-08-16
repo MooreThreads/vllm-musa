@@ -1,7 +1,7 @@
 # vLLM MUSA Platform Plugin - Makefile
 # =====================================
 
-.PHONY: help install dev-install pre-commit test test-cov build publish publish-test clean all
+.PHONY: help install dev-install pre-commit test test-cov test-engine-plan build publish publish-test clean all
 
 # Default target
 help:
@@ -17,6 +17,7 @@ help:
 	@echo "  Testing:"
 	@echo "    make test         - Run all tests"
 	@echo "    make test-cov     - Run tests with coverage report"
+	@echo "    make test-engine-plan - Run focused RuntimePlan and plan-builder tests"
 	@echo ""
 	@echo "  Build & Publish:"
 	@echo "    make build        - Build wheel and sdist"
@@ -55,6 +56,24 @@ test:
 
 test-cov:
 	pytest tests/ -v --cov=vllm_musa --cov-report=term-missing --cov-report=html
+
+test-engine-plan:
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
+		python -m pytest -q -p no:cacheprovider \
+		tests/test_engine_plan_artifact_io.py \
+		tests/test_engine_plan_autotuner.py \
+		tests/test_engine_plugin_ir_catalog.py \
+		tests/test_engine_plan_builder_cli.py \
+		tests/test_engine_plugins.py \
+		tests/test_runtime_plan_core.py \
+		tests/test_runtime_plan_declarative.py \
+		tests/test_runtime_plan_engine_decisions.py \
+		tests/test_builtin_engine_plan.py \
+		tests/test_qwen_runtime_plan.py \
+		tests/test_qwen_runtime_plan_source.py \
+		tests/test_qwen3_qk_rope_kv_presplit.py \
+		tests/test_deepseek_v4_runtime_plan.py \
+		tests/test_deepseek_v4_runtime_plan_source.py
 
 # =============================================================================
 # Build & Publish

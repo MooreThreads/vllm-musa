@@ -39,20 +39,20 @@ def _is_dense_model(config: VllmConfig) -> bool:
 
 
 def _silu_deepgemm_fusion_requested(config: VllmConfig) -> bool:
-    from vllm_musa.optimization_contract import policy
-    from vllm_musa.optimization_contract.types import OptimizationFeature
+    from vllm_musa.runtime_plan import policy
+    from vllm_musa.runtime_plan.types import RuntimeDecision
 
-    return policy.prefers_feature(
-        config, OptimizationFeature.QWEN3_DENSE_FP8_POST_GRAD_FUSIONS
+    return policy.runtime_plan_enabled(
+        config, RuntimeDecision.QWEN3_DENSE_FP8_POST_GRAD_FUSIONS
     )
 
 
 def _rms_deepgemm_fusion_requested(config: VllmConfig) -> bool:
-    from vllm_musa.optimization_contract import policy
-    from vllm_musa.optimization_contract.types import OptimizationFeature
+    from vllm_musa.runtime_plan import policy
+    from vllm_musa.runtime_plan.types import RuntimeDecision
 
-    return policy.prefers_feature(
-        config, OptimizationFeature.QWEN3_DENSE_FP8_POST_GRAD_FUSIONS
+    return policy.runtime_plan_enabled(
+        config, RuntimeDecision.QWEN3_DENSE_FP8_POST_GRAD_FUSIONS
     )
 
 

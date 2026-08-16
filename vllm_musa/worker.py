@@ -4,6 +4,8 @@
 from vllm.config import VllmConfig
 from vllm.v1.worker.gpu_worker import Worker
 
+from vllm_musa.platform import materialize_fused_moe_runtime_policy_for_worker
+
 
 class MTGPUWorker(Worker):
     """A worker class that executes (a partition of) the model on a MTGPU.
@@ -19,6 +21,14 @@ class MTGPUWorker(Worker):
         distributed_init_method: str,
         is_driver_worker: bool = False,
     ) -> None:
+        # RuntimePlan dispatch state is process-local.  Materialize it from the
+        # serialized VllmConfig before GPUModelRunner imports/compiles the MoE
+        # dispatcher; relying on parent environment inheritance is not safe
+        # across vLLM's EngineCore/TP-worker spawn boundaries.
+        materialize_fused_moe_runtime_policy_for_worker(
+            vllm_config,
+            worker_rank=rank,
+        )
         super().__init__(
             vllm_config=vllm_config,
             local_rank=local_rank,

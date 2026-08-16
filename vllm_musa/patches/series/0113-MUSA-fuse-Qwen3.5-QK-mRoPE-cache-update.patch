@@ -45,7 +45,7 @@ index 3031ba9525..b7f4d13e4e 100644
                  kv_cache_dummy_dep = torch.ops.vllm.unified_kv_cache_update(
                      key, value, encoded
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
-index 450f23f287..5f8f249887 100644
+index 04757e798b..64488d589e 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
 @@ -433,6 +433,7 @@ class Qwen3NextAttention(nn.Module):

@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: fence DeepSeek-V4 MTP mixed prefill queues
  1 file changed, 26 insertions(+)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 44a9bc5c75..2b2a665f01 100644
+index eb822111fc..0863352884 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -4806,11 +4806,37 @@ class GPUModelRunner(
+@@ -4802,11 +4802,37 @@ class GPUModelRunner(
          )
          self.kv_connector_output = kv_connector_output
  
@@ -27,7 +27,7 @@ index 44a9bc5c75..2b2a665f01 100644
 +            self, "_musa_dsv4_mtp_prefill_queue_fence", None
 +        )
 +        if queue_fence is None:
-+            from vllm_musa.optimization_contract.policy import (
++            from vllm_musa.runtime_plan.policy import (
 +                deepseek_v4_mtp_async_prefill_queue_fence_enabled,
 +                deepseek_v4_mtp_prefill_step_requires_sync,
 +            )

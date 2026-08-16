@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: I001
-"""Focused caller-output contract for the MUSA Qwen GDN decode path."""
+"""Focused caller-output plan for the MUSA Qwen GDN decode path."""
 
 from types import SimpleNamespace
 
@@ -10,7 +10,7 @@ import torch
 
 # isort: on
 
-from tests.qwen_contract_test_utils import qwen_hybrid_contract, qwen_sampler
+from tests.qwen_runtime_plan_test_utils import qwen_hybrid_plan, qwen_sampler
 from vllm_musa.model_executor.layers.mamba.gdn import qwen_gdn_linear_attn as gdn
 
 
@@ -32,10 +32,19 @@ def _fake_attention(
         torch.zeros(2, 4, 1),
         torch.zeros(4, 2, 2, 2, dtype=torch.float32),
     )
-    attention._musa_optimization_contract = (
-        qwen_hybrid_contract()
+    attention._musa_runtime_plan = (
+        qwen_hybrid_plan()
         if separate_pool
-        else qwen_sampler(enabled=False)._musa_optimization_contract
+        else qwen_sampler(enabled=False)._musa_runtime_plan
+    )
+    attention._musa_hybrid_kv_cache_pool_separate = (
+        attention._musa_runtime_plan.selected(
+            gdn.RuntimeDecision.HYBRID_KV_CACHE_POOL_LAYOUT,
+            "separate",
+        )
+    )
+    attention._musa_qwen35_gdn_width4_prefill = attention._musa_runtime_plan.enabled(
+        gdn.RuntimeDecision.QWEN35_GDN_WIDTH4_PREFILL
     )
     return attention
 

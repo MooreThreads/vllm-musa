@@ -19,10 +19,9 @@ from vllm.distributed import (
 from vllm.platforms import current_platform
 
 from vllm_musa import _custom_ops as _ops
-from vllm_musa.optimization_contract import (
-    OptimizationFeature,
-    prefers_optimization,
-    resolve_optimization_contract,
+from vllm_musa.runtime_plan import (
+    RuntimeDecision,
+    runtime_plan_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,7 +76,7 @@ def _can_skip_legacy_qwen_unit_temperature(
 ) -> bool:
     """Use the scheduler's exact CPU hint to avoid a device divide by one."""
     return (
-        prefers_optimization(sampler, OptimizationFeature.QWEN_LEGACY_SAMPLING)
+        runtime_plan_enabled(sampler, RuntimeDecision.QWEN_LEGACY_SAMPLING)
         and getattr(sampling_metadata, "all_random", False)
         and _is_qwen_sampler_vocab(logits)
         and getattr(sampling_metadata, "uniform_temperature", None) == np.float32(1.0)
@@ -346,7 +345,6 @@ def _topk_topp_sampler_init(
 ):
     original_init = vllm_topk_topp_sampler.TopKTopPSampler._musa_original_init
     original_init(self, logprobs_mode, use_fp64_gumbel)
-    self._musa_optimization_contract = resolve_optimization_contract()
     if (
         logprobs_mode not in ("processed_logits", "processed_logprobs")
         and current_platform.is_musa()
@@ -601,9 +599,9 @@ def musa_compute_logits_if_eligible(
         getattr(sampler, "logprobs_mode", "raw_logprobs"),
         predict_bonus_token=False,
         use_fp64_gumbel=bool(getattr(sampler, "use_fp64_gumbel", False)),
-        is_qwen_family=prefers_optimization(
+        is_qwen_family=runtime_plan_enabled(
             sampler,
-            OptimizationFeature.QWEN_TP4_SHARDED_GUMBEL,
+            RuntimeDecision.QWEN_TP4_SHARDED_GUMBEL,
         ),
     )
     rows = int(hidden_states.shape[0]) if hidden_states.ndim > 0 else 0
@@ -975,9 +973,9 @@ def _sample(
     sampling_metadata: Any,
     logprobs_mode_override: LogprobsMode | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    is_qwen_family = prefers_optimization(
+    is_qwen_family = runtime_plan_enabled(
         self,
-        OptimizationFeature.QWEN_LEGACY_GUMBEL,
+        RuntimeDecision.QWEN_LEGACY_GUMBEL,
     )
     logprobs_mode = logprobs_mode_override or self.logprobs_mode
     assert not (sampling_metadata.all_greedy and sampling_metadata.all_random)
@@ -1107,7 +1105,7 @@ def _sampler_forward(
         self.logprobs_mode,
         predict_bonus_token,
         self.use_fp64_gumbel,
-        prefers_optimization(self, OptimizationFeature.QWEN_LEGACY_GUMBEL),
+        runtime_plan_enabled(self, RuntimeDecision.QWEN_LEGACY_GUMBEL),
         sampler=self,
     ):
         sampled = sample_qwen_legacy_unfiltered_gumbel(self, logits)
@@ -1160,7 +1158,7 @@ def can_use_qwen_v2_gumbel(
 ) -> bool:
     """Gate the pinned V2 Gumbel sampler to one validated Qwen contract."""
     if (
-        not prefers_optimization(sampler, OptimizationFeature.QWEN_V2_GUMBEL)
+        not runtime_plan_enabled(sampler, RuntimeDecision.QWEN_V2_GUMBEL)
         or not current_platform.is_musa()
         or not is_musa_tensor(logits)
     ):
@@ -1205,7 +1203,7 @@ def can_use_qwen_v2_unfiltered_gumbel(
 ) -> bool:
     """Gate direct logits-domain Gumbel to an unfiltered Qwen contract."""
     if (
-        not prefers_optimization(sampler, OptimizationFeature.QWEN_V2_GUMBEL)
+        not runtime_plan_enabled(sampler, RuntimeDecision.QWEN_V2_GUMBEL)
         or not current_platform.is_musa()
         or not is_musa_tensor(logits)
     ):
@@ -1460,7 +1458,7 @@ def _apply_worker_sampling_filters_for_seeded_multinomial(
     use_min_p = np.any(sampler.sampling_states.min_p.np[idx_mapping_np] != 0.0)
     if (
         use_top_k
-        and prefers_optimization(sampler, OptimizationFeature.QWEN_V2_GUMBEL)
+        and runtime_plan_enabled(sampler, RuntimeDecision.QWEN_V2_GUMBEL)
         and _is_uniform_top_k_50(top_k_np)
         and _is_qwen_sampler_vocab(logits)
         and (not use_top_p or logits.shape[0] >= 4)
@@ -1580,7 +1578,7 @@ def _worker_sample(
             self.sampling_states,
             expanded_idx_mapping,
             idx_mapping_np,
-            prefers_optimization(self, OptimizationFeature.QWEN_V2_GUMBEL),
+            runtime_plan_enabled(self, RuntimeDecision.QWEN_V2_GUMBEL),
         )
         return sampled, processed_logits
 

@@ -8,7 +8,7 @@ Subject: [PATCH] perf: skip SSM slot mapping in uniform decode
  1 file changed, 31 insertions(+), 5 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 412125254e..44a9bc5c75 100644
+index 589cd97c25..eb822111fc 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -615,6 +615,9 @@ class GPUModelRunner(
@@ -21,7 +21,7 @@ index 412125254e..44a9bc5c75 100644
          # self.kv_cache_config: KVCacheConfig
  
          # mm_hash ->  encoder_output
-@@ -2307,11 +2310,28 @@ class GPUModelRunner(
+@@ -2303,11 +2306,28 @@ class GPUModelRunner(
          )
          self.seq_lens[num_reqs:].fill_(0)
  
@@ -55,7 +55,7 @@ index 412125254e..44a9bc5c75 100644
  
          # Copy the tensors to the GPU.
          self._prepare_input_ids(
-@@ -7409,6 +7429,12 @@ class GPUModelRunner(
+@@ -7405,6 +7425,12 @@ class GPUModelRunner(
          for i, attn_backend_map in enumerate(attention_backend_maps):
              self.attn_groups.append(create_attn_groups(attn_backend_map, i))
  

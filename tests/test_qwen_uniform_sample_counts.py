@@ -5,11 +5,15 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+# torchada must patch CUDA-facing symbols before torch is imported.
+# isort: off
 import numpy as np
 import torchada  # noqa: F401
 import torch
 
-from tests.qwen_contract_test_utils import qwen_sampler
+# isort: on
+
+from tests.qwen_runtime_plan_test_utils import qwen_sampler
 from vllm_musa.v1.sample import uniform_sample_counts as sample_counts
 
 
@@ -119,7 +123,7 @@ def test_qwen_uniform_sample_counts_bound_hook(monkeypatch) -> None:
         raising=False,
     )
     sampler = sample_counts.Sampler.__new__(sample_counts.Sampler)
-    sampler._musa_optimization_contract = qwen_sampler()._musa_optimization_contract
+    sampler._musa_runtime_plan = qwen_sampler()._musa_runtime_plan
     logits = torch.empty((4, 151936), dtype=torch.bfloat16)
 
     counts = sampler._musa_select_num_sampled_and_rejected(logits, make_batch())

@@ -83,7 +83,7 @@ index 77d56ad882..05fa471b98 100644
                  raise NotImplementedError(
                      f"Unsupported KV cache spec type: {type(kv_cache_spec)}"
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 2b2a665f01..b3ad96f579 100644
+index 0863352884..be744e8887 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -12,6 +12,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -102,7 +102,7 @@ index 2b2a665f01..b3ad96f579 100644
      PIN_MEMORY,
      async_tensor_h2d,
      current_stream,
-@@ -7792,15 +7794,29 @@ class GPUModelRunner(
+@@ -7788,15 +7790,29 @@ class GPUModelRunner(
                  elif isinstance(kv_cache_spec, MambaSpec):
                      has_mamba = True
                      raw_tensor = kv_cache_raw_tensors[layer_name]

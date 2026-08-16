@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 27 Aug 2026 14:45:58 +0800
+Subject: [PATCH] MUSA: bind modular MoE plans safely
+
+---
+ vllm/model_executor/layers/fused_moe/fused_moe.py |  9 ++++++++-
+ vllm/model_executor/layers/quantization/fp8.py    | 10 ++++++++++
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index a3396c2775..ff113b1429 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -886,11 +886,18 @@ def invoke_fused_moe_triton_kernel(
+     HAS_BIAS = B_bias is not None
+ 
+     config = config.copy()
++    # On S5000, Triton stages two and three can prefetch past the final
++    # expert page for FP8 W8A8. Keep this single-stage until the compiler
++    # provides a bounded-prefetch guarantee.
++    if current_platform.is_musa() and use_fp8_w8a8:
++        config["num_stages"] = 1
+     config["SPLIT_K"] = 1
+     BLOCK_SIZE_K = config.pop("BLOCK_SIZE_K")
+     if block_shape is not None:
+         BLOCK_SIZE_K = min(BLOCK_SIZE_K, min(block_shape[0], block_shape[1]))
+-    even_Ks = B.size(2) % BLOCK_SIZE_K == 0
++    # The unmasked even-K load path has triggered a one-past MMU fault on
++    # S5000; retain masked loads on MUSA even when K divides the tile exactly.
++    even_Ks = B.size(2) % BLOCK_SIZE_K == 0 and not current_platform.is_musa()
+     if use_td and A.size(1) % BLOCK_SIZE_K != 0:
+         # TD gather/load feeding tl.dot with a non-block-aligned K
+         # miscompiles (~74% of output elements wrong) on real HW;
+diff --git a/vllm/model_executor/layers/quantization/fp8.py b/vllm/model_executor/layers/quantization/fp8.py
+index 6396a3bf77..e6304bd090 100644
+--- a/vllm/model_executor/layers/quantization/fp8.py
++++ b/vllm/model_executor/layers/quantization/fp8.py
+@@ -685,6 +685,16 @@ class Fp8MoEMethod(FusedMoEMethodBase):
+             experts_cls=self.experts_cls,
+             routing_tables=layer._expert_routing_tables(),
+         )
++        if getattr(torch.version, "musa", None) is not None:
++            from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
++                record_modular_fused_moe_runtime_plan_binding,
++            )
++
++            record_modular_fused_moe_runtime_plan_binding(
++                routed_experts=layer,
++                moe_kernel=self.moe_kernel,
++                layer_name=layer.layer_name,
++            )
+ 
+     def process_weights_after_loading(self, layer: RoutedExperts) -> None:
+         # Allow for accessing weights and scales in standard way.

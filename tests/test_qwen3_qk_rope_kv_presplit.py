@@ -24,6 +24,8 @@ _FUSED_OP_SCHEMA = (
     "musa_qwen3_qk_rope_and_unified_kv_cache_update(Tensor q, Tensor k, "
     "Tensor v, Tensor q_weight, Tensor k_weight, Tensor positions, "
     "Tensor cos_sin_cache, Tensor(a!) q_out, Tensor(b!) k_out, "
+    "bool is_neox, SymInt mrope_section_t, SymInt mrope_section_h, "
+    "SymInt mrope_section_w, bool is_interleaved, float eps, bool gemma, "
     "str layer_name) -> Tensor"
 )
 _GRAPH_OP_SCHEMAS = (
@@ -269,5 +271,31 @@ def test_apply_replaces_norm_rope_and_cache(monkeypatch, hoisted_layer_name):
         assert len(attention_nodes) == 1
         assert len(fused_nodes) == 1
         assert fused_nodes[0] in attention_nodes[0].all_input_nodes
+        assert set(fused_nodes[0].kwargs) == {
+            "q",
+            "k",
+            "v",
+            "q_weight",
+            "k_weight",
+            "positions",
+            "cos_sin_cache",
+            "q_out",
+            "k_out",
+            "is_neox",
+            "mrope_section_t",
+            "mrope_section_h",
+            "mrope_section_w",
+            "is_interleaved",
+            "eps",
+            "gemma",
+            "layer_name",
+        }
+        assert fused_nodes[0].kwargs["is_neox"] is True
+        assert fused_nodes[0].kwargs["mrope_section_t"] == 64
+        assert fused_nodes[0].kwargs["mrope_section_h"] == 0
+        assert fused_nodes[0].kwargs["mrope_section_w"] == 0
+        assert fused_nodes[0].kwargs["is_interleaved"] is False
+        assert fused_nodes[0].kwargs["eps"] == pytest.approx(1e-6)
+        assert fused_nodes[0].kwargs["gemma"] is False
         if layer_name is not None:
             assert fused_nodes[0].kwargs["layer_name"] is layer_name

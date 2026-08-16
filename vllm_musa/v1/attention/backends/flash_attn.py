@@ -45,9 +45,9 @@ from vllm.v1.attention.ops.dcp_alltoall import dcp_a2a_lse_reduce
 from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
 from vllm.v1.kv_cache_interface import AttentionSpec
 
-from vllm_musa.optimization_contract import (
-    OptimizationFeature,
-    resolve_optimization_contract,
+from vllm_musa.runtime_plan import (
+    RuntimeDecision,
+    resolve_runtime_plan,
 )
 from vllm_musa.v1.attention.backends.fa_utils import (
     flash_attn_supports_fp8,
@@ -68,8 +68,8 @@ logger = init_logger(__name__)
 
 
 def _is_musa_qwen_text_generation_architecture(model_config: Any) -> bool:
-    return resolve_optimization_contract(model_config=model_config).prefers(
-        OptimizationFeature.QWEN_FA3_SCHEDULER
+    return resolve_runtime_plan(model_config=model_config).enabled(
+        RuntimeDecision.QWEN_FA3_SCHEDULER
     )
 
 
@@ -116,10 +116,10 @@ def _is_qwen_family_scheduler_lookup_base_config(
         return False
 
     max_num_seqs = getattr(scheduler_config, "max_num_seqs", None)
-    contract = resolve_optimization_contract(vllm_config)
+    plan = resolve_runtime_plan(vllm_config)
 
     return (
-        contract.prefers(OptimizationFeature.QWEN_FA3_SINGLE_REQUEST_METADATA)
+        plan.enabled(RuntimeDecision.QWEN_FA3_SINGLE_REQUEST_METADATA)
         and isinstance(max_num_seqs, int)
         and max_num_seqs >= 1
         and getattr(vllm_config, "speculative_config", None) is None
@@ -495,7 +495,10 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
 
         self.max_num_splits = 0  # No upper bound on the number of splits.
         self.aot_schedule = get_flash_attn_version() == 3
-        self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
+        self._musa_runtime_plan = resolve_runtime_plan(vllm_config)
+        self._musa_qwen_fa3_scheduler = self._musa_runtime_plan.enabled(
+            RuntimeDecision.QWEN_FA3_SCHEDULER
+        )
 
         try:
             from vllm.distributed.parallel_state import get_dcp_group
@@ -708,9 +711,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
                 self.model_config.dtype == torch.bfloat16
                 and self.kv_cache_dtype in ("auto", "bfloat16", torch.bfloat16)
             ),
-            is_qwen_family=self._musa_optimization_contract.prefers(
-                OptimizationFeature.QWEN_FA3_SCHEDULER
-            ),
+            is_qwen_family=self._musa_qwen_fa3_scheduler,
             use_full_cuda_graph=self.use_full_cuda_graph,
             common_prefix_len=common_prefix_len,
             dcp_world_size=self.dcp_world_size,
@@ -1605,9 +1606,11 @@ class FlashAttentionImpl(AttentionImpl):
 
     def qwen3_qk_rope_kvcache_supported(self) -> bool:
         """Whether this layer is inside a validated Qwen3 cache-out envelope."""
-        supported_shape = (
-            (self.num_heads, self.num_kv_heads, self.head_size)
-            in ((16, 8, 128), (32, 8, 128), (4, 1, 256), (32, 2, 256))
+        supported_shape = (self.num_heads, self.num_kv_heads, self.head_size) in (
+            (16, 8, 128),
+            (32, 8, 128),
+            (4, 1, 256),
+            (32, 2, 256),
         )
         return (
             get_flash_attn_version() == 3
@@ -1671,8 +1674,7 @@ class FlashAttentionImpl(AttentionImpl):
                 and is_interleaved
                 and self.head_size == 256
                 and cos_sin_cache.shape[-1] == 64
-                and (mrope_section_t, mrope_section_h, mrope_section_w)
-                == (11, 11, 10)
+                and (mrope_section_t, mrope_section_h, mrope_section_w) == (11, 11, 10)
             )
             paged_cache_supported = (
                 h256_paged_specialization

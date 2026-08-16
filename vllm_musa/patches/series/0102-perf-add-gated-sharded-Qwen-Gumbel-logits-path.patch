@@ -105,10 +105,10 @@ index 28c6e0f402..e261180a25 100644
 +    sampled_values = local_max.gather(dim=-1, index=max_block_idx).view(-1)
 +    return sampled, sampled_values
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 3a040031b3..412125254e 100644
+index 3a0b78faff..589cd97c25 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -4707,7 +4707,22 @@ class GPUModelRunner(
+@@ -4703,7 +4703,22 @@ class GPUModelRunner(
                      sample_hidden_states = hidden_states[:num_reqs]
                  else:
                      sample_hidden_states = hidden_states[logits_indices]
@@ -132,7 +132,7 @@ index 3a040031b3..412125254e 100644
              else:
                  # Rare case.
                  assert not self.is_pooling_model
-@@ -4717,6 +4732,7 @@ class GPUModelRunner(
+@@ -4713,6 +4728,7 @@ class GPUModelRunner(
                  else:
                      sample_hidden_states = hidden_states[logits_indices]
                  if not get_pp_group().is_last_rank:
@@ -140,7 +140,7 @@ index 3a040031b3..412125254e 100644
                      all_gather_tensors = {
                          "residual": not is_residual_scattered_for_sp(
                              self.vllm_config, num_tokens_padded
-@@ -4729,7 +4745,22 @@ class GPUModelRunner(
+@@ -4725,7 +4741,22 @@ class GPUModelRunner(
                      )
                      logits = None
                  else:

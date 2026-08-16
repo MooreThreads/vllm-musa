@@ -78,7 +78,9 @@ def test_supported_musa_stack_contract_cases_are_explicit():
 
 
 def test_torchada_floor_is_consistent():
-    assert 'dynamic = ["dependencies"]' in (ROOT / "pyproject.toml").read_text()
+    assert (
+        'dynamic = ["dependencies", "version"]' in (ROOT / "pyproject.toml").read_text()
+    )
     private_requirements, common_requirements, expected = _declared_musa_stack()
     assert set(expected["private"]).issubset(private_requirements)
     assert expected["torchada"] in common_requirements
@@ -370,6 +372,13 @@ def test_source_distribution_manifest_includes_setup_inputs():
     assert "recursive-include requirements *.txt" in manifest
     assert "recursive-include build_utils *.py" in manifest
     assert "include third_party/PINS" in manifest
+
+
+def test_runtime_jit_headers_are_packaged():
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    assert '"jit_kernel/csrc/*.h"' in pyproject
+    assert '"jit_kernel/tilelang/*.h"' in pyproject
+    assert (ROOT / "vllm_musa/jit_kernel/tilelang/_atomic_helper.h").is_file()
 
 
 def test_no_legacy_mirror_contract_remains():

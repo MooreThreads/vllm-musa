@@ -9,10 +9,10 @@ Currently registers:
   compatibility shim, so this provider self-disables until a real MUSA kernel
   is present.
 - fused_add_rms_norm: exposes one ``musa`` provider whose internal capability
-  dispatch uses the exact FP32-sum JIT kernel for measured H5120 BF16 work and
-  the pre-existing C-extension kernel for broader standard RMSNorm shapes. It
-  is registered as in-place so vLLM's IR functionalization pass, rather than a
-  model-name check, owns activation donation.
+  dispatch uses the exact FP32-sum JIT kernel for registered BF16 hidden sizes
+  and the pre-existing C-extension kernel for broader standard RMSNorm shapes.
+  It is registered as in-place so vLLM's IR functionalization pass, rather
+  than a model-name check, owns activation donation.
 
 Engine log from baseline confirms:
     ir_op_priority=IrOpPriorityConfig(rms_norm=['native'])
@@ -29,7 +29,10 @@ from torch import Tensor
 from vllm import ir
 from vllm.platforms import current_platform
 
-from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
+from vllm_musa.tuning import (
+    get_fused_add_rmsnorm_min_rows,
+    is_fused_add_rmsnorm_tuned_hidden_size,
+)
 
 # vllm._C must be loaded before torch.ops._C.rms_norm is resolvable.
 current_platform.import_kernels()
@@ -86,7 +89,7 @@ def rms_norm(
     return output
 
 
-def _jit_fused_add_rms_norm_supports_args(
+def _jit_fused_add_rms_norm_capable(
     x: Tensor,
     x_residual: Tensor,
     weight: Tensor | None,
@@ -98,37 +101,16 @@ def _jit_fused_add_rms_norm_supports_args(
     if weight is None or x.dim() != 2 or x_residual.dim() != 2 or weight.dim() != 1:
         return False
 
-    # IR lowering selects one provider for an entire vLLM compile range. Do not
-    # inspect a symbolic tensor's example-value hint here: vLLM deliberately
-    # drops shape guards, so that choice would also be reused below the measured
-    # profitability boundary. The platform inserts an endpoint immediately
-    # below FUSED_ADD_RMSNORM_MIN_ROWS for eligible H5120/BF16 models, and the
-    # lowering pass exposes that range through its pass context. Eager dispatch
-    # has concrete shapes.
-    try:
-        from vllm.compilation.passes.inductor_pass import get_pass_context
-
-        profitable_rows = (
-            get_pass_context().compile_range.start >= FUSED_ADD_RMSNORM_MIN_ROWS
-        )
-    except AssertionError:
-        # Eager dispatch has concrete shapes. A direct compiled invocation
-        # without vLLM's pass context may have a symbolic row dimension, whose
-        # comparison cannot be evaluated as a Python bool. Fail closed and let
-        # the next provider handle that unsupported integration path.
-        if torch.compiler.is_compiling():
-            return False
-        profitable_rows = x.shape[0] >= FUSED_ADD_RMSNORM_MIN_ROWS
-
+    shape_compatible = (weight.numel() == x.shape[1]) & (
+        is_fused_add_rmsnorm_tuned_hidden_size(x.shape[1])
+    )
     return (
         variance_size is None
         and x.device.type == "musa"
         and x_residual.device.type == "musa"
         and weight.device.type == "musa"
         and x.shape == x_residual.shape
-        and profitable_rows
-        and x.shape[1] == 5120
-        and weight.numel() == 5120
+        and shape_compatible
         and x.dtype == torch.bfloat16
         and x_residual.dtype == x.dtype
         and weight.dtype in (x.dtype, torch.float32)
@@ -136,6 +118,42 @@ def _jit_fused_add_rms_norm_supports_args(
         and x_residual.is_contiguous()
         and weight.is_contiguous()
     )
+
+
+def _jit_fused_add_rms_norm_supports_args(
+    x: Tensor,
+    x_residual: Tensor,
+    weight: Tensor | None,
+    epsilon: float,
+    variance_size: int | None = None,
+) -> bool:
+    if not _jit_fused_add_rms_norm_capable(
+        x, x_residual, weight, epsilon, variance_size
+    ):
+        return False
+
+    min_rows = get_fused_add_rmsnorm_min_rows()
+    # IR lowering selects one provider for an entire vLLM compile range. Do not
+    # inspect a symbolic tensor's example-value hint here: vLLM deliberately
+    # drops shape guards, so that choice would also be reused below the measured
+    # profitability boundary. The platform inserts an endpoint immediately
+    # below the resolved RuntimePlan threshold for registered BF16 hidden sizes,
+    # and the lowering pass exposes that range through its pass context. Eager
+    # dispatch has concrete shapes.
+    try:
+        from vllm.compilation.passes.inductor_pass import get_pass_context
+
+        profitable_rows = get_pass_context().compile_range.start >= min_rows
+    except AssertionError:
+        # Eager dispatch has concrete shapes. A direct compiled invocation
+        # without vLLM's pass context may have a symbolic row dimension, whose
+        # comparison cannot be evaluated as a Python bool. Fail closed and let
+        # the next provider handle that unsupported integration path.
+        if torch.compiler.is_compiling():
+            return False
+        profitable_rows = x.shape[0] >= min_rows
+
+    return profitable_rows
 
 
 def _c_ext_fused_add_rms_norm_supports_args(
@@ -208,6 +226,27 @@ def _fused_add_rms_norm_supports_args(
     )
 
 
+def _run_musa_fused_add_rms_norm_impl(
+    selected: str,
+    x: Tensor,
+    x_residual: Tensor,
+    weight: Tensor,
+    epsilon: float,
+) -> tuple[Tensor, Tensor]:
+    """Run one concrete provider implementation for explicit offline tuning."""
+
+    if selected == "jit":
+        from vllm_musa.jit_kernel.csrc.norm import fused_add_rmsnorm
+
+        return fused_add_rmsnorm(x, x_residual, weight, epsilon, gemma=False)
+    if selected == "c_ext":
+        from vllm_musa import _custom_ops as musa_ops
+
+        musa_ops.musa_fused_add_rms_norm(x, x_residual, weight, epsilon)
+        return x, x_residual
+    raise ValueError(f"unknown fused-add RMSNorm implementation {selected!r}")
+
+
 @ir.ops.fused_add_rms_norm.register_impl(
     "musa",
     inplace=True,
@@ -227,16 +266,11 @@ def fused_add_rms_norm(
     selected = _select_musa_fused_add_rms_norm_impl(
         x, x_residual, weight, epsilon, variance_size
     )
-    if selected == "jit":
-        from vllm_musa.jit_kernel.csrc.norm import fused_add_rmsnorm
-
+    if selected is not None:
         # IR supplies the effective scale. Gemma has already materialized
         # ``parameter.float() + 1``, so applying Gemma's offset here would
         # double it.
-        return fused_add_rmsnorm(x, x_residual, weight, epsilon, gemma=False)
-    if selected == "c_ext":
-        from vllm_musa import _custom_ops as musa_ops
-
-        musa_ops.musa_fused_add_rms_norm(x, x_residual, weight, epsilon)
-        return x, x_residual
+        return _run_musa_fused_add_rms_norm_impl(
+            selected, x, x_residual, weight, epsilon
+        )
     raise AssertionError("musa provider invoked with unsupported arguments")

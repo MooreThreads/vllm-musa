@@ -7,7 +7,6 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vllm-musa"
-version = "0.1.28"
 description = "vLLM platform plugin for Moore Threads (MUSA) GPUs"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -25,7 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dynamic = ["dependencies"]
+dynamic = ["dependencies", "version"]
 
 [project.optional-dependencies]
 dev = [
@@ -62,7 +61,15 @@ vllm_musa = [
     "jit_kernel/csrc/*.h",
     "jit_kernel/csrc/*/*.mu",
     "jit_kernel/include/.gitkeep",
+    "jit_kernel/tilelang/*.h",
+    "runtime_plan/profiles/*.json",
 ]
+
+[tool.setuptools.dynamic]
+# Keep the source-tree API, wheel metadata, and engine-plan provenance on the
+# same version.  The attribute is a literal so setuptools can read it without
+# importing vllm_musa (and therefore without importing the MUSA runtime stack).
+version = {attr = "vllm_musa.__version__"}
 
 [tool.ruff]
 line-length = 88

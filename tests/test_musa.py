@@ -145,8 +145,8 @@ class TestMUSAPlatformBase:
     def test_gated_qkv_inductor_priority_excludes_routed_moe(self):
         from vllm.config.compilation import CompilationMode
 
-        from vllm_musa.optimization_contract.policy import model_has_routed_experts
         from vllm_musa.platform import MUSAPlatformBase
+        from vllm_musa.runtime_plan.policy import model_has_routed_experts
 
         compilation_config = SimpleNamespace(
             backend="inductor",
@@ -217,7 +217,11 @@ class TestMUSAPlatformBase:
         config.compilation_config.cudagraph_mode = CUDAGraphMode.FULL
         assert not _should_route_quantized_piecewise_ops_native(config)
 
-    def test_fused_add_profit_boundary_splits_eligible_compile_range(self):
+    @pytest.mark.parametrize("hidden_size", [4096, 5120])
+    def test_fused_add_profit_boundary_splits_eligible_compile_range(
+        self,
+        hidden_size,
+    ):
         import torch
 
         from vllm_musa.platform import (
@@ -227,7 +231,7 @@ class TestMUSAPlatformBase:
 
         config = SimpleNamespace(
             model_config=SimpleNamespace(
-                get_hidden_size=lambda: 5120,
+                get_hidden_size=lambda: hidden_size,
                 dtype=torch.bfloat16,
                 enforce_eager=False,
             ),
@@ -259,15 +263,295 @@ class TestMUSAPlatformBase:
         )
         assert config.compilation_config.compile_ranges_endpoints == []
 
+    def test_fused_add_hidden_size_capability_exports_symbolically(self):
+        import torch
+        from torch.export import Dim, export
+
+        from vllm_musa.tuning import is_fused_add_rmsnorm_tuned_hidden_size
+
+        class CapabilityModule(torch.nn.Module):
+            def forward(self, x):
+                return (
+                    is_fused_add_rmsnorm_tuned_hidden_size(x.shape[1]),
+                    x.shape[1] == 4096,
+                )
+
+        program = export(
+            CapabilityModule(),
+            (torch.randn(2, 4096),),
+            dynamic_shapes={"x": {0: Dim("rows"), 1: Dim("hidden")}},
+        )
+
+        assert program.graph_module is not None
+
+    @pytest.mark.parametrize("hidden_size", [4096, 5120])
+    def test_fused_add_profit_boundary_uses_plan_threshold(
+        self,
+        hidden_size,
+    ):
+        import torch
+
+        from vllm_musa.platform import (
+            _configure_fused_add_rmsnorm_compile_range,
+        )
+
+        config = SimpleNamespace(
+            model_config=SimpleNamespace(
+                get_hidden_size=lambda: hidden_size,
+                dtype=torch.bfloat16,
+                enforce_eager=False,
+            ),
+            scheduler_config=SimpleNamespace(max_num_batched_tokens=4096),
+            compilation_config=SimpleNamespace(compile_ranges_endpoints=[7, 63, 2048]),
+        )
+        assert _configure_fused_add_rmsnorm_compile_range(
+            config,
+            native_custom_ops=False,
+            min_rows=32,
+        )
+        assert config.compilation_config.compile_ranges_endpoints == [
+            7,
+            31,
+            63,
+            2048,
+        ]
+
+    def test_fused_moe_plan_splits_ranges_without_expanding_graph_budget(self):
+        from vllm_musa.platform import _configure_fused_moe_compile_ranges
+
+        config = SimpleNamespace(
+            scheduler_config=SimpleNamespace(max_num_batched_tokens=64),
+            compilation_config=SimpleNamespace(
+                compile_ranges_endpoints=[],
+                cudagraph_mode=SimpleNamespace(has_full_cudagraphs=lambda: True),
+                cudagraph_capture_sizes=[1, 2, 4],
+                max_cudagraph_capture_size=4,
+            ),
+        )
+        assert _configure_fused_moe_compile_ranges(
+            config,
+            boundaries=(2, 3, 4),
+        )
+
+        assert config.compilation_config.compile_ranges_endpoints == [2, 3, 4]
+        assert config.compilation_config.cudagraph_capture_sizes == [1, 2, 4]
+        assert config.compilation_config.max_cudagraph_capture_size == 4
+
+    def test_fused_moe_plan_preserves_non_full_graph_budget(self):
+        from vllm_musa.platform import _configure_fused_moe_compile_ranges
+
+        config = SimpleNamespace(
+            scheduler_config=SimpleNamespace(max_num_batched_tokens=64),
+            compilation_config=SimpleNamespace(
+                compile_ranges_endpoints=[],
+                cudagraph_mode=SimpleNamespace(has_full_cudagraphs=lambda: False),
+                cudagraph_capture_sizes=[1, 2, 4],
+                max_cudagraph_capture_size=4,
+            ),
+        )
+
+        assert _configure_fused_moe_compile_ranges(
+            config,
+            boundaries=(4,),
+        )
+
+        assert config.compilation_config.cudagraph_capture_sizes == [1, 2, 4]
+        assert config.compilation_config.max_cudagraph_capture_size == 4
+
+    def test_fused_moe_plan_rejects_token_one_transition(self):
+        from vllm_musa.platform import _configure_fused_moe_compile_ranges
+
+        config = SimpleNamespace(
+            scheduler_config=SimpleNamespace(max_num_batched_tokens=64),
+            compilation_config=SimpleNamespace(
+                compile_ranges_endpoints=[],
+                cudagraph_mode=SimpleNamespace(has_full_cudagraphs=lambda: True),
+                cudagraph_capture_sizes=[1],
+                max_cudagraph_capture_size=1,
+            ),
+        )
+        with pytest.raises(RuntimeError, match="transition immediately after token 1"):
+            _configure_fused_moe_compile_ranges(
+                config,
+                boundaries=(1, 4),
+            )
+
+        assert config.compilation_config.compile_ranges_endpoints == []
+        assert config.compilation_config.cudagraph_capture_sizes == [1]
+        assert config.compilation_config.max_cudagraph_capture_size == 1
+
+    def test_fused_moe_plan_finalizer_rejects_dropped_boundary(self):
+        from vllm_musa.platform import _validate_fused_moe_compile_ranges
+
+        config = SimpleNamespace(
+            model_config=SimpleNamespace(enforce_eager=False),
+            scheduler_config=SimpleNamespace(max_num_batched_tokens=64),
+            compilation_config=SimpleNamespace(
+                compile_ranges_endpoints=[2, 4, 64],
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match=r"missing=\(3,\)"):
+            _validate_fused_moe_compile_ranges(
+                config,
+                boundaries=(2, 3, 4, 64),
+            )
+
+    @staticmethod
+    def _capture_policy(*ranges):
+        def freeze(value):
+            if isinstance(value, dict):
+                return tuple((key, freeze(item)) for key, item in sorted(value.items()))
+            if isinstance(value, list):
+                return tuple(freeze(item) for item in value)
+            return value
+
+        return freeze(
+            {
+                "schema": "musa.fused_moe.dispatch_policy.v1",
+                "entries": [
+                    {
+                        "shape": {
+                            "graph_mode": "capture",
+                            "hidden_size": 4096,
+                            "local_experts": 128,
+                            "top_k": 8,
+                            "w1_output_size": 512,
+                        },
+                        "ranges": list(ranges),
+                    }
+                ],
+            }
+        )
+
+    def test_fused_moe_plan_rejects_mixed_graph_padding_across_tactic(self):
+        from vllm.config import CUDAGraphMode
+
+        from vllm_musa.platform import _validate_fused_moe_cudagraph_padding
+
+        policy = self._capture_policy(
+            {"min_tokens": 1, "max_tokens": 5, "backend": "upstream"},
+            {"min_tokens": 6, "max_tokens": 64, "backend": "gemv"},
+        )
+        config = SimpleNamespace(
+            scheduler_config=SimpleNamespace(max_num_seqs=8),
+            compilation_config=SimpleNamespace(
+                cudagraph_mode=CUDAGraphMode.FULL,
+                cudagraph_capture_sizes=[1, 4, 8],
+            ),
+        )
+
+        for mode in (
+            CUDAGraphMode.FULL,
+            CUDAGraphMode.PIECEWISE,
+            CUDAGraphMode.FULL_AND_PIECEWISE,
+        ):
+            config.compilation_config.cudagraph_mode = mode
+            with pytest.raises(
+                RuntimeError,
+                match=r"actual_tokens=5, padded_tokens=8",
+            ):
+                _validate_fused_moe_cudagraph_padding(
+                    config,
+                    policy=policy,
+                    uniform_decode_query_len=1,
+                )
+
+        config.compilation_config.cudagraph_mode = CUDAGraphMode.FULL
+        config.compilation_config.cudagraph_capture_sizes = [1, 4, 5, 8]
+        _validate_fused_moe_cudagraph_padding(
+            config,
+            policy=policy,
+            uniform_decode_query_len=1,
+        )
+
+    def test_fused_moe_plan_validates_decode_only_graph_padding(self):
+        from vllm.config import CUDAGraphMode
+
+        from vllm_musa.platform import _validate_fused_moe_cudagraph_padding
+
+        policy = self._capture_policy(
+            {"min_tokens": 1, "max_tokens": 2, "backend": "upstream"},
+            {"min_tokens": 3, "max_tokens": 64, "backend": "gemv"},
+        )
+        config = SimpleNamespace(
+            scheduler_config=SimpleNamespace(max_num_seqs=4),
+            compilation_config=SimpleNamespace(
+                cudagraph_mode=CUDAGraphMode.FULL_DECODE_ONLY,
+                cudagraph_capture_sizes=[1, 4],
+            ),
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"actual_tokens=2, padded_tokens=4",
+        ):
+            _validate_fused_moe_cudagraph_padding(
+                config,
+                policy=policy,
+                uniform_decode_query_len=1,
+            )
+
+        config.compilation_config.cudagraph_capture_sizes = [1, 2, 4]
+        _validate_fused_moe_cudagraph_padding(
+            config,
+            policy=policy,
+            uniform_decode_query_len=1,
+        )
+
+    def test_fused_moe_plan_rejects_speculative_capture_domain(self):
+        from vllm.config import CUDAGraphMode
+
+        from vllm_musa.platform import _validate_fused_moe_cudagraph_padding
+
+        policy = self._capture_policy(
+            {"min_tokens": 1, "max_tokens": 64, "backend": "upstream"},
+        )
+        config = SimpleNamespace(
+            scheduler_config=SimpleNamespace(max_num_seqs=3),
+            compilation_config=SimpleNamespace(
+                cudagraph_mode=CUDAGraphMode.FULL_DECODE_ONLY,
+                cudagraph_capture_sizes=[3, 9],
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match=r"do not yet support speculative"):
+            _validate_fused_moe_cudagraph_padding(
+                config,
+                policy=policy,
+                uniform_decode_query_len=3,
+            )
+
+    def test_fused_moe_plan_rejects_resolved_none_graph_mode(self):
+        from vllm.config import CUDAGraphMode
+
+        from vllm_musa.platform import _validate_fused_moe_cudagraph_padding
+
+        config = SimpleNamespace(
+            scheduler_config=SimpleNamespace(max_num_seqs=8),
+            compilation_config=SimpleNamespace(
+                cudagraph_mode=CUDAGraphMode.NONE,
+                cudagraph_capture_sizes=[1, 2, 4],
+            ),
+        )
+        with pytest.raises(RuntimeError, match="mode is NONE"):
+            _validate_fused_moe_cudagraph_padding(
+                config,
+                policy=self._capture_policy(
+                    {"min_tokens": 1, "max_tokens": 64, "backend": "upstream"}
+                ),
+                uniform_decode_query_len=1,
+            )
+
     def test_qwen2_rope_kv_fusion_exact_config_gate(self):
         import torch
 
-        from vllm_musa.optimization_contract import policy
-        from vllm_musa.optimization_contract.types import OptimizationFeature
+        from vllm_musa.runtime_plan import policy
+        from vllm_musa.runtime_plan.types import RuntimeDecision
 
         def is_eligible(config):
-            return policy.prefers_feature(
-                config, OptimizationFeature.QWEN2_ROPE_KV_PRESPLIT
+            return policy.runtime_plan_enabled(
+                config, RuntimeDecision.QWEN2_ROPE_KV_PRESPLIT
             )
 
         def make_config(model_type: str, kv_heads, intermediate_size):
@@ -310,12 +594,12 @@ class TestMUSAPlatformBase:
     def test_qwen3_qk_rope_kv_fusion_exact_config_gate(self):
         import torch
 
-        from vllm_musa.optimization_contract import policy
-        from vllm_musa.optimization_contract.types import OptimizationFeature
+        from vllm_musa.runtime_plan import policy
+        from vllm_musa.runtime_plan.types import RuntimeDecision
 
         def is_eligible(config):
-            return policy.prefers_feature(
-                config, OptimizationFeature.QWEN3_QK_ROPE_KV_PRESPLIT
+            return policy.runtime_plan_enabled(
+                config, RuntimeDecision.QWEN3_QK_ROPE_KV_PRESPLIT
             )
 
         def make_config(

@@ -10,16 +10,16 @@ from typing import Any
 import torch
 from mate.gdn_decode import gated_delta_rule_decode
 from mate.gdn_prefill import chunk_gated_delta_rule
-from vllm.config import CUDAGraphMode, get_current_vllm_config
+from vllm.config import CUDAGraphMode, get_current_vllm_config  # noqa: F401
 from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
     QwenGatedDeltaNetAttention,
 )
 
-from vllm_musa.optimization_contract import (
-    OptimizationFeature,
-    resolve_optimization_contract,
+from vllm_musa.runtime_plan import (
+    RuntimeDecision,
+    resolve_runtime_plan,
 )
 
 logger = init_logger(__name__)
@@ -120,7 +120,17 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             gqa_interleaved_layout,
             reduce_results=reduce_results,
         )
-        self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
+        self._musa_runtime_plan = resolve_runtime_plan(vllm_config)
+        # These choices affect compiled/captured forward paths. Materialize
+        # them before Dynamo sees the module instead of tracing RuntimePlan's
+        # typed catalog and enum-keyed decision table.
+        self._musa_hybrid_kv_cache_pool_separate = self._musa_runtime_plan.selected(
+            RuntimeDecision.HYBRID_KV_CACHE_POOL_LAYOUT,
+            "separate",
+        )
+        self._musa_qwen35_gdn_width4_prefill = self._musa_runtime_plan.enabled(
+            RuntimeDecision.QWEN35_GDN_WIDTH4_PREFILL
+        )
         compilation_config = vllm_config.compilation_config
         self._gdn_cudagraph_capture_sizes = tuple(
             compilation_config.cudagraph_capture_sizes or ()
@@ -355,9 +365,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         # whole-pool contiguity copy.
         if ssm_state.dtype == torch.float32:
             try:
-                _musa_sep = self._musa_optimization_contract.prefers(
-                    OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
-                )
+                _musa_sep = self._musa_hybrid_kv_cache_pool_separate
                 # MUSA: write the mate decode output straight into the
                 # preallocated core_attn_out buffer (bf16) to skip a per-layer copy.
                 _out_view = core_attn_out[:num_decode_tokens].view(
@@ -547,9 +555,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             )
 
             causal_conv1d_kwargs["allow_width4_prefill_split"] = (
-                self._musa_optimization_contract.prefers(
-                    OptimizationFeature.QWEN35_GDN_WIDTH4_PREFILL
-                )
+                self._musa_qwen35_gdn_width4_prefill
             )
         except Exception:
             pass  # MUSA: fall back to Triton causal_conv1d_fn on import failure

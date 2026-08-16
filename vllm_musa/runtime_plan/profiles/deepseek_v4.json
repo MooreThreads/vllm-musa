@@ -1,0 +1,166 @@
+{
+  "schema_version": "musa.runtime_profile.v1",
+  "id": "deepseek_v4",
+  "priority": 200,
+  "reason": "declarative DeepSeek-V4 runtime profile",
+  "provider_when": {
+    "any": [
+      {"path": "model.effective_architectures", "op": "contains_any", "value": ["DeepseekV4ForCausalLM", "DeepSeekV4MTPModel"]},
+      {"path": "model.model_type", "op": "in", "value": ["deepseek_v4", "deepseek_mtp"]}
+    ]
+  },
+  "conditions": {
+    "complete_identity": {
+      "all": [
+        {"path": "model.effective_architectures", "op": "eq", "value": ["DeepseekV4ForCausalLM"]},
+        {"path": "model.model_type", "op": "eq", "value": "deepseek_v4"}
+      ]
+    },
+    "complete_mtp_identity": {
+      "all": [
+        {"path": "model.effective_architectures", "op": "eq", "value": ["DeepSeekV4MTPModel"]},
+        {"path": "model.model_type", "op": "eq", "value": "deepseek_mtp"},
+        {"path": "model.outer_model_type", "op": "eq", "value": "deepseek_mtp"}
+      ]
+    },
+    "flash_shape": {
+      "all": [
+        {"path": "model.dtype", "op": "eq", "value": "bfloat16"},
+        {"path": "model.quantization", "op": "in", "value": ["fp8", "deepseek_v4_fp8"]},
+        {"path": "model.hidden_size", "op": "eq", "value": 4096},
+        {"path": "model.num_hidden_layers", "op": "eq", "value": 43},
+        {"path": "model.num_attention_heads", "op": "eq", "value": 64},
+        {"path": "model.num_key_value_heads", "op": "eq", "value": 1},
+        {"path": "model.head_dim", "op": "eq", "value": 512},
+        {"path": "model.vocab_size", "op": "eq", "value": 129280},
+        {"path": "model.num_experts", "op": "eq", "value": 256},
+        {"path": "model.num_experts_per_tok", "op": "eq", "value": 6},
+        {"path": "model.num_shared_experts", "op": "eq", "value": 1},
+        {"path": "model.moe_intermediate_size", "op": "eq", "value": 2048},
+        {"path": "model.expert_dtype", "op": "eq", "value": "fp8"},
+        {"path": "model.hidden_act", "op": "eq", "value": "silu"},
+        {"path": "model.swiglu_limit", "op": "eq", "value": 10.0},
+        {"path": "model.quant_block_shape", "op": "eq", "value": [128, 128]},
+        {"path": "model.has_routed_experts", "op": "eq", "value": true},
+        {"path": "model.uses_mla", "op": "eq", "value": true},
+        {"path": "model.index_topk", "op": "eq", "value": 512},
+        {"path": "model.is_hybrid", "op": "eq", "value": false}
+      ]
+    },
+    "flash_base": {"all": [{"ref": "complete_identity"}, {"ref": "flash_shape"}]},
+    "mtp_draft_flash_base": {"all": [{"ref": "complete_mtp_identity"}, {"ref": "flash_shape"}]},
+    "tp8_common": {
+      "all": [
+        {"path": "execution.has_parallel_config", "op": "eq", "value": true},
+        {"path": "execution.tensor_parallel_size", "op": "eq", "value": 8},
+        {"path": "execution.pipeline_parallel_size", "op": "eq", "value": 1},
+        {"path": "execution.data_parallel_size", "op": "eq", "value": 1},
+        {"path": "execution.decode_context_parallel_size", "op": "eq", "value": 1},
+        {"path": "execution.has_quant_config", "op": "eq", "value": true},
+        {"path": "execution.is_pooling_model", "op": "eq", "value": false},
+        {"path": "execution.cache_dtype", "op": "in", "value": ["fp8", "fp8_ds_mla"]},
+        {"path": "execution.attention_backend", "op": "eq", "value": "flashmla"},
+        {"path": "execution.compilation_mode", "op": "eq", "value": "none"},
+        {"path": "execution.cudagraph_mode", "op": "eq", "value": "full_decode_only"}
+      ]
+    },
+    "tp8_reference": {
+      "all": [
+        {"ref": "tp8_common"},
+        {"path": "execution.has_speculative_config", "op": "eq", "value": false},
+        {"path": "execution.max_num_seqs", "op": "eq", "value": 1}
+      ]
+    },
+    "tp8_reference_multibatch": {
+      "all": [
+        {"ref": "tp8_common"},
+        {"path": "execution.has_speculative_config", "op": "eq", "value": false},
+        {"path": "execution.max_num_seqs", "op": "gt", "value": 0}
+      ]
+    },
+    "tp8_mtp": {
+      "all": [
+        {"ref": "tp8_common"},
+        {"path": "execution.has_speculative_config", "op": "eq", "value": true},
+        {"path": "execution.speculative_method", "op": "in", "value": ["mtp", "deepseek_mtp"]},
+        {"path": "execution.max_num_seqs", "op": "gt", "value": 1}
+      ]
+    },
+    "tp8_mtp_car": {
+      "all": [
+        {"ref": "tp8_common"},
+        {"path": "execution.has_speculative_config", "op": "eq", "value": true},
+        {"path": "execution.speculative_method", "op": "in", "value": ["mtp", "deepseek_mtp"]},
+        {"path": "execution.max_num_seqs", "op": "gt", "value": 0}
+      ]
+    },
+    "tp8_mtp_draft": {
+      "all": [
+        {"ref": "tp8_common"},
+        {"path": "execution.has_speculative_config", "op": "eq", "value": false},
+        {"path": "execution.max_num_seqs", "op": "gt", "value": 1}
+      ]
+    },
+    "shared_clamp": {
+      "all": [
+        {"ref": "flash_base"},
+        {"ref": "tp8_reference_multibatch"},
+        {"path": "execution.batch_invariant_enabled", "op": "eq", "value": false}
+      ]
+    },
+    "native_sparse_supported": {
+      "all": [
+        {"ref": "flash_base"},
+        {"path": "execution.has_parallel_config", "op": "eq", "value": true}
+      ]
+    },
+    "mtp_feature_supported": {
+      "any": [{"ref": "flash_base"}, {"ref": "mtp_draft_flash_base"}]
+    },
+    "mtp_feature_preferred": {
+      "any": [
+        {"all": [{"ref": "flash_base"}, {"ref": "tp8_mtp"}]},
+        {"all": [{"ref": "mtp_draft_flash_base"}, {"ref": "tp8_mtp_draft"}]}
+      ]
+    },
+    "mtp_async_fence": {
+      "all": [
+        {"ref": "flash_base"},
+        {"ref": "tp8_mtp"},
+        {"path": "execution.async_scheduling", "op": "eq", "value": true}
+      ]
+    },
+    "mtp_car": {"all": [{"ref": "flash_base"}, {"ref": "tp8_mtp_car"}]},
+    "mtp_registered_inputs": {
+      "all": [
+        {"ref": "mtp_car"},
+        {"path": "execution.max_num_seqs", "op": "eq", "value": 1}
+      ]
+    },
+    "block256": {"all": [{"ref": "flash_base"}, {"ref": "tp8_reference"}]},
+    "flash_or_draft": {"any": [{"ref": "flash_base"}, {"ref": "mtp_draft_flash_base"}]}
+  },
+  "classifications": [
+    {"when": {"ref": "complete_mtp_identity"}, "family": "deepseek_v4", "role": "mtp_draft"},
+    {"when": true, "family": "deepseek_v4", "role": "text_generation"}
+  ],
+  "profiles": [
+    {"when": {"all": [{"ref": "mtp_draft_flash_base"}, {"ref": "tp8_mtp_draft"}]}, "profile": "deepseek_v4.tp8_flash_mtp_draft"},
+    {"when": {"all": [{"ref": "flash_base"}, {"ref": "tp8_mtp"}]}, "profile": "deepseek_v4.tp8_flash_base_mtp"},
+    {"when": {"all": [{"ref": "flash_base"}, {"ref": "tp8_reference"}]}, "profile": "deepseek_v4.tp8_flash_base"},
+    {"when": true, "profile": "deepseek_v4.unvalidated"}
+  ],
+  "decisions": [
+    {"decision": "deepseek_v4.shared_mlp_clamp_fp8", "supported_when": {"ref": "flash_base"}, "value_when": {"ref": "shared_clamp"}, "value": true, "tunability": "profile"},
+    {"decision": "deepseek_v4.native_sparse_indexer", "supported_when": {"ref": "flash_base"}, "value_when": {"ref": "native_sparse_supported"}, "value": true, "tunability": "profile"},
+    {"decision": "deepseek_v4.materialized_prefill_indexer", "supported_when": {"ref": "flash_base"}, "value_when": {"ref": "native_sparse_supported"}, "value": true, "tunability": "profile"},
+    {"decision": "deepseek_v4.tp8_mtp_sparse_direct_out", "supported_when": {"ref": "mtp_feature_supported"}, "value_when": {"ref": "mtp_feature_preferred"}, "value": true, "tunability": "profile"},
+    {"decision": "deepseek_v4.tp8_mtp_sparse_prefill_headroom", "supported_when": {"ref": "mtp_feature_supported"}, "value_when": {"ref": "mtp_feature_preferred"}, "value": true, "tunability": "profile"},
+    {"decision": "deepseek_v4.tp8_mtp_async_prefill_queue_fence", "supported_when": {"ref": "flash_base"}, "value_when": {"ref": "mtp_async_fence"}, "value": true, "tunability": "profile"},
+    {"decision": "deepseek_v4.car_graph_input_capture_guard", "supported_when": {"ref": "complete_identity"}, "value_when": false, "value": true, "tunability": "fixed"},
+    {"decision": "deepseek_v4.mtp_car_graph_registered_inputs", "supported_when": {"ref": "mtp_registered_inputs"}, "value_when": {"ref": "mtp_registered_inputs"}, "value": true, "tunability": "profile"},
+    {"decision": "deepseek_v4.mtp_car_graph_staging_arena", "supported_when": {"ref": "mtp_car"}, "value_when": {"ref": "mtp_car"}, "value": true, "tunability": "profile"},
+    {"decision": "deepseek_v4.tp8_fused_add_rmsnorm_block256", "supported_when": {"ref": "flash_base"}, "value_when": {"ref": "block256"}, "value": true, "tunability": "profile"},
+    {"decision": "deepseek_v4.flashmla_sparse_page_size", "supported_when": {"ref": "flash_or_draft"}, "value_when": {"ref": "flash_or_draft"}, "value": 256, "tunability": "fixed"}
+  ]
+}

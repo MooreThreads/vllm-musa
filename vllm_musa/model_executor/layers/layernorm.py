@@ -7,9 +7,9 @@ from vllm.config import get_current_vllm_config_or_none
 from vllm.model_executor.layers.layernorm import GemmaRMSNorm, RMSNorm, RMSNormGated
 
 from vllm_musa.jit_kernel.csrc import norm as musa_jit_norm
-from vllm_musa.optimization_contract import (
-    OptimizationFeature,
-    bind_optimization_contract,
+from vllm_musa.runtime_plan import (
+    RuntimeDecision,
+    bind_runtime_plan,
 )
 from vllm_musa.utils.environ import envs
 
@@ -45,7 +45,13 @@ class MusaRMSNorm(RMSNorm):
         dtype: torch.dtype | None = None,
     ) -> None:
         super().__init__(hidden_size, eps, var_hidden_size, has_weight, dtype)
-        bind_optimization_contract(self, get_current_vllm_config_or_none())
+        plan = bind_runtime_plan(self, get_current_vllm_config_or_none())
+        # RuntimePlan resolution is a config/model-initialization concern.
+        # Keep enum/catalog lookups out of Dynamo's full-graph forward trace;
+        # the compiled path consumes only this frozen Python boolean.
+        self._musa_deepseek_v4_tp8_fused_add_rmsnorm_block256 = plan.enabled(
+            RuntimeDecision.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
+        )
 
     def forward_oot(
         self,
@@ -59,12 +65,9 @@ class MusaRMSNorm(RMSNorm):
             return self.forward_native(x, residual)
 
         if residual is not None:
-            contract = self._musa_optimization_contract
             weight = self.weight.data
             if (
-                contract.prefers(
-                    OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
-                )
+                self._musa_deepseek_v4_tp8_fused_add_rmsnorm_block256
                 and x.device.type == "musa"
                 and x.dim() == 2
                 and residual.shape == x.shape

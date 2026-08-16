@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Source-contract checks for dense MUSA SwiGLU plus DeepGEMM fusion."""
+"""Source checks for dense MUSA SwiGLU plus DeepGEMM fusion."""
 
 from pathlib import Path
 
@@ -70,19 +70,17 @@ def test_pass_manager_uses_independent_standard_fusion_flags():
     assert "self.pass_config.fuse_act_quant" not in rms_block
 
 
-def test_contract_auto_enablement_is_limited_to_the_validated_scope():
+def test_runtime_plan_auto_enablement_is_limited_to_the_validated_scope():
     platform_source = (ROOT / "vllm_musa" / "platform.py").read_text()
-    qwen_source = (ROOT / "vllm_musa" / "optimization_contract" / "qwen.py").read_text()
-    policy_source = (
-        ROOT / "vllm_musa" / "optimization_contract" / "policy.py"
-    ).read_text()
+    qwen_source = (ROOT / "vllm_musa" / "runtime_plan" / "qwen.py").read_text()
+    policy_source = (ROOT / "vllm_musa" / "runtime_plan" / "policy.py").read_text()
 
     assert "def _is_validated_qwen3_8b_fp8_single_gpu(" not in platform_source
     assert "def _is_qwen2_rope_kv_fusion_config(" not in platform_source
     assert "def _is_qwen3_qk_rope_kv_fusion_config(" not in platform_source
     assert "def _has_routed_experts(" not in platform_source
     assert "def _deepseek_v4_flashmla_sparse_block_size(" not in platform_source
-    assert "def prefers_feature(" in policy_source
+    assert "def runtime_plan_enabled(" in policy_source
     assert "def deepseek_v4_flashmla_sparse_page_size(" in policy_source
     assert "== (4096, 12288, 36)" in qwen_source
     assert "model.hidden_size == 2048" in qwen_source
@@ -97,7 +95,7 @@ def test_contract_auto_enablement_is_limited_to_the_validated_scope():
     assert "def _silu_deepgemm_fusion_requested(" in pass_manager_source
     assert "VLLM_MUSA_SILU_DEEPGEMM_FUSION" not in pass_manager_source
     assert "VLLM_MUSA_CUSTOM_OP_USE_NATIVE" not in pass_manager_source
-    assert "policy.prefers_feature(" in pass_manager_source
+    assert "policy.runtime_plan_enabled(" in pass_manager_source
     assert "QWEN3_DENSE_FP8_POST_GRAD_FUSIONS" in pass_manager_source
     assert "_has_validated_musa_device_capability()" in pass_manager_source
     assert "torch.musa.current_device()" in pass_manager_source
