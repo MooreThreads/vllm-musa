@@ -4,16 +4,16 @@ Date: Tue, 9 Jun 2026 15:41:52 +0800
 Subject: [PATCH] MUSA: vllm.v1.worker.gpu_model_runner
 
 ---
- vllm/v1/worker/gpu_model_runner.py | 112 ++++++++++++++++++++++++-----
- 1 file changed, 96 insertions(+), 16 deletions(-)
+ vllm/v1/worker/gpu_model_runner.py | 98 +++++++++++++++++++++++++++++++------
+ 1 file changed, 82 insertions(+), 16 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 74938a823..8dba0cea5 100644
+index 74938a823..dfff0fd5a 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -540,6 +540,9 @@ class GPUModelRunner(
          self.encoder_cudagraph_manager: EncoderCudaGraphManager | None = None
- 
+
          self.use_aux_hidden_state_outputs = False
 +        # / PR #34880: tracks whether the draft model supports
 +        # FULL-mode CUDA-graph capture (Eagle + padded drafter batch).
@@ -46,7 +46,7 @@ index 74938a823..8dba0cea5 100644
 @@ -801,6 +812,25 @@ class GPUModelRunner(
          self.query_pos = self._make_buffer(arange_size, dtype=torch.int64)
          self._arange_scratch = np.empty(arange_size, dtype=np.int64)
- 
+
 +        # MUSA-3406: reusable CPU/GPU buffers for speculative metadata indices.
 +        # Avoid per-step torch.from_numpy(...).to(device) pageable uploads in
 +        # _calc_spec_decode_metadata on the TP8 DeepSeek-V4 decode path.
@@ -72,7 +72,7 @@ index 74938a823..8dba0cea5 100644
 @@ -2795,17 +2825,48 @@ class GPUModelRunner(
          # [0, 1, 2, 5, 6, 9]
          target_logits_indices += self._arange_scratch[: cu_num_draft_tokens[-1]]
- 
+
 -        cu_num_draft_tokens = async_tensor_h2d(cu_num_draft_tokens, device=self.device)
 -        cu_num_sampled_tokens = async_tensor_h2d(
 -            cu_num_sampled_tokens, device=self.device
@@ -126,48 +126,27 @@ index 74938a823..8dba0cea5 100644
 +            bonus_logits_indices = async_tensor_h2d(
 +                bonus_logits_indices, device=self.device
 +            )
- 
+
          # Compute the draft token ids.
          # draft_token_indices:      [  1,   2,   3, 105, 106, 208]
-@@ -4513,6 +4574,20 @@ class GPUModelRunner(
-             input_fits_in_drafter = self._input_fits_in_drafter(
-                 spec_decode_common_attn_metadata
-             )
-+            if (
-+                current_platform.is_musa()
-+                and not self.input_batch.sampling_metadata.all_greedy
-+                and __import__("os").environ.get(
-+                    "VLLM_MUSA_SPEC_DECODE_RANDOM_FALLBACK",
-+                    "1",
-+                ).lower()
-+                not in ("0", "false", "no", "off")
-+            ):
-+                # The MUSA random rejection-sampling kernel is not
-+                # correctness-stable yet. Do not run the drafter for
-+                # non-greedy requests; the target model already sampled one
-+                # correct token for this step.
-+                input_fits_in_drafter = False
-             use_gpu_toks = (
-                 spec_config.use_eagle()
-                 or spec_config.uses_draft_model()
-@@ -5822,6 +5897,7 @@ class GPUModelRunner(
+@@ -5822,6 +5883,7 @@ class GPUModelRunner(
          )
- 
+
          attn_metadata: PerLayerAttnMetadata | None = None
 +        spec_decode_cm: 'CommonAttentionMetadata | None' = None
- 
+
          slot_mappings_by_group, slot_mappings = self._get_slot_mappings(
              num_tokens_padded=num_tokens_padded,
-@@ -5876,7 +5952,7 @@ class GPUModelRunner(
+@@ -5876,7 +5938,7 @@ class GPUModelRunner(
                  self.input_batch.block_table.commit_block_table(num_reqs_padded)
- 
+
                  pad_attn = cudagraph_runtime_mode == CUDAGraphMode.FULL
 -                attn_metadata, _ = self._build_attention_metadata(
 +                attn_metadata, spec_decode_cm = self._build_attention_metadata(
                      num_tokens=num_tokens_unpadded,
                      num_tokens_padded=num_tokens_padded if pad_attn else None,
                      num_reqs=num_reqs_padded,
-@@ -5983,13 +6059,16 @@ class GPUModelRunner(
+@@ -5983,13 +6045,16 @@ class GPUModelRunner(
                      | Gemma4Proposer,
                  )
                  assert self.speculative_config is not None
@@ -188,8 +167,8 @@ index 74938a823..8dba0cea5 100644
                      )
                      or (
                          not is_graph_capturing
-@@ -6009,6 +6088,7 @@ class GPUModelRunner(
- 
+@@ -6009,6 +6074,7 @@ class GPUModelRunner(
+
                  self.drafter.dummy_run(
                      num_tokens,
 +                    common_attn_metadata=spec_decode_cm,
