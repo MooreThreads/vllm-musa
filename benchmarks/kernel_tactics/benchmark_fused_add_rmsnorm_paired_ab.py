@@ -22,9 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rows", type=int, nargs="+", default=(16, 56, 112, 120))
     parser.add_argument("--hidden-size", type=int, default=4096)
-    parser.add_argument(
-        "--pairs", type=int, nargs=2, action="append", default=[[0, 256], [0, 512]]
-    )
+    parser.add_argument("--pairs", type=int, nargs=2, action="append")
     parser.add_argument("--repeats", type=int, default=40)
     parser.add_argument("--dry-runs", type=int, default=8)
     parser.add_argument("--l2-flush-mb", type=int, default=8000)
@@ -40,10 +38,11 @@ def percentile(values: list[float], fraction: float) -> float:
 
 def main() -> int:
     args = parse_args()
+    pairs = args.pairs or [[0, 256], [0, 512]]
     valid_blocks = {0, 128, 256, 512, 1024}
     if not args.rows or min(args.rows) <= 0:
         raise ValueError("rows must contain positive integers")
-    if any(set(pair) - valid_blocks for pair in args.pairs):
+    if any(set(pair) - valid_blocks for pair in pairs):
         raise ValueError(f"pairs must use blocks from {sorted(valid_blocks)}")
     if args.hidden_size <= 0 or args.hidden_size % 8:
         raise ValueError("hidden-size must be positive and divisible by 8")
@@ -65,29 +64,52 @@ def main() -> int:
         weight = torch.randn((args.hidden_size,), dtype=torch.bfloat16, device="musa")
         work = {
             block: (torch.empty_like(base_x), torch.empty_like(base_residual))
-            for pair in args.pairs
+            for pair in pairs
             for block in pair
         }
 
-        def run(block: int) -> None:
+        def prepare(block: int) -> None:
             x, residual = work[block]
             x.copy_(base_x)
             residual.copy_(base_residual)
+
+        def launch(block: int) -> None:
+            x, residual = work[block]
             musa_ops.musa_fused_add_rms_norm(
                 x, residual, weight, args.eps, block_x=block
             )
 
         for block in sorted(work):
-            run(block)
+            prepare(block)
+            launch(block)
         torch.musa.synchronize()
 
-        for pair in args.pairs:
+        for pair in pairs:
             baseline, candidate = pair
+            prepare(baseline)
+            launch(baseline)
+            prepare(candidate)
+            launch(candidate)
+            torch.musa.synchronize()
+            torch.testing.assert_close(
+                work[candidate][0].float(),
+                work[baseline][0].float(),
+                rtol=2e-2,
+                atol=2e-2,
+            )
+            torch.testing.assert_close(
+                work[candidate][1].float(),
+                work[baseline][1].float(),
+                rtol=0.0,
+                atol=0.0,
+            )
             baseline_samples: list[float] = []
             candidate_samples: list[float] = []
             correctness = True
             for dry in range(args.dry_runs):
-                run(pair[dry % 2])
+                block = pair[dry % 2]
+                prepare(block)
+                launch(block)
             torch.musa.synchronize()
             for repeat in range(args.repeats):
                 order = (
@@ -95,12 +117,12 @@ def main() -> int:
                 )
                 measured: dict[int, float] = {}
                 for block in order:
+                    prepare(block)
                     flush_buffer.add_(1)
-                    torch.musa.synchronize()
                     start = torch.musa.Event(enable_timing=True)
                     end = torch.musa.Event(enable_timing=True)
                     start.record()
-                    run(block)
+                    launch(block)
                     end.record()
                     end.synchronize()
                     measured[block] = float(start.elapsed_time(end))
