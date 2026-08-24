@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pairs", type=int, nargs=2, action="append")
     parser.add_argument("--repeats", type=int, default=40)
     parser.add_argument("--dry-runs", type=int, default=8)
+    parser.add_argument("--inner-iters", type=int, default=1)
     parser.add_argument("--l2-flush-mb", type=int, default=8000)
     parser.add_argument("--eps", type=float, default=1e-6)
     parser.add_argument("--seed", type=int, default=20260824)
@@ -46,7 +47,7 @@ def main() -> int:
         raise ValueError(f"pairs must use blocks from {sorted(valid_blocks)}")
     if args.hidden_size <= 0 or args.hidden_size % 8:
         raise ValueError("hidden-size must be positive and divisible by 8")
-    if min(args.repeats, args.dry_runs, args.l2_flush_mb) <= 0:
+    if min(args.repeats, args.dry_runs, args.inner_iters, args.l2_flush_mb) <= 0:
         raise ValueError("timing parameters must be positive")
 
     properties = torch.musa.get_device_properties(0)
@@ -63,7 +64,18 @@ def main() -> int:
         base_residual = torch.randn_like(base_x)
         weight = torch.randn((args.hidden_size,), dtype=torch.bfloat16, device="musa")
         work = {
-            block: (torch.empty_like(base_x), torch.empty_like(base_residual))
+            block: (
+                torch.empty(
+                    (args.inner_iters, *base_x.shape),
+                    dtype=base_x.dtype,
+                    device=base_x.device,
+                ),
+                torch.empty(
+                    (args.inner_iters, *base_residual.shape),
+                    dtype=base_residual.dtype,
+                    device=base_residual.device,
+                ),
+            )
             for pair in pairs
             for block in pair
         }
@@ -75,9 +87,10 @@ def main() -> int:
 
         def launch(block: int) -> None:
             x, residual = work[block]
-            musa_ops.musa_fused_add_rms_norm(
-                x, residual, weight, args.eps, block_x=block
-            )
+            for inner in range(args.inner_iters):
+                musa_ops.musa_fused_add_rms_norm(
+                    x[inner], residual[inner], weight, args.eps, block_x=block
+                )
 
         for block in sorted(work):
             prepare(block)
@@ -125,7 +138,7 @@ def main() -> int:
                     launch(block)
                     end.record()
                     end.synchronize()
-                    measured[block] = float(start.elapsed_time(end))
+                    measured[block] = float(start.elapsed_time(end)) / args.inner_iters
                     x, residual = work[block]
                     correctness = correctness and bool(
                         torch.isfinite(x).all().item()
@@ -167,6 +180,7 @@ def main() -> int:
                 "benchmark": {
                     "repeats": args.repeats,
                     "dry_runs": args.dry_runs,
+                    "inner_iters": args.inner_iters,
                     "paired_alternating_order": True,
                     "l2_flush_mb": args.l2_flush_mb,
                 },
