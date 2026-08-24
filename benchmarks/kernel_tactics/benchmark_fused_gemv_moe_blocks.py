@@ -158,6 +158,8 @@ def main() -> int:
         args.l2_flush_mb * 1024 * 1024 // 4, dtype=torch.float32, device=device
     )
     rows = []
+    skipped = []
+    vector_length = 16 if family.weight_dtype == torch.float8_e4m3fn else 8
 
     for tokens in args.tokens:
         hidden = (
@@ -199,6 +201,8 @@ def main() -> int:
                     kernel_topk = family.topk
                     use_swigelu = True
                     mul_routed_weight = False
+                    output_size = family.intermediate_size
+                    reduction_size = family.hidden_size
                 else:
                     activation = intermediate
                     weight = w2
@@ -211,6 +215,8 @@ def main() -> int:
                     kernel_topk = 1
                     use_swigelu = False
                     mul_routed_weight = True
+                    output_size = family.hidden_size
+                    reduction_size = family.intermediate_size
 
                 def launch(block: tuple[int, int]) -> None:
                     block_n, block_k = block
@@ -237,6 +243,24 @@ def main() -> int:
                 baseline_output = output.clone()
 
                 for candidate_block in args.blocks:
+                    block_n, block_k = candidate_block
+                    load_size = block_k * vector_length
+                    if output_size % block_n or reduction_size % load_size:
+                        skipped.append(
+                            {
+                                "family": family.name,
+                                "tokens": tokens,
+                                "route": route,
+                                "stage": stage,
+                                "candidate_block": list(candidate_block),
+                                "reason": (
+                                    f"invalid for output_size={output_size}, "
+                                    f"reduction_size={reduction_size}, "
+                                    f"vector_length={vector_length}"
+                                ),
+                            }
+                        )
+                        continue
                     launch(candidate_block)
                     torch.musa.synchronize()
                     candidate_output = output.clone()
@@ -325,6 +349,7 @@ def main() -> int:
                     "paired_alternating_order": True,
                 },
                 "rows": rows,
+                "skipped": skipped,
             },
             indent=2,
             sort_keys=True,
