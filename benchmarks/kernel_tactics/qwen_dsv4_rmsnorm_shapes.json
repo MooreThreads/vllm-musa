@@ -7,7 +7,9 @@
   ],
   "row_shapes": {
     "graph_ladder": [1, 2, 4, 8, 16, 32, 64],
+    "qwen_mtp1": [2, 8, 32, 128],
     "qwen_mtp2": [3, 12, 48, 192],
+    "qwen_mtp3": [4, 16, 64, 256],
     "deepseek_v4_mtp4": [5, 20, 80, 320],
     "prefill_and_bounds": [2048, 4096, 4100, 8195]
   },
