@@ -83,8 +83,11 @@ For every proposed tactic-map entry:
 
 1. Run on the exact physical MP-count bin; `set_num_mps()` is useful for
    scheduler experiments but is not evidence for another physical device.
-2. Use identical source/image, driver family, shape, dtype, cooling class, and
-   benchmark method where the fleet permits it.
+2. Compare baseline and candidate on the same physical device with identical
+   source/image, shape, dtype, and benchmark method. Record the driver and
+   cooling class as provenance; they need not match another MP-count type when
+   the decision is based on within-device normalized uplift rather than
+   cross-device absolute latency.
 3. Interleave candidates, flush L2 for weight-streaming kernels, retain all raw
    samples, and report median, p95, and IQR.
 4. Check outputs against the production fallback, including NaN/Inf and
@@ -93,6 +96,10 @@ For every proposed tactic-map entry:
    tail-wave utilization. Treat this model as a ranking aid, not proof.
 6. Validate the winning tactic through the compiled/captured production path
    and a model-level regression before enabling it by default.
+
+Across MP-count types, compare the identity of the winning tactic and its
+same-device speedup over the local baseline. Do not rank hardware types by raw
+latency when their driver, cooling, clocks, or host stack differ.
 
 The current fused-MoE dispatch policy is the reference implementation: its
 shape key includes `multiprocessor_count`, and unknown counts fail closed. The
