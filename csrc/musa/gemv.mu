@@ -516,6 +516,7 @@ struct BlockConfig {
 };
 
 constexpr const char* kGemvMoeBlockEnv = "VLLM_MUSA_GEMV_MOE_BLOCK";
+constexpr const char* kGemvBlockEnv = "VLLM_MUSA_GEMV_BLOCK";
 
 bool ParseForcedBlockConfig(BlockConfig* config) {
     const char* value = std::getenv(kGemvMoeBlockEnv);
@@ -530,6 +531,24 @@ bool ParseForcedBlockConfig(BlockConfig* config) {
     }
     TORCH_CHECK(block_n > 0 && block_k > 0, kGemvMoeBlockEnv, " must use positive block sizes, got ", value);
     TORCH_CHECK(block_n * block_k <= 512, kGemvMoeBlockEnv, " block_n * block_k must be <= 512, got ", value);
+
+    *config = BlockConfig{block_n, block_k, 0.f, true};
+    return true;
+}
+
+bool ParseDenseForcedBlockConfig(BlockConfig* config) {
+    const char* value = std::getenv(kGemvBlockEnv);
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+
+    int block_n = 0;
+    int block_k = 0;
+    if (std::sscanf(value, "%dx%d", &block_n, &block_k) != 2) {
+        TORCH_CHECK(false, kGemvBlockEnv, " must use '<block_n>x<block_k>', got ", value);
+    }
+    TORCH_CHECK(block_n > 0 && block_k > 0, kGemvBlockEnv, " must use positive block sizes, got ", value);
+    TORCH_CHECK(block_n * block_k <= 512, kGemvBlockEnv, " block_n * block_k must be <= 512, got ", value);
 
     *config = BlockConfig{block_n, block_k, 0.f, true};
     return true;
@@ -801,9 +820,17 @@ void musa_fused_gemv(
         fallback_config = BlockConfig{128, 1, -1.0f, false};
     }
     BlockConfig forced_config{0, 0, 0.f, false};
+    BlockConfig dense_forced_config{0, 0, 0.f, false};
     BlockConfig deepseek_v4_linear_config{0, 0, 0.f, false};
     BlockConfig* best_config = &fallback_config;
-    if (SelectDeepSeekV4Fp8OProjTile(
+    if (ParseDenseForcedBlockConfig(&dense_forced_config)) {
+        TORCH_CHECK(
+            IsForcedBlockConfigValid(dense_forced_config, nr_n, hidden_size, vlen),
+            kGemvBlockEnv, "=", dense_forced_config.block_n, "x",
+            dense_forced_config.block_k, " is invalid for nr_n=", nr_n,
+            ", hidden_size=", hidden_size, ", vlen=", vlen);
+        best_config = &dense_forced_config;
+    } else if (SelectDeepSeekV4Fp8OProjTile(
             current_arch,
             is_fp8,
             use_swigelu,
