@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 
 # isort: off
@@ -59,6 +60,11 @@ def reference(
 
 def main() -> int:
     args = parse_args()
+    manual_override = os.environ.get("VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X")
+    if manual_override is not None:
+        raise RuntimeError(
+            "unset VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X for an unbiased block sweep"
+        )
     valid_blocks = {0, 128, 256, 512, 1024}
     if not args.rows or min(args.rows) <= 0:
         raise ValueError("rows must contain positive integers")
@@ -169,6 +175,7 @@ def main() -> int:
                 "dtype": "bfloat16",
                 "eps": args.eps,
                 "blocks": args.blocks,
+                "manual_override": manual_override,
                 "benchmark": {
                     "dry_runs": args.dry_runs,
                     "repeats": args.repeats,
