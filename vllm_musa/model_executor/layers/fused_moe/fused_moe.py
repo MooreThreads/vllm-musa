@@ -40,6 +40,7 @@ from vllm_musa.optimization_contract import (
     matches_qwen35_moe_bf16_decode_gemv_layer,
     matches_qwen35_moe_bf16_prefill_layer,
 )
+from vllm_musa.tuning import query_musa_kernel_hardware
 
 logger = init_logger(__name__)
 
@@ -147,19 +148,8 @@ def _musa_moe_routes_are_supported(
 def _musa_device_fingerprint(
     device_index: int,
 ) -> tuple[tuple[int, int], int]:
-    try:
-        capability = current_platform.get_device_capability(device_index)
-        device_capability = (
-            (int(capability[0]), int(capability[1]))
-            if capability is not None
-            else (-1, -1)
-        )
-        multiprocessor_count = int(
-            torch.musa.get_device_properties(device_index).multi_processor_count
-        )
-        return device_capability, multiprocessor_count
-    except Exception:
-        return (-1, -1), -1
+    hardware = query_musa_kernel_hardware(device_index)
+    return hardware.device_capability, hardware.multiprocessor_count
 
 
 def _tensor_meta(tensor: torch.Tensor | None) -> dict[str, object] | None:

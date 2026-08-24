@@ -38,6 +38,7 @@ from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     MusaFusedMoeBackend,
     MusaFusedMoeShape,
 )
+from vllm_musa.tuning import query_musa_kernel_hardware
 
 
 @dataclass(frozen=True)
@@ -824,11 +825,10 @@ def main() -> int:
     )
     w1_scale = block_scales(w1, shape.block_size, args.seed + 2)
     w2_scale = block_scales(w2, shape.block_size, args.seed + 3)
-    capability = tuple(int(value) for value in torch.musa.get_device_capability())
+    hardware = query_musa_kernel_hardware(0)
+    capability = hardware.device_capability
     device_name = torch.musa.get_device_name(0)
-    multiprocessor_count = int(
-        torch.musa.get_device_properties(0).multi_processor_count
-    )
+    multiprocessor_count = hardware.multiprocessor_count
     if capability != (3, 1) or "S5000" not in device_name.upper():
         raise RuntimeError(
             "this policy sweep is valid only on MTT S5000/MP31, got "
@@ -905,6 +905,7 @@ def main() -> int:
             "VLLM_MUSA_MOE_DEEPGEMM_PREFILL_MIN_TOKENS", "2500"
         ),
         "device_name": device_name,
+        "hardware_cache_key": hardware.cache_key,
         "device_capability": capability,
         "multiprocessor_count": multiprocessor_count,
         "torch_musa_runtime": getattr(torch.version, "musa", None),
