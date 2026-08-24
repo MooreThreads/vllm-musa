@@ -53,6 +53,7 @@ MUSA architecture and multiprocessor_count
 driver, runtime, compiler, MATE, and TileLang/Triton versions
 dtype and layout
 shape/workload bucket
+host-visible workload class and any data-dependent scheduling class
 tile, stages, warps/squads, split count, and persistent-block count
 eager/compile/CUDAGraph mode
 ```
@@ -77,6 +78,20 @@ Do not move a kernel to JIT solely because different device bins exist. First
 show that the winning compile-time tactic changes across real devices and that
 the end-to-end gain pays for added startup and cache complexity.
 
+JIT does not by itself solve data-dependent scheduling. For example, an MoE
+GEMV tile can depend on both the physical MP count and whether routed tokens
+are balanced across experts or concentrated on a hot expert. If that route
+class exists only in device memory, do not add a host-side MP-only override or
+synchronize it to the CPU on the serving hot path. Prefer, in order:
+
+1. a route-invariant tactic that stays within the accepted regression envelope;
+2. metadata already computed on-device by the production routing path;
+3. a device-side or persistent scheduler that consumes that metadata; or
+4. the established fallback when the route class is unknown.
+
+A timing-cache entry may include a route class only when production can obtain
+the same class without introducing a new synchronization or scan.
+
 ## Qualification matrix
 
 For every proposed tactic-map entry:
@@ -96,6 +111,10 @@ For every proposed tactic-map entry:
    tail-wave utilization. Treat this model as a ranking aid, not proof.
 6. Validate the winning tactic through the compiled/captured production path
    and a model-level regression before enabling it by default.
+7. For kernels with data-dependent grids or reuse, sweep representative input
+   distributions (for example balanced and hot-expert routing). Reject a
+   static MP-only entry when its winner changes with a distribution that the
+   host dispatcher cannot observe safely.
 
 Across MP-count types, compare the identity of the winning tactic and its
 same-device speedup over the local baseline. Do not rank hardware types by raw
@@ -105,6 +124,24 @@ The current fused-MoE dispatch policy is the reference implementation: its
 shape key includes `multiprocessor_count`, and unknown counts fail closed. The
 MP60-only direct FA3 metadata path is another correct example: other counts
 fall back until their scheduler equivalence is proven.
+
+## Empirical decision records
+
+The initial S5000 MP56/MP60 campaign produced two useful negative/positive
+boundaries:
+
+- Existing fused-add-RMSNorm AOT blocks showed large (roughly 15-35%) common
+  shape-aware gains on real Qwen and DeepSeek-V4-Flash shapes, but every stable
+  winner was identical on MP56 and MP60. An exact-MP RMSNorm map was therefore
+  rejected; the common shape map requires a separate model-level E2E gate.
+- Existing MoE GEMV AOT blocks did show MP56/MP60 winner changes, but those
+  changes also depended on balanced versus hot-expert routing. A static
+  MP-only MoE map was rejected because the host dispatcher does not safely
+  observe that route distribution. Dense DSV4 GEMV was route-independent, but
+  its stable winners were again identical on MP56 and MP60.
+
+These results illustrate why MP count belongs in the evidence and cache key,
+but is not necessarily sufficient as the complete runtime dispatch key.
 
 ## Source references
 
