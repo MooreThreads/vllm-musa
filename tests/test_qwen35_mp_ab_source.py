@@ -13,6 +13,7 @@ def test_qwen35_ab_uses_compiled_capture_path() -> None:
     assert "tensor_parallel_size=4" in source
     assert "enforce_eager=False" in source
     assert "TokensPrompt(prompt_token_ids=prompt_ids)" in source
+    assert "encoded.input_ids" in source
     assert "ignore_eos=True" in source
     assert "semantic_pass" in source
 

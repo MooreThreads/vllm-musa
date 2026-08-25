@@ -48,7 +48,9 @@ def _instruction(tokenizer: AutoTokenizer) -> list[int]:
         add_generation_prompt=True,
         enable_thinking=False,
     )
-    if isinstance(encoded, dict):
+    if hasattr(encoded, "input_ids"):
+        encoded = encoded.input_ids
+    elif isinstance(encoded, dict):
         encoded = encoded["input_ids"]
     return list(encoded)
 
