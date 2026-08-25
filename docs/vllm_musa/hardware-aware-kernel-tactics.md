@@ -63,6 +63,33 @@ Runtime-only scheduling values need not force another binary when the kernel
 ABI already accepts them, but the timing-cache/tactic key must still include
 the MP count.
 
+Keep the **compiled-binary cache** and the **measured-winner map** separate.
+The binary cache answers whether an implementation already exists; the winner
+map answers whether that implementation was qualified for the current device
+and workload. A practical winner key is:
+
+```text
+(schema_version, kernel_abi, source_revision,
+ architecture, active_mp, op_stage,
+ exact_or_bucketed_shape, dtype, layout, quantization)
+```
+
+Record driver and compiler versions with the evidence. Do not make the driver
+an exact selector dimension until a same-device A/B demonstrates that it
+changes the winner. Invalidate or requalify entries when the kernel ABI,
+library release, source revision, or result schema changes.
+
+Use a fail-closed lookup ladder:
+
+1. exact architecture, MP count, and shape;
+2. a validated shape bucket on the same MP count;
+3. an architecture-common tactic proven robust on all required MP bins; then
+4. the current production default.
+
+Never substitute the nearest MP count. Store the winning margin, sample count,
+dispersion, correctness status, and covered route distributions with each map
+entry so a narrow or noisy result cannot masquerade as a stable policy.
+
 ## AOT versus JIT
 
 Prefer **AOT plus runtime dispatch** when the candidate set is small, compile
@@ -91,6 +118,21 @@ synchronize it to the CPU on the serving hot path. Prefer, in order:
 
 A timing-cache entry may include a route class only when production can obtain
 the same class without introducing a new synchronization or scan.
+
+For the current native MoE GEMV path, `topk_ids` and `topk_weights` are already
+GPU-resident and replay-safe, but a per-expert histogram is not. The existing
+DeepGEMM count/offset buffers belong to a different large-prefill backend, and
+the optional routed-expert capture buffer is intended for later host return.
+Neither should be borrowed implicitly by decode GEMV.
+
+If route-aware selection is pursued, the smallest graph-safe experiment is a
+GPU classifier that writes a fixed-size route-class buffer followed by a
+bounded set of graph-static AOT launches guarded by that device value. Measure
+classifier and suppressed-launch overhead as part of the candidate. A stronger
+long-term design is one fixed resident grid, normally derived from active MP
+count, that consumes device-side counts/offsets in a persistent work loop.
+Neither design requires copying expert IDs to the host, and neither assumes a
+device-side dynamic launch facility.
 
 ## Qualification matrix
 
@@ -143,6 +185,36 @@ boundaries:
 These results illustrate why MP count belongs in the evidence and cache key,
 but is not necessarily sufficient as the complete runtime dispatch key.
 
+## Cross-vendor implementation guidance
+
+The policy above intentionally combines mechanisms instead of copying one
+vendor stack wholesale:
+
+- AMD AITER keys tuned dense GEMM results by both `gfx` and `cu_num`, then by
+  shape, dtype, layout, and quantization fields. Its MoE selector extends the
+  key with token, expert, and top-k dimensions and retains bounded fallbacks.
+  This is the closest existing schema to an S5000 `(mp_31, active_mp, shape)`
+  map.
+- hipBLASLt supports offline problem-to-solution tuning but scopes solution
+  indices to a library release and device architecture. Reuse that invalidation
+  discipline; do not treat a numeric tactic ID as permanently portable.
+- Composable Kernel retains a finite catalog of AOT instances, filters invalid
+  arguments, and profiles the survivors. Its grouped-GEMM tile loop consumes
+  group metadata on-device with a persistent grid, demonstrating that a small
+  AOT catalog and device-side dynamic scheduling are complementary.
+- Triton persistent matmul and CUTLASS grouped scheduling query the real SM
+  count and bound a resident grid by it. CUTLASS explicitly provides a
+  device-only grouped scheduler for metadata produced by an earlier GPU
+  kernel, avoiding a host synchronization.
+- MATE supplies the MUSA-side JIT/code-generation and cache layer. Use it when
+  a winning tactic changes compile-time constants or the AOT catalog would
+  grow without bound; keep a small, stable AOT catalog otherwise.
+
+The resulting best practice is therefore not a blanket AOT-to-JIT migration.
+It is a versioned offline winner map keyed by active MP count, a bounded
+AOT/JIT implementation catalog, a robust fallback ladder, and device-side
+persistent scheduling for truly data-dependent work.
+
 ## Source references
 
 - CUDA device properties:
@@ -153,5 +225,15 @@ but is not necessarily sufficient as the complete runtime dispatch key.
   <https://rocm.docs.amd.com/projects/HIP/en/latest/reference/api-reference.html>
 - AMD hipBLASLt tuning:
   <https://rocm.docs.amd.com/projects/hipBLASLt/en/latest/how-to/use-hipblaslt.html>
+- AMD AITER dense and MoE tuned selectors:
+  <https://github.com/ROCm/aiter/blob/7cb8f3389aeaf76c820ea692f295273f02e6071e/aiter/tuned_gemm.py>
+  and
+  <https://github.com/ROCm/aiter/blob/7cb8f3389aeaf76c820ea692f295273f02e6071e/aiter/fused_moe.py>
+- AMD Composable Kernel grouped tile-loop scheduler:
+  <https://github.com/ROCm/rocm-libraries/blob/fb3b576286941d15f63b5037c63844eaf7b53f29/projects/composablekernel/include/ck/tensor_operation/gpu/device/impl/device_grouped_gemm_multiple_d_xdl_cshuffle_tile_loop.hpp>
+- Triton persistent matmul:
+  <https://triton-lang.org/main/getting-started/tutorials/09-persistent-matmul.html>
+- CUTLASS device-only grouped scheduler:
+  <https://docs.nvidia.com/cutlass/latest/media/docs/cpp/grouped_scheduler.html>
 - MATE runtime MP resolution:
   <https://github.com/MooreThreads/mate/blob/main/mate/mate_runtime.py>
