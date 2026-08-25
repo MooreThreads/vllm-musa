@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-"""Cold-cache crossover sweep for MUSA FP8 fused-MoE backends.
+"""Cold-cache crossover sweep for MUSA fused-MoE backends.
 
 All dimensions are the actual per-rank kernel dimensions. A coarse sweep only
 produces a candidate interval; rerun densely around both crossings and confirm
@@ -48,7 +48,7 @@ class Shape:
     hidden_size: int
     intermediate_size: int
     top_k: int
-    block_size: int
+    block_size: int | None
 
 
 @dataclass
@@ -87,6 +87,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-size", type=int, required=True)
     parser.add_argument("--intermediate-size", type=int, required=True)
     parser.add_argument("--top-k", type=int, required=True)
+    parser.add_argument(
+        "--weight-dtype",
+        choices=("fp8", "bf16"),
+        default="fp8",
+        help="Weight format to benchmark; BF16 supports gemv and upstream only.",
+    )
     parser.add_argument("--block-size", type=int, choices=(128,), default=128)
     parser.add_argument(
         "--tokens",
@@ -234,6 +240,24 @@ def quantized_weight(shape: tuple[int, ...], seed: int) -> torch.Tensor:
     return output
 
 
+def bf16_weight(shape: tuple[int, ...], seed: int) -> torch.Tensor:
+    generator = torch.Generator(device="musa")
+    generator.manual_seed(seed)
+    output = torch.empty(shape, device="musa", dtype=torch.bfloat16)
+    chunk_experts = max(1, min(shape[0], 8))
+    for start in range(0, shape[0], chunk_experts):
+        end = min(start + chunk_experts, shape[0])
+        output[start:end].copy_(
+            torch.randn(
+                (end - start, *shape[1:]),
+                device="musa",
+                dtype=torch.bfloat16,
+                generator=generator,
+            )
+        )
+    return output
+
+
 def block_scale_shape(weight: torch.Tensor, block_size: int) -> tuple[int, int, int]:
     experts, output_size, input_size = weight.shape
     if input_size % block_size != 0 or output_size % block_size != 0:
@@ -360,10 +384,11 @@ def backend_kwargs(
     w2: torch.Tensor,
     topk_weights: torch.Tensor,
     topk_ids: torch.Tensor,
-    w1_scale: torch.Tensor,
-    w2_scale: torch.Tensor,
-    block_size: int,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    block_size: int | None,
 ) -> dict[str, Any]:
+    use_fp8 = w1.dtype == torch.float8_e4m3fn
     return {
         "hidden_states": hidden_states,
         "w1": w1,
@@ -372,7 +397,7 @@ def backend_kwargs(
         "topk_ids": topk_ids,
         "activation": "silu",
         "apply_router_weight_on_input": False,
-        "use_fp8_w8a8": True,
+        "use_fp8_w8a8": use_fp8,
         "use_int8_w8a8": False,
         "use_int8_w8a16": False,
         "use_int4_w4a16": False,
@@ -386,7 +411,7 @@ def backend_kwargs(
         "w2_zp": None,
         "a1_scale": None,
         "a2_scale": None,
-        "block_shape": [block_size, block_size],
+        "block_shape": [block_size, block_size] if use_fp8 else None,
         "w1_bias": None,
         "w2_bias": None,
     }
@@ -404,12 +429,17 @@ def build_backends(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bo
         for key, value in kwargs.items()
         if key not in {"topk_weights", "global_num_experts", "w1_zp", "w2_zp"}
     }
+    use_fp8 = bool(kwargs["use_fp8_w8a8"])
     capabilities = {
-        "gemv": fused_moe._can_use_musa_native_fp8_moe_gemv(**gemv_gate),
-        "grouped_gemm": fused_moe._can_use_musa_fp8_moe_grouped_gemm(**grouped_gate),
-        "deepgemm_prefill": fused_moe._can_use_moe_deepgemm_prefill(
-            **deepgemm_prefill_gate
+        "gemv": (
+            fused_moe._can_use_musa_native_fp8_moe_gemv(**gemv_gate)
+            if use_fp8
+            else fused_moe._can_use_musa_native_bf16_moe_gemv(**gemv_gate)
         ),
+        "grouped_gemm": use_fp8
+        and fused_moe._can_use_musa_fp8_moe_grouped_gemm(**grouped_gate),
+        "deepgemm_prefill": use_fp8
+        and fused_moe._can_use_moe_deepgemm_prefill(**deepgemm_prefill_gate),
         "upstream": True,
     }
 
@@ -783,7 +813,7 @@ def main() -> int:
         hidden_size=args.hidden_size,
         intermediate_size=args.intermediate_size,
         top_k=args.top_k,
-        block_size=args.block_size,
+        block_size=args.block_size if args.weight_dtype == "fp8" else None,
     )
     tokens = sorted({int(value) for value in args.tokens.split(",") if value})
     if args.sweep_kind == "dense" and tokens:
@@ -798,6 +828,11 @@ def main() -> int:
     }
     if unknown:
         raise ValueError(f"unsupported backends: {sorted(unknown)}")
+    if args.weight_dtype == "bf16" and set(requested_backends) != {
+        "gemv",
+        "upstream",
+    }:
+        raise ValueError("BF16 requires exactly gemv and upstream backends")
     if "upstream" not in requested_backends:
         raise ValueError("upstream is mandatory as the correctness reference")
     if not tokens or min(tokens) <= 0:
@@ -817,14 +852,20 @@ def main() -> int:
     if args.rounds <= 0 or args.rounds % len(requested_backends) != 0:
         raise ValueError("rounds must be a positive multiple of backend count")
 
-    w1 = quantized_weight(
+    weight_factory = quantized_weight if args.weight_dtype == "fp8" else bf16_weight
+    w1 = weight_factory(
         (shape.experts, 2 * shape.intermediate_size, shape.hidden_size), args.seed
     )
-    w2 = quantized_weight(
+    w2 = weight_factory(
         (shape.experts, shape.hidden_size, shape.intermediate_size), args.seed + 1
     )
-    w1_scale = block_scales(w1, shape.block_size, args.seed + 2)
-    w2_scale = block_scales(w2, shape.block_size, args.seed + 3)
+    if args.weight_dtype == "fp8":
+        assert shape.block_size is not None
+        w1_scale = block_scales(w1, shape.block_size, args.seed + 2)
+        w2_scale = block_scales(w2, shape.block_size, args.seed + 3)
+    else:
+        w1_scale = None
+        w2_scale = None
     hardware = query_musa_kernel_hardware(0)
     capability = hardware.device_capability
     device_name = torch.musa.get_device_name(0)
@@ -847,10 +888,10 @@ def main() -> int:
         activation="silu",
         expert_parallel=False,
         hidden_dtype=str(torch.bfloat16),
-        weight_dtype=str(torch.float8_e4m3fn),
-        scale_dtype=str(torch.float32),
-        w1_scale_shape=tuple(w1_scale.shape),
-        w2_scale_shape=tuple(w2_scale.shape),
+        weight_dtype=str(w1.dtype),
+        scale_dtype=str(w1_scale.dtype) if w1_scale is not None else "none",
+        w1_scale_shape=tuple(w1_scale.shape) if w1_scale is not None else (),
+        w2_scale_shape=tuple(w2_scale.shape) if w2_scale is not None else (),
         gemv_block=os.environ.get("VLLM_MUSA_GEMV_MOE_BLOCK", "auto"),
         graph_mode="eager",
     )
@@ -860,6 +901,7 @@ def main() -> int:
         "argv": sys.argv,
         "shape": asdict(shape),
         "shape_dimensions_are_per_rank": True,
+        "weight_dtype": args.weight_dtype,
         "policy_key": asdict(policy_key),
         "route_mode": args.route_mode,
         "folded_shared_expert": args.folded_shared_expert,
@@ -916,8 +958,16 @@ def main() -> int:
         "estimated_static_bytes": (
             w1.numel() * w1.element_size()
             + w2.numel() * w2.element_size()
-            + w1_scale.numel() * w1_scale.element_size()
-            + w2_scale.numel() * w2_scale.element_size()
+            + (
+                w1_scale.numel() * w1_scale.element_size()
+                if w1_scale is not None
+                else 0
+            )
+            + (
+                w2_scale.numel() * w2_scale.element_size()
+                if w2_scale is not None
+                else 0
+            )
         ),
     }
     results: list[Result] = []
@@ -966,16 +1016,23 @@ def main() -> int:
             except Exception as exc:
                 oracle_errors[backend] = f"{type(exc).__name__}: {exc}"
         try:
-            oracle = dequantized_fp32_reference(
-                hidden_states=oracle_hidden_states,
-                w1=w1,
-                w2=w2,
-                topk_weights=oracle_topk_weights,
-                topk_ids=oracle_topk_ids,
-                w1_scale=w1_scale,
-                w2_scale=w2_scale,
-                block_size=shape.block_size,
-            )
+            if args.weight_dtype == "bf16":
+                oracle = oracle_outputs["upstream"].float()
+                oracle_reference = "upstream-bf16"
+            else:
+                assert w1_scale is not None and w2_scale is not None
+                assert shape.block_size is not None
+                oracle = dequantized_fp32_reference(
+                    hidden_states=oracle_hidden_states,
+                    w1=w1,
+                    w2=w2,
+                    topk_weights=oracle_topk_weights,
+                    topk_ids=oracle_topk_ids,
+                    w1_scale=w1_scale,
+                    w2_scale=w2_scale,
+                    block_size=shape.block_size,
+                )
+                oracle_reference = "dequantized-fp32-no-activation-quantization"
             comparisons: dict[str, Any] = {}
             for backend, output in oracle_outputs.items():
                 difference = (output.float() - oracle).abs()
@@ -1004,7 +1061,7 @@ def main() -> int:
                 "selected_experts": sorted(
                     int(value) for value in oracle_topk_ids.unique().cpu().tolist()
                 ),
-                "reference": "dequantized-fp32-no-activation-quantization",
+                "reference": oracle_reference,
                 "gemv_passed": gemv_oracle_pass,
                 "comparisons": comparisons,
                 "errors": oracle_errors,
@@ -1016,7 +1073,11 @@ def main() -> int:
                 "tokens": args.oracle_probe_tokens,
                 "route_mode": "deterministic_coverage",
                 "seed": oracle_seed,
-                "reference": "dequantized-fp32-no-activation-quantization",
+                "reference": (
+                    "upstream-bf16"
+                    if args.weight_dtype == "bf16"
+                    else "dequantized-fp32-no-activation-quantization"
+                ),
                 "gemv_passed": False,
                 "errors": {
                     **oracle_errors,
