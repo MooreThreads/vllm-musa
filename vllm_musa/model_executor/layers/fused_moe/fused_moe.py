@@ -940,6 +940,7 @@ def _moe_deepgemm_bf16_prefill_impl(
         get_mk_alignment_for_contiguous_layout,
         mk_alignment_scope,
     )
+
     from vllm_musa.jit_kernel.post_reorder import post_reorder_triton_kernel
     from vllm_musa.jit_kernel.tilelang.deep_gemm_contig_preprocess import (
         can_use_bf16_tilelang,

@@ -35,11 +35,9 @@ import pymtml as pynvml
 from vllm_musa.optimization_contract import (
     ModelFamily,
     OptimizationFeature,
-)
-from vllm_musa.optimization_contract import policy as contract_policy
-from vllm_musa.optimization_contract import (
     resolve_optimization_contract,
 )
+from vllm_musa.optimization_contract import policy as contract_policy
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
