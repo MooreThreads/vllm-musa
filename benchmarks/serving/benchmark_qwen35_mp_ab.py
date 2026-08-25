@@ -17,7 +17,7 @@ from typing import Any
 
 import torchada  # noqa: F401
 from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
+from vllm import LLM, SamplingParams, TokensPrompt
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,7 +71,7 @@ def run_batch(
     batch_size: int,
     sampling: SamplingParams,
 ) -> tuple[float, list[str], int]:
-    prompts = [{"prompt_token_ids": prompt_ids} for _ in range(batch_size)]
+    prompts = [TokensPrompt(prompt_token_ids=prompt_ids) for _ in range(batch_size)]
     start = time.perf_counter()
     outputs = llm.generate(prompts, sampling)
     elapsed = time.perf_counter() - start
