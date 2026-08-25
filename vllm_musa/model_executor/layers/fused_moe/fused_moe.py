@@ -8,6 +8,7 @@ from functools import cache
 
 import torch
 from vllm import _custom_ops as ops
+from vllm.config import get_current_vllm_config_or_none
 from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe.utils import (
     moe_kernel_quantize_input,
@@ -43,6 +44,13 @@ from vllm_musa.optimization_contract import (
 from vllm_musa.tuning import query_musa_kernel_hardware
 
 logger = init_logger(__name__)
+
+
+def _current_max_num_seqs() -> int | None:
+    vllm_config = get_current_vllm_config_or_none()
+    scheduler_config = getattr(vllm_config, "scheduler_config", None)
+    value = getattr(scheduler_config, "max_num_seqs", None)
+    return value if isinstance(value, int) and value > 0 else None
 
 
 def disable_inplace() -> bool:
@@ -1561,6 +1569,7 @@ def _musa_fused_moe_shape(
         w2_scale_shape=tuple(w2_scale.shape) if w2_scale is not None else (),
         gemv_block=gemv_block,
         graph_mode="capture" if stream_is_capturing else "eager",
+        max_num_seqs=_current_max_num_seqs(),
     )
 
 

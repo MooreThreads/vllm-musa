@@ -312,11 +312,17 @@ def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
         w2_scale_shape=(),
     )
     assert thresholds_for_shape(unfolded).gemv_max_tokens == 12
+    assert (
+        thresholds_for_shape(
+            dataclasses.replace(unfolded, max_num_seqs=16)
+        ).gemv_max_tokens
+        == 12
+    )
 
 
 def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
     for local_experts, top_k in ((256, 8), (257, 9)):
-        eager_shape = _shape(
+        base_shape = _shape(
             multiprocessor_count=56,
             local_experts=local_experts,
             w1_output_size=256,
@@ -330,32 +336,45 @@ def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
             w1_scale_shape=(),
             w2_scale_shape=(),
         )
-        assert thresholds_for_shape(eager_shape).gemv_max_tokens is None
-        shape = dataclasses.replace(eager_shape, graph_mode="capture")
-        thresholds = thresholds_for_shape(shape)
-        assert thresholds.gemv_max_tokens == 4
-        assert "mp56" in thresholds.source
-        assert "route-worst" in thresholds.source
+        assert thresholds_for_shape(base_shape).gemv_max_tokens is None
         assert (
-            select_fused_moe_backend(
-                shape=shape,
-                num_tokens=4,
-                can_use_gemv=True,
-                can_use_grouped_gemm=False,
-                stream_is_capturing=False,
-            )
-            == MusaFusedMoeBackend.GEMV
+            thresholds_for_shape(
+                dataclasses.replace(base_shape, max_num_seqs=16)
+            ).gemv_max_tokens
+            is None
         )
-        assert (
-            select_fused_moe_backend(
-                shape=shape,
-                num_tokens=5,
-                can_use_gemv=True,
-                can_use_grouped_gemm=False,
-                stream_is_capturing=False,
-            )
-            == MusaFusedMoeBackend.UPSTREAM
-        )
+        for graph_mode in ("eager", "capture"):
+            for max_num_seqs in (1, 2, 4):
+                shape = dataclasses.replace(
+                    base_shape,
+                    graph_mode=graph_mode,
+                    max_num_seqs=max_num_seqs,
+                )
+                thresholds = thresholds_for_shape(shape)
+                assert thresholds.gemv_max_tokens == 4
+                assert "mp56" in thresholds.source
+                assert f"maxseq{max_num_seqs}" in thresholds.source
+                assert "route-worst" in thresholds.source
+                assert (
+                    select_fused_moe_backend(
+                        shape=shape,
+                        num_tokens=4,
+                        can_use_gemv=True,
+                        can_use_grouped_gemm=False,
+                        stream_is_capturing=graph_mode == "capture",
+                    )
+                    == MusaFusedMoeBackend.GEMV
+                )
+                assert (
+                    select_fused_moe_backend(
+                        shape=shape,
+                        num_tokens=5,
+                        can_use_gemv=True,
+                        can_use_grouped_gemm=False,
+                        stream_is_capturing=graph_mode == "capture",
+                    )
+                    == MusaFusedMoeBackend.UPSTREAM
+                )
 
 
 def test_force_modes_preserve_eligibility_checks():

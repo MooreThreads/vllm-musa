@@ -9,7 +9,7 @@ entries below; unknown shapes keep the established upstream backend.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Final
 
@@ -45,6 +45,7 @@ class MusaFusedMoeShape:
     w2_scale_shape: tuple[int, ...]
     gemv_block: str
     graph_mode: str
+    max_num_seqs: int | None = None
 
 
 @dataclass(frozen=True)
@@ -98,7 +99,11 @@ def _s5000_fp8_shape(
 
 
 def _s5000_qwen35_bf16_decode_shape(
-    *, multiprocessor_count: int, graph_mode: str, folded_shared_expert: bool
+    *,
+    multiprocessor_count: int,
+    graph_mode: str,
+    folded_shared_expert: bool,
+    max_num_seqs: int | None = None,
 ) -> MusaFusedMoeShape:
     """TP4-local Qwen3.5/3.6 BF16 decode shape."""
 
@@ -124,6 +129,7 @@ def _s5000_qwen35_bf16_decode_shape(
         w2_scale_shape=(),
         gemv_block="auto",
         graph_mode=graph_mode,
+        max_num_seqs=max_num_seqs,
     )
 
 
@@ -221,23 +227,25 @@ _CALIBRATED_THRESHOLDS.update(
             multiprocessor_count=56,
             graph_mode=graph_mode,
             folded_shared_expert=folded_shared_expert,
+            max_num_seqs=max_num_seqs,
         ): _thresholds(
             # MP56 route sweep: hot routes regress at M=8 while balanced and
             # unique routes still win there. Keep the worst-route boundary
             # until a device-side route classifier is available. Register it
-            # only for concrete graph capture sizes: selecting GEMV during the
-            # preceding symbolic torch.compile pass can bake the small-M arm
-            # into a graph reused by larger batches.
+            # only for an engine whose graph-static max_num_seqs cannot cross
+            # that boundary. Selecting from replay-time M alone can bake the
+            # small-M arm into a graph reused by larger batches.
             gemv_max_tokens=4,
             grouped_gemm_min_tokens=None,
             source=(
                 f"s5000-mp56-20260825-qwen35-bf16-e"
                 f"{257 if folded_shared_expert else 256}-n256-k2048-v128-"
-                f"{graph_mode}-route-worst-crossover-v1"
+                f"{graph_mode}-maxseq{max_num_seqs}-route-worst-crossover-v2"
             ),
         )
-        for graph_mode in ("capture",)
+        for graph_mode in ("eager", "capture")
         for folded_shared_expert in (False, True)
+        for max_num_seqs in (1, 2, 4)
     }
 )
 _CALIBRATED_THRESHOLDS.update(
@@ -367,7 +375,17 @@ def parse_dispatch_backend(value: str | None = None) -> MusaFusedMoeBackend:
 
 
 def thresholds_for_shape(shape: MusaFusedMoeShape) -> MusaFusedMoeThresholds:
-    return _CALIBRATED_THRESHOLDS.get(shape, _DEFAULT_THRESHOLDS)
+    thresholds = _CALIBRATED_THRESHOLDS.get(shape)
+    if thresholds is not None:
+        return thresholds
+    if shape.max_num_seqs is not None:
+        # Existing hardware/shape policies predate the scheduler-profile key.
+        # Fall back only to an explicitly calibrated generic entry; MP56 has
+        # no such entry and therefore fails closed for engines above BS4.
+        thresholds = _CALIBRATED_THRESHOLDS.get(replace(shape, max_num_seqs=None))
+        if thresholds is not None:
+            return thresholds
+    return _DEFAULT_THRESHOLDS
 
 
 def has_calibrated_dimensions(
