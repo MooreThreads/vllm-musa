@@ -1568,7 +1568,15 @@ def _musa_fused_moe_shape(
         w1_scale_shape=tuple(w1_scale.shape) if w1_scale is not None else (),
         w2_scale_shape=tuple(w2_scale.shape) if w2_scale is not None else (),
         gemv_block=gemv_block,
-        graph_mode="capture" if stream_is_capturing else "eager",
+        # Do not select a small-batch GEMV arm while Dynamo is tracing the
+        # symbolic graph. The trace may be reused for a larger capture shape;
+        # only the engine-static profile and concrete capture/eager execution
+        # may consult the calibrated MP table.
+        graph_mode=(
+            "compile"
+            if torch.compiler.is_compiling()
+            else ("capture" if stream_is_capturing else "eager")
+        ),
         max_num_seqs=_current_max_num_seqs(),
     )
 

@@ -349,6 +349,11 @@ def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
         for key in POLICY._CALIBRATED_THRESHOLDS
         if key.multiprocessor_count == 56
     )
+    assert all(
+        key.graph_mode != "compile"
+        for key in POLICY._CALIBRATED_THRESHOLDS
+        if key.multiprocessor_count == 56
+    )
     for graph_mode in ("eager", "capture"):
         for max_num_seqs in (1, 2, 4):
             shape = dataclasses.replace(
