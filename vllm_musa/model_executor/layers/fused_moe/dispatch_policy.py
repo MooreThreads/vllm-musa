@@ -244,7 +244,7 @@ _CALIBRATED_THRESHOLDS.update(
             ),
         )
         for graph_mode in ("eager", "capture")
-        for folded_shared_expert in (False, True)
+        for folded_shared_expert in (True,)
         for max_num_seqs in (1, 2, 4)
     }
 )

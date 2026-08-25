@@ -321,60 +321,60 @@ def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
 
 
 def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
-    for local_experts, top_k in ((256, 8), (257, 9)):
-        base_shape = _shape(
-            multiprocessor_count=56,
-            local_experts=local_experts,
-            w1_output_size=256,
-            w2_input_size=128,
-            hidden_size=2048,
-            top_k=top_k,
-            block_n=0,
-            block_k=0,
-            weight_dtype="torch.bfloat16",
-            scale_dtype="none",
-            w1_scale_shape=(),
-            w2_scale_shape=(),
-        )
-        assert thresholds_for_shape(base_shape).gemv_max_tokens is None
-        assert (
-            thresholds_for_shape(
-                dataclasses.replace(base_shape, max_num_seqs=16)
-            ).gemv_max_tokens
-            is None
-        )
-        for graph_mode in ("eager", "capture"):
-            for max_num_seqs in (1, 2, 4):
-                shape = dataclasses.replace(
-                    base_shape,
-                    graph_mode=graph_mode,
-                    max_num_seqs=max_num_seqs,
+    base_shape = _shape(
+        multiprocessor_count=56,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        block_n=0,
+        block_k=0,
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+    )
+    assert thresholds_for_shape(base_shape).gemv_max_tokens is None
+    assert (
+        thresholds_for_shape(
+            dataclasses.replace(base_shape, max_num_seqs=16)
+        ).gemv_max_tokens
+        is None
+    )
+    for graph_mode in ("eager", "capture"):
+        for max_num_seqs in (1, 2, 4):
+            shape = dataclasses.replace(
+                base_shape,
+                graph_mode=graph_mode,
+                max_num_seqs=max_num_seqs,
+            )
+            thresholds = thresholds_for_shape(shape)
+            assert thresholds.gemv_max_tokens == 4
+            assert "mp56" in thresholds.source
+            assert "e257" in thresholds.source
+            assert f"maxseq{max_num_seqs}" in thresholds.source
+            assert "route-worst" in thresholds.source
+            assert (
+                select_fused_moe_backend(
+                    shape=shape,
+                    num_tokens=4,
+                    can_use_gemv=True,
+                    can_use_grouped_gemm=False,
+                    stream_is_capturing=graph_mode == "capture",
                 )
-                thresholds = thresholds_for_shape(shape)
-                assert thresholds.gemv_max_tokens == 4
-                assert "mp56" in thresholds.source
-                assert f"maxseq{max_num_seqs}" in thresholds.source
-                assert "route-worst" in thresholds.source
-                assert (
-                    select_fused_moe_backend(
-                        shape=shape,
-                        num_tokens=4,
-                        can_use_gemv=True,
-                        can_use_grouped_gemm=False,
-                        stream_is_capturing=graph_mode == "capture",
-                    )
-                    == MusaFusedMoeBackend.GEMV
+                == MusaFusedMoeBackend.GEMV
+            )
+            assert (
+                select_fused_moe_backend(
+                    shape=shape,
+                    num_tokens=5,
+                    can_use_gemv=True,
+                    can_use_grouped_gemm=False,
+                    stream_is_capturing=graph_mode == "capture",
                 )
-                assert (
-                    select_fused_moe_backend(
-                        shape=shape,
-                        num_tokens=5,
-                        can_use_gemv=True,
-                        can_use_grouped_gemm=False,
-                        stream_is_capturing=graph_mode == "capture",
-                    )
-                    == MusaFusedMoeBackend.UPSTREAM
-                )
+                == MusaFusedMoeBackend.UPSTREAM
+            )
 
 
 def test_force_modes_preserve_eligibility_checks():
