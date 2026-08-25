@@ -423,6 +423,9 @@ def build_backends(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bo
         for key, value in kwargs.items()
         if key not in {"apply_router_weight_on_input", "block_shape"}
     }
+    bf16_gemv_gate = {
+        key: value for key, value in kwargs.items() if key != "block_shape"
+    }
     grouped_gate = dict(kwargs)
     deepgemm_prefill_gate = {
         key: value
@@ -434,7 +437,7 @@ def build_backends(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bo
         "gemv": (
             fused_moe._can_use_musa_native_fp8_moe_gemv(**gemv_gate)
             if use_fp8
-            else fused_moe._can_use_musa_native_bf16_moe_gemv(**gemv_gate)
+            else fused_moe._can_use_musa_native_bf16_moe_gemv(**bf16_gemv_gate)
         ),
         "grouped_gemm": use_fp8
         and fused_moe._can_use_musa_fp8_moe_grouped_gemm(**grouped_gate),
