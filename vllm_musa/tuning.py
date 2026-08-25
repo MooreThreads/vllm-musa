@@ -85,7 +85,7 @@ def query_musa_kernel_hardware(device_index: int) -> MusaKernelHardware:
             device_capability=(int(properties.major), int(properties.minor)),
             multiprocessor_count=int(properties.multi_processor_count),
         )
-    except (AttributeError, ImportError, RuntimeError, TypeError, ValueError):
+    except Exception:  # noqa: BLE001 - hardware probing must fail closed
         return UNKNOWN_MUSA_KERNEL_HARDWARE
 
 

@@ -342,6 +342,13 @@ def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
         ).gemv_max_tokens
         is None
     )
+    # The engine-static profile is part of the key: a larger profile must not
+    # accidentally inherit the small-batch GEMV entry during symbolic compile.
+    assert all(
+        key.max_num_seqs in (None, 1, 2, 4)
+        for key in POLICY._CALIBRATED_THRESHOLDS
+        if key.multiprocessor_count == 56
+    )
     for graph_mode in ("eager", "capture"):
         for max_num_seqs in (1, 2, 4):
             shape = dataclasses.replace(

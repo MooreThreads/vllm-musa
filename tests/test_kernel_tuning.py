@@ -70,6 +70,14 @@ def test_query_kernel_hardware_recovers_after_early_unknown(monkeypatch) -> None
     assert tuning.query_musa_kernel_hardware(0).cache_key == "mp31-mps60"
 
 
+def test_query_kernel_hardware_fails_closed_on_unexpected_probe_error(monkeypatch) -> None:
+    def raise_unexpected(_device_index):
+        raise OSError("transient MUSA property query failure")
+
+    monkeypatch.setattr(tuning, "_get_musa_device_properties", raise_unexpected)
+    assert tuning.query_musa_kernel_hardware(0) == tuning.UNKNOWN_MUSA_KERNEL_HARDWARE
+
+
 def test_engine_scheduler_profile_is_fail_closed(monkeypatch) -> None:
     monkeypatch.delenv(tuning._ENGINE_MAX_NUM_SEQS_ENV, raising=False)
     assert tuning.query_musa_engine_max_num_seqs() is None
