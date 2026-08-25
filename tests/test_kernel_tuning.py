@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from vllm_musa import tuning
+
+PLATFORM_SOURCE = Path(__file__).resolve().parents[1] / "vllm_musa" / "platform.py"
 
 
 def test_kernel_hardware_cache_key_keeps_mp_count_exact() -> None:
@@ -65,6 +68,26 @@ def test_query_kernel_hardware_recovers_after_early_unknown(monkeypatch) -> None
 
     assert tuning.query_musa_kernel_hardware(0).cache_key == "unknown"
     assert tuning.query_musa_kernel_hardware(0).cache_key == "mp31-mps60"
+
+
+def test_engine_scheduler_profile_is_fail_closed(monkeypatch) -> None:
+    monkeypatch.delenv(tuning._ENGINE_MAX_NUM_SEQS_ENV, raising=False)
+    assert tuning.query_musa_engine_max_num_seqs() is None
+
+    tuning.configure_musa_engine_scheduler_profile(4)
+    assert tuning.query_musa_engine_max_num_seqs() == 4
+
+    monkeypatch.setenv(tuning._ENGINE_MAX_NUM_SEQS_ENV, "invalid")
+    assert tuning.query_musa_engine_max_num_seqs() is None
+
+    tuning.configure_musa_engine_scheduler_profile(None)
+    assert tuning.query_musa_engine_max_num_seqs() is None
+
+
+def test_platform_publishes_resolved_scheduler_profile() -> None:
+    source = PLATFORM_SOURCE.read_text(encoding="utf-8")
+    assert "configure_musa_engine_scheduler_profile(" in source
+    assert '"max_num_seqs"' in source
 
 
 @pytest.mark.parametrize(

@@ -10,12 +10,38 @@ unknown identities.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
 # Minimum rows where the MUSA JIT fused-add RMSNorm provider was measured to
 # outperform the fallback for contiguous BF16 H5120 workloads on S5000.
 FUSED_ADD_RMSNORM_MIN_ROWS = 64
+_ENGINE_MAX_NUM_SEQS_ENV = "_VLLM_MUSA_ENGINE_MAX_NUM_SEQS"
+
+
+def configure_musa_engine_scheduler_profile(max_num_seqs: int | None) -> None:
+    """Publish the engine-static scheduler profile to spawned workers.
+
+    This is written only by the MUSA platform from the resolved VllmConfig; it
+    is not a user-facing override. Environment transport is used because vLLM
+    spawns worker processes after platform config validation.
+    """
+    if isinstance(max_num_seqs, int) and max_num_seqs > 0:
+        os.environ[_ENGINE_MAX_NUM_SEQS_ENV] = str(max_num_seqs)
+    else:
+        os.environ.pop(_ENGINE_MAX_NUM_SEQS_ENV, None)
+
+
+def query_musa_engine_max_num_seqs() -> int | None:
+    value = os.environ.get(_ENGINE_MAX_NUM_SEQS_ENV)
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
 
 
 @dataclass(frozen=True, slots=True)
