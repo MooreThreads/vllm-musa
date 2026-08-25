@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _instruction(tokenizer: AutoTokenizer) -> list[int]:
-    return tokenizer.apply_chat_template(
+    encoded = tokenizer.apply_chat_template(
         [
             {
                 "role": "user",
@@ -48,6 +48,9 @@ def _instruction(tokenizer: AutoTokenizer) -> list[int]:
         add_generation_prompt=True,
         enable_thinking=False,
     )
+    if isinstance(encoded, dict):
+        encoded = encoded["input_ids"]
+    return list(encoded)
 
 
 def make_prompt_ids(tokenizer: AutoTokenizer, input_tokens: int) -> list[int]:
