@@ -1,4 +1,5 @@
 import ast
+import dataclasses
 import importlib.util
 import sys
 from pathlib import Path
@@ -315,7 +316,7 @@ def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
 
 def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
     for local_experts, top_k in ((256, 8), (257, 9)):
-        shape = _shape(
+        eager_shape = _shape(
             multiprocessor_count=56,
             local_experts=local_experts,
             w1_output_size=256,
@@ -329,6 +330,8 @@ def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
             w1_scale_shape=(),
             w2_scale_shape=(),
         )
+        assert thresholds_for_shape(eager_shape).gemv_max_tokens is None
+        shape = dataclasses.replace(eager_shape, graph_mode="capture")
         thresholds = thresholds_for_shape(shape)
         assert thresholds.gemv_max_tokens == 4
         assert "mp56" in thresholds.source

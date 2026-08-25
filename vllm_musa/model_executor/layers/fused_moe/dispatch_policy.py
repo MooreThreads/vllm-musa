@@ -223,8 +223,11 @@ _CALIBRATED_THRESHOLDS.update(
             folded_shared_expert=folded_shared_expert,
         ): _thresholds(
             # MP56 route sweep: hot routes regress at M=8 while balanced and
-            # unique routes still win there.  Keep the worst-route boundary
-            # until a device-side route classifier is available.
+            # unique routes still win there. Keep the worst-route boundary
+            # until a device-side route classifier is available. Register it
+            # only for concrete graph capture sizes: selecting GEMV during the
+            # preceding symbolic torch.compile pass can bake the small-M arm
+            # into a graph reused by larger batches.
             gemv_max_tokens=4,
             grouped_gemm_min_tokens=None,
             source=(
@@ -233,7 +236,7 @@ _CALIBRATED_THRESHOLDS.update(
                 f"{graph_mode}-route-worst-crossover-v1"
             ),
         )
-        for graph_mode in ("eager", "capture")
+        for graph_mode in ("capture",)
         for folded_shared_expert in (False, True)
     }
 )
