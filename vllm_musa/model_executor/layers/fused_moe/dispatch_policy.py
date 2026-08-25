@@ -98,7 +98,7 @@ def _s5000_fp8_shape(
 
 
 def _s5000_qwen35_bf16_decode_shape(
-    *, graph_mode: str, folded_shared_expert: bool
+    *, multiprocessor_count: int, graph_mode: str, folded_shared_expert: bool
 ) -> MusaFusedMoeShape:
     """TP4-local Qwen3.5/3.6 BF16 decode shape."""
 
@@ -107,7 +107,7 @@ def _s5000_qwen35_bf16_decode_shape(
 
     return MusaFusedMoeShape(
         device_capability=(3, 1),
-        multiprocessor_count=60,
+        multiprocessor_count=multiprocessor_count,
         local_experts=experts,
         w1_output_size=256,
         w2_input_size=128,
@@ -217,6 +217,28 @@ _CALIBRATED_THRESHOLDS.update(
 )
 _CALIBRATED_THRESHOLDS.update(
     {
+        _s5000_qwen35_bf16_decode_shape(
+            multiprocessor_count=56,
+            graph_mode=graph_mode,
+            folded_shared_expert=folded_shared_expert,
+        ): _thresholds(
+            # MP56 route sweep: hot routes regress at M=8 while balanced and
+            # unique routes still win there.  Keep the worst-route boundary
+            # until a device-side route classifier is available.
+            gemv_max_tokens=4,
+            grouped_gemm_min_tokens=None,
+            source=(
+                f"s5000-mp56-20260825-qwen35-bf16-e"
+                f"{257 if folded_shared_expert else 256}-n256-k2048-v128-"
+                f"{graph_mode}-route-worst-crossover-v1"
+            ),
+        )
+        for graph_mode in ("eager", "capture")
+        for folded_shared_expert in (False, True)
+    }
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
         _s5000_fp8_shape(
             local_experts=256,
             w1_output_size=512,
@@ -266,6 +288,7 @@ _CALIBRATED_THRESHOLDS.update(
 _CALIBRATED_THRESHOLDS.update(
     {
         _s5000_qwen35_bf16_decode_shape(
+            multiprocessor_count=60,
             graph_mode=graph_mode,
             folded_shared_expert=folded_shared_expert,
         ): _thresholds(
