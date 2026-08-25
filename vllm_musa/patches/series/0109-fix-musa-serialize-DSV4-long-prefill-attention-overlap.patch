@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 24 Aug 2026 13:18:26 +0800
+Subject: [PATCH] fix(musa): serialize DSV4 long-prefill attention overlap
+
+---
+ vllm/models/deepseek_v4/attention.py | 36 +++++++++++++++++++++++++---
+ 1 file changed, 33 insertions(+), 3 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index b2d29e1973..7d85116c2d 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -66,6 +66,26 @@ from vllm.platforms import current_platform
+ 
+ 
+ _MUSA_DEEPSEEK_V4_SCORE_FP32_DEEPGEMM_MAX_TOKENS = 16
++_MUSA_DEEPSEEK_V4_AUX_OVERLAP_MAX_TOKENS = 1024
++
++
++def _musa_deepseek_v4_aux_overlap_enabled(num_tokens: int) -> bool:
++    """Keep MUSA aux-stream overlap away from long-prefill kernels.
++
++    Long DeepSeek-V4 prefills can launch multiple persistent kernels from
++    independent streams.  On MUSA that combination can consume all MPs and
++    prevent the command queues from making forward progress.  Decode and MTP
++    shapes remain below the existing multi-stream threshold and retain their
++    overlap path.
++    """
++    return (
++        not current_platform.is_musa()
++        or num_tokens
++        <= min(
++            envs.VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD,
++            _MUSA_DEEPSEEK_V4_AUX_OVERLAP_MAX_TOKENS,
++        )
++    )
+ 
+ 
+ def _musa_deepseek_v4_use_score_fp32_deepgemm(
+@@ -523,8 +543,11 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             self.ln_events[0],
+             self.ln_events[1:4],
+             aux_streams,
+-            enable=hidden_states.shape[0]
+-            <= envs.VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD,
++            enable=(
++                hidden_states.shape[0]
++                <= envs.VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD
++                and _musa_deepseek_v4_aux_overlap_enabled(hidden_states.shape[0])
++            ),
+         )
+ 
+         return qr_kv, kv_score, indexer_kv_score, indexer_weights
+@@ -551,6 +574,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         # overlap with default's GEMM + cache write.
+         if self.indexer is not None:
+             aux_streams = self.aux_stream_list
++            if not _musa_deepseek_v4_aux_overlap_enabled(hidden_states.shape[0]):
++                aux_streams = None
+             indexer = self.indexer
+             # Local ref so the closure keeps a non-None type for mypy.
+             assert self.compressor is not None
+@@ -599,6 +624,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             aux_stream = (
+                 self.aux_stream_list[0] if self.aux_stream_list is not None else None
+             )
++            if not _musa_deepseek_v4_aux_overlap_enabled(hidden_states.shape[0]):
++                aux_stream = None
+             compressor = self.compressor
+ 
+             def wq_b_kv_insert() -> torch.Tensor:
+@@ -939,12 +966,15 @@ class DeepseekV4Indexer(nn.Module):
+ 
+         # compressor returns None and writes K to the indexer KV cache; the
+         # join orders that write before indexer_op (skip_k_cache_insert=True).
++        aux_stream = self.aux_stream
++        if not _musa_deepseek_v4_aux_overlap_enabled(hidden_states.shape[0]):
++            aux_stream = None
+         (q_quant, weights), k = maybe_execute_in_parallel(
+             wq_b_and_q_quant,
+             lambda: compressor(compressed_kv_score, positions, rotary_emb),
+             self.ln_events[0],
+             self.ln_events[1],
+-            self.aux_stream,
++            aux_stream,
+         )
+         return self.indexer_op(hidden_states, q_quant, k, weights)
+ 

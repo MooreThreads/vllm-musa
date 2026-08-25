@@ -70,6 +70,9 @@ try:
 except Exception:
     _MATE_SPARSE_DIRECT_OUT_ABI_SUPPORTED = False
 
+_DSV4_SPARSE_PREFILL_OVERLAP_TOKEN_THRESHOLD = 1024
+_DSV4_SPARSE_PREFILL_OVERLAP_BRANCHES = 3
+
 _MATE_SPARSE_DIRECT_OUT_PARAM_NAMES = (
     "q_handle",
     "kv_handle",
@@ -287,6 +290,17 @@ def _has_expected_mate_sparse_direct_out_abi(kernel: Any) -> bool:
     )
 
 
+def _dsv4_sparse_prefill_persistent_blocks(q: torch.Tensor) -> int:
+    assert _mate_resolve_num_mps is not None
+    num_mps = _mate_resolve_num_mps(q.device, None)
+    if q.shape[0] <= _DSV4_SPARSE_PREFILL_OVERLAP_TOKEN_THRESHOLD:
+        return num_mps
+    # Long DSV4 prefill overlaps q projection, KV compression, and the DSA
+    # indexer. Give the persistent DSA branch only its share of the MPs so the
+    # other full-device branches can always make forward progress.
+    return max(num_mps // _DSV4_SPARSE_PREFILL_OVERLAP_BRANCHES, 1)
+
+
 @_mate_api
 def _flash_mla_sparse_fwd_direct_out(
     q: torch.Tensor,
@@ -319,7 +333,7 @@ def _flash_mla_sparse_fwd_direct_out(
         sm_scale=sm_scale,
         has_attn_sink=attn_sink is not None,
         is_persistence=True,
-        persistent_blocks=_mate_resolve_num_mps(q.device, None),
+        persistent_blocks=_dsv4_sparse_prefill_persistent_blocks(q),
     )
     if not _has_expected_mate_sparse_direct_out_abi(kernel):
         logger.warning_once(

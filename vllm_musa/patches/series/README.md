@@ -17,13 +17,15 @@ is pre-patched.
   the highest prefix. Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **114 patches**. This branch includes the Qwen3.6 patches for common
+Currently **115 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
 adds Qwen3.5-122B/Qwen3-VL MM encoder FlashAttention routing, TP-only shared
 expert folding and shared-gate binding, QK/mRoPE cache-out fusion, and opt-in
-vision-block graph capture. The series contains
+vision-block graph capture. It also serializes DeepSeek-V4 long-prefill
+attention branches on MUSA while preserving decode/MTP auxiliary-stream
+overlap. The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.24.0`), applied at build. Runtime
 object/registration patches (which patch live objects at import) are kept

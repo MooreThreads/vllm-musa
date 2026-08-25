@@ -145,6 +145,30 @@ def test_dsv4_tp8_sparse_prefill_writes_directly_to_out() -> None:
     assert torch.all(lse == 8)
 
 
+@pytest.mark.parametrize(("num_mps", "expected"), [(60, 20), (56, 18), (2, 1)])
+def test_dsv4_long_sparse_prefill_partitions_mps(
+    num_mps: int,
+    expected: int,
+) -> None:
+    q = SimpleNamespace(shape=(8192, 64, 512), device="musa")
+    with patch.object(
+        flashmla,
+        "_mate_resolve_num_mps",
+        lambda device, requested: num_mps,
+    ):
+        assert flashmla._dsv4_sparse_prefill_persistent_blocks(q) == expected
+
+
+def test_dsv4_short_sparse_prefill_keeps_all_mps() -> None:
+    q = SimpleNamespace(shape=(1024, 64, 512), device="musa")
+    with patch.object(
+        flashmla,
+        "_mate_resolve_num_mps",
+        lambda device, requested: 60,
+    ):
+        assert flashmla._dsv4_sparse_prefill_persistent_blocks(q) == 60
+
+
 @pytest.mark.parametrize(
     ("allow_direct_out", "heads"),
     [(False, 64), (True, 8)],
