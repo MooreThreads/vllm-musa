@@ -13,6 +13,8 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Final
 
+from vllm_musa.tuning import MusaForwardGraphBucket
+
 MUSA_FUSED_MOE_DISPATCH_ENV: Final = "VLLM_MUSA_FUSED_MOE_DISPATCH"
 MP56_QWEN35_CALIBRATED_DECODE_BUCKETS: Final = (1, 2, 4)
 
@@ -47,7 +49,7 @@ class MusaFusedMoeShape:
     gemv_block: str
     graph_mode: str
     max_num_seqs: int | None = None
-    graph_bucket: tuple[int, int | None, bool] | None = None
+    graph_bucket: MusaForwardGraphBucket | None = None
 
 
 @dataclass(frozen=True)
@@ -316,14 +318,16 @@ _CALIBRATED_THRESHOLDS.update(
             graph_mode=graph_mode,
             folded_shared_expert=folded_shared_expert,
         ): _thresholds(
-            # Exact TP4-local Qwen crossover: M=1/2/4/8/12 are faster on
-            # native GEMV, while M>=16 is not a stable production win.
-            gemv_max_tokens=12,
+            # The folded E=257/topk=9 route-worst sweep on MP60 has a
+            # conservative M<=4 boundary; the unfolded E=256/topk=8 profile
+            # retains its independently calibrated M<=12 boundary.
+            gemv_max_tokens=4 if folded_shared_expert else 12,
             grouped_gemm_min_tokens=None,
             source=(
                 f"s5000-mp60-20260806-qwen35-36-bf16-e"
                 f"{257 if folded_shared_expert else 256}-"
-                f"n256-k2048-v128-{graph_mode}-crossover-v1"
+                f"n256-k2048-v128-{graph_mode}-"
+                f"route-worst-{'v2' if folded_shared_expert else 'v1'}"
             ),
         )
         for graph_mode in ("eager", "capture")
@@ -397,19 +401,26 @@ def thresholds_for_shape(shape: MusaFusedMoeShape) -> MusaFusedMoeThresholds:
     profiled_shape = replace(lookup_shape, max_num_seqs=None)
 
     if profiled_shape in _PROFILED_SHAPES and shape.graph_bucket is not None:
-        graph_num_tokens, graph_num_reqs, graph_uniform = shape.graph_bucket
+        graph_bucket = shape.graph_bucket
         # The MP56 profile is calibrated for full, uniform, one-token decode.
         # Speculative and piecewise descriptors retain the established backend.
         if (
-            not graph_uniform
-            or graph_num_reqs is None
-            or graph_num_tokens != graph_num_reqs
-            or graph_num_reqs <= 0
-            or (shape.max_num_seqs is not None and graph_num_reqs > shape.max_num_seqs)
+            not graph_bucket.present
+            or graph_bucket.runtime_mode != "FULL"
+            or graph_bucket.has_lora is not False
+            or graph_bucket.num_active_loras != 0
+            or not graph_bucket.uniform
+            or graph_bucket.num_reqs is None
+            or graph_bucket.num_tokens != graph_bucket.num_reqs
+            or graph_bucket.num_reqs <= 0
+            or (
+                shape.max_num_seqs is not None
+                and graph_bucket.num_reqs > shape.max_num_seqs
+            )
         ):
             return _DEFAULT_THRESHOLDS
         thresholds = _CALIBRATED_THRESHOLDS.get(
-            replace(lookup_shape, max_num_seqs=graph_num_reqs)
+            replace(lookup_shape, max_num_seqs=graph_bucket.num_reqs)
         )
         return thresholds or _DEFAULT_THRESHOLDS
 
@@ -467,7 +478,15 @@ def select_fused_moe_backend(
     # native backend while Dynamo is still tracing symbolic inputs.
     if shape.graph_mode == "compile":
         return MusaFusedMoeBackend.UPSTREAM
-    if shape.graph_bucket is not None and shape.graph_bucket[0] != num_tokens:
+    if shape.graph_bucket is not None and (
+        not shape.graph_bucket.present
+        or shape.graph_bucket.num_tokens != num_tokens
+        or shape.graph_bucket.runtime_mode != "FULL"
+        or shape.graph_bucket.has_lora is not False
+        or shape.graph_bucket.num_active_loras != 0
+        or not shape.graph_bucket.uniform
+        or shape.graph_bucket.num_reqs != shape.graph_bucket.num_tokens
+    ):
         return MusaFusedMoeBackend.UPSTREAM
 
     if requested == MusaFusedMoeBackend.GEMV:

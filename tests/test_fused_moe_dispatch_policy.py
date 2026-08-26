@@ -20,6 +20,7 @@ MUSA_FUSED_MOE_DISPATCH_ENV = POLICY.MUSA_FUSED_MOE_DISPATCH_ENV
 MusaFusedMoeBackend = POLICY.MusaFusedMoeBackend
 MusaFusedMoeShape = POLICY.MusaFusedMoeShape
 MusaFusedMoeThresholds = POLICY.MusaFusedMoeThresholds
+MusaForwardGraphBucket = POLICY.MusaForwardGraphBucket
 parse_dispatch_backend = POLICY.parse_dispatch_backend
 resolve_fused_moe_graph_mode = POLICY.resolve_fused_moe_graph_mode
 select_fused_moe_backend = POLICY.select_fused_moe_backend
@@ -303,7 +304,7 @@ def test_pr113_folded_qwen_shape_requires_fresh_calibration():
     assert thresholds_for_shape(folded_qwen).source == "uncalibrated-shape"
 
 
-def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
+def test_qwen35_bf16_decode_gemv_uses_mp60_route_worst_crossover():
     shape = _shape(
         multiprocessor_count=60,
         local_experts=257,
@@ -319,8 +320,8 @@ def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
         w2_scale_shape=(),
     )
 
-    assert thresholds_for_shape(shape).gemv_max_tokens == 12
-    for token_count in (1, 4, 8, 12):
+    assert thresholds_for_shape(shape).gemv_max_tokens == 4
+    for token_count in (1, 4):
         assert (
             select_fused_moe_backend(
                 shape=shape,
@@ -331,18 +332,19 @@ def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
             )
             == MusaFusedMoeBackend.GEMV
         )
-    assert (
-        select_fused_moe_backend(
-            shape=shape,
-            num_tokens=16,
-            can_use_gemv=True,
-            can_use_grouped_gemm=False,
-            stream_is_capturing=False,
+    for token_count in (8, 16):
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=token_count,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=False,
+            )
+            == MusaFusedMoeBackend.UPSTREAM
         )
-        == MusaFusedMoeBackend.UPSTREAM
-    )
     capture_shape = _shape(**{**shape.__dict__, "graph_mode": "capture"})
-    assert thresholds_for_shape(capture_shape).gemv_max_tokens == 12
+    assert thresholds_for_shape(capture_shape).gemv_max_tokens == 4
 
     unfolded = _shape(
         multiprocessor_count=60,
@@ -455,14 +457,23 @@ def test_qwen_mp56_uses_only_exact_full_decode_graph_buckets():
     )
 
     for graph_bucket in ((1, 1, True), (2, 2, True), (4, 4, True)):
+        descriptor = MusaForwardGraphBucket(
+            num_tokens=graph_bucket[0],
+            num_reqs=graph_bucket[1],
+            uniform=graph_bucket[2],
+            runtime_mode="FULL",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        )
         thresholds = thresholds_for_shape(
-            dataclasses.replace(base_shape, graph_bucket=graph_bucket)
+            dataclasses.replace(base_shape, graph_bucket=descriptor)
         )
         assert thresholds.gemv_max_tokens == 4
         assert f"maxseq{graph_bucket[0]}" in thresholds.source
         assert (
             select_fused_moe_backend(
-                shape=dataclasses.replace(base_shape, graph_bucket=graph_bucket),
+                shape=dataclasses.replace(base_shape, graph_bucket=descriptor),
                 num_tokens=graph_bucket[0],
                 can_use_gemv=True,
                 can_use_grouped_gemm=False,
@@ -473,7 +484,18 @@ def test_qwen_mp56_uses_only_exact_full_decode_graph_buckets():
             == MusaFusedMoeBackend.GEMV
         )
 
-    bucket_one_shape = dataclasses.replace(base_shape, graph_bucket=(1, 1, True))
+    bucket_one_shape = dataclasses.replace(
+        base_shape,
+        graph_bucket=MusaForwardGraphBucket(
+            num_tokens=1,
+            num_reqs=1,
+            uniform=True,
+            runtime_mode="FULL",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        ),
+    )
     assert (
         select_fused_moe_backend(
             shape=bucket_one_shape,
@@ -493,7 +515,16 @@ def test_qwen_mp56_uses_only_exact_full_decode_graph_buckets():
         (4, None, False),
         (1, None, False),
     ):
-        invalid_shape = dataclasses.replace(base_shape, graph_bucket=graph_bucket)
+        descriptor = MusaForwardGraphBucket(
+            num_tokens=graph_bucket[0],
+            num_reqs=graph_bucket[1],
+            uniform=graph_bucket[2],
+            runtime_mode="FULL" if graph_bucket[2] else "PIECEWISE",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        )
+        invalid_shape = dataclasses.replace(base_shape, graph_bucket=descriptor)
         thresholds = thresholds_for_shape(invalid_shape)
         assert thresholds.source == "uncalibrated-shape"
         assert (
@@ -505,6 +536,45 @@ def test_qwen_mp56_uses_only_exact_full_decode_graph_buckets():
                 stream_is_capturing=True,
                 requested=MusaFusedMoeBackend.AUTO,
                 thresholds=thresholds,
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+
+    for descriptor in (
+        MusaForwardGraphBucket(
+            num_tokens=1,
+            num_reqs=1,
+            uniform=True,
+            runtime_mode="FULL",
+            has_lora=True,
+            num_active_loras=1,
+            present=True,
+        ),
+        MusaForwardGraphBucket.invalid(),
+    ):
+        shape = dataclasses.replace(base_shape, graph_bucket=descriptor)
+        assert thresholds_for_shape(shape).source == "uncalibrated-shape"
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=1,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=True,
+                requested=MusaFusedMoeBackend.AUTO,
+                thresholds=thresholds_for_shape(shape),
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=1,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=False,
+                requested=MusaFusedMoeBackend.GEMV,
+                thresholds=thresholds_for_shape(shape),
             )
             == MusaFusedMoeBackend.UPSTREAM
         )

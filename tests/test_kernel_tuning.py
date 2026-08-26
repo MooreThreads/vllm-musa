@@ -136,23 +136,85 @@ def test_forward_graph_bucket_query_is_validated_and_fail_closed(monkeypatch) ->
 
     forward_context.is_forward_context_available = lambda: False
     forward_context.get_forward_context = lambda: SimpleNamespace(
-        batch_descriptor=SimpleNamespace(num_tokens=1, num_reqs=1, uniform=True)
+        batch_descriptor=SimpleNamespace(
+            num_tokens=1,
+            num_reqs=1,
+            uniform=True,
+            has_lora=False,
+            num_active_loras=0,
+        ),
+        cudagraph_runtime_mode=SimpleNamespace(name="FULL"),
     )
     assert tuning.query_musa_forward_graph_bucket() is None
 
     forward_context.is_forward_context_available = lambda: True
-    assert tuning.query_musa_forward_graph_bucket() == (1, 1, True)
+    forward_context.get_forward_context = lambda: SimpleNamespace(
+        batch_descriptor=SimpleNamespace(
+            num_tokens=1,
+            num_reqs=1,
+            uniform=True,
+            has_lora=False,
+            num_active_loras=0,
+        ),
+        cudagraph_runtime_mode=SimpleNamespace(name="FULL"),
+    )
+    bucket = tuning.query_musa_forward_graph_bucket()
+    assert bucket is not None
+    assert bucket.num_tokens == 1
+    assert bucket.runtime_mode == "FULL"
+    assert bucket.has_lora is False
+    assert bucket.num_active_loras == 0
 
     for descriptor in (
         None,
-        SimpleNamespace(num_tokens=0, num_reqs=1, uniform=True),
-        SimpleNamespace(num_tokens=4, num_reqs=0, uniform=True),
-        SimpleNamespace(num_tokens=4, num_reqs=4, uniform=1),
+        SimpleNamespace(
+            num_tokens=0,
+            num_reqs=1,
+            uniform=True,
+            has_lora=False,
+            num_active_loras=0,
+        ),
+        SimpleNamespace(
+            num_tokens=4,
+            num_reqs=0,
+            uniform=True,
+            has_lora=False,
+            num_active_loras=0,
+        ),
+        SimpleNamespace(
+            num_tokens=4,
+            num_reqs=4,
+            uniform=1,
+            has_lora=False,
+            num_active_loras=0,
+        ),
     ):
         forward_context.get_forward_context = lambda descriptor=descriptor: (
-            SimpleNamespace(batch_descriptor=descriptor)
+            SimpleNamespace(
+                batch_descriptor=descriptor,
+                cudagraph_runtime_mode=SimpleNamespace(name="FULL"),
+            )
         )
-        assert tuning.query_musa_forward_graph_bucket() is None
+        assert tuning.query_musa_forward_graph_bucket().present
+
+    for mode, has_lora, active_loras in (("PIECEWISE", False, 0), ("FULL", True, 1)):
+        forward_context.get_forward_context = (
+            lambda mode=mode,
+            has_lora=has_lora,
+            active_loras=active_loras: SimpleNamespace(
+                batch_descriptor=SimpleNamespace(
+                    num_tokens=1,
+                    num_reqs=1,
+                    uniform=True,
+                    has_lora=has_lora,
+                    num_active_loras=active_loras,
+                ),
+                cudagraph_runtime_mode=SimpleNamespace(name=mode),
+            )
+        )
+        bucket = tuning.query_musa_forward_graph_bucket()
+        assert bucket.present
+        assert bucket.runtime_mode == mode
 
 
 @pytest.mark.parametrize(

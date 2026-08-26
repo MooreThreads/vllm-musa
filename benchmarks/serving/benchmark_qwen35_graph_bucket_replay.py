@@ -17,6 +17,8 @@ from typing import Any
 
 from benchmark_qwen35_mp_ab import (
     DEFAULT_MODEL,
+    DISPATCH_ENV,
+    inspect_compile_state,
     make_prompt_ids,
 )
 
@@ -85,7 +87,11 @@ def main() -> None:
     parser.add_argument("--input-tokens", type=int, default=256)
     parser.add_argument("--output-tokens", type=int, default=128)
     parser.add_argument("--max-num-batched-tokens", type=int, default=8192)
-    parser.add_argument("--cudagraph-capture-sizes", type=_parse_sequence)
+    parser.add_argument(
+        "--cudagraph-capture-sizes",
+        type=_parse_sequence,
+        default="1,2,4,16,64",
+    )
     parser.add_argument("--seed", type=int, default=20260826)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -93,6 +99,18 @@ def main() -> None:
     max_batch = max(args.batch_sequence + args.warmup_sequence)
     if args.max_num_seqs < max_batch:
         raise ValueError("max_num_seqs must cover every replay batch")
+    required_capture_sizes = {1, 2, 4}
+    if not required_capture_sizes.issubset(args.cudagraph_capture_sizes) or not any(
+        size >= 16 for size in args.cudagraph_capture_sizes
+    ):
+        raise ValueError(
+            "cudagraph_capture_sizes must include 1,2,4 and a fallback bucket >=16"
+        )
+
+    dispatch_policy = {"baseline": "upstream", "candidate": "auto"}[args.policy]
+    import os
+
+    os.environ[DISPATCH_ENV] = dispatch_policy
 
     import torchada  # noqa: F401 - activate MUSA compatibility first
     from transformers import AutoTokenizer
@@ -162,6 +180,13 @@ def main() -> None:
         for batch_size, values in sorted(grouped.items())
     }
 
+    compile_state = inspect_compile_state(llm)
+    if compile_state is None or not compile_state["compile_active"]:
+        raise RuntimeError(
+            "vLLM resolved cudagraph mode is unavailable or disabled; "
+            "refusing to record a compiled replay result"
+        )
+
     result = {
         "policy": args.policy,
         "model": args.model,
@@ -173,8 +198,10 @@ def main() -> None:
         "output_tokens": args.output_tokens,
         "max_num_batched_tokens": args.max_num_batched_tokens,
         "cudagraph_capture_sizes": args.cudagraph_capture_sizes,
+        "dispatch_policy": dispatch_policy,
         "seed": args.seed,
         "enforce_eager": False,
+        "compile_state": compile_state,
         "compiled_or_captured": True,
         "semantic_pass": all(record["semantic_pass"] for record in records),
         "exact_output_tokens": all(record["exact_output_tokens"] for record in records),

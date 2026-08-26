@@ -20,6 +20,28 @@ FUSED_ADD_RMSNORM_MIN_ROWS = 64
 _ENGINE_MAX_NUM_SEQS_ENV = "_VLLM_MUSA_ENGINE_MAX_NUM_SEQS"
 
 
+@dataclass(frozen=True)
+class MusaForwardGraphBucket:
+    """Validated projection of vLLM's graph dispatch descriptor.
+
+    ``present`` distinguishes a missing context (where a legacy static profile
+    may still be safe) from a present but ineligible descriptor (which must
+    fail closed).
+    """
+
+    num_tokens: int | None = None
+    num_reqs: int | None = None
+    uniform: bool | None = None
+    runtime_mode: str | None = None
+    has_lora: bool | None = None
+    num_active_loras: int | None = None
+    present: bool = False
+
+    @classmethod
+    def invalid(cls) -> MusaForwardGraphBucket:
+        return cls(present=True)
+
+
 def configure_musa_engine_scheduler_profile(max_num_seqs: int | None) -> None:
     """Publish the engine-static scheduler profile to spawned workers.
 
@@ -45,7 +67,7 @@ def configure_musa_engine_scheduler_profile_from_config(vllm_config: Any) -> Non
     )
 
 
-def query_musa_forward_graph_bucket() -> tuple[int, int | None, bool] | None:
+def query_musa_forward_graph_bucket() -> MusaForwardGraphBucket | None:
     """Read vLLM's graph-static batch key and fail closed if unavailable."""
     try:
         from vllm.forward_context import (
@@ -55,28 +77,40 @@ def query_musa_forward_graph_bucket() -> tuple[int, int | None, bool] | None:
 
         if not is_forward_context_available():
             return None
-        descriptor = get_forward_context().batch_descriptor
+        context = get_forward_context()
+        descriptor = context.batch_descriptor
         if descriptor is None:
-            return None
+            return MusaForwardGraphBucket.invalid()
         num_tokens = descriptor.num_tokens
         num_reqs = descriptor.num_reqs
         uniform = descriptor.uniform
-        if type(num_tokens) is not int or num_tokens <= 0:
-            return None
-        if num_reqs is not None and (type(num_reqs) is not int or num_reqs <= 0):
-            return None
-        if type(uniform) is not bool:
-            return None
-        return num_tokens, num_reqs, uniform
-    except (
-        AttributeError,
-        ImportError,
-        LookupError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-    ):
+        runtime_mode = getattr(context.cudagraph_runtime_mode, "name", None)
+        has_lora = descriptor.has_lora
+        num_active_loras = descriptor.num_active_loras
+        if (
+            type(num_tokens) is not int
+            or num_tokens <= 0
+            or (num_reqs is not None and (type(num_reqs) is not int or num_reqs <= 0))
+            or type(uniform) is not bool
+            or type(runtime_mode) is not str
+            or type(has_lora) is not bool
+            or type(num_active_loras) is not int
+            or num_active_loras < 0
+        ):
+            return MusaForwardGraphBucket.invalid()
+        return MusaForwardGraphBucket(
+            num_tokens=num_tokens,
+            num_reqs=num_reqs,
+            uniform=uniform,
+            runtime_mode=runtime_mode,
+            has_lora=has_lora,
+            num_active_loras=num_active_loras,
+            present=True,
+        )
+    except ImportError:
         return None
+    except (AttributeError, LookupError, RuntimeError, TypeError, ValueError):
+        return MusaForwardGraphBucket.invalid()
 
 
 def query_musa_engine_max_num_seqs() -> int | None:

@@ -16,6 +16,24 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_MODEL = "/home/dist/models/Qwen3.5-35B-A3B-BF16"
+DISPATCH_ENV = "VLLM_MUSA_FUSED_MOE_DISPATCH"
+
+
+def inspect_compile_state(llm: Any) -> dict[str, Any] | None:
+    """Return vLLM's resolved compile/cudagraph state when introspectable."""
+    engine = getattr(llm, "llm_engine", None)
+    vllm_config = getattr(engine, "vllm_config", None)
+    compilation_config = getattr(vllm_config, "compilation_config", None)
+    if compilation_config is None:
+        return None
+    mode = getattr(compilation_config, "cudagraph_mode", None)
+    mode_name = getattr(mode, "name", None) or str(mode)
+    capture_sizes = getattr(compilation_config, "cudagraph_capture_sizes", None)
+    return {
+        "cudagraph_mode": mode_name,
+        "cudagraph_capture_sizes": list(capture_sizes or []),
+        "compile_active": mode_name.upper() not in {"NONE", "NONE_MODE"},
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,6 +118,8 @@ def main() -> int:
         )
 
     max_num_seqs = args.max_num_seqs or args.batch_size
+    dispatch_policy = {"baseline": "upstream", "candidate": "auto"}[args.policy]
+    os.environ[DISPATCH_ENV] = dispatch_policy
 
     import torchada  # noqa: F401 - activate MUSA compatibility first
     from transformers import AutoTokenizer
@@ -155,15 +175,24 @@ def main() -> int:
             f"semantic check did not contain Beijing: {semantic_text!r}"
         )
 
+    compile_state = inspect_compile_state(llm)
+    if compile_state is None or not compile_state["compile_active"]:
+        raise RuntimeError(
+            "vLLM resolved cudagraph mode is unavailable or disabled; "
+            "refusing to record a compiled A/B result"
+        )
+
     throughputs = [record["output_tokens_per_s"] for record in records]
     result = {
         "policy": args.policy,
         "model": args.model,
         "tensor_parallel_size": 4,
+        "compile_state": compile_state,
         "compiled_or_captured": True,
         "enforce_eager": False,
         "batch_size": args.batch_size,
         "max_num_seqs": max_num_seqs,
+        "dispatch_policy": dispatch_policy,
         "input_tokens": args.input_tokens,
         "output_tokens": args.output_tokens,
         "warmup": warmup_records,
