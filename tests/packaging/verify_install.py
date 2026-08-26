@@ -38,12 +38,23 @@ def verify_bundled() -> None:
     assert "/vllm-workspace" not in str(Path(vllm.__file__).resolve())
     assert "/vllm-workspace" not in str(Path(vllm_musa.__file__).resolve())
 
-    importlib.import_module("vllm._C")
-    importlib.import_module("vllm_musa._C")
+    for module_name in (
+        "vllm._C",
+        "vllm._C_stable_libtorch",
+        "vllm._moe_C",
+        "vllm_musa._C",
+    ):
+        importlib.import_module(module_name)
     rust_frontend = Path(vllm.__file__).with_name("vllm-rs")
     if rust_frontend.exists():
         assert rust_frontend.stat().st_mode & 0o111
         importlib.import_module("vllm._rust_tool_parser")
+
+    from vllm.utils.import_utils import get_vllm_optional_dependencies
+
+    optional_dependencies = get_vllm_optional_dependencies()
+    assert "audio" in optional_dependencies
+    assert "bench" in optional_dependencies
 
     entry_points = importlib.metadata.entry_points()
     for group, names in {

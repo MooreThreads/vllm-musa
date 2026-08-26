@@ -75,7 +75,7 @@ install below.
 | Index | URL | Provides |
 |---|---|---|
 | Moore Threads | `https://dl.mthreads.com/repo/api/pypi/pypi/simple` | the MUSA wheels pinned in `requirements/musa_private.txt` — `torch`, `torch_musa`, `mate`, `flash_attn_3`, `flash_mla`, `deep-gemm`, `tilelang_musa`, `triton`, `apache-tvm-ffi`, … |
-| Public PyPI | `https://pypi.org/simple`, or a mirror | the ordinary third-party wheels in `requirements/build.txt` and `requirements/common.txt` |
+| Public PyPI | `https://pypi.org/simple`, or a mirror | the ordinary third-party wheels in `requirements/build.txt`, `requirements/common.txt`, and `requirements/vllm_common.txt` |
 
 Most of the MUSA wheels are not published on public PyPI, so installing
 `requirements/musa.txt` with pip's default index fails with
@@ -118,7 +118,8 @@ there and the merged index only supplies the ordinary dependencies.
     # 2. The ordinary third-party wheels, from public PyPI. Pass 1 already
     #    satisfies `torch`.
     pip install --index-url "${PYPI_INDEX_URL}" \
-        -r requirements/build.txt -r requirements/common.txt
+        -r requirements/build.txt -r requirements/common.txt \
+        -r requirements/vllm_common.txt
 
     # 3. The MUSA wheels' own ordinary dependencies (sympy, networkx, ...).
     #    Pass 1 pinned every MUSA wheel, so none are re-resolved here.
@@ -134,10 +135,10 @@ there and the merged index only supplies the ordinary dependencies.
     export PIP_INDEX_URL="${PYPI_INDEX_URL}"
 
     # Standard installation (installs vLLM MUSA plugin and vLLM)
-    pip install . --no-build-isolation -v
+    pip install . --no-build-isolation --no-deps -v
 
     # Or editable installation for development
-    pip install -e . --no-build-isolation -v
+    pip install -e . --no-build-isolation --no-deps -v
     ```
 
     A standard installation creates one `vllm-musa` distribution that owns
@@ -185,14 +186,14 @@ host C++ compiler and MUSA `mcc` through ccache. The generated `mcc` wrapper
 normalizes MUSA-only inputs such as `.mu` sources to cacheable `.cu` copies and
 hides `-x musa` from ccache while still passing it to `mcc`. The default cache
 lives in `<repo>/.ccache`, so a second
-`pip install -e . --no-build-isolation -v` from the same checkout can reuse
+`pip install -e . --no-build-isolation --no-deps -v` from the same checkout can reuse
 cached `.cu`, `.mu`, and C++ object compilation.
 
 Useful commands:
 
 ```bash
 ccache --zero-stats
-pip install -e . --no-build-isolation -v
+pip install -e . --no-build-isolation --no-deps -v
 ccache --show-stats
 ```
 

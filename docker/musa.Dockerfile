@@ -290,7 +290,7 @@ ENV PIP_INDEX_URL=${PYPI_INDEX_URL}
 
 COPY . /vllm-workspace
 RUN python -m pip install \
-        -e . --no-build-isolation -v && \
+        -e . --no-build-isolation --no-deps -v && \
     python -m pip install numpy==1.26
 
 RUN python -m pip install \

@@ -19,10 +19,12 @@ sys.path.insert(0, str(root))
 
 from setuptools import setup  # noqa: E402
 from setuptools.command.build_py import build_py  # noqa: E402
-from setuptools_scm import get_version  # noqa: E402
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension  # noqa: E402
 
-from build_utils.bundle_vllm import bundle_vllm_package  # noqa: E402
+from build_utils.bundle_vllm import (  # noqa: E402
+    bundle_vllm_package,
+    generate_vllm_version,
+)
 from build_utils.ccache import configure_compiler_cache  # noqa: E402
 
 third_party = Path("third_party")
@@ -78,6 +80,7 @@ _is_editable_install = (
     "develop" in sys.argv
     or "editable_wheel" in sys.argv
     or any("--editable" in arg or "-e" in arg for arg in sys.argv)
+    or ("build_ext" in sys.argv and "--inplace" in sys.argv)
 )
 
 if _is_editable_install:
@@ -556,14 +559,21 @@ class _CustomBuildPy(build_py):
 
         _CustomBuildExt.prepare_third_party()
         repo = root / _VLLM_REPO.source_dir
-        get_version(root=str(repo), write_to="vllm/_version.py")
+        generate_vllm_version(
+            repo,
+            fallback_version=os.environ.get(
+                "VLLM_VERSION_OVERRIDE", _PINS["VLLM_TAG"].removeprefix("v")
+            ),
+            commit_id=_PINS.get("VLLM_COMMIT"),
+        )
 
         source = repo / "vllm"
         destination = Path(self.build_lib) / "vllm"
         result = bundle_vllm_package(source, destination)
         print(
             "Bundled patched vLLM package: "
-            f"files={result.files} metadata_rewrites={result.metadata_rewrites}"
+            f"files={result.files} version_rewrites={result.version_rewrites} "
+            f"metadata_rewrites={result.metadata_rewrites}"
         )
 
 

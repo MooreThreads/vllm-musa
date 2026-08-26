@@ -1,0 +1,61 @@
+# Runtime requirements mirrored from the pinned upstream vLLM checkout.
+# Keep this file semantically aligned by running tests/test_pins.py when the
+# VLLM_COMMIT in third_party/PINS changes.
+regex
+cachetools
+psutil
+sentencepiece
+numpy
+requests >= 2.26.0
+tqdm
+blake3
+py-cpuinfo
+transformers >= 5.5.3
+tokenizers >= 0.21.1
+safetensors >= 0.6.2
+protobuf >= 5.29.6, !=6.30.*, !=6.31.*, !=6.32.*, !=6.33.0.*, !=6.33.1.*, !=6.33.2.*, !=6.33.3.*, !=6.33.4.*
+fastapi[standard] >= 0.133.0, < 0.137.0
+starlette >= 1.0.1
+aiohttp >= 3.13.3
+openai >= 2.0.0
+pydantic >= 2.12.0
+prometheus_client >= 0.18.0
+pillow
+prometheus-fastapi-instrumentator >= 8.0.0
+tiktoken >= 0.6.0
+lm-format-enforcer == 0.11.3
+llguidance >= 1.7.0, < 1.8.0; platform_machine == "x86_64" or platform_machine == "arm64" or platform_machine == "aarch64" or platform_machine == "ppc64le"
+outlines_core == 0.2.14
+diskcache == 5.6.3
+lark == 1.2.2
+xgrammar >= 0.2.1, < 1.0.0; platform_machine == "x86_64" or platform_machine == "aarch64" or platform_machine == "arm64" or platform_machine == "s390x" or platform_machine == "ppc64le"
+typing_extensions >= 4.10
+filelock >= 3.16.1
+partial-json-parser
+jsonschema >= 4.23.0
+pyzmq >= 25.0.0
+msgspec
+mistral_common[image] >= 1.11.3
+opencv-python-headless >= 4.13.0
+pyyaml
+six>=1.16.0; python_version > "3.11"
+setuptools>=77.0.3,<81.0.0; python_version > "3.11"
+einops
+compressed-tensors == 0.17.0
+depyf==0.20.0
+cloudpickle
+watchfiles
+python-json-logger
+ninja
+pybase64
+cbor2
+ijson
+setproctitle
+openai-harmony >= 0.0.3
+anthropic >= 0.71.0
+model-hosting-container-standards >= 0.1.14, < 1.0.0
+mcp
+opentelemetry-sdk >= 1.27.0
+opentelemetry-api >= 1.27.0
+opentelemetry-exporter-otlp >= 1.27.0
+opentelemetry-semantic-conventions-ai >= 0.4.1

@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parent.parent
 PINS = ROOT / "third_party" / "PINS"
@@ -27,6 +28,18 @@ def _parse_pins() -> dict:
         key, _, value = line.partition("=")
         pins[key.strip()] = value.split("#", 1)[0].strip()
     return pins
+
+
+def _normalized_requirements(path: Path) -> set[str]:
+    requirements = set()
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if " #" in line:
+            line = line.split(" #", 1)[0].strip()
+        requirements.add(str(Requirement(line)))
+    return requirements
 
 
 def test_pins_exists_with_required_keys():
@@ -77,3 +90,12 @@ def test_setup_and_makefile_resolve_same_commit():
     ).stdout.strip()
     assert sed_commit == pins_commit, (sed_commit, pins_commit)
     assert len(pins_commit) == 40
+
+
+def test_vllm_runtime_requirements_match_prepared_pin():
+    upstream = ROOT / "third_party" / "vllm" / "requirements" / "common.txt"
+    if not upstream.is_file():
+        pytest.skip("pinned upstream vLLM source is not prepared")
+
+    bundled = ROOT / "requirements" / "vllm_common.txt"
+    assert _normalized_requirements(bundled) == _normalized_requirements(upstream)

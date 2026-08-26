@@ -72,7 +72,7 @@ MUSA SDK 的主机上，请使用下面的源码安装。
 | 索引 | URL | 提供内容 |
 |---|---|---|
 | 摩尔线程 | `https://dl.mthreads.com/repo/api/pypi/pypi/simple` | `requirements/musa_private.txt` 中约束的 MUSA wheel — `torch`、`torch_musa`、`mate`、`flash_attn_3`、`flash_mla`、`deep-gemm`、`tilelang_musa`、`triton`、`apache-tvm-ffi` 等 |
-| 公共 PyPI | `https://pypi.org/simple` 或其镜像 | `requirements/build.txt` 与 `requirements/common.txt` 中的普通第三方 wheel |
+| 公共 PyPI | `https://pypi.org/simple` 或其镜像 | `requirements/build.txt`、`requirements/common.txt` 与 `requirements/vllm_common.txt` 中的普通第三方 wheel |
 
 大部分 MUSA wheel 并未发布到公共 PyPI，因此用 pip 默认索引安装
 `requirements/musa.txt` 会失败并报
@@ -111,7 +111,8 @@ MUSA wheel 必须在摩尔线程索引作为**唯一** `--index-url` 的前提�
 
     # 2. 普通第三方 wheel，从公共 PyPI 安装。第 1 步已满足 `torch`。
     pip install --index-url "${PYPI_INDEX_URL}" \
-        -r requirements/build.txt -r requirements/common.txt
+        -r requirements/build.txt -r requirements/common.txt \
+        -r requirements/vllm_common.txt
 
     # 3. 补齐 MUSA wheel 自身的普通依赖（sympy、networkx 等）。第 1 步已固定所有
     #    MUSA wheel，这里不会重新解析它们。
@@ -127,10 +128,10 @@ MUSA wheel 必须在摩尔线程索引作为**唯一** `--index-url` 的前提�
     export PIP_INDEX_URL="${PYPI_INDEX_URL}"
 
     # 标准安装（安装 vLLM MUSA 插件和 vLLM）
-    pip install . --no-build-isolation -v
+    pip install . --no-build-isolation --no-deps -v
 
     # 或可编辑安装（用于开发）
-    pip install -e . --no-build-isolation -v
+    pip install -e . --no-build-isolation --no-deps -v
     ```
 
     标准安装只会创建一个 `vllm-musa` distribution，由它同时拥有 `vllm` 和
@@ -176,14 +177,14 @@ MUSA wheel 必须在摩尔线程索引作为**唯一** `--index-url` 的前提�
 ccache。生成的 `mcc` wrapper 会把 `.mu` 等 MUSA 专有输入规范化为可缓存的 `.cu`
 副本，并对 ccache 隐藏 `-x musa`，同时仍将其传给 `mcc`。默认缓存目录为
 `<repo>/.ccache`，因此在同一份检出中第二次执行
-`pip install -e . --no-build-isolation -v` 可以复用已缓存的 `.cu`、`.mu` 和 C++
+`pip install -e . --no-build-isolation --no-deps -v` 可以复用已缓存的 `.cu`、`.mu` 和 C++
 目标文件。
 
 常用命令：
 
 ```bash
 ccache --zero-stats
-pip install -e . --no-build-isolation -v
+pip install -e . --no-build-isolation --no-deps -v
 ccache --show-stats
 ```
 

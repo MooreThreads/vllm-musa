@@ -374,6 +374,7 @@ def test_wheel_build_wires_bundled_vllm_without_changing_editable_sources():
     assert "bundle_vllm_package(source, destination)" in setup
     assert 'if _is_editable_install:' in setup
     assert "if _is_editable_install:\n            self._install_vllm" in setup
+    assert '("build_ext" in sys.argv and "--inplace" in sys.argv)' in setup
     assert 'vllm = "vllm.entrypoints.cli.main:main"' in pyproject
 
 
