@@ -4,8 +4,8 @@ Date: Wed, 3 Jun 2026 11:47:36 +0000
 Subject: [PATCH] MUSA: vllm.v1.spec_decode.llm_base_proposer
 
 ---
- vllm/v1/spec_decode/llm_base_proposer.py | 140 +++++++++++++++++++----
- 1 file changed, 117 insertions(+), 23 deletions(-)
+ vllm/v1/spec_decode/llm_base_proposer.py | 155 ++++++++++++++++++++----
+ 1 file changed, 132 insertions(+), 23 deletions(-)
 
 diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
 index 9f46cbd24..daa0cde9d 100644
@@ -33,11 +33,11 @@ index 9f46cbd24..daa0cde9d 100644
 +        self.cudagraph_dispatcher = CudagraphDispatcher(
 +            self.vllm_config, for_draft_model=True
 +        )
- 
+
          # persistent buffers for cuda graph
          self.input_ids = torch.zeros(
 @@ -466,7 +472,7 @@ class SpecDecodeBaseProposer:
- 
+
          if self.method in ("eagle3", "dflash"):
              model = self.model
 -            if isinstance(model, BreakableCUDAGraphWrapper):
@@ -48,7 +48,7 @@ index 9f46cbd24..daa0cde9d 100644
 @@ -498,8 +504,12 @@ class SpecDecodeBaseProposer:
              self.build_per_group_and_layer_attn_metadata(common_attn_metadata)
          )
- 
+
 -        cudagraph_runtime_mode, num_input_tokens, num_tokens_across_dp = (
 -            self._determine_batch_execution_and_padding(num_tokens)
 +        # / PR #34880: derive uniform_decode locally (PR #34880 plumbs
@@ -58,7 +58,7 @@ index 9f46cbd24..daa0cde9d 100644
 +        cudagraph_runtime_mode, batch_desc, num_input_tokens, num_tokens_across_dp = (
 +            self._determine_batch_execution_and_padding(num_tokens, uniform_decode)
          )
- 
+
          model_kwargs, slot_mapping_size = self.build_model_inputs_first_pass(
 @@ -517,6 +527,7 @@ class SpecDecodeBaseProposer:
              num_tokens=num_input_tokens,
@@ -71,7 +71,7 @@ index 9f46cbd24..daa0cde9d 100644
 @@ -587,14 +598,25 @@ class SpecDecodeBaseProposer:
          # Generate the remaining draft tokens.
          draft_token_ids_list = [draft_token_ids]
- 
+
 -        cudagraph_runtime_mode, input_batch_size, batch_size_across_dp = (
 -            self._determine_batch_execution_and_padding(batch_size)
 +        # / PR #34880: subsequent decode passes dispatch with
@@ -82,7 +82,7 @@ index 9f46cbd24..daa0cde9d 100644
 +                batch_size, uniform_decode=True, uniform_decode_query_len=1
 +            )
          )
- 
+
          common_attn_metadata.num_actual_tokens = batch_size
          common_attn_metadata.max_query_len = 1
 -        common_attn_metadata.query_start_loc = self.arange[: batch_size + 1]
@@ -97,7 +97,7 @@ index 9f46cbd24..daa0cde9d 100644
 +        common_attn_metadata.query_start_loc_cpu[: batch_size + 1] = torch.from_numpy(
              self.token_arange_np[: batch_size + 1]
          ).clone()
- 
+
 @@ -662,6 +684,7 @@ class SpecDecodeBaseProposer:
                  num_tokens=input_batch_size,
                  num_tokens_across_dp=batch_size_across_dp,
@@ -108,7 +108,7 @@ index 9f46cbd24..daa0cde9d 100644
                  ret_hidden_states = self.model(**model_kwargs)
 @@ -1240,6 +1263,29 @@ class SpecDecodeBaseProposer:
          )
- 
+
          self.model = self._get_model()
 +        # / PR #34880: wrap the draft model with FULL-mode
 +        # CUDAGraphWrapper when target uses FULL captures. CUDAGraphWrapper
@@ -133,10 +133,10 @@ index 9f46cbd24..daa0cde9d 100644
 +            self.model = CUDAGraphWrapper(
 +                self.model, self.vllm_config, runtime_mode=CUDAGraphMode.FULL
 +            )
- 
+
          # Find draft layers (attention layers added by draft model)
          all_attn_layers = get_layers_from_vllm_config(
-@@ -1505,22 +1551,48 @@ class SpecDecodeBaseProposer:
+@@ -1505,22 +1551,63 @@ class SpecDecodeBaseProposer:
      def dummy_run(
          self,
          num_tokens: int,
@@ -171,8 +171,23 @@ index 9f46cbd24..daa0cde9d 100644
 +                # Match propose()'s subsequent decode passes which dispatch
 +                # with (batch_size, uniform=True, qdl=1).
 +                uniform_decode = True
-+                num_tokens = common_attn_metadata.num_reqs
++                batch_size = common_attn_metadata.num_reqs
++                num_tokens = batch_size
 +                uniform_decode_query_len = 1
++
++                # The subsequent Eagle draft pass consumes one token per
++                # request, not the target verify pass's
++                # (1 + num_speculative_tokens) tokens per request. Keep the
++                # attention metadata consistent with the draft Q tensor. In
++                # particular, cu_seqlens_q[-1] must equal q.shape[0].
++                common_attn_metadata.num_actual_tokens = batch_size
++                common_attn_metadata.max_query_len = 1
++                common_attn_metadata.query_start_loc[: batch_size + 1] = (
++                    self.arange[: batch_size + 1]
++                )
++                common_attn_metadata.query_start_loc_cpu[: batch_size + 1] = (
++                    torch.from_numpy(self.token_arange_np[: batch_size + 1]).clone()
++                )
 +            else:
 +                mode = self.cudagraph_dispatcher.cudagraph_mode
 +                is_full_sep = (
@@ -193,13 +208,13 @@ index 9f46cbd24..daa0cde9d 100644
 +                use_cudagraphs=use_cudagraphs,
 +                uniform_decode_query_len=uniform_decode_query_len,
 +            )
- 
+
              # Make sure to use EAGLE's own buffer during cudagraph capture.
              if (
 @@ -1532,12 +1604,30 @@ class SpecDecodeBaseProposer:
              else:
                  slot_mapping_dict = slot_mappings or {}
- 
+
 +            # / PR #34880: build per-layer attn metadata for the
 +            # captured forward so attention backends see the right shape
 +            # at capture time.
@@ -244,13 +259,13 @@ index 9f46cbd24..daa0cde9d 100644
 +            uniform_decode_query_len=uniform_decode_query_len,
          )
          num_tokens_padded = batch_desc.num_tokens
- 
+
 @@ -1699,7 +1793,7 @@ class SpecDecodeBaseProposer:
                  assert batch_desc.num_tokens == num_tokens_padded
                  num_tokens_across_dp[dp_rank] = num_tokens_padded
- 
+
 -        return cudagraph_mode, num_tokens_padded, num_tokens_across_dp
 +        return cudagraph_mode, batch_desc, num_tokens_padded, num_tokens_across_dp
- 
- 
+
+
  # NOTE(woosuk): Currently, the below code is not used and we always use argmax
