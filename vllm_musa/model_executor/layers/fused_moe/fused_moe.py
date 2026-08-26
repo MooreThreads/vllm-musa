@@ -32,6 +32,7 @@ from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     MusaFusedMoeShape,
     has_calibrated_dimensions,
     parse_dispatch_backend,
+    resolve_fused_moe_graph_mode,
     select_fused_moe_backend,
     thresholds_for_shape,
 )
@@ -42,6 +43,7 @@ from vllm_musa.optimization_contract import (
 from vllm_musa.tuning import (
     query_cached_musa_kernel_hardware,
     query_musa_engine_max_num_seqs,
+    query_musa_forward_graph_bucket,
 )
 
 logger = init_logger(__name__)
@@ -1548,6 +1550,7 @@ def _musa_fused_moe_shape(
             and block_k == 128
         )
         gemv_block = "16x8" if is_deepseek_v4_flash_tp8_shape else "auto"
+    is_compiling = torch.compiler.is_compiling()
     return MusaFusedMoeShape(
         device_capability=device_capability,
         multiprocessor_count=multiprocessor_count,
@@ -1568,14 +1571,14 @@ def _musa_fused_moe_shape(
         gemv_block=gemv_block,
         # Do not select a small-batch GEMV arm while Dynamo is tracing the
         # symbolic graph. The trace may be reused for a larger capture shape;
-        # only the engine-static profile and concrete capture/eager execution
-        # may consult the calibrated MP table.
-        graph_mode=(
-            "compile"
-            if torch.compiler.is_compiling()
-            else ("capture" if stream_is_capturing else "eager")
+        # concrete capture/eager execution may use an exact vLLM graph
+        # descriptor or the conservative engine-static fallback profile.
+        graph_mode=resolve_fused_moe_graph_mode(
+            is_compiling=is_compiling,
+            stream_is_capturing=stream_is_capturing,
         ),
         max_num_seqs=_current_max_num_seqs(),
+        graph_bucket=None if is_compiling else query_musa_forward_graph_bucket(),
     )
 
 
@@ -2134,7 +2137,8 @@ def _musa_fused_experts_impl_dispatch(
         assert shape is not None
         logger.info_once(
             "MUSA fused-MoE dispatcher selected backend=%s policy=%s for "
-            "shape=(E=%d,N=%d,K=%d,topk=%d,graph=%s,mp=%d,gemv_block=%s).",
+            "shape=(E=%d,N=%d,K=%d,topk=%d,graph=%s,mp=%d,maxseq=%s,"
+            "graph_bucket=%s,gemv_block=%s).",
             backend.value,
             policy.source,
             shape.local_experts,
@@ -2143,6 +2147,8 @@ def _musa_fused_experts_impl_dispatch(
             shape.top_k,
             shape.graph_mode,
             shape.multiprocessor_count,
+            shape.max_num_seqs,
+            shape.graph_bucket,
             shape.gemv_block,
         )
 

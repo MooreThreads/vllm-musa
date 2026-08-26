@@ -418,15 +418,11 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def check_and_update_config(cls, vllm_config: "VllmConfig") -> None:
-        from vllm_musa.tuning import configure_musa_engine_scheduler_profile
-
-        configure_musa_engine_scheduler_profile(
-            getattr(
-                getattr(vllm_config, "scheduler_config", None),
-                "max_num_seqs",
-                None,
-            )
+        from vllm_musa.tuning import (
+            configure_musa_engine_scheduler_profile_from_config,
         )
+
+        configure_musa_engine_scheduler_profile_from_config(vllm_config)
         # when dflash spec-decode is active, coerce the draft-loop
         # CUDAGraph capture to block-aligned FULL sizes (see below). The dflash
         # source patch (DFlashProposer.dummy_run signature) is applied at BUILD

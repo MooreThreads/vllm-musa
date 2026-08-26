@@ -6,6 +6,12 @@ SOURCE = (
     / "serving"
     / "benchmark_qwen35_mp_ab.py"
 )
+REPLAY_SOURCE = (
+    Path(__file__).resolve().parents[1]
+    / "benchmarks"
+    / "serving"
+    / "benchmark_qwen35_graph_bucket_replay.py"
+)
 
 
 def test_qwen35_ab_uses_compiled_capture_path() -> None:
@@ -22,5 +28,21 @@ def test_qwen35_ab_requires_exact_output_and_semantics() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     assert 'parser.add_argument("--warmup", type=int, default=4)' in source
     assert 'parser.add_argument("--repeats", type=int, default=5)' in source
+    assert 'parser.add_argument("--max-num-seqs", type=int)' in source
+    assert "max_num_seqs = args.max_num_seqs or args.batch_size" in source
+    assert "max_num_seqs=max_num_seqs" in source
     assert "generated != args.batch_size * args.output_tokens" in source
     assert '"beijing" not in semantic_text.lower()' in source
+
+
+def test_qwen35_graph_bucket_replay_uses_one_general_engine() -> None:
+    source = REPLAY_SOURCE.read_text(encoding="utf-8")
+    assert 'parser.add_argument("--max-num-seqs", type=int, default=64)' in source
+    assert 'default="1,16,4,16,1,2,16"' in source
+    assert "llm = LLM(" in source
+    assert "max_num_seqs=args.max_num_seqs" in source
+    assert "for step, batch_size in enumerate(args.batch_sequence):" in source
+    assert "enforce_eager=False" in source
+    assert '"compiled_or_captured": True' in source
+    assert "del llm" in source
+    assert "gc.collect()" in source

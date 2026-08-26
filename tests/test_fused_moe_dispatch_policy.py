@@ -21,6 +21,7 @@ MusaFusedMoeBackend = POLICY.MusaFusedMoeBackend
 MusaFusedMoeShape = POLICY.MusaFusedMoeShape
 MusaFusedMoeThresholds = POLICY.MusaFusedMoeThresholds
 parse_dispatch_backend = POLICY.parse_dispatch_backend
+resolve_fused_moe_graph_mode = POLICY.resolve_fused_moe_graph_mode
 select_fused_moe_backend = POLICY.select_fused_moe_backend
 thresholds_for_shape = POLICY.thresholds_for_shape
 FUSED_MOE_PATH = (
@@ -116,6 +117,30 @@ def test_compile_mode_is_always_fail_closed():
             )
             == MusaFusedMoeBackend.UPSTREAM
         )
+
+
+def test_graph_mode_resolution_prioritizes_symbolic_compile():
+    assert (
+        resolve_fused_moe_graph_mode(
+            is_compiling=True,
+            stream_is_capturing=True,
+        )
+        == "compile"
+    )
+    assert (
+        resolve_fused_moe_graph_mode(
+            is_compiling=False,
+            stream_is_capturing=True,
+        )
+        == "capture"
+    )
+    assert (
+        resolve_fused_moe_graph_mode(
+            is_compiling=False,
+            stream_is_capturing=False,
+        )
+        == "eager"
+    )
 
 
 def test_calibrated_threshold_boundaries_and_device_identity(monkeypatch):
@@ -409,6 +434,88 @@ def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
                 )
                 == MusaFusedMoeBackend.UPSTREAM
             )
+
+
+def test_qwen_mp56_uses_only_exact_full_decode_graph_buckets():
+    base_shape = _shape(
+        multiprocessor_count=56,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        block_n=0,
+        block_k=0,
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+        graph_mode="capture",
+        max_num_seqs=64,
+    )
+
+    for graph_bucket in ((1, 1, True), (2, 2, True), (4, 4, True)):
+        thresholds = thresholds_for_shape(
+            dataclasses.replace(base_shape, graph_bucket=graph_bucket)
+        )
+        assert thresholds.gemv_max_tokens == 4
+        assert f"maxseq{graph_bucket[0]}" in thresholds.source
+        assert (
+            select_fused_moe_backend(
+                shape=dataclasses.replace(base_shape, graph_bucket=graph_bucket),
+                num_tokens=graph_bucket[0],
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=True,
+                requested=MusaFusedMoeBackend.AUTO,
+                thresholds=thresholds,
+            )
+            == MusaFusedMoeBackend.GEMV
+        )
+
+    bucket_one_shape = dataclasses.replace(base_shape, graph_bucket=(1, 1, True))
+    assert (
+        select_fused_moe_backend(
+            shape=bucket_one_shape,
+            num_tokens=2,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=True,
+            requested=MusaFusedMoeBackend.AUTO,
+            thresholds=thresholds_for_shape(bucket_one_shape),
+        )
+        == MusaFusedMoeBackend.UPSTREAM
+    )
+
+    for graph_bucket in (
+        (16, 16, True),
+        (4, 2, True),
+        (4, None, False),
+        (1, None, False),
+    ):
+        invalid_shape = dataclasses.replace(base_shape, graph_bucket=graph_bucket)
+        thresholds = thresholds_for_shape(invalid_shape)
+        assert thresholds.source == "uncalibrated-shape"
+        assert (
+            select_fused_moe_backend(
+                shape=invalid_shape,
+                num_tokens=graph_bucket[0],
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=True,
+                requested=MusaFusedMoeBackend.AUTO,
+                thresholds=thresholds,
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+
+    assert thresholds_for_shape(base_shape).source == "uncalibrated-shape"
+    assert (
+        thresholds_for_shape(
+            dataclasses.replace(base_shape, multiprocessor_count=48)
+        ).source
+        == "uncalibrated-shape"
+    )
 
 
 def test_force_modes_preserve_eligibility_checks():

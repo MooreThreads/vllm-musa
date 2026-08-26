@@ -33,6 +33,52 @@ def configure_musa_engine_scheduler_profile(max_num_seqs: int | None) -> None:
         os.environ.pop(_ENGINE_MAX_NUM_SEQS_ENV, None)
 
 
+def configure_musa_engine_scheduler_profile_from_config(vllm_config: Any) -> None:
+    """Publish the resolved scheduler profile from a vLLM config object.
+
+    A missing scheduler config or profile deliberately clears the inherited
+    value so hardware selectors fail closed.
+    """
+    scheduler_config = getattr(vllm_config, "scheduler_config", None)
+    configure_musa_engine_scheduler_profile(
+        getattr(scheduler_config, "max_num_seqs", None)
+    )
+
+
+def query_musa_forward_graph_bucket() -> tuple[int, int | None, bool] | None:
+    """Read vLLM's graph-static batch key and fail closed if unavailable."""
+    try:
+        from vllm.forward_context import (
+            get_forward_context,
+            is_forward_context_available,
+        )
+
+        if not is_forward_context_available():
+            return None
+        descriptor = get_forward_context().batch_descriptor
+        if descriptor is None:
+            return None
+        num_tokens = descriptor.num_tokens
+        num_reqs = descriptor.num_reqs
+        uniform = descriptor.uniform
+        if type(num_tokens) is not int or num_tokens <= 0:
+            return None
+        if num_reqs is not None and (type(num_reqs) is not int or num_reqs <= 0):
+            return None
+        if type(uniform) is not bool:
+            return None
+        return num_tokens, num_reqs, uniform
+    except (
+        AttributeError,
+        ImportError,
+        LookupError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
 def query_musa_engine_max_num_seqs() -> int | None:
     value = os.environ.get(_ENGINE_MAX_NUM_SEQS_ENV)
     if value is None:

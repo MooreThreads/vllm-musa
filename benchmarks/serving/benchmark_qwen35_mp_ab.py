@@ -15,16 +15,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-import torchada  # noqa: F401
-from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams, TokensPrompt
+DEFAULT_MODEL = "/home/dist/models/Qwen3.5-35B-A3B-BF16"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="/home/dist/models/Qwen3.5-35B-A3B-BF16")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--policy", choices=("baseline", "candidate"), required=True)
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--max-num-seqs", type=int)
     parser.add_argument("--input-tokens", type=int, default=256)
     parser.add_argument("--output-tokens", type=int, default=128)
     parser.add_argument("--warmup", type=int, default=4)
@@ -34,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _instruction(tokenizer: AutoTokenizer) -> list[int]:
+def _instruction(tokenizer: Any) -> list[int]:
     encoded = tokenizer.apply_chat_template(
         [
             {
@@ -55,7 +54,7 @@ def _instruction(tokenizer: AutoTokenizer) -> list[int]:
     return list(encoded)
 
 
-def make_prompt_ids(tokenizer: AutoTokenizer, input_tokens: int) -> list[int]:
+def make_prompt_ids(tokenizer: Any, input_tokens: int) -> list[int]:
     if input_tokens < 32:
         raise ValueError("input_tokens must be at least 32")
     suffix = _instruction(tokenizer)
@@ -71,11 +70,13 @@ def make_prompt_ids(tokenizer: AutoTokenizer, input_tokens: int) -> list[int]:
 
 
 def run_batch(
-    llm: LLM,
+    llm: Any,
     prompt_ids: list[int],
     batch_size: int,
-    sampling: SamplingParams,
+    sampling: Any,
 ) -> tuple[float, list[str], int]:
+    from vllm import TokensPrompt
+
     prompts = [TokensPrompt(prompt_token_ids=prompt_ids) for _ in range(batch_size)]
     start = time.perf_counter()
     outputs = llm.generate(prompts, sampling)
@@ -87,8 +88,22 @@ def run_batch(
 
 def main() -> int:
     args = parse_args()
-    if args.batch_size < 1 or args.repeats < 1 or args.warmup < 0:
-        raise ValueError("batch_size/repeats must be positive and warmup non-negative")
+    if (
+        args.batch_size < 1
+        or args.repeats < 1
+        or args.warmup < 0
+        or (args.max_num_seqs is not None and args.max_num_seqs < args.batch_size)
+    ):
+        raise ValueError(
+            "batch_size/repeats must be positive, warmup non-negative, and "
+            "max_num_seqs must cover batch_size"
+        )
+
+    max_num_seqs = args.max_num_seqs or args.batch_size
+
+    import torchada  # noqa: F401 - activate MUSA compatibility first
+    from transformers import AutoTokenizer
+    from vllm import LLM, SamplingParams
 
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
     prompt_ids = make_prompt_ids(tokenizer, args.input_tokens)
@@ -99,7 +114,7 @@ def main() -> int:
         enforce_eager=False,
         gpu_memory_utilization=args.gpu_memory_utilization,
         max_model_len=args.input_tokens + args.output_tokens + 256,
-        max_num_seqs=args.batch_size,
+        max_num_seqs=max_num_seqs,
     )
     sampling = SamplingParams(
         temperature=0.0,
@@ -148,6 +163,7 @@ def main() -> int:
         "compiled_or_captured": True,
         "enforce_eager": False,
         "batch_size": args.batch_size,
+        "max_num_seqs": max_num_seqs,
         "input_tokens": args.input_tokens,
         "output_tokens": args.output_tokens,
         "warmup": warmup_records,

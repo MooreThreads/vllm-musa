@@ -1,14 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from pathlib import Path
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from vllm_musa import tuning
-
-PLATFORM_SOURCE = Path(__file__).resolve().parents[1] / "vllm_musa" / "platform.py"
 
 
 def test_kernel_hardware_cache_key_keeps_mp_count_exact() -> None:
@@ -117,10 +115,44 @@ def test_engine_scheduler_profile_is_fail_closed(monkeypatch) -> None:
     assert tuning.query_musa_engine_max_num_seqs() is None
 
 
-def test_platform_publishes_resolved_scheduler_profile() -> None:
-    source = PLATFORM_SOURCE.read_text(encoding="utf-8")
-    assert "configure_musa_engine_scheduler_profile(" in source
-    assert '"max_num_seqs"' in source
+def test_platform_publishes_resolved_scheduler_profile(monkeypatch) -> None:
+    monkeypatch.delenv(tuning._ENGINE_MAX_NUM_SEQS_ENV, raising=False)
+
+    tuning.configure_musa_engine_scheduler_profile_from_config(
+        SimpleNamespace(scheduler_config=SimpleNamespace(max_num_seqs=64))
+    )
+    assert tuning.query_musa_engine_max_num_seqs() == 64
+
+    tuning.configure_musa_engine_scheduler_profile_from_config(SimpleNamespace())
+    assert tuning.query_musa_engine_max_num_seqs() is None
+
+
+def test_forward_graph_bucket_query_is_validated_and_fail_closed(monkeypatch) -> None:
+    vllm_module = ModuleType("vllm")
+    vllm_module.__path__ = []
+    forward_context = ModuleType("vllm.forward_context")
+    monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+    monkeypatch.setitem(sys.modules, "vllm.forward_context", forward_context)
+
+    forward_context.is_forward_context_available = lambda: False
+    forward_context.get_forward_context = lambda: SimpleNamespace(
+        batch_descriptor=SimpleNamespace(num_tokens=1, num_reqs=1, uniform=True)
+    )
+    assert tuning.query_musa_forward_graph_bucket() is None
+
+    forward_context.is_forward_context_available = lambda: True
+    assert tuning.query_musa_forward_graph_bucket() == (1, 1, True)
+
+    for descriptor in (
+        None,
+        SimpleNamespace(num_tokens=0, num_reqs=1, uniform=True),
+        SimpleNamespace(num_tokens=4, num_reqs=0, uniform=True),
+        SimpleNamespace(num_tokens=4, num_reqs=4, uniform=1),
+    ):
+        forward_context.get_forward_context = lambda descriptor=descriptor: (
+            SimpleNamespace(batch_descriptor=descriptor)
+        )
+        assert tuning.query_musa_forward_graph_bucket() is None
 
 
 @pytest.mark.parametrize(

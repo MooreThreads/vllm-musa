@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Final
 
 MUSA_FUSED_MOE_DISPATCH_ENV: Final = "VLLM_MUSA_FUSED_MOE_DISPATCH"
+MP56_QWEN35_CALIBRATED_DECODE_BUCKETS: Final = (1, 2, 4)
 
 
 class MusaFusedMoeBackend(str, Enum):
@@ -46,6 +47,7 @@ class MusaFusedMoeShape:
     gemv_block: str
     graph_mode: str
     max_num_seqs: int | None = None
+    graph_bucket: tuple[int, int | None, bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,15 @@ class MusaFusedMoeThresholds:
     gemv_max_tokens: int | None
     grouped_gemm_min_tokens: int | None
     source: str
+
+
+def resolve_fused_moe_graph_mode(
+    *, is_compiling: bool, stream_is_capturing: bool
+) -> str:
+    """Resolve selector state with symbolic compile taking precedence."""
+    if is_compiling:
+        return "compile"
+    return "capture" if stream_is_capturing else "eager"
 
 
 # Unknown shapes stay on the established upstream path until an exact S5000
@@ -245,7 +256,9 @@ _CALIBRATED_THRESHOLDS.update(
         )
         for graph_mode in ("eager", "capture")
         for folded_shared_expert in (True,)
-        for max_num_seqs in (1, 2, 4)
+        # These engine profiles are also reused only for an exact full, uniform
+        # graph descriptor. Raw replay-time M is never a selector key.
+        for max_num_seqs in MP56_QWEN35_CALIBRATED_DECODE_BUCKETS
     }
 )
 _CALIBRATED_THRESHOLDS.update(
@@ -348,6 +361,11 @@ _CALIBRATED_DIMENSIONS: Final = frozenset(
     )
     for shape in _CALIBRATED_THRESHOLDS
 )
+_PROFILED_SHAPES: Final = frozenset(
+    replace(shape, max_num_seqs=None)
+    for shape in _CALIBRATED_THRESHOLDS
+    if shape.max_num_seqs is not None
+)
 
 
 def parse_dispatch_backend(value: str | None = None) -> MusaFusedMoeBackend:
@@ -375,14 +393,36 @@ def parse_dispatch_backend(value: str | None = None) -> MusaFusedMoeBackend:
 
 
 def thresholds_for_shape(shape: MusaFusedMoeShape) -> MusaFusedMoeThresholds:
-    thresholds = _CALIBRATED_THRESHOLDS.get(shape)
+    lookup_shape = replace(shape, graph_bucket=None)
+    profiled_shape = replace(lookup_shape, max_num_seqs=None)
+
+    if profiled_shape in _PROFILED_SHAPES and shape.graph_bucket is not None:
+        graph_num_tokens, graph_num_reqs, graph_uniform = shape.graph_bucket
+        # The MP56 profile is calibrated for full, uniform, one-token decode.
+        # Speculative and piecewise descriptors retain the established backend.
+        if (
+            not graph_uniform
+            or graph_num_reqs is None
+            or graph_num_tokens != graph_num_reqs
+            or graph_num_reqs <= 0
+            or (shape.max_num_seqs is not None and graph_num_reqs > shape.max_num_seqs)
+        ):
+            return _DEFAULT_THRESHOLDS
+        thresholds = _CALIBRATED_THRESHOLDS.get(
+            replace(lookup_shape, max_num_seqs=graph_num_reqs)
+        )
+        return thresholds or _DEFAULT_THRESHOLDS
+
+    thresholds = _CALIBRATED_THRESHOLDS.get(lookup_shape)
     if thresholds is not None:
         return thresholds
-    if shape.max_num_seqs is not None:
+    if lookup_shape.max_num_seqs is not None:
         # Existing hardware/shape policies predate the scheduler-profile key.
         # Fall back only to an explicitly calibrated generic entry; MP56 has
-        # no such entry and therefore fails closed for engines above BS4.
-        thresholds = _CALIBRATED_THRESHOLDS.get(replace(shape, max_num_seqs=None))
+        # no generic entry and requires an exact graph descriptor or profile.
+        thresholds = _CALIBRATED_THRESHOLDS.get(
+            replace(lookup_shape, max_num_seqs=None)
+        )
         if thresholds is not None:
             return thresholds
     return _DEFAULT_THRESHOLDS
@@ -426,6 +466,8 @@ def select_fused_moe_backend(
     # Backend overrides are runtime diagnostics. They must not specialize a
     # native backend while Dynamo is still tracing symbolic inputs.
     if shape.graph_mode == "compile":
+        return MusaFusedMoeBackend.UPSTREAM
+    if shape.graph_bucket is not None and shape.graph_bucket[0] != num_tokens:
         return MusaFusedMoeBackend.UPSTREAM
 
     if requested == MusaFusedMoeBackend.GEMV:
@@ -481,6 +523,7 @@ __all__ = [
     "MusaFusedMoeThresholds",
     "has_calibrated_dimensions",
     "parse_dispatch_backend",
+    "resolve_fused_moe_graph_mode",
     "select_fused_moe_backend",
     "thresholds_for_shape",
 ]
