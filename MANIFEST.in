@@ -1,3 +1,4 @@
 include third_party/PINS
 recursive-include build_utils *.py
 recursive-include requirements *.txt
+recursive-include vllm_musa/patches/series *.patch

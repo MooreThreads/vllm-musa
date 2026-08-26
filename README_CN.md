@@ -133,6 +133,19 @@ MUSA wheel 必须在摩尔线程索引作为**唯一** `--index-url` 的前提�
     pip install -e . --no-build-isolation -v
     ```
 
+    标准安装只会创建一个 `vllm-musa` distribution，由它同时拥有 `vllm` 和
+    `vllm_musa` 两个 Python package。不要在同一环境中再安装官方 `vllm` wheel，
+    否则两个 distribution 会共同拥有同一批 `vllm/` 文件。editable install
+    则有意保留原有的双 distribution 开发布局：`vllm` 指向
+    `third_party/vllm`，`vllm-musa` 指向本仓库。
+
+    构建并检查发布 wheel：
+
+    ```bash
+    python -m build --wheel --no-isolation
+    python tests/packaging/verify_bundled_wheel.py dist/vllm_musa-*.whl
+    ```
+
 5. 验证安装：
 
     ```bash

@@ -140,6 +140,20 @@ there and the merged index only supplies the ordinary dependencies.
     pip install -e . --no-build-isolation -v
     ```
 
+    A standard installation creates one `vllm-musa` distribution that owns
+    both the `vllm` and `vllm_musa` Python packages. Do not install the official
+    `vllm` wheel in the same environment because both distributions would own
+    the same `vllm/` files. Editable installs intentionally keep the existing
+    two-distribution development layout: `vllm` points at
+    `third_party/vllm`, and `vllm-musa` points at this repository.
+
+    Build and inspect a release wheel with:
+
+    ```bash
+    python -m build --wheel --no-isolation
+    python tests/packaging/verify_bundled_wheel.py dist/vllm_musa-*.whl
+    ```
+
 5. Verify the installation:
 
     ```bash

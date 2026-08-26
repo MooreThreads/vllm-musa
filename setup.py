@@ -17,9 +17,12 @@ import torch
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
 
-from setuptools import setup
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+from setuptools import setup  # noqa: E402
+from setuptools.command.build_py import build_py  # noqa: E402
+from setuptools_scm import get_version  # noqa: E402
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension  # noqa: E402
 
+from build_utils.bundle_vllm import bundle_vllm_package  # noqa: E402
 from build_utils.ccache import configure_compiler_cache  # noqa: E402
 
 third_party = Path("third_party")
@@ -370,6 +373,8 @@ EXT_MODULES = [
 class _CustomBuildExt(BuildExtension):
     """Custom build extension that clones third-party repositories before building."""
 
+    _third_party_prepared = False
+
     @staticmethod
     def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):
         attempts = int(os.environ.get("VLLM_MUSA_GIT_RETRY_ATTEMPTS", "8"))
@@ -503,18 +508,23 @@ class _CustomBuildExt(BuildExtension):
         for name, status in ba.apply_patch_series(repo, series, strict=True):
             print(f"MUSA build patch: {status:16} {name}")
 
-    def run(self):
+    @classmethod
+    def prepare_third_party(cls):
+        """Materialize the exact patched sources consumed by every build path."""
+        if cls._third_party_prepared:
+            return
+
         if os.environ.get("SKIP_THIRD_PARTY", "0") == "1":
             print("Skipping third-party repositories cloning (SKIP_THIRD_PARTY=1)")
         else:
             print("Cloning third-party repositories...")
-            self._clone_and_checkout(
+            cls._clone_and_checkout(
                 _VLLM_REPO.source_dir,
                 _VLLM_REPO.git_repository,
                 _VLLM_REPO.git_tag,
                 _VLLM_REPO.git_shallow,
             )
-            self._clone_and_checkout(
+            cls._clone_and_checkout(
                 _FLASHINFER_REPO.source_dir,
                 _FLASHINFER_REPO.git_repository,
                 _FLASHINFER_REPO.git_tag,
@@ -522,17 +532,47 @@ class _CustomBuildExt(BuildExtension):
             )
             print("Third-party repositories ready.")
 
-        # patch the clone BEFORE installing, so the installed vLLM is pre-patched.
-        self._apply_musa_patch_series(_VLLM_REPO.source_dir)
+        # Patch the clone before either copying it into a wheel or exposing it
+        # through the existing editable development install.
+        cls._apply_musa_patch_series(_VLLM_REPO.source_dir)
+        cls._third_party_prepared = True
 
-        self._install_vllm(_VLLM_REPO.source_dir)
+    def run(self):
+        self.prepare_third_party()
+
+        if _is_editable_install:
+            self._install_vllm(_VLLM_REPO.source_dir)
 
         super().run()
 
 
+class _CustomBuildPy(build_py):
+    """Bundle the pinned, patched upstream vLLM package in non-editable wheels."""
+
+    def run(self):
+        super().run()
+        if _is_editable_install:
+            return
+
+        _CustomBuildExt.prepare_third_party()
+        repo = root / _VLLM_REPO.source_dir
+        get_version(root=str(repo), write_to="vllm/_version.py")
+
+        source = repo / "vllm"
+        destination = Path(self.build_lib) / "vllm"
+        result = bundle_vllm_package(source, destination)
+        print(
+            "Bundled patched vLLM package: "
+            f"files={result.files} metadata_rewrites={result.metadata_rewrites}"
+        )
+
+
 setup(
     ext_modules=EXT_MODULES,
-    cmdclass={"build_ext": _CustomBuildExt.with_options(use_ninja=True)},
+    cmdclass={
+        "build_ext": _CustomBuildExt.with_options(use_ninja=True),
+        "build_py": _CustomBuildPy,
+    },
     include_package_data=False,
     # Runtime dependencies live in requirements/musa.txt so Docker and package
     # metadata share one source. MUSA-private pins, including torch/torch_musa,
@@ -540,5 +580,6 @@ setup(
     install_requires=_read_requirements("musa.txt"),
 )
 
-# place the built vllm.* extensions into the editable vLLM clone (see the function).
-develop_dynamic_library("vllm", target_override=_VLLM_REPO.source_dir / "vllm")
+# Place built vllm.* extensions into the editable vLLM checkout.
+if _is_editable_install:
+    develop_dynamic_library("vllm", target_override=_VLLM_REPO.source_dir / "vllm")

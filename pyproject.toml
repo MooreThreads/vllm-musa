@@ -2,7 +2,7 @@
 # Keep build tool pins mirrored in requirements/build.txt. vllm-musa is
 # installed with --no-build-isolation in MUSA images after MUSA-private runtime
 # requirements such as torch/torch_musa have been installed.
-requires = ["setuptools>=80.10.2", "wheel"]
+requires = ["setuptools>=80.10.2", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -41,12 +41,15 @@ dev = [
 ]
 
 [project.scripts]
+vllm = "vllm.entrypoints.cli.main:main"
 vllm_collect_env = "vllm_musa:collect_env"
 
 [project.entry-points."vllm.platform_plugins"]
 musa = "vllm_musa:musa_platform_plugin"
 
 [project.entry-points."vllm.general_plugins"]
+lora_filesystem_resolver = "vllm.plugins.lora_resolvers.filesystem_resolver:register_filesystem_resolver"
+lora_hf_hub_resolver = "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_hub_resolver"
 musa_custom_ops = "vllm_musa:register_custom_ops"
 
 [project.urls]

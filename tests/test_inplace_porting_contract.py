@@ -365,10 +365,23 @@ def test_archive_vllm_install_uses_upstream_version_override():
     assert "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM" not in setup
 
 
+def test_wheel_build_wires_bundled_vllm_without_changing_editable_sources():
+    setup = (ROOT / "setup.py").read_text()
+    pyproject = (ROOT / "pyproject.toml").read_text()
+
+    assert '"build_py": _CustomBuildPy' in setup
+    assert "_CustomBuildExt.prepare_third_party()" in setup
+    assert "bundle_vllm_package(source, destination)" in setup
+    assert 'if _is_editable_install:' in setup
+    assert "if _is_editable_install:\n            self._install_vllm" in setup
+    assert 'vllm = "vllm.entrypoints.cli.main:main"' in pyproject
+
+
 def test_source_distribution_manifest_includes_setup_inputs():
     manifest = (ROOT / "MANIFEST.in").read_text()
     assert "recursive-include requirements *.txt" in manifest
     assert "recursive-include build_utils *.py" in manifest
+    assert "recursive-include vllm_musa/patches/series *.patch" in manifest
     assert "include third_party/PINS" in manifest
 
 
