@@ -96,6 +96,28 @@ def test_grouped_gemm_is_never_selected_during_capture():
     )
 
 
+def test_compile_mode_is_always_fail_closed():
+    shape = _shape(graph_mode="compile")
+
+    for requested in MusaFusedMoeBackend:
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=1,
+                can_use_gemv=True,
+                can_use_grouped_gemm=True,
+                stream_is_capturing=False,
+                requested=requested,
+                thresholds=MusaFusedMoeThresholds(
+                    gemv_max_tokens=4,
+                    grouped_gemm_min_tokens=1,
+                    source="must-not-specialize-during-compile",
+                ),
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+
+
 def test_calibrated_threshold_boundaries_and_device_identity(monkeypatch):
     shape = _shape()
     thresholds = MusaFusedMoeThresholds(

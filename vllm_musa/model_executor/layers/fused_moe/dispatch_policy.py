@@ -423,6 +423,11 @@ def select_fused_moe_backend(
     requested backend is ineligible the established upstream path is used.
     """
 
+    # Backend overrides are runtime diagnostics. They must not specialize a
+    # native backend while Dynamo is still tracing symbolic inputs.
+    if shape.graph_mode == "compile":
+        return MusaFusedMoeBackend.UPSTREAM
+
     if requested == MusaFusedMoeBackend.GEMV:
         # Forced GEMV remains useful for eager diagnostics, but graph capture
         # must stay inside an explicitly calibrated capture entry and token

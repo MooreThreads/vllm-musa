@@ -70,7 +70,32 @@ def test_query_kernel_hardware_recovers_after_early_unknown(monkeypatch) -> None
     assert tuning.query_musa_kernel_hardware(0).cache_key == "mp31-mps60"
 
 
-def test_query_kernel_hardware_fails_closed_on_unexpected_probe_error(monkeypatch) -> None:
+def test_cached_kernel_hardware_does_not_cache_early_unknown(monkeypatch) -> None:
+    results = iter(
+        (
+            tuning.UNKNOWN_MUSA_KERNEL_HARDWARE,
+            tuning.MusaKernelHardware((3, 1), 60),
+        )
+    )
+    calls = 0
+
+    def query(_index):
+        nonlocal calls
+        calls += 1
+        return next(results)
+
+    monkeypatch.setattr(tuning, "_MUSA_KERNEL_HARDWARE_CACHE", {})
+    monkeypatch.setattr(tuning, "query_musa_kernel_hardware", query)
+
+    assert tuning.query_cached_musa_kernel_hardware(0).cache_key == "unknown"
+    assert tuning.query_cached_musa_kernel_hardware(0).cache_key == "mp31-mps60"
+    assert tuning.query_cached_musa_kernel_hardware(0).cache_key == "mp31-mps60"
+    assert calls == 2
+
+
+def test_query_kernel_hardware_fails_closed_on_unexpected_probe_error(
+    monkeypatch,
+) -> None:
     def raise_unexpected(_device_index):
         raise OSError("transient MUSA property query failure")
 

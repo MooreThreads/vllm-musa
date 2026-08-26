@@ -69,6 +69,7 @@ UNKNOWN_MUSA_KERNEL_HARDWARE = MusaKernelHardware(
     device_capability=(-1, -1),
     multiprocessor_count=-1,
 )
+_MUSA_KERNEL_HARDWARE_CACHE: dict[int, MusaKernelHardware] = {}
 
 
 def query_musa_kernel_hardware(device_index: int) -> MusaKernelHardware:
@@ -87,6 +88,18 @@ def query_musa_kernel_hardware(device_index: int) -> MusaKernelHardware:
         )
     except Exception:  # noqa: BLE001 - hardware probing must fail closed
         return UNKNOWN_MUSA_KERNEL_HARDWARE
+
+
+def query_cached_musa_kernel_hardware(device_index: int) -> MusaKernelHardware:
+    """Cache a known device identity while allowing an early probe to recover."""
+    cached = _MUSA_KERNEL_HARDWARE_CACHE.get(device_index)
+    if cached is not None:
+        return cached
+
+    hardware = query_musa_kernel_hardware(device_index)
+    if hardware.is_known:
+        _MUSA_KERNEL_HARDWARE_CACHE[device_index] = hardware
+    return hardware
 
 
 def _get_musa_device_properties(device_index: int) -> Any:

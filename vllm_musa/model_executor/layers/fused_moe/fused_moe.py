@@ -4,7 +4,6 @@
 import json
 import os
 import time
-from functools import cache
 
 import torch
 from vllm import _custom_ops as ops
@@ -41,8 +40,8 @@ from vllm_musa.optimization_contract import (
     matches_qwen35_moe_bf16_prefill_layer,
 )
 from vllm_musa.tuning import (
+    query_cached_musa_kernel_hardware,
     query_musa_engine_max_num_seqs,
-    query_musa_kernel_hardware,
 )
 
 logger = init_logger(__name__)
@@ -151,11 +150,10 @@ def _musa_moe_routes_are_supported(
     )
 
 
-@cache
 def _musa_device_fingerprint(
     device_index: int,
 ) -> tuple[tuple[int, int], int]:
-    hardware = query_musa_kernel_hardware(device_index)
+    hardware = query_cached_musa_kernel_hardware(device_index)
     return hardware.device_capability, hardware.multiprocessor_count
 
 
