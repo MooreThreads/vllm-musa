@@ -85,6 +85,7 @@ def main() -> None:
     parser.add_argument("--input-tokens", type=int, default=256)
     parser.add_argument("--output-tokens", type=int, default=128)
     parser.add_argument("--max-num-batched-tokens", type=int, default=8192)
+    parser.add_argument("--cudagraph-capture-sizes", type=_parse_sequence)
     parser.add_argument("--seed", type=int, default=20260826)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -122,6 +123,11 @@ def main() -> None:
         max_num_batched_tokens=args.max_num_batched_tokens,
         max_num_seqs=args.max_num_seqs,
         gpu_memory_utilization=0.9,
+        compilation_config=(
+            {"cudagraph_capture_sizes": args.cudagraph_capture_sizes}
+            if args.cudagraph_capture_sizes is not None
+            else None
+        ),
     )
 
     for batch_size in args.warmup_sequence:
@@ -166,6 +172,7 @@ def main() -> None:
         "input_tokens": args.input_tokens,
         "output_tokens": args.output_tokens,
         "max_num_batched_tokens": args.max_num_batched_tokens,
+        "cudagraph_capture_sizes": args.cudagraph_capture_sizes,
         "seed": args.seed,
         "enforce_eager": False,
         "compiled_or_captured": True,
