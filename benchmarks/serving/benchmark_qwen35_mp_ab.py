@@ -1,6 +1,7 @@
-"""Compiled/captured Qwen3.5 TP4 baseline-vs-candidate benchmark.
+"""Compiled/captured Qwen3.5 TP4 same-source selector attribution.
 
-The caller controls the production policy file before starting this process.
+This diagnostic compares the explicit upstream rollback with AUTO on one source
+tree. Exact base-vs-head serving gates must keep AUTO in both source arms.
 Each process should use a fresh container/cache so graph and JIT compilation
 costs cannot leak from one policy arm into the other.
 """
@@ -19,8 +20,37 @@ DEFAULT_MODEL = "/home/dist/models/Qwen3.5-35B-A3B-BF16"
 DISPATCH_ENV = "VLLM_MUSA_FUSED_MOE_DISPATCH"
 
 
+def _inspect_worker_compile_state(worker: Any) -> dict[str, Any]:
+    """Serialize the worker's post-backend cudagraph dispatcher state."""
+    runner = worker.model_runner
+    dispatcher = runner.cudagraph_dispatcher
+    capture_descriptors: dict[str, list[dict[str, Any]]] = {}
+    for runtime_mode, descriptors in dispatcher.get_capture_descs():
+        capture_descriptors[runtime_mode.name] = [
+            {
+                "num_tokens": descriptor.num_tokens,
+                "num_reqs": descriptor.num_reqs,
+                "uniform": descriptor.uniform,
+                "has_lora": descriptor.has_lora,
+                "num_active_loras": descriptor.num_active_loras,
+            }
+            for descriptor in descriptors
+        ]
+    configured_mode = runner.compilation_config.cudagraph_mode
+    return {
+        "rank": getattr(worker, "rank", None),
+        "local_rank": getattr(worker, "local_rank", None),
+        "configured_cudagraph_mode": getattr(
+            configured_mode, "name", str(configured_mode)
+        ),
+        "resolved_cudagraph_mode": dispatcher.cudagraph_mode.name,
+        "keys_initialized": dispatcher.keys_initialized,
+        "capture_descriptors": capture_descriptors,
+    }
+
+
 def inspect_compile_state(llm: Any) -> dict[str, Any] | None:
-    """Return vLLM's resolved compile/cudagraph state when introspectable."""
+    """Return client intent plus every worker's resolved dispatcher state."""
     engine = getattr(llm, "llm_engine", None)
     vllm_config = getattr(engine, "vllm_config", None)
     compilation_config = getattr(vllm_config, "compilation_config", None)
@@ -29,17 +59,30 @@ def inspect_compile_state(llm: Any) -> dict[str, Any] | None:
     mode = getattr(compilation_config, "cudagraph_mode", None)
     mode_name = getattr(mode, "name", None) or str(mode)
     capture_sizes = getattr(compilation_config, "cudagraph_capture_sizes", None)
+    worker_states = llm.collective_rpc(_inspect_worker_compile_state, timeout=60)
+    worker_runtime_modes = {state["resolved_cudagraph_mode"] for state in worker_states}
+    workers_active = bool(
+        worker_states
+        and len(worker_states) == 4
+        and len(worker_runtime_modes) == 1
+        and worker_runtime_modes != {"NONE"}
+        and all(state["keys_initialized"] for state in worker_states)
+        and all(state["capture_descriptors"] for state in worker_states)
+    )
     return {
-        "cudagraph_mode": mode_name,
-        "cudagraph_capture_sizes": list(capture_sizes or []),
-        "compile_active": mode_name.upper() not in {"NONE", "NONE_MODE"},
+        "client_cudagraph_mode": mode_name,
+        "client_cudagraph_capture_sizes": list(capture_sizes or []),
+        "worker_states": worker_states,
+        "compile_active": bool(
+            mode_name.upper() not in {"NONE", "NONE_MODE"} and workers_active
+        ),
     }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--policy", choices=("baseline", "candidate"), required=True)
+    parser.add_argument("--policy", choices=("upstream", "auto"), required=True)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-num-seqs", type=int)
     parser.add_argument("--input-tokens", type=int, default=256)
@@ -117,8 +160,13 @@ def main() -> int:
             "max_num_seqs must cover batch_size"
         )
 
+    if args.input_tokens > 512:
+        raise ValueError(
+            "same-source selector attribution is limited to <=512 input tokens; "
+            "use exact base-vs-head AUTO serving arms for long-prefill gates"
+        )
     max_num_seqs = args.max_num_seqs or args.batch_size
-    dispatch_policy = {"baseline": "upstream", "candidate": "auto"}[args.policy]
+    dispatch_policy = args.policy
     os.environ[DISPATCH_ENV] = dispatch_policy
 
     import torchada  # noqa: F401 - activate MUSA compatibility first

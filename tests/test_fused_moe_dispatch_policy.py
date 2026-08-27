@@ -369,6 +369,117 @@ def test_qwen35_bf16_decode_gemv_uses_mp60_route_worst_crossover():
     )
 
 
+def test_graph_bucket_guard_preserves_existing_mp60_runtime_modes():
+    qwen = _shape(
+        multiprocessor_count=60,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        block_n=0,
+        block_k=0,
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+    )
+    dsv4 = _shape(
+        multiprocessor_count=60,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="32x8",
+    )
+    runtime_cases = (
+        (
+            "eager",
+            MusaForwardGraphBucket(
+                num_tokens=4,
+                num_reqs=None,
+                uniform=False,
+                runtime_mode="NONE",
+                has_lora=False,
+                num_active_loras=0,
+                present=True,
+            ),
+        ),
+        (
+            "capture",
+            MusaForwardGraphBucket(
+                num_tokens=4,
+                num_reqs=None,
+                uniform=False,
+                runtime_mode="PIECEWISE",
+                has_lora=False,
+                num_active_loras=0,
+                present=True,
+            ),
+        ),
+        (
+            "capture",
+            MusaForwardGraphBucket(
+                num_tokens=4,
+                num_reqs=4,
+                uniform=True,
+                runtime_mode="FULL",
+                has_lora=False,
+                num_active_loras=0,
+                present=True,
+            ),
+        ),
+    )
+
+    for base_shape in (qwen, dsv4):
+        for graph_mode, descriptor in runtime_cases:
+            shape = dataclasses.replace(
+                base_shape,
+                graph_mode=graph_mode,
+                graph_bucket=descriptor,
+            )
+            thresholds = thresholds_for_shape(shape)
+            assert thresholds.gemv_max_tokens is not None
+            assert (
+                select_fused_moe_backend(
+                    shape=shape,
+                    num_tokens=4,
+                    can_use_gemv=True,
+                    can_use_grouped_gemm=False,
+                    stream_is_capturing=graph_mode == "capture",
+                    thresholds=thresholds,
+                )
+                == MusaFusedMoeBackend.GEMV
+            )
+
+    for descriptor in (
+        MusaForwardGraphBucket.invalid(),
+        MusaForwardGraphBucket(
+            num_tokens=1,
+            num_reqs=1,
+            uniform=True,
+            runtime_mode="NONE",
+            has_lora=True,
+            num_active_loras=1,
+            present=True,
+        ),
+    ):
+        shape = dataclasses.replace(qwen, graph_bucket=descriptor)
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=1,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=False,
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+
+
 def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
     base_shape = _shape(
         multiprocessor_count=56,
@@ -416,15 +527,16 @@ def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
             assert "e257" in thresholds.source
             assert f"maxseq{max_num_seqs}" in thresholds.source
             assert "route-worst" in thresholds.source
-            assert (
-                select_fused_moe_backend(
-                    shape=shape,
-                    num_tokens=4,
-                    can_use_gemv=True,
-                    can_use_grouped_gemm=False,
-                    stream_is_capturing=graph_mode == "capture",
-                )
-                == MusaFusedMoeBackend.GEMV
+            assert select_fused_moe_backend(
+                shape=shape,
+                num_tokens=4,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=graph_mode == "capture",
+            ) == (
+                MusaFusedMoeBackend.GEMV
+                if graph_mode == "eager"
+                else MusaFusedMoeBackend.UPSTREAM
             )
             assert (
                 select_fused_moe_backend(
@@ -505,6 +617,48 @@ def test_qwen_mp56_uses_only_exact_full_decode_graph_buckets():
             stream_is_capturing=True,
             requested=MusaFusedMoeBackend.AUTO,
             thresholds=thresholds_for_shape(bucket_one_shape),
+        )
+        == MusaFusedMoeBackend.UPSTREAM
+    )
+
+    eager_none = MusaForwardGraphBucket(
+        num_tokens=4,
+        num_reqs=None,
+        uniform=False,
+        runtime_mode="NONE",
+        has_lora=False,
+        num_active_loras=0,
+        present=True,
+    )
+    eager_shape = dataclasses.replace(
+        base_shape,
+        graph_mode="eager",
+        max_num_seqs=4,
+        graph_bucket=eager_none,
+    )
+    eager_thresholds = thresholds_for_shape(eager_shape)
+    assert eager_thresholds.gemv_max_tokens == 4
+    assert (
+        select_fused_moe_backend(
+            shape=eager_shape,
+            num_tokens=4,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=False,
+            thresholds=eager_thresholds,
+        )
+        == MusaFusedMoeBackend.GEMV
+    )
+
+    # Missing ForwardContext is tolerated only for eager direct-operator
+    # callers. It cannot specialize a graph capture.
+    assert (
+        select_fused_moe_backend(
+            shape=base_shape,
+            num_tokens=1,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=True,
         )
         == MusaFusedMoeBackend.UPSTREAM
     )
@@ -644,6 +798,29 @@ def test_forced_gemv_preserves_capture_calibration_boundary(monkeypatch):
     assert (
         select_fused_moe_backend(
             shape=capture_shape,
+            num_tokens=4,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=True,
+            requested=MusaFusedMoeBackend.GEMV,
+        )
+        == MusaFusedMoeBackend.UPSTREAM
+    )
+    capture_shape_with_context = dataclasses.replace(
+        capture_shape,
+        graph_bucket=MusaForwardGraphBucket(
+            num_tokens=4,
+            num_reqs=4,
+            uniform=True,
+            runtime_mode="FULL",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        ),
+    )
+    assert (
+        select_fused_moe_backend(
+            shape=capture_shape_with_context,
             num_tokens=4,
             can_use_gemv=True,
             can_use_grouped_gemm=False,

@@ -76,7 +76,7 @@ def _run_batch(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--policy", choices=("baseline", "candidate"), required=True)
+    parser.add_argument("--policy", choices=("upstream", "auto"), required=True)
     parser.add_argument("--max-num-seqs", type=int, default=64)
     parser.add_argument(
         "--batch-sequence",
@@ -99,6 +99,11 @@ def main() -> None:
     max_batch = max(args.batch_sequence + args.warmup_sequence)
     if args.max_num_seqs < max_batch:
         raise ValueError("max_num_seqs must cover every replay batch")
+    if args.input_tokens > 512:
+        raise ValueError(
+            "graph-bucket selector replay is limited to <=512 input tokens; "
+            "use exact base-vs-head AUTO serving arms for long-prefill gates"
+        )
     required_capture_sizes = {1, 2, 4}
     if not required_capture_sizes.issubset(args.cudagraph_capture_sizes) or not any(
         size >= 16 for size in args.cudagraph_capture_sizes
@@ -107,7 +112,7 @@ def main() -> None:
             "cudagraph_capture_sizes must include 1,2,4 and a fallback bucket >=16"
         )
 
-    dispatch_policy = {"baseline": "upstream", "candidate": "auto"}[args.policy]
+    dispatch_policy = args.policy
     import os
 
     os.environ[DISPATCH_ENV] = dispatch_policy
@@ -186,6 +191,19 @@ def main() -> None:
             "vLLM resolved cudagraph mode is unavailable or disabled; "
             "refusing to record a compiled replay result"
         )
+    required_full_sizes = {1, 2, 4, 16}
+    for worker_state in compile_state["worker_states"]:
+        full_sizes = {
+            descriptor["num_tokens"]
+            for descriptor in worker_state["capture_descriptors"].get("FULL", [])
+            if descriptor["has_lora"] is False
+        }
+        if not required_full_sizes.issubset(full_sizes):
+            raise RuntimeError(
+                "worker FULL capture descriptors do not cover selector/fallback "
+                f"buckets: required={sorted(required_full_sizes)}, "
+                f"observed={sorted(full_sizes)}, state={worker_state}"
+            )
 
     result = {
         "policy": args.policy,

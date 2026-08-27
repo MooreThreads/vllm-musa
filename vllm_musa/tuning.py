@@ -93,6 +93,7 @@ def query_musa_forward_graph_bucket() -> MusaForwardGraphBucket | None:
             or (num_reqs is not None and (type(num_reqs) is not int or num_reqs <= 0))
             or type(uniform) is not bool
             or type(runtime_mode) is not str
+            or runtime_mode not in {"NONE", "PIECEWISE", "FULL"}
             or type(has_lora) is not bool
             or type(num_active_loras) is not int
             or num_active_loras < 0
@@ -108,8 +109,18 @@ def query_musa_forward_graph_bucket() -> MusaForwardGraphBucket | None:
             present=True,
         )
     except ImportError:
-        return None
-    except (AttributeError, LookupError, RuntimeError, TypeError, ValueError):
+        # A missing ForwardContext API is dependency drift, not an absent
+        # context.  Mark it present-but-invalid so engine-static profiles
+        # cannot bypass the descriptor, runtime-mode, and LoRA safety checks.
+        return MusaForwardGraphBucket.invalid()
+    except (
+        AssertionError,
+        AttributeError,
+        LookupError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         return MusaForwardGraphBucket.invalid()
 
 

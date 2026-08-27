@@ -324,7 +324,9 @@ _CALIBRATED_THRESHOLDS.update(
             gemv_max_tokens=4 if folded_shared_expert else 12,
             grouped_gemm_min_tokens=None,
             source=(
-                f"s5000-mp60-20260806-qwen35-36-bf16-e"
+                f"s5000-mp60-"
+                f"{'20260826' if folded_shared_expert else '20260806'}-"
+                f"qwen35-36-bf16-e"
                 f"{257 if folded_shared_expert else 256}-"
                 f"n256-k2048-v128-{graph_mode}-"
                 f"route-worst-{'v2' if folded_shared_expert else 'v1'}"
@@ -372,6 +374,12 @@ _PROFILED_SHAPES: Final = frozenset(
 )
 
 
+def _uses_graph_bucket_profile(shape: MusaFusedMoeShape) -> bool:
+    """Whether ``shape`` requires an exact calibrated graph descriptor."""
+    lookup_shape = replace(shape, graph_bucket=None)
+    return replace(lookup_shape, max_num_seqs=None) in _PROFILED_SHAPES
+
+
 def parse_dispatch_backend(value: str | None = None) -> MusaFusedMoeBackend:
     """Parse the generic force/rollback override; default is ``auto``."""
 
@@ -402,7 +410,27 @@ def thresholds_for_shape(shape: MusaFusedMoeShape) -> MusaFusedMoeThresholds:
 
     if profiled_shape in _PROFILED_SHAPES and shape.graph_bucket is not None:
         graph_bucket = shape.graph_bucket
-        # The MP56 profile is calibrated for full, uniform, one-token decode.
+        # Eager execution can use the engine-static profile because no graph is
+        # reused across runtime token counts. The pinned vLLM NONE descriptor
+        # carries the exact token count but deliberately has no request count.
+        if (
+            shape.graph_mode == "eager"
+            and graph_bucket.present
+            and graph_bucket.runtime_mode == "NONE"
+            and graph_bucket.has_lora is False
+            and graph_bucket.num_active_loras == 0
+            and graph_bucket.num_tokens is not None
+            and graph_bucket.num_tokens > 0
+            and graph_bucket.num_reqs is None
+            and graph_bucket.uniform is False
+            and (
+                shape.max_num_seqs is None
+                or graph_bucket.num_tokens <= shape.max_num_seqs
+            )
+        ):
+            return _CALIBRATED_THRESHOLDS.get(lookup_shape, _DEFAULT_THRESHOLDS)
+
+        # Graph replay is calibrated only for full, uniform, one-token decode.
         # Speculative and piecewise descriptors retain the established backend.
         if (
             not graph_bucket.present
@@ -478,16 +506,44 @@ def select_fused_moe_backend(
     # native backend while Dynamo is still tracing symbolic inputs.
     if shape.graph_mode == "compile":
         return MusaFusedMoeBackend.UPSTREAM
-    if shape.graph_bucket is not None and (
-        not shape.graph_bucket.present
-        or shape.graph_bucket.num_tokens != num_tokens
-        or shape.graph_bucket.runtime_mode != "FULL"
-        or shape.graph_bucket.has_lora is not False
-        or shape.graph_bucket.num_active_loras != 0
-        or not shape.graph_bucket.uniform
-        or shape.graph_bucket.num_reqs != shape.graph_bucket.num_tokens
+    if shape.graph_bucket is None and (
+        stream_is_capturing
+        or (_uses_graph_bucket_profile(shape) and shape.graph_mode == "capture")
     ):
+        # Capture without ForwardContext has no graph-static specialization
+        # identity. Reserve the legacy missing-context fallback for eager
+        # direct-operator callers only.
         return MusaFusedMoeBackend.UPSTREAM
+    if shape.graph_bucket is not None:
+        graph_bucket = shape.graph_bucket
+        # Invalid API/context projections and LoRA-specialized descriptors are
+        # unsafe for every calibrated native kernel.
+        if (
+            not graph_bucket.present
+            or graph_bucket.has_lora is not False
+            or graph_bucket.num_active_loras != 0
+        ):
+            return MusaFusedMoeBackend.UPSTREAM
+        # Only the new MP56 profile was calibrated by exact FULL decode graph
+        # buckets. Existing MP60 entries are separately keyed as eager/capture
+        # and were calibrated under vLLM's legacy NONE/PIECEWISE descriptor
+        # semantics; this PR must not silently disable those padded paths.
+        if _uses_graph_bucket_profile(shape):
+            eager_none = (
+                shape.graph_mode == "eager"
+                and graph_bucket.runtime_mode == "NONE"
+                and graph_bucket.num_tokens == num_tokens
+                and graph_bucket.num_reqs is None
+                and graph_bucket.uniform is False
+            )
+            full_decode = (
+                graph_bucket.num_tokens == num_tokens
+                and graph_bucket.runtime_mode == "FULL"
+                and graph_bucket.uniform
+                and graph_bucket.num_reqs == graph_bucket.num_tokens
+            )
+            if not eager_none and not full_decode:
+                return MusaFusedMoeBackend.UPSTREAM
 
     if requested == MusaFusedMoeBackend.GEMV:
         # Forced GEMV remains useful for eager diagnostics, but graph capture

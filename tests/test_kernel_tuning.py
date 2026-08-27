@@ -216,6 +216,80 @@ def test_forward_graph_bucket_query_is_validated_and_fail_closed(monkeypatch) ->
         assert bucket.present
         assert bucket.runtime_mode == mode
 
+    forward_context.get_forward_context = lambda: SimpleNamespace(
+        batch_descriptor=SimpleNamespace(
+            num_tokens=1,
+            num_reqs=1,
+            uniform=True,
+            has_lora=False,
+            num_active_loras=0,
+        ),
+        cudagraph_runtime_mode=SimpleNamespace(name="FULL_DECODE_ONLY"),
+    )
+    assert tuning.query_musa_forward_graph_bucket() == (
+        tuning.MusaForwardGraphBucket.invalid()
+    )
+
+
+def test_forward_graph_bucket_api_drift_is_present_invalid(monkeypatch) -> None:
+    vllm_module = ModuleType("vllm")
+    vllm_module.__path__ = []
+    monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+    monkeypatch.delitem(sys.modules, "vllm.forward_context", raising=False)
+
+    bucket = tuning.query_musa_forward_graph_bucket()
+    assert bucket is not None
+    assert bucket.present
+    assert bucket.num_tokens is None
+    assert bucket.runtime_mode is None
+
+
+def test_forward_graph_bucket_matches_pinned_vllm_context_objects() -> None:
+    forward_context = pytest.importorskip("vllm.forward_context")
+    vllm_config = pytest.importorskip("vllm.config")
+
+    cases = (
+        (
+            vllm_config.CUDAGraphMode.FULL,
+            forward_context.BatchDescriptor(1, 1, True, False, 0),
+            (1, 1, True, "FULL", False, 0),
+        ),
+        (
+            vllm_config.CUDAGraphMode.PIECEWISE,
+            forward_context.BatchDescriptor(4, None, False, False, 0),
+            (4, None, False, "PIECEWISE", False, 0),
+        ),
+        (
+            vllm_config.CUDAGraphMode.NONE,
+            forward_context.BatchDescriptor(4),
+            (4, None, False, "NONE", False, 0),
+        ),
+        (
+            vllm_config.CUDAGraphMode.FULL,
+            forward_context.BatchDescriptor(1, 1, True, True, 1),
+            (1, 1, True, "FULL", True, 1),
+        ),
+    )
+    for mode, descriptor, expected in cases:
+        context = forward_context.ForwardContext(
+            {},
+            {},
+            {},
+            cudagraph_runtime_mode=mode,
+            batch_descriptor=descriptor,
+        )
+        with forward_context.override_forward_context(context):
+            bucket = tuning.query_musa_forward_graph_bucket()
+        assert bucket is not None
+        assert (
+            bucket.num_tokens,
+            bucket.num_reqs,
+            bucket.uniform,
+            bucket.runtime_mode,
+            bucket.has_lora,
+            bucket.num_active_loras,
+        ) == expected
+
 
 @pytest.mark.parametrize(
     ("multiprocessor_count", "expected_waves", "expected_tail", "expected_util"),
