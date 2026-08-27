@@ -12,6 +12,7 @@ REPLAY_SOURCE = (
     / "serving"
     / "benchmark_qwen35_graph_bucket_replay.py"
 )
+WORKER_SOURCE = Path(__file__).resolve().parents[1] / "vllm_musa" / "worker.py"
 
 
 def test_qwen35_ab_uses_compiled_capture_path() -> None:
@@ -22,9 +23,11 @@ def test_qwen35_ab_uses_compiled_capture_path() -> None:
     assert "encoded.input_ids" in source
     assert "ignore_eos=True" in source
     assert "semantic_pass" in source
-    assert "llm.collective_rpc(_inspect_worker_compile_state" in source
-    assert '"resolved_cudagraph_mode": dispatcher.cudagraph_mode.name' in source
+    assert '"get_musa_cudagraph_runtime_state", timeout=60' in source
     assert "len(worker_states) == 4" in source
+    worker_source = WORKER_SOURCE.read_text(encoding="utf-8")
+    assert "def get_musa_cudagraph_runtime_state" in worker_source
+    assert '"resolved_cudagraph_mode": dispatcher.cudagraph_mode.name' in worker_source
 
 
 def test_qwen35_ab_requires_exact_output_and_semantics() -> None:

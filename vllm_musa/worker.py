@@ -32,3 +32,31 @@ class MTGPUWorker(Worker):
             self.model_runner.uniform_decode_query_len,
             uniform_decode=True,
         )
+
+    def get_musa_cudagraph_runtime_state(self) -> dict[str, object]:
+        """Return the resolved, msgpack-safe cudagraph state for evidence."""
+        runner = self.model_runner
+        dispatcher = runner.cudagraph_dispatcher
+        capture_descriptors: dict[str, list[dict[str, object]]] = {}
+        for runtime_mode, descriptors in dispatcher.get_capture_descs():
+            capture_descriptors[runtime_mode.name] = [
+                {
+                    "num_tokens": descriptor.num_tokens,
+                    "num_reqs": descriptor.num_reqs,
+                    "uniform": descriptor.uniform,
+                    "has_lora": descriptor.has_lora,
+                    "num_active_loras": descriptor.num_active_loras,
+                }
+                for descriptor in descriptors
+            ]
+        configured_mode = runner.compilation_config.cudagraph_mode
+        return {
+            "rank": self.rank,
+            "local_rank": self.local_rank,
+            "configured_cudagraph_mode": getattr(
+                configured_mode, "name", str(configured_mode)
+            ),
+            "resolved_cudagraph_mode": dispatcher.cudagraph_mode.name,
+            "keys_initialized": dispatcher.keys_initialized,
+            "capture_descriptors": capture_descriptors,
+        }

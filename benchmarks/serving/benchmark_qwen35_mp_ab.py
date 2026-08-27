@@ -20,35 +20,6 @@ DEFAULT_MODEL = "/home/dist/models/Qwen3.5-35B-A3B-BF16"
 DISPATCH_ENV = "VLLM_MUSA_FUSED_MOE_DISPATCH"
 
 
-def _inspect_worker_compile_state(worker: Any) -> dict[str, Any]:
-    """Serialize the worker's post-backend cudagraph dispatcher state."""
-    runner = worker.model_runner
-    dispatcher = runner.cudagraph_dispatcher
-    capture_descriptors: dict[str, list[dict[str, Any]]] = {}
-    for runtime_mode, descriptors in dispatcher.get_capture_descs():
-        capture_descriptors[runtime_mode.name] = [
-            {
-                "num_tokens": descriptor.num_tokens,
-                "num_reqs": descriptor.num_reqs,
-                "uniform": descriptor.uniform,
-                "has_lora": descriptor.has_lora,
-                "num_active_loras": descriptor.num_active_loras,
-            }
-            for descriptor in descriptors
-        ]
-    configured_mode = runner.compilation_config.cudagraph_mode
-    return {
-        "rank": getattr(worker, "rank", None),
-        "local_rank": getattr(worker, "local_rank", None),
-        "configured_cudagraph_mode": getattr(
-            configured_mode, "name", str(configured_mode)
-        ),
-        "resolved_cudagraph_mode": dispatcher.cudagraph_mode.name,
-        "keys_initialized": dispatcher.keys_initialized,
-        "capture_descriptors": capture_descriptors,
-    }
-
-
 def inspect_compile_state(llm: Any) -> dict[str, Any] | None:
     """Return client intent plus every worker's resolved dispatcher state."""
     engine = getattr(llm, "llm_engine", None)
@@ -59,7 +30,7 @@ def inspect_compile_state(llm: Any) -> dict[str, Any] | None:
     mode = getattr(compilation_config, "cudagraph_mode", None)
     mode_name = getattr(mode, "name", None) or str(mode)
     capture_sizes = getattr(compilation_config, "cudagraph_capture_sizes", None)
-    worker_states = llm.collective_rpc(_inspect_worker_compile_state, timeout=60)
+    worker_states = llm.collective_rpc("get_musa_cudagraph_runtime_state", timeout=60)
     worker_runtime_modes = {state["resolved_cudagraph_mode"] for state in worker_states}
     workers_active = bool(
         worker_states
