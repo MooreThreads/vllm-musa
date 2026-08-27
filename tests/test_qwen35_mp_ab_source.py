@@ -27,6 +27,9 @@ def test_qwen35_ab_uses_compiled_capture_path() -> None:
     assert "len(worker_states) == 4" in source
     worker_source = WORKER_SOURCE.read_text(encoding="utf-8")
     assert "def get_musa_cudagraph_runtime_state" in worker_source
+    assert 'getattr(runner, "cudagraph_dispatcher", None)' in worker_source
+    assert '"resolved_cudagraph_mode": "NONE"' in worker_source
+    assert '"capture_descriptors": {}' in worker_source
     assert '"resolved_cudagraph_mode": dispatcher.cudagraph_mode.name' in worker_source
 
 
