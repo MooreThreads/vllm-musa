@@ -68,5 +68,8 @@ def test_qwen35_graph_bucket_replay_uses_one_general_engine() -> None:
     assert '"compile_state": compile_state' in source
     assert "required_full_sizes = {1, 2, 4, 16}" in source
     assert 'worker_state["capture_descriptors"].get("FULL", [])' in source
+    assert 'descriptor["num_reqs"] == descriptor["num_tokens"]' in source
+    assert 'descriptor["uniform"] is True' in source
+    assert 'descriptor["num_active_loras"] == 0' in source
     assert "del llm" in source
     assert "gc.collect()" in source

@@ -196,7 +196,10 @@ def main() -> None:
         full_sizes = {
             descriptor["num_tokens"]
             for descriptor in worker_state["capture_descriptors"].get("FULL", [])
-            if descriptor["has_lora"] is False
+            if descriptor["num_reqs"] == descriptor["num_tokens"]
+            and descriptor["uniform"] is True
+            and descriptor["has_lora"] is False
+            and descriptor["num_active_loras"] == 0
         }
         if not required_full_sizes.issubset(full_sizes):
             raise RuntimeError(
