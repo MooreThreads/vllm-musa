@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.cudagraph_dispatcher
  1 file changed, 34 insertions(+), 4 deletions(-)
 
 diff --git a/vllm/v1/cudagraph_dispatcher.py b/vllm/v1/cudagraph_dispatcher.py
-index 6a48b6282..356c00870 100644
+index 6a48b6282d..356c00870b 100644
 --- a/vllm/v1/cudagraph_dispatcher.py
 +++ b/vllm/v1/cudagraph_dispatcher.py
 @@ -31,8 +31,9 @@ class CudagraphDispatcher:

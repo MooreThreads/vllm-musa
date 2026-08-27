@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 31 Jul 2026 14:28:18 +0800
+Subject: [PATCH] perf: add gated sharded Qwen Gumbel logits path
+
+---
+ .../model_executor/layers/logits_processor.py |  2 ++
+ vllm/v1/worker/gpu/sample/gumbel.py           | 18 +++++++---
+ vllm/v1/worker/gpu_model_runner.py            | 35 +++++++++++++++++--
+ 3 files changed, 49 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/layers/logits_processor.py b/vllm/model_executor/layers/logits_processor.py
+index ab8d1d4102..efeb62095e 100644
+--- a/vllm/model_executor/layers/logits_processor.py
++++ b/vllm/model_executor/layers/logits_processor.py
+@@ -173,6 +173,8 @@ class LogitsProcessor(PluggableLayer):
+         lm_head: VocabParallelEmbedding,
+     ) -> torch.Tensor:
+         """gather/all-gather the logits tensor across model parallel group."""
++        if getattr(self, "_musa_skip_tp_gather", False):
++            return logits
+         if self.use_all_gather:
+             # Gather is not supported for some devices such as TPUs.
+             # Use all-gather instead.
+diff --git a/vllm/v1/worker/gpu/sample/gumbel.py b/vllm/v1/worker/gpu/sample/gumbel.py
+index 28c6e0f402..e261180a25 100644
+--- a/vllm/v1/worker/gpu/sample/gumbel.py
++++ b/vllm/v1/worker/gpu/sample/gumbel.py
+@@ -125,6 +125,7 @@ def gumbel_noised_argmax(
+ def gumbel_block_argmax(
+     logits,
+     block,
++    rng_block,
+     mask,
+     token_idx,
+     expanded_idx_mapping_ptr,
+@@ -166,7 +167,7 @@ def gumbel_block_argmax(
+     pos = tl.load(pos_ptr + token_idx)
+     return gumbel_noised_argmax(
+         logits,
+-        block,
++        rng_block,
+         mask,
+         seed,
+         pos,
+@@ -192,6 +193,7 @@ def _gumbel_sample_kernel(
+     pos_ptr,
+     temp_ptr,
+     vocab_size,
++    vocab_start_index,
+     BLOCK_SIZE: tl.constexpr,
+     APPLY_TEMPERATURE: tl.constexpr,
+     USE_FP64: tl.constexpr,
+@@ -200,6 +202,7 @@ def _gumbel_sample_kernel(
+     token_idx = tl.program_id(0).to(tl.int64)
+     block_idx = tl.program_id(1)
+     block = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
++    global_block = block + vocab_start_index
+     mask = block < vocab_size
+     logits = tl.load(
+         logits_ptr + token_idx * logits_stride + block,
+@@ -211,6 +214,7 @@ def _gumbel_sample_kernel(
+     value, idx = gumbel_block_argmax(
+         logits,
+         block,
++        global_block,
+         mask,
+         token_idx,
+         expanded_idx_mapping_ptr,
+@@ -225,7 +229,7 @@ def _gumbel_sample_kernel(
+         USE_FP64=USE_FP64,
+         PER_TOKEN_COL=PER_TOKEN_COL,
+     )
+-    token_id = block_idx * BLOCK_SIZE + idx
++    token_id = vocab_start_index + block_idx * BLOCK_SIZE + idx
+     tl.store(local_argmax_ptr + token_idx * local_argmax_stride + block_idx, token_id)
+     tl.store(local_max_ptr + token_idx * local_max_stride + block_idx, value)
+ 
+@@ -240,7 +244,9 @@ def gumbel_sample(
+     logits_cache: torch.Tensor | None = None,  # [max_num_reqs, num_cols, vocab_size]
+     logits_cache_col: torch.Tensor | None = None,  # scalar or [num_tokens]
+     use_fp64: bool = False,
+-) -> torch.Tensor:
++    vocab_start_index: int = 0,
++    return_values: bool = False,
++) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+     # Enforce contiguity on non-strided input tensors
+     expanded_idx_mapping = expanded_idx_mapping.contiguous()
+     pos = pos.contiguous()
+@@ -268,6 +274,7 @@ def gumbel_sample(
+         pos,
+         temperature,
+         vocab_size,
++        vocab_start_index,
+         BLOCK_SIZE=BLOCK_SIZE,
+         APPLY_TEMPERATURE=apply_temperature,
+         USE_FP64=use_fp64,
+@@ -276,4 +283,7 @@ def gumbel_sample(
+     # NOTE(woosuk): Use int64 for later indexing.
+     max_block_idx = local_max.argmax(dim=-1, keepdim=True)
+     sampled = local_argmax.gather(dim=-1, index=max_block_idx).view(-1)
+-    return sampled
++    if not return_values:
++        return sampled
++    sampled_values = local_max.gather(dim=-1, index=max_block_idx).view(-1)
++    return sampled, sampled_values
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 3a040031b3..412125254e 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -4707,7 +4707,22 @@ class GPUModelRunner(
+                     sample_hidden_states = hidden_states[:num_reqs]
+                 else:
+                     sample_hidden_states = hidden_states[logits_indices]
+-                logits = self.model.compute_logits(sample_hidden_states)
++                if current_platform.is_musa() and getattr(
++                    self.sampler, "_musa_qwen_legacy_sampling", False
++                ):
++                    from vllm_musa.v1.sample.topk_topp_sampler import (
++                        musa_compute_logits_if_eligible,
++                    )
++
++                    logits, _ = musa_compute_logits_if_eligible(
++                        self.model,
++                        sample_hidden_states,
++                        self.input_batch.sampling_metadata,
++                        self.sampler,
++                    )
++                else:
++                    self.sampler._musa_qwen_sharded_logits = False
++                    logits = self.model.compute_logits(sample_hidden_states)
+             else:
+                 # Rare case.
+                 assert not self.is_pooling_model
+@@ -4717,6 +4732,7 @@ class GPUModelRunner(
+                 else:
+                     sample_hidden_states = hidden_states[logits_indices]
+                 if not get_pp_group().is_last_rank:
++                    self.sampler._musa_qwen_sharded_logits = False
+                     all_gather_tensors = {
+                         "residual": not is_residual_scattered_for_sp(
+                             self.vllm_config, num_tokens_padded
+@@ -4729,7 +4745,22 @@ class GPUModelRunner(
+                     )
+                     logits = None
+                 else:
+-                    logits = self.model.compute_logits(sample_hidden_states)
++                    if current_platform.is_musa() and getattr(
++                        self.sampler, "_musa_qwen_legacy_sampling", False
++                    ):
++                        from vllm_musa.v1.sample.topk_topp_sampler import (
++                            musa_compute_logits_if_eligible,
++                        )
++
++                        logits, _ = musa_compute_logits_if_eligible(
++                            self.model,
++                            sample_hidden_states,
++                            self.input_batch.sampling_metadata,
++                            self.sampler,
++                        )
++                    else:
++                        self.sampler._musa_qwen_sharded_logits = False
++                        logits = self.model.compute_logits(sample_hidden_states)
+ 
+                 model_output_broadcast_data: dict[str, Any] = {}
+                 if logits is not None:

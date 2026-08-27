@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.models.deepseek_v4.common.ops.save_partial_states
  1 file changed, 16 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/models/deepseek_v4/common/ops/save_partial_states.py b/vllm/models/deepseek_v4/common/ops/save_partial_states.py
-index e3d7d38f4..9a4915ee9 100644
+index e3d7d38f45..9a4915ee94 100644
 --- a/vllm/models/deepseek_v4/common/ops/save_partial_states.py
 +++ b/vllm/models/deepseek_v4/common/ops/save_partial_states.py
 @@ -3,9 +3,24 @@

@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 20 Aug 2026 15:12:00 +0800
+Subject: [PATCH] MUSA: split rejection sampler chained condition
+
+MUSA Triton does not accept a three-term chained boolean expression. Keep the
+constexpr block-verification guard and combine the two scalar runtime
+predicates with a bitwise conjunction.
+---
+ vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
+index 0ee48bb08c..d4010627e9 100644
+--- a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
+@@ -667,7 +667,7 @@ def _rejection_kernel(
+                 tl.store(sampled_ptr + req_idx * sampled_stride + i, draft_sampled)
+ 
+     tl.store(rejected_steps_ptr + req_idx, accepted_length)
+-    if USE_BLOCK_VERIFICATION and not is_greedy and accepted_length < num_draft_tokens:
++    if USE_BLOCK_VERIFICATION and ((not is_greedy) & (accepted_length < num_draft_tokens)):
+         # Compute the target and draft log exponential sums for the
+         # rejected token.
+         rejected_idx = start_idx + accepted_length

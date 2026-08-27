@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc-file): csrc/custom_all_reduce.cu
  1 file changed, 129 insertions(+), 70 deletions(-)
 
 diff --git a/csrc/libtorch_stable/custom_all_reduce.cu b/csrc/libtorch_stable/custom_all_reduce.cu
-index 0f7f75994..4ae105171 100644
+index 07fca99ddd..df98c2f020 100644
 --- a/csrc/libtorch_stable/custom_all_reduce.cu
 +++ b/csrc/libtorch_stable/custom_all_reduce.cu
 @@ -1,11 +1,7 @@
@@ -35,7 +35,7 @@ index 0f7f75994..4ae105171 100644
 +                      torch::Tensor& rank_data, int64_t rank,
                        bool fully_connected) {
    int world_size = fake_ipc_ptrs.size();
-   if (world_size > 8)
+   if (world_size > vllm::kMaxCustomCollectiveRanks)
 @@ -29,9 +25,9 @@ fptr_t init_custom_ar(const std::vector<fptr_t>& fake_ipc_ptrs,
    for (int i = 0; i < world_size; i++) {
      ipc_ptrs[i] = reinterpret_cast<vllm::Signal*>(fake_ipc_ptrs[i]);
@@ -217,7 +217,7 @@ index 0f7f75994..4ae105171 100644
    auto fa = reinterpret_cast<vllm::CustomAllreduce*>(_fa);
 -  STD_TORCH_CHECK(fake_ipc_ptrs.size() == fa->world_size_);
 +  TORCH_CHECK(fake_ipc_ptrs.size() == fa->world_size_);
-   void* ipc_ptrs[8];
+   void* ipc_ptrs[vllm::kMaxCustomCollectiveRanks];
    for (int i = 0; i < fake_ipc_ptrs.size(); i++) {
      ipc_ptrs[i] = reinterpret_cast<void*>(fake_ipc_ptrs[i]);
 @@ -154,49 +209,53 @@ void register_graph_buffers(fptr_t _fa,

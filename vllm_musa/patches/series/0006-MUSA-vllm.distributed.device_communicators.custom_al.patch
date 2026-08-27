@@ -4,28 +4,27 @@ Date: Wed, 3 Jun 2026 11:47:35 +0000
 Subject: [PATCH] MUSA: vllm.distributed.device_communicators.custom_all_reduce
 
 ---
- vllm/distributed/device_communicators/custom_all_reduce.py | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
+ vllm/distributed/device_communicators/custom_all_reduce.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/distributed/device_communicators/custom_all_reduce.py b/vllm/distributed/device_communicators/custom_all_reduce.py
-index 95db6cc92..a5f0de620 100644
+index 86180a51a7..2c83be3f39 100644
 --- a/vllm/distributed/device_communicators/custom_all_reduce.py
 +++ b/vllm/distributed/device_communicators/custom_all_reduce.py
-@@ -56,7 +56,7 @@ class CustomAllreduce:
+@@ -71,7 +71,7 @@ class CustomAllreduce:
          self,
          group: ProcessGroup,
          device: int | str | torch.device,
 -        max_size=8192 * 1024,
 +        max_size=16 * 8192 * 1024,
-         symm_mem_enabled=False,
-     ) -> None:
-         """
-@@ -158,7 +158,7 @@ class CustomAllreduce:
-         # this is expensive to compute at the first time
-         # then we cache the result
-         # On AMD GPU, p2p is always enabled between XGMI connected GPUs
--        if not current_platform.is_rocm() and not _can_p2p(rank, world_size):
-+        if not current_platform.is_rocm() and not current_platform.is_musa() and not _can_p2p(rank, world_size):
+         max_all_gather_size=_DEFAULT_ALL_GATHER_MAX_SIZE,
+         max_mnnvl_all_gather_size=None,
+         max_reduce_scatter_size=_DEFAULT_REDUCE_SCATTER_MAX_SIZE,
+@@ -190,6 +190,7 @@ class CustomAllreduce:
+         if (
+             same_node
+             and not current_platform.is_rocm()
++            and not current_platform.is_musa()
+             and not _can_p2p(rank, world_size)
+         ):
              logger.warning(
-                 "Custom allreduce is disabled because your platform lacks "
-                 "GPU P2P capability or P2P test failed. To silence this "

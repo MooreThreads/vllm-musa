@@ -3,7 +3,8 @@ import math
 import torch
 import vllm.model_executor.layers.quantization.fp8 as vllm_fp8
 from vllm.logger import init_logger
-from vllm.model_executor.layers.fused_moe import FusedMoE, fused_experts
+from vllm.model_executor.layers.fused_moe import RoutedExperts
+from vllm.model_executor.layers.fused_moe.fused_moe import fused_experts
 from vllm.platforms import current_platform
 
 logger = init_logger(__name__)
@@ -118,7 +119,7 @@ def _release_cached_blocks() -> None:
         torch.musa.empty_cache()
 
 
-def _fold_shared_expert_weights(self, layer: FusedMoE) -> None:
+def _fold_shared_expert_weights(self, layer: RoutedExperts) -> None:
     """Append the model's shared expert to the routed FP8 expert stack.
 
     The MoE block stashes its shared MLP and gate on the routed-experts layer
@@ -188,13 +189,13 @@ def _fold_shared_expert_weights(self, layer: FusedMoE) -> None:
     )
 
 
-def process_weights_after_loading(self, layer: FusedMoE) -> None:
+def process_weights_after_loading(self, layer: RoutedExperts) -> None:
     _ORIGINAL_FP8_MOE_PROCESS_WEIGHTS(self, layer)
     _fold_shared_expert_weights(self, layer)
 
 
 def _extend_routing_with_shared_expert(
-    layer: FusedMoE,
+    layer: RoutedExperts,
     x: torch.Tensor,
     topk_weights: torch.Tensor,
     topk_ids: torch.Tensor,
@@ -212,7 +213,7 @@ def _extend_routing_with_shared_expert(
 
 def apply(
     self,
-    layer: FusedMoE,
+    layer: RoutedExperts,
     x: torch.Tensor,
     topk_weights: torch.Tensor,
     topk_ids: torch.Tensor,

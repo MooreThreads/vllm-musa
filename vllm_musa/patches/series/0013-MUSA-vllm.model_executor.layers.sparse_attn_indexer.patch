@@ -4,11 +4,11 @@ Date: Wed, 3 Jun 2026 11:47:36 +0000
 Subject: [PATCH] MUSA: vllm.model_executor.layers.sparse_attn_indexer
 
 ---
- .../layers/sparse_attn_indexer.py             | 1013 +++++++++++++++++
- 1 file changed, 1013 insertions(+)
+ .../layers/sparse_attn_indexer.py             | 1326 +++++++++++++++++
+ 1 file changed, 1326 insertions(+)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index fe2b268cd..eadc6f533 100644
+index d94b377dbe..b924899c31 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -2,9 +2,12 @@
@@ -24,7 +24,7 @@ index fe2b268cd..eadc6f533 100644
  from vllm import _custom_ops as ops
  from vllm._aiter_ops import rocm_aiter_ops
  from vllm.compilation.breakable_cudagraph import eager_break_during_capture
-@@ -31,6 +34,1291 @@ from vllm.v1.worker.workspace import current_workspace_manager
+@@ -39,6 +42,1291 @@ from vllm.v1.worker.workspace import current_workspace_manager
  
  logger = init_logger(__name__)
  
@@ -1316,8 +1316,7 @@ index fe2b268cd..eadc6f533 100644
  RADIX_TOPK_WORKSPACE_SIZE = 1024 * 1024
  
  # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
-@@ -452,19 +1740,21 @@ class SparseAttnIndexer(CustomOp):
-         max_total_seq_len: int,
+@@ -750,6 +2038,7 @@ class SparseAttnIndexer(CustomOp):
          topk_indices_buffer: torch.Tensor,
          skip_k_cache_insert: bool = False,
          use_fp4_cache: bool = False,
@@ -1325,20 +1324,15 @@ index fe2b268cd..eadc6f533 100644
      ):
          super().__init__()
          self.k_cache = k_cache
-         self.quant_block_size = quant_block_size
-         self.scale_fmt = scale_fmt
-         self.topk_tokens = topk_tokens
-         self.head_dim = head_dim
-         self.max_model_len = max_model_len
-         self.max_total_seq_len = max_total_seq_len
-         self.topk_indices_buffer = topk_indices_buffer
-         self.skip_k_cache_insert = skip_k_cache_insert
-         self.use_fp4_cache = use_fp4_cache
+@@ -771,6 +2060,7 @@ class SparseAttnIndexer(CustomOp):
+         self.dcp_rank = get_dcp_group().rank_in_group if self.dcp_world_size > 1 else 0
+         self.cp_kv_cache_interleave_size = parallel_config.cp_kv_cache_interleave_size
+         self.use_pcp = parallel_config.prefill_context_parallel_size > 1
 +        self.use_musa_native_indexer = use_musa_native_indexer
          if current_platform.is_cuda() and not has_deep_gemm():
              raise RuntimeError(
                  "Sparse Attention Indexer CUDA op requires DeepGEMM support in "
-@@ -482,6 +1772,42 @@ class SparseAttnIndexer(CustomOp):
+@@ -788,6 +2078,42 @@ class SparseAttnIndexer(CustomOp):
              return self.forward_cuda(hidden_states, q_quant, k, weights)
          elif current_platform.is_rocm():
              return self.forward_hip(hidden_states, q_quant, k, weights)

@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc-file): csrc/quantization/activation_kernels.cu
  1 file changed, 16 insertions(+), 7 deletions(-)
 
 diff --git a/csrc/libtorch_stable/quantization/activation_kernels.cu b/csrc/libtorch_stable/quantization/activation_kernels.cu
-index 822a41969..a140a043c 100644
+index 822a41969e..a140a043c2 100644
 --- a/csrc/libtorch_stable/quantization/activation_kernels.cu
 +++ b/csrc/libtorch_stable/quantization/activation_kernels.cu
 @@ -117,15 +117,18 @@ __device__ __forceinline__ float2 silu2(float2 x) {

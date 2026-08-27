@@ -45,9 +45,12 @@ The plugin leverages the following key components:
 
 | vLLM Version | PyTorch Version | Engine  | Status       |
 |--------------|-----------------|---------|--------------|
-| v0.24.0       | 2.11.x          | V1 only | ✅ Supported |
+| v0.28.0       | 2.11.x (MUSA)   | V1 only | Upgrade candidate |
 
-> **Note**: This plugin uses vLLM's V1 engine architecture (the V0 engine is not supported). Within the V1 engine, vLLM v0.24.0 auto-selects its **Model Runner V2** for certain architectures (e.g. Qwen3, DeepSeek-V2, Llama) and the V1 model runner for others; both are supported on MUSA. Set `VLLM_USE_V2_MODEL_RUNNER=1` or `0` to force one.
+> **Note**: This branch is based on the exact vLLM v0.28.0 release commit in
+> `third_party/PINS`. It intentionally retains the MUSA PyTorch 2.11 wheel
+> stack instead of upstream vLLM's CUDA PyTorch 2.13 stack; build and model
+> smoke evidence is required before promoting the candidate to supported.
 
 ### Docker image
 

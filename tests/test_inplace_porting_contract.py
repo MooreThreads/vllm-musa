@@ -361,7 +361,7 @@ def test_setup_activates_torchada_without_installing_dependencies():
 
 def test_archive_vllm_install_uses_upstream_version_override():
     setup = (ROOT / "setup.py").read_text()
-    assert 'env.setdefault("VLLM_VERSION_OVERRIDE", "0.24.0")' in setup
+    assert 'env.setdefault("VLLM_VERSION_OVERRIDE", "0.28.0")' in setup
     assert "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM" not in setup
 
 

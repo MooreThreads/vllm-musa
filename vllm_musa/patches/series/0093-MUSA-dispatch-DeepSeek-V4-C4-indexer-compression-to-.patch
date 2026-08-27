@@ -9,10 +9,10 @@ Subject: [PATCH] MUSA: dispatch DeepSeek-V4 C4 indexer compression to native
  1 file changed, 32 insertions(+)
 
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
-index 4ec4d72902..78df401a32 100644
+index 0b678a4834..0f7946ef6a 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
-@@ -72,6 +72,38 @@ def compress_norm_rope_store_triton(
+@@ -78,6 +78,38 @@ def compress_norm_rope_store_triton(
      Picks one of the three kernels in this module based on ``head_dim`` and
      ``use_fp4_cache``. Identical launch signature for all three.
      """

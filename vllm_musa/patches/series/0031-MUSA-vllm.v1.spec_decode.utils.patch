@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.spec_decode.utils
  1 file changed, 10 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/v1/spec_decode/utils.py b/vllm/v1/spec_decode/utils.py
-index 65b9408a8..79af45d20 100644
+index 65b9408a89..79af45d202 100644
 --- a/vllm/v1/spec_decode/utils.py
 +++ b/vllm/v1/spec_decode/utils.py
 @@ -152,6 +152,15 @@ def eagle_prepare_inputs_padded_kernel(

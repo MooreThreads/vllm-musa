@@ -174,7 +174,7 @@ def test_mhc_auto_paths_fall_back_when_tilelang_is_unavailable():
     assert "return _mhc_pre_native_provider(" in source
 
 
-def test_hc_head_musa_eager_path_preserves_token_dimensions():
+def test_hc_head_musa_fallback_preserves_token_dimensions():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
 
     assert "def _reshape_hc_head_input(" in source
@@ -189,6 +189,18 @@ def test_hc_head_musa_eager_path_preserves_token_dimensions():
     assert "return y.reshape(*token_shape, hidden_size).to(dtype)" in source
 
 
+def test_hc_head_musa_uses_fused_tilelang_path():
+    tilelang = _read("third_party/vllm/vllm/model_executor/kernels/mhc/tilelang.py")
+    tilelang_utils = _read("third_party/vllm/vllm/tilelang_utils/__init__.py")
+    tilelang_tree = ast.parse(tilelang)
+    hc_head = _function_node(tilelang_tree, "hc_head_fused_kernel_tilelang")
+
+    assert "or current_platform.is_musa()" in tilelang_utils
+    assert 'hs_flat.device.type == "musa"' not in ast.unparse(hc_head)
+    assert not _calls(hc_head, "hc_head_musa")
+    assert _calls(hc_head, "hc_head_fuse_tilelang")
+
+
 def test_mhc_pre_decode_prenorm_uses_deepgemm_by_default():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
 
@@ -200,6 +212,23 @@ def test_mhc_pre_decode_prenorm_uses_deepgemm_by_default():
     assert 'return "deepgemm"' in selector
     assert 'return "tilelang"' not in selector
     assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_DECODE_PRENORM_IMPL" not in source
+
+
+def test_mhc_broadcast_prenorm_uses_mate_deepgemm_on_musa():
+    deep_gemm = _read("third_party/vllm/vllm/utils/deep_gemm.py")
+    tilelang = _read("third_party/vllm/vllm/model_executor/kernels/mhc/tilelang.py")
+    musa_mhc = _read("vllm_musa/deepseek_v4_mhc.py")
+    tilelang_tree = ast.parse(tilelang)
+    broadcast = _function_node(tilelang_tree, "mhc_pre_broadcast_tilelang")
+    broadcast_source = ast.unparse(broadcast)
+
+    assert "import mate.deep_gemm as _mate_dg" in deep_gemm
+    assert '_mate_dg, "tf32_hc_prenorm_gemm", None' in deep_gemm
+    assert "from mate.deep_gemm import tf32_hc_prenorm_gemm" in musa_mhc
+    assert 'residual.device.type == "musa"' in tilelang
+    assert "mhc_pre_musa_with_norm" in broadcast_source
+    assert ".expand(" in broadcast_source
+    assert _calls(broadcast, "mhc_pre_musa_with_norm")
 
 
 def test_mhc_pre_deepgemm_big_fuse_shape_guards_and_splitk():

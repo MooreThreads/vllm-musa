@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.model_executor.kernels.mhc.tilelang
  1 file changed, 49 insertions(+)
 
 diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
-index e0007141d..40be813b3 100644
+index c3c773d07f..57f852c60d 100644
 --- a/vllm/model_executor/kernels/mhc/tilelang.py
 +++ b/vllm/model_executor/kernels/mhc/tilelang.py
 @@ -126,6 +126,26 @@ def mhc_pre_tilelang(
@@ -38,7 +38,7 @@ index e0007141d..40be813b3 100644
      from vllm.model_executor.kernels.mhc.tilelang_kernels import (
          compute_num_split,
          mhc_pre_big_fuse_tilelang,
-@@ -306,6 +326,12 @@ def mhc_post_tilelang(
+@@ -413,6 +433,12 @@ def mhc_post_tilelang(
      post_layer_mix: torch.Tensor,
      comb_res_mix: torch.Tensor,
  ) -> torch.Tensor:
@@ -51,7 +51,7 @@ index e0007141d..40be813b3 100644
      from vllm.model_executor.kernels.mhc.tilelang_kernels import (
          mhc_post_tilelang as _mhc_post_kernel,
      )
-@@ -355,6 +381,29 @@ def mhc_fused_post_pre_tilelang(
+@@ -462,6 +488,29 @@ def mhc_fused_post_pre_tilelang(
          layer_input_cur: shape (..., hidden_size)
      """
  

@@ -12,10 +12,10 @@ static-quant kernel.
  1 file changed, 8 insertions(+), 4 deletions(-)
 
 diff --git a/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu b/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu
-index 2152e64dc..6ac5d922b 100644
+index 56dd470387..b722eb19ed 100644
 --- a/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu
 +++ b/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu
-@@ -141,8 +141,10 @@ void rms_norm_dynamic_per_token_quant_dispatch(
+@@ -142,8 +142,10 @@ void rms_norm_dynamic_per_token_quant_dispatch(
      std::optional<torch::stable::Tensor> const& scale_ub,
      std::optional<torch::stable::Tensor>& residual) {
    int32_t hidden_size = input.size(-1);
@@ -28,7 +28,7 @@ index 2152e64dc..6ac5d922b 100644
    auto num_tokens = input.numel() / hidden_size;
  
    dim3 grid(num_tokens);
-@@ -218,8 +220,10 @@ void rms_norm_per_block_quant_dispatch(
+@@ -219,8 +221,10 @@ void rms_norm_per_block_quant_dispatch(
      std::optional<torch::stable::Tensor> const& scale_ub,
      std::optional<torch::stable::Tensor>& residual, bool is_scale_transposed) {
    int32_t hidden_size = input.size(-1);

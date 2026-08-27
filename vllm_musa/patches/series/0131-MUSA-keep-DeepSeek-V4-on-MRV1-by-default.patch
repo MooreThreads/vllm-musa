@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 26 Aug 2026 12:08:10 +0800
+Subject: [PATCH] MUSA: keep DeepSeek-V4 on MRV1 by default
+
+Keep the faster MRV1 path as the MUSA default for DeepSeek-V4.
+
+Preserve explicit V2 opt-in and the DSpark V2 override.
+---
+ vllm/config/vllm.py | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
+index 0c90ceff03..b2078c18ae 100644
+--- a/vllm/config/vllm.py
++++ b/vllm/config/vllm.py
+@@ -85,10 +85,11 @@ def default_v2_model_runner_architectures() -> frozenset[str]:
+     """Architectures defaulting to the V2 model runner on this platform."""
+     from vllm.platforms import current_platform
+ 
+-    if current_platform.is_rocm():
+-        # TODO(rocm): DeepSeek V4 is still faster on MRV1 on ROCm. The
+-        # attention layer picks the eager cudagraph region MRV1 needs, so
+-        # this is a perf default only; drop it once MRV2 catches up.
++    is_musa = getattr(current_platform, "is_musa", None)
++    if current_platform.is_rocm() or (callable(is_musa) and is_musa()):
++        # DeepSeek V4 is faster on MRV1 on ROCm and MUSA. Its attention layer
++        # selects the eager region MRV1 needs, and MUSA uses FULL_DECODE_ONLY
++        # rather than piecewise graphs for this deployment.
+         return DEFAULT_V2_MODEL_RUNNER_ARCHITECTURES - {"DeepseekV4ForCausalLM"}
+     return DEFAULT_V2_MODEL_RUNNER_ARCHITECTURES
+ 

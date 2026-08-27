@@ -5,18 +5,18 @@ Subject: [PATCH] MUSA(csrc): build the relocated MoE kernels as a regular
  at::Tensor extension
 
 ---
- .../moe/moe_align_sum_kernels.cu              |  2 +-
- csrc/libtorch_stable/moe/moe_ops.h            | 91 +++++++++---------
- .../moe/topk_softmax_kernels.cu               | 95 +++++++++----------
- .../moe/topk_softplus_sqrt_kernels.cu         | 66 +++++++------
- 4 files changed, 125 insertions(+), 129 deletions(-)
+ .../moe/moe_align_sum_kernels.cu              |   2 +-
+ csrc/libtorch_stable/moe/moe_ops.h            | 102 +++++++--------
+ .../moe/topk_softmax_kernels.cu               | 117 +++++++++---------
+ .../moe/topk_softplus_sqrt_kernels.cu         |  99 +++++++--------
+ 4 files changed, 155 insertions(+), 165 deletions(-)
 
 diff --git a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
-index c086d6f3b..21cad90c6 100644
+index a8c09794b2..70410120f4 100644
 --- a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 +++ b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
-@@ -8,7 +8,7 @@
- 
+@@ -9,7 +9,7 @@
+ #include "libtorch_stable/quantization/vectorization.cuh"
  #include "cuda_compat.h"
  #include "dispatch_utils.h"
 -#include "core/math.hpp"
@@ -25,15 +25,15 @@ index c086d6f3b..21cad90c6 100644
  #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
  
 diff --git a/csrc/libtorch_stable/moe/moe_ops.h b/csrc/libtorch_stable/moe/moe_ops.h
-index 43cbb7f86..f33737a8c 100644
+index 03525a05f9..8986d5da4e 100644
 --- a/csrc/libtorch_stable/moe/moe_ops.h
 +++ b/csrc/libtorch_stable/moe/moe_ops.h
-@@ -1,3 +1,4 @@
-+#include <torch/all.h>
+@@ -1,74 +1,74 @@
  #pragma once
  
- #include <torch/csrc/stable/tensor.h>
-@@ -5,64 +6,64 @@
+-#include <torch/csrc/stable/tensor.h>
++#include <torch/all.h>
+ 
  #include <optional>
  #include <tuple>
  
@@ -41,23 +41,28 @@ index 43cbb7f86..f33737a8c 100644
 -                  torch::stable::Tensor& topk_indices,
 -                  torch::stable::Tensor& token_expert_indices,
 -                  torch::stable::Tensor& gating_output, bool renormalize,
--                  std::optional<torch::stable::Tensor> bias);
+-                  std::optional<torch::stable::Tensor> bias,
+-                  std::optional<torch::stable::Tensor> is_padding);
 +void topk_softmax(torch::Tensor& topk_weights,
 +                  torch::Tensor& topk_indices,
 +                  torch::Tensor& token_expert_indices,
 +                  torch::Tensor& gating_output, bool renormalize,
-+                  std::optional<torch::Tensor> bias);
++                  std::optional<torch::Tensor> bias,
++                  std::optional<torch::Tensor> is_padding);
  
 -void topk_sigmoid(torch::stable::Tensor& topk_weights,
 -                  torch::stable::Tensor& topk_indices,
 -                  torch::stable::Tensor& token_expert_indices,
 -                  torch::stable::Tensor& gating_output, bool renormalize,
--                  std::optional<torch::stable::Tensor> bias);
+-                  std::optional<torch::stable::Tensor> bias,
 +void topk_sigmoid(torch::Tensor& topk_weights,
 +                  torch::Tensor& topk_indices,
 +                  torch::Tensor& token_expert_indices,
 +                  torch::Tensor& gating_output, bool renormalize,
-+                  std::optional<torch::Tensor> bias);
++                  std::optional<torch::Tensor> bias,
+                   double routed_scaling_factor,
+-                  std::optional<torch::stable::Tensor> is_padding);
++                  std::optional<torch::Tensor> is_padding);
  
  void topk_softplus_sqrt(
 -    torch::stable::Tensor& topk_weights, torch::stable::Tensor& topk_indices,
@@ -69,13 +74,19 @@ index 43cbb7f86..f33737a8c 100644
      double routed_scaling_factor,
 -    const std::optional<torch::stable::Tensor>& correction_bias,
 -    const std::optional<torch::stable::Tensor>& input_ids,
--    const std::optional<torch::stable::Tensor>& tid2eid);
+-    const std::optional<torch::stable::Tensor>& tid2eid,
+-    const std::optional<torch::stable::Tensor>& is_padding);
 +    const std::optional<torch::Tensor>& correction_bias,
 +    const std::optional<torch::Tensor>& input_ids,
-+    const std::optional<torch::Tensor>& tid2eid);
++    const std::optional<torch::Tensor>& tid2eid,
++    const std::optional<torch::Tensor>& is_padding);
  
--void moe_sum(torch::stable::Tensor& input, torch::stable::Tensor& output);
-+void moe_sum(torch::Tensor& input, torch::Tensor& output);
+-void moe_sum(torch::stable::Tensor& input, torch::stable::Tensor& output,
+-             std::optional<torch::stable::Tensor> topk_ids,
+-             std::optional<torch::stable::Tensor> expert_map);
++void moe_sum(torch::Tensor& input, torch::Tensor& output,
++             std::optional<torch::Tensor> topk_ids,
++             std::optional<torch::Tensor> expert_map);
  
  void moe_align_block_size(
 -    torch::stable::Tensor topk_ids, int64_t num_experts, int64_t block_size,
@@ -137,7 +148,7 @@ index 43cbb7f86..f33737a8c 100644
  #endif
  
  bool moe_permute_unpermute_supported();
-@@ -70,9 +71,9 @@ bool moe_permute_unpermute_supported();
+@@ -76,9 +76,9 @@ bool moe_permute_unpermute_supported();
  int64_t moe_permute_sort_workspace_size(int64_t num_expanded_rows,
                                          int64_t num_expert);
  
@@ -150,7 +161,7 @@ index 43cbb7f86..f33737a8c 100644
  
  #ifndef USE_ROCM
  // DeepSeek V3 optimized router GEMM kernel for SM90+
-@@ -81,7 +82,7 @@ void shuffle_rows(const torch::stable::Tensor& input_tensor,
+@@ -87,7 +87,7 @@ void shuffle_rows(const torch::stable::Tensor& input_tensor,
  //   mat_b: [num_experts, hidden_dim] in bf16
  //   output: [num_tokens, num_experts] in bf16 or fp32
  // Supports num_tokens in [1, 16], num_experts in {256, 384}, hidden_dim = 7168
@@ -162,7 +173,7 @@ index 43cbb7f86..f33737a8c 100644
 +                      const torch::Tensor& mat_b);
  #endif
 diff --git a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
-index e8453579b..4c9f943b1 100644
+index 098644a1b9..776cdfddaa 100644
 --- a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
 +++ b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
 @@ -19,14 +19,13 @@
@@ -178,7 +189,7 @@ index e8453579b..4c9f943b1 100644
 +#include <c10/cuda/CUDAGuard.h>
  
 -#include "../../cuda_compat.h"
--#include "../../cub_helpers.h"
+-#include "../cub_helpers.h"
 -#include "libtorch_stable/torch_utils.h"
 +#include "cuda_compat.h"
 +#include "cub_helpers.h"
@@ -186,7 +197,7 @@ index e8453579b..4c9f943b1 100644
  
  #ifndef USE_ROCM
      #include <cuda_bf16.h>
-@@ -718,7 +717,7 @@ void topkGatingKernelLauncher(
+@@ -728,7 +727,7 @@ void topkGatingKernelLauncher(
              break;
  #endif
          default: {
@@ -195,7 +206,7 @@ index e8453579b..4c9f943b1 100644
                  "workspace must be provided for num_experts that are not a power of 2 or multiple of 64.");
              static constexpr int TPB = 256;
              if constexpr (SF == SCORING_SOFTMAX) {
-@@ -728,7 +727,7 @@ void topkGatingKernelLauncher(
+@@ -738,7 +737,7 @@ void topkGatingKernelLauncher(
                moeSigmoid<TPB, InputType><<<num_tokens, TPB, 0, stream>>>(
                  gating_output, nullptr, workspace, num_experts);
              } else {
@@ -204,7 +215,7 @@ index e8453579b..4c9f943b1 100644
              }
              moeTopK<TPB><<<num_tokens, TPB, 0, stream>>>(
                  workspace, nullptr, topk_weights, topk_indices, token_expert_indices,
-@@ -743,28 +742,28 @@ void topkGatingKernelLauncher(
+@@ -753,42 +752,44 @@ void topkGatingKernelLauncher(
  
  template<typename ComputeType, vllm::moe::ScoringFunc SF>
  void dispatch_topk_launch(
@@ -221,7 +232,10 @@ index e8453579b..4c9f943b1 100644
      int num_tokens, int num_experts, int topk, bool renormalize,
 -    std::optional<torch::stable::Tensor> bias,
 +    std::optional<torch::Tensor> bias,
-     cudaStream_t stream)
+     double routed_scaling_factor,
+     cudaStream_t stream,
+-    std::optional<torch::stable::Tensor> is_padding)
++    std::optional<torch::Tensor> is_padding)
   {
      const float* bias_ptr = nullptr;
      if (bias.has_value()) {
@@ -240,30 +254,51 @@ index e8453579b..4c9f943b1 100644
        bias_ptr = bias_tensor.const_data_ptr<float>();
      }
  
+     const bool* is_padding_ptr = nullptr;
+     if (is_padding.has_value()) {
+-      const torch::stable::Tensor& is_padding_tensor = is_padding.value();
+-      STD_TORCH_CHECK(is_padding_tensor.scalar_type() == torch::headeronly::ScalarType::Bool,
+-                      "is_padding tensor must be bool");
+-      STD_TORCH_CHECK(is_padding_tensor.dim() == 1, "is_padding tensor must be 1D");
+-      STD_TORCH_CHECK(is_padding_tensor.size(0) == num_tokens,
+-                      "is_padding size mismatch, expected: ", num_tokens);
+-      STD_TORCH_CHECK(is_padding_tensor.is_contiguous(), "is_padding tensor must be contiguous");
++      const torch::Tensor& is_padding_tensor = is_padding.value();
++      TORCH_CHECK(is_padding_tensor.scalar_type() == at::ScalarType::Bool,
++                  "is_padding tensor must be bool");
++      TORCH_CHECK(is_padding_tensor.dim() == 1,
++                  "is_padding tensor must be 1D");
++      TORCH_CHECK(is_padding_tensor.size(0) == num_tokens,
++                  "is_padding size mismatch, expected: ", num_tokens);
++      TORCH_CHECK(is_padding_tensor.is_contiguous(),
++                  "is_padding tensor must be contiguous");
+       is_padding_ptr = is_padding_tensor.const_data_ptr<bool>();
+     }
+ 
 -    if (topk_indices.scalar_type() == torch::headeronly::ScalarType::Int) {
 +    if (topk_indices.scalar_type() == at::ScalarType::Int) {
          vllm::moe::topkGatingKernelLauncher<int, ComputeType, SF>(
              reinterpret_cast<const ComputeType*>(gating_output.const_data_ptr()),
              topk_weights.mutable_data_ptr<float>(),
-@@ -773,7 +772,7 @@ void dispatch_topk_launch(
+@@ -797,7 +798,7 @@ void dispatch_topk_launch(
              softmax_workspace.mutable_data_ptr<float>(),
              num_tokens, num_experts, topk, renormalize,
-             bias_ptr, stream);
+             bias_ptr, routed_scaling_factor, stream, is_padding_ptr);
 -    } else if (topk_indices.scalar_type() == torch::headeronly::ScalarType::UInt32) {
 +    } else if (topk_indices.scalar_type() == at::ScalarType::UInt32) {
          vllm::moe::topkGatingKernelLauncher<uint32_t, ComputeType, SF>(
              reinterpret_cast<const ComputeType*>(gating_output.const_data_ptr()),
              topk_weights.mutable_data_ptr<float>(),
-@@ -783,7 +782,7 @@ void dispatch_topk_launch(
+@@ -807,7 +808,7 @@ void dispatch_topk_launch(
              num_tokens, num_experts, topk, renormalize,
-             bias_ptr, stream);
+             bias_ptr, routed_scaling_factor, stream, is_padding_ptr);
      } else {
 -        STD_TORCH_CHECK(topk_indices.scalar_type() == torch::headeronly::ScalarType::Long);
 +        TORCH_CHECK(topk_indices.scalar_type() == at::ScalarType::Long);
          vllm::moe::topkGatingKernelLauncher<int64_t, ComputeType, SF>(
              reinterpret_cast<const ComputeType*>(gating_output.const_data_ptr()),
              topk_weights.mutable_data_ptr<float>(),
-@@ -796,12 +795,12 @@ void dispatch_topk_launch(
+@@ -820,13 +821,13 @@ void dispatch_topk_launch(
  }
  
  void topk_softmax(
@@ -276,12 +311,14 @@ index e8453579b..4c9f943b1 100644
 +    torch::Tensor& token_expert_indices,        // [num_tokens, topk]
 +    torch::Tensor& gating_output,               // [num_tokens, num_experts]
      bool renormalize,
--    std::optional<torch::stable::Tensor> bias)
-+    std::optional<torch::Tensor> bias)
+-    std::optional<torch::stable::Tensor> bias,
+-    std::optional<torch::stable::Tensor> is_padding)
++    std::optional<torch::Tensor> bias,
++    std::optional<torch::Tensor> is_padding)
  {
      const int num_experts = gating_output.size(-1);
      const auto num_tokens = gating_output.numel() / num_experts;
-@@ -811,36 +810,35 @@ void topk_softmax(
+@@ -836,38 +837,37 @@ void topk_softmax(
      const bool needs_workspace = !is_pow_2 || num_experts > 256;
      const int64_t workspace_size = needs_workspace ? num_tokens * num_experts : 0;
  
@@ -298,17 +335,17 @@ index e8453579b..4c9f943b1 100644
 +    if (gating_output.scalar_type() == at::ScalarType::Float) {
          dispatch_topk_launch<float, vllm::moe::SCORING_SOFTMAX>(gating_output, topk_weights, topk_indices,
              token_expert_indices, softmax_workspace, num_tokens, num_experts, topk, renormalize,
-             bias, stream);
+             bias, 1.0, stream, is_padding);
 -    } else if (gating_output.scalar_type() == torch::headeronly::ScalarType::Half) {
 +    } else if (gating_output.scalar_type() == at::ScalarType::Half) {
          dispatch_topk_launch<__half, vllm::moe::SCORING_SOFTMAX>(gating_output, topk_weights, topk_indices,
              token_expert_indices, softmax_workspace, num_tokens, num_experts, topk, renormalize,
-             bias, stream);
+             bias, 1.0, stream, is_padding);
 -    } else if (gating_output.scalar_type() == torch::headeronly::ScalarType::BFloat16) {
 +    } else if (gating_output.scalar_type() == at::ScalarType::BFloat16) {
          dispatch_topk_launch<__nv_bfloat16, vllm::moe::SCORING_SOFTMAX>(gating_output, topk_weights, topk_indices,
              token_expert_indices, softmax_workspace, num_tokens, num_experts, topk, renormalize,
-             bias, stream);
+             bias, 1.0, stream, is_padding);
      } else {
 -        STD_TORCH_CHECK(false, "Unsupported gating_output data type: ", gating_output.scalar_type());
 +        TORCH_CHECK(false, "Unsupported gating_output data type: ", gating_output.scalar_type());
@@ -325,12 +362,15 @@ index e8453579b..4c9f943b1 100644
 +    torch::Tensor& token_expert_indices,        // [num_tokens, topk]
 +    torch::Tensor& gating_output,               // [num_tokens, num_experts]
      bool renormalize,
--    std::optional<torch::stable::Tensor> bias)
-+    std::optional<torch::Tensor> bias)
+-    std::optional<torch::stable::Tensor> bias,
++    std::optional<torch::Tensor> bias,
+     double routed_scaling_factor,
+-    std::optional<torch::stable::Tensor> is_padding)
++    std::optional<torch::Tensor> is_padding)
  {
      const int num_experts = gating_output.size(-1);
      const auto num_tokens = gating_output.numel() / num_experts;
-@@ -850,25 +848,24 @@ void topk_sigmoid(
+@@ -877,25 +877,24 @@ void topk_sigmoid(
      const bool needs_workspace = !is_pow_2 || num_experts > 256;
      const int64_t workspace_size = needs_workspace ? num_tokens * num_experts : 0;
  
@@ -347,24 +387,24 @@ index e8453579b..4c9f943b1 100644
 +    if (gating_output.scalar_type() == at::ScalarType::Float) {
          dispatch_topk_launch<float, vllm::moe::SCORING_SIGMOID>(gating_output, topk_weights, topk_indices,
              token_expert_indices, workspace, num_tokens, num_experts, topk, renormalize,
-             bias, stream);
+             bias, routed_scaling_factor, stream, is_padding);
 -    } else if (gating_output.scalar_type() == torch::headeronly::ScalarType::Half) {
 +    } else if (gating_output.scalar_type() == at::ScalarType::Half) {
          dispatch_topk_launch<__half, vllm::moe::SCORING_SIGMOID>(gating_output, topk_weights, topk_indices,
              token_expert_indices, workspace, num_tokens, num_experts, topk, renormalize,
-             bias, stream);
+             bias, routed_scaling_factor, stream, is_padding);
 -    } else if (gating_output.scalar_type() == torch::headeronly::ScalarType::BFloat16) {
 +    } else if (gating_output.scalar_type() == at::ScalarType::BFloat16) {
          dispatch_topk_launch<__nv_bfloat16, vllm::moe::SCORING_SIGMOID>(gating_output, topk_weights, topk_indices,
              token_expert_indices, workspace, num_tokens, num_experts, topk, renormalize,
-             bias, stream);
+             bias, routed_scaling_factor, stream, is_padding);
      } else {
 -        STD_TORCH_CHECK(false, "Unsupported gating_output data type: ", gating_output.scalar_type());
 +        TORCH_CHECK(false, "Unsupported gating_output data type: ", gating_output.scalar_type());
      }
  }
 diff --git a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
-index 7efe13b4d..f43cdf73f 100644
+index 976eebac3d..b5290648b2 100644
 --- a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
 +++ b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
 @@ -20,14 +20,13 @@
@@ -377,7 +417,7 @@ index 7efe13b4d..f43cdf73f 100644
 -#include <torch/headeronly/util/Exception.h>
 -
 -#include "../../cuda_compat.h"
--#include "../../cub_helpers.h"
+-#include "../cub_helpers.h"
 -#include "libtorch_stable/torch_utils.h"
 +#include <torch/all.h>
 +#include <ATen/cuda/CUDAContext.h>
@@ -389,7 +429,7 @@ index 7efe13b4d..f43cdf73f 100644
  #ifndef USE_ROCM
    #include <cuda_bf16.h>
    #include <cuda_fp16.h>
-@@ -623,7 +622,7 @@ void topkGatingSoftplusSqrtKernelLauncher(
+@@ -744,7 +743,7 @@ void topkGatingSoftplusSqrtKernelLauncher(
        LAUNCH_SOFTPLUS_SQRT(576, WARPS_PER_TB, BYTES_PER_LDG_MULTIPLE_64_NARROW);
        break;
      default: {
@@ -398,7 +438,7 @@ index 7efe13b4d..f43cdf73f 100644
      }
    }
  }
-@@ -633,24 +632,24 @@ void topkGatingSoftplusSqrtKernelLauncher(
+@@ -754,46 +753,41 @@ void topkGatingSoftplusSqrtKernelLauncher(
  
  template <typename ComputeType>
  void dispatch_topk_softplus_sqrt_launch(
@@ -411,47 +451,86 @@ index 7efe13b4d..f43cdf73f 100644
      int num_experts, int topk, bool renormalize, double routed_scaling_factor,
 -    const std::optional<torch::stable::Tensor>& correction_bias,
 -    const std::optional<torch::stable::Tensor>& input_ids,
--    const std::optional<torch::stable::Tensor>& tid2eid, cudaStream_t stream) {
+-    const std::optional<torch::stable::Tensor>& tid2eid, cudaStream_t stream,
+-    const std::optional<torch::stable::Tensor>& is_padding) {
 +    const std::optional<torch::Tensor>& correction_bias,
 +    const std::optional<torch::Tensor>& input_ids,
-+    const std::optional<torch::Tensor>& tid2eid, cudaStream_t stream) {
++    const std::optional<torch::Tensor>& tid2eid, cudaStream_t stream,
++    const std::optional<torch::Tensor>& is_padding) {
    const float* bias_ptr = nullptr;
    if (correction_bias.has_value()) {
      bias_ptr = correction_bias.value().const_data_ptr<float>();
    }
-   bool use_hash = false;
-   if (tid2eid.has_value()) {
--    STD_TORCH_CHECK(input_ids.has_value(),
-+    TORCH_CHECK(input_ids.has_value(),
-                     "input_ids is required for hash MoE");
-     use_hash = true;
-   }
+-
+   auto launch = [&](auto* topk_indices_ptr) {
+     using OutIndType =
+         typename std::remove_pointer<decltype(topk_indices_ptr)>::type;
+ 
+     const bool* is_padding_ptr = nullptr;
+     if (is_padding.has_value()) {
+-      const torch::stable::Tensor& is_padding_tensor = is_padding.value();
+-      STD_TORCH_CHECK(is_padding_tensor.scalar_type() ==
+-                          torch::headeronly::ScalarType::Bool,
+-                      "is_padding tensor must be bool");
+-      STD_TORCH_CHECK(is_padding_tensor.dim() == 1,
+-                      "is_padding tensor must be 1D");
+-      STD_TORCH_CHECK(is_padding_tensor.size(0) == num_tokens,
+-                      "is_padding size mismatch, expected: ", num_tokens);
+-      STD_TORCH_CHECK(is_padding_tensor.is_contiguous(),
+-                      "is_padding tensor must be contiguous");
++      const torch::Tensor& is_padding_tensor = is_padding.value();
++      TORCH_CHECK(is_padding_tensor.scalar_type() == at::ScalarType::Bool,
++                  "is_padding tensor must be bool");
++      TORCH_CHECK(is_padding_tensor.dim() == 1,
++                  "is_padding tensor must be 1D");
++      TORCH_CHECK(is_padding_tensor.size(0) == num_tokens,
++                  "is_padding size mismatch, expected: ", num_tokens);
++      TORCH_CHECK(is_padding_tensor.is_contiguous(),
++                  "is_padding tensor must be contiguous");
+       is_padding_ptr = is_padding_tensor.const_data_ptr<bool>();
+     }
+-
+     if (tid2eid.has_value()) {
+-      STD_TORCH_CHECK(input_ids.has_value(),
+-                      "input_ids is required for hash MoE");
+-      STD_TORCH_CHECK(
++      TORCH_CHECK(input_ids.has_value(), "input_ids is required for hash MoE");
++      TORCH_CHECK(
+           input_ids.value().scalar_type() == tid2eid.value().scalar_type(),
+           "input_ids and tid2eid must have the same dtype");
+-      if (tid2eid.value().scalar_type() ==
+-          torch::headeronly::ScalarType::Long) {
++      if (tid2eid.value().scalar_type() == at::ScalarType::Long) {
+         vllm::moe::topkGatingSoftplusSqrtKernelLauncher<OutIndType, ComputeType,
+                                                         int64_t>(
+             gating_output, topk_weights.mutable_data_ptr<float>(),
+@@ -802,8 +796,7 @@ void dispatch_topk_softplus_sqrt_launch(
+             bias_ptr, true, input_ids.value().const_data_ptr<int64_t>(),
+             tid2eid.value().const_data_ptr<int64_t>(), stream, is_padding_ptr);
+       } else {
+-        STD_TORCH_CHECK(tid2eid.value().scalar_type() ==
+-                        torch::headeronly::ScalarType::Int);
++        TORCH_CHECK(tid2eid.value().scalar_type() == at::ScalarType::Int);
+         vllm::moe::topkGatingSoftplusSqrtKernelLauncher<OutIndType, ComputeType,
+                                                         int>(
+             gating_output, topk_weights.mutable_data_ptr<float>(),
+@@ -822,58 +815,56 @@ void dispatch_topk_softplus_sqrt_launch(
+     }
+   };
+ 
 -  if (topk_indices.scalar_type() == torch::headeronly::ScalarType::Int) {
 +  if (topk_indices.scalar_type() == at::ScalarType::Int) {
-     const int* input_ids_ptr = nullptr;
-     const int* tid2eid_ptr = nullptr;
-     if (tid2eid.has_value()) {
-@@ -665,7 +664,7 @@ void dispatch_topk_softplus_sqrt_launch(
-         topk, renormalize, routed_scaling_factor, bias_ptr, use_hash,
-         input_ids_ptr, tid2eid_ptr, stream);
+     launch(topk_indices.mutable_data_ptr<int>());
    } else if (topk_indices.scalar_type() ==
 -             torch::headeronly::ScalarType::UInt32) {
 +             at::ScalarType::UInt32) {
-     const uint32_t* input_ids_ptr = nullptr;
-     const uint32_t* tid2eid_ptr = nullptr;
-     if (tid2eid.has_value()) {
-@@ -679,8 +678,8 @@ void dispatch_topk_softplus_sqrt_launch(
-         topk, renormalize, routed_scaling_factor, bias_ptr, use_hash,
-         input_ids_ptr, tid2eid_ptr, stream);
+     launch(topk_indices.mutable_data_ptr<uint32_t>());
    } else {
 -    STD_TORCH_CHECK(topk_indices.scalar_type() ==
 -                    torch::headeronly::ScalarType::Long);
-+    TORCH_CHECK(topk_indices.scalar_type() ==
-+                    at::ScalarType::Long);
- 
-     const int64_t* input_ids_ptr = nullptr;
-     const int64_t* tid2eid_ptr = nullptr;
-@@ -699,43 +698,42 @@ void dispatch_topk_softplus_sqrt_launch(
++    TORCH_CHECK(topk_indices.scalar_type() == at::ScalarType::Long);
+     launch(topk_indices.mutable_data_ptr<int64_t>());
+   }
  }
  
  void topk_softplus_sqrt(
@@ -466,10 +545,12 @@ index 7efe13b4d..f43cdf73f 100644
      bool renormalize, double routed_scaling_factor,
 -    const std::optional<torch::stable::Tensor>& correction_bias,
 -    const std::optional<torch::stable::Tensor>& input_ids,
--    const std::optional<torch::stable::Tensor>& tid2eid) {
+-    const std::optional<torch::stable::Tensor>& tid2eid,
+-    const std::optional<torch::stable::Tensor>& is_padding) {
 +    const std::optional<torch::Tensor>& correction_bias,
 +    const std::optional<torch::Tensor>& input_ids,
-+    const std::optional<torch::Tensor>& tid2eid) {
++    const std::optional<torch::Tensor>& tid2eid,
++    const std::optional<torch::Tensor>& is_padding) {
    const int num_experts = gating_output.size(-1);
    const auto num_tokens = gating_output.numel() / num_experts;
    const int topk = topk_weights.size(-1);
@@ -485,7 +566,8 @@ index 7efe13b4d..f43cdf73f 100644
      dispatch_topk_softplus_sqrt_launch<float>(
          gating_output.const_data_ptr<float>(), topk_weights, topk_indices,
          token_expert_indices, num_tokens, num_experts, topk, renormalize,
-         routed_scaling_factor, correction_bias, input_ids, tid2eid, stream);
+         routed_scaling_factor, correction_bias, input_ids, tid2eid, stream,
+         is_padding);
    } else if (gating_output.scalar_type() ==
 -             torch::headeronly::ScalarType::Half) {
 +             at::ScalarType::Half) {
@@ -493,7 +575,7 @@ index 7efe13b4d..f43cdf73f 100644
          reinterpret_cast<const __half*>(gating_output.const_data_ptr()),
          topk_weights, topk_indices, token_expert_indices, num_tokens,
          num_experts, topk, renormalize, routed_scaling_factor, correction_bias,
-         input_ids, tid2eid, stream);
+         input_ids, tid2eid, stream, is_padding);
    } else if (gating_output.scalar_type() ==
 -             torch::headeronly::ScalarType::BFloat16) {
 +             at::ScalarType::BFloat16) {
@@ -501,11 +583,10 @@ index 7efe13b4d..f43cdf73f 100644
          reinterpret_cast<const __nv_bfloat16*>(gating_output.const_data_ptr()),
          topk_weights, topk_indices, token_expert_indices, num_tokens,
          num_experts, topk, renormalize, routed_scaling_factor, correction_bias,
-         input_ids, tid2eid, stream);
+         input_ids, tid2eid, stream, is_padding);
    } else {
 -    STD_TORCH_CHECK(false, "Unsupported gating_output data type: ",
 +    TORCH_CHECK(false, "Unsupported gating_output data type: ",
                      gating_output.scalar_type());
    }
  }
-\ No newline at end of file

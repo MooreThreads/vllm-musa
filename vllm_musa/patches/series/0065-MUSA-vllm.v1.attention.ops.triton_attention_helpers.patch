@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.attention.ops.triton_attention_helpers
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
-index 520911e4e..75efad037 100644
+index ef338b348b..398c1d3d3a 100644
 --- a/vllm/v1/attention/ops/triton_attention_helpers.py
 +++ b/vllm/v1/attention/ops/triton_attention_helpers.py
 @@ -182,7 +182,7 @@ def compute_tile_loop_bounds(
@@ -17,6 +17,6 @@ index 520911e4e..75efad037 100644
      )
 -    if USE_MM_PREFIX or USE_PER_SEQ_CAUSAL or (not USE_CAUSAL):
 +    if USE_MM_PREFIX or (USE_PER_SEQ_CAUSAL or (not USE_CAUSAL)):
-         # Non-causal or mixed batches need the full sequence range.
-         # Per-element masking in compute_kv_seq_mask handles the
-         # actual causal/non-causal boundary per sequence.
+         # Read the full sequence but never past seq_len: the causal-style
+         # formula above can overshoot for non-causal sequences, and slots
+         # >= seq_len are unwritten KV (last-block tail) that may hold NaN

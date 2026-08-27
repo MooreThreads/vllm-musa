@@ -4,22 +4,23 @@ Date: Wed, 3 Jun 2026 11:47:36 +0000
 Subject: [PATCH] MUSA: vllm.profiler.wrapper
 
 ---
- vllm/profiler/wrapper.py | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
+ vllm/profiler/wrapper.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/profiler/wrapper.py b/vllm/profiler/wrapper.py
-index 201b45078..0eb9384d5 100644
+index 2f56d0fc7c..9b8f448315 100644
 --- a/vllm/profiler/wrapper.py
 +++ b/vllm/profiler/wrapper.py
-@@ -148,10 +148,10 @@ class WorkerProfiler(ABC):
+@@ -162,11 +162,12 @@ class WorkerProfiler(ABC):
          return nullcontext()
  
  
--TorchProfilerActivity = Literal["CPU", "CUDA", "XPU"]
-+TorchProfilerActivity = Literal["CPU", "MUSA"]
+-TorchProfilerActivity = Literal["CPU", "CUDA", "PrivateUse1", "XPU"]
++TorchProfilerActivity = Literal["CPU", "CUDA", "PrivateUse1", "MUSA", "XPU"]
  TorchProfilerActivityMap = {
      "CPU": torch.profiler.ProfilerActivity.CPU,
--    "CUDA": torch.profiler.ProfilerActivity.CUDA,
+     "CUDA": torch.profiler.ProfilerActivity.CUDA,
+     "PrivateUse1": torch.profiler.ProfilerActivity.PrivateUse1,
 +    "MUSA": torch.profiler.ProfilerActivity.MUSA,
      "XPU": torch.profiler.ProfilerActivity.XPU,
  }

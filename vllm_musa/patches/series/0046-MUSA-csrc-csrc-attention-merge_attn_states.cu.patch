@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc): csrc/attention/merge_attn_states.cu
  1 file changed, 48 insertions(+), 55 deletions(-)
 
 diff --git a/csrc/libtorch_stable/attention/merge_attn_states.cu b/csrc/libtorch_stable/attention/merge_attn_states.cu
-index b132e82e2..7dedf1727 100644
+index cc89397f68..067acb4dd7 100644
 --- a/csrc/libtorch_stable/attention/merge_attn_states.cu
 +++ b/csrc/libtorch_stable/attention/merge_attn_states.cu
 @@ -1,14 +1,14 @@
@@ -31,7 +31,7 @@ index b132e82e2..7dedf1727 100644
  
  namespace vllm {
  
-@@ -196,17 +196,17 @@ __global__ void merge_attn_states_kernel(
+@@ -205,17 +205,17 @@ __global__ void merge_attn_states_kernel(
  // The following macro is used to dispatch the conversion function based on
  // the output data type. The FN is a macro that calls a function with
  // template<typename scalar_t>.
@@ -60,7 +60,7 @@ index b132e82e2..7dedf1727 100644
    }
  
  #define LAUNCH_MERGE_ATTN_STATES(scalar_t, output_t, NUM_THREADS,           \
-@@ -245,14 +245,11 @@ __global__ void merge_attn_states_kernel(
+@@ -257,14 +257,11 @@ __global__ void merge_attn_states_kernel(
   */
  template <typename scalar_t>
  void merge_attn_states_launcher(
@@ -79,8 +79,8 @@ index b132e82e2..7dedf1727 100644
    constexpr uint NUM_THREADS = 128;
    const uint num_tokens = output.size(0);
    const uint num_heads = output.size(1);
-@@ -261,23 +258,23 @@ void merge_attn_states_launcher(
-   const uint output_head_stride = output.stride(1);
+@@ -286,23 +283,23 @@ void merge_attn_states_launcher(
+   }
    // Thread mapping is based on input BF16 pack_size
    const uint pack_size = 16 / sizeof(scalar_t);
 -  STD_TORCH_CHECK(head_size % pack_size == 0,
@@ -109,7 +109,7 @@ index b132e82e2..7dedf1727 100644
    }
    // Process one pack elements per thread. for float, the
    // pack_size is 4 for half/bf16, the pack_size is 8.
-@@ -287,15 +284,14 @@ void merge_attn_states_launcher(
+@@ -312,15 +309,14 @@ void merge_attn_states_launcher(
    dim3 block(NUM_THREADS);
    dim3 grid((total_threads + NUM_THREADS - 1) / NUM_THREADS);
  
@@ -130,7 +130,7 @@ index b132e82e2..7dedf1727 100644
    } else {
      // Original BF16/FP16/FP32 output path
      LAUNCH_MERGE_ATTN_STATES(scalar_t, scalar_t, NUM_THREADS, false);
-@@ -309,29 +305,26 @@ void merge_attn_states_launcher(
+@@ -334,29 +330,26 @@ void merge_attn_states_launcher(
          suffix_lse, prefill_tokens_with_context, output_scale);       \
    }
  

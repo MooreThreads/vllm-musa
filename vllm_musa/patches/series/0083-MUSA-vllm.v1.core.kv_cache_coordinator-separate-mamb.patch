@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 19 Aug 2026 15:30:51 +0800
+Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
+
+---
+ vllm/v1/core/kv_cache_coordinator.py | 32 ++++++++++++++++++++++++----
+ vllm/v1/core/kv_cache_utils.py       | 32 +++++++++++++++++++---------
+ 2 files changed, 50 insertions(+), 14 deletions(-)
+
+diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
+index 8efaf9252e..bf9c8d5ac5 100644
+--- a/vllm/v1/core/kv_cache_coordinator.py
++++ b/vllm/v1/core/kv_cache_coordinator.py
+@@ -12,9 +12,11 @@ from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
+ from vllm.v1.core.kv_cache_utils import (
+     BlockHash,
+     KVCacheBlock,
++    musa_mamba_separate_pool_enabled,
+ )
+ from vllm.v1.core.single_type_kv_cache_manager import (
+     CrossAttentionManager,
++    MambaManager,
+     SingleTypeKVCacheManager,
+     get_manager_for_kv_cache_spec,
+ )
+@@ -102,6 +104,21 @@ class KVCacheCoordinator(ABC):
+             metrics_collector=metrics_collector,
+         )
+ 
++        # Dedicated non-caching pools keep Mamba block IDs within the smaller
++        # state allocations recorded by the MUSA KV-cache config.
++        self.musa_mamba_block_pools: dict[int, BlockPool] = {}
++        musa_mamba_num_blocks = kv_cache_config.musa_mamba_num_blocks
++        if musa_mamba_separate_pool_enabled() and musa_mamba_num_blocks:
++            for group_id, group in enumerate(kv_cache_config.kv_cache_groups):
++                if isinstance(group.kv_cache_spec, MambaSpec):
++                    self.musa_mamba_block_pools[group_id] = BlockPool(
++                        num_gpu_blocks=musa_mamba_num_blocks,
++                        enable_caching=False,
++                        hash_block_size=hash_block_size,
++                        enable_kv_cache_events=False,
++                        metrics_collector=None,
++                    )
++
+         # KV cache group indices that get the EAGLE last-block drop.
+         self.eagle_group_ids: set[int] = {
+             i for i, g in enumerate(kv_cache_config.kv_cache_groups) if g.is_eagle_group
+@@ -137,7 +154,7 @@ class KVCacheCoordinator(ABC):
+                 kv_cache_spec=kv_cache_group.kv_cache_spec,
+                 max_in_flight_tokens=max_in_flight_tokens,
+                 max_model_len=max_model_len,
+-                block_pool=self.block_pool,
++                block_pool=self.musa_mamba_block_pools.get(i, self.block_pool),
+                 enable_caching=enable_caching,
+                 kv_cache_group_id=i,
+                 dcp_world_size=dcp_world_size,
+@@ -194,6 +211,10 @@ class KVCacheCoordinator(ABC):
+         """
+         num_blocks_to_allocate = 0
+         for i, manager in enumerate(self.single_type_managers):
++            if i in self.musa_mamba_block_pools and isinstance(manager, MambaManager):
++                # Dedicated Mamba pools are sized from max_num_seqs and do not
++                # constrain admission against the attention pool.
++                continue
+             if isinstance(manager, CrossAttentionManager):
+                 # For cross-attention, we issue a single static allocation
+                 # of blocks based on the number of encoder input tokens.
+@@ -666,7 +687,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+ 
+             # Try to find an existing group with the same spec
+             for idx, group in enumerate(self.attention_groups):
+-                if group.spec == spec:
++                if group.spec == spec and i not in self.musa_mamba_block_pools:
+                     assert manager_cls is group.manager_cls, (
+                         "Expected same manager class for identical KV cache specs."
+                     )
+@@ -831,7 +852,9 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+                     block_hashes=block_hashes,
+                     max_length=_max_length,
+                     kv_cache_group_ids=group_ids,
+-                    block_pool=self.block_pool,
++                    block_pool=self.single_type_managers[
++                        first_group_id
++                    ].block_pool,
+                     kv_cache_spec=spec,
+                     drop_eagle_block=drop_eagle_block,
+                     alignment_tokens=self._cache_hit_alignment_tokens,
+@@ -896,11 +919,12 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+         hit_lengths: list[int] = [0] * num_groups
+ 
+         for spec, group_ids, manager_cls, use_eagle in self.attention_groups:
++            first_group_id = group_ids[0]
+             blocks, group_hit = manager_cls.find_longest_cache_hit(
+                 block_hashes=block_hashes,
+                 max_length=max_cache_hit_length,
+                 kv_cache_group_ids=group_ids,
+-                block_pool=self.block_pool,
++                block_pool=self.single_type_managers[first_group_id].block_pool,
+                 kv_cache_spec=spec,
+                 drop_eagle_block=use_eagle,
+                 alignment_tokens=self._cache_hit_alignment_tokens,
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index 8a3e5fe548..85c54aa5a0 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1395,9 +1395,13 @@ _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
+ 
+ 
+ def musa_mamba_separate_pool_enabled() -> bool:
+-    """MUSA: give mamba state its own contiguous BlockPool so mate's GDN
+-    decode runs in place (no gather/scatter)."""
+-    return True
++    """Whether MUSA may assign Mamba groups dedicated block-id pools."""
++    try:
++        from vllm.platforms import current_platform
++    except Exception:
++        return False
++    is_musa = getattr(current_platform, "is_musa", None)
++    return callable(is_musa) and is_musa()
+ 
+ 
+ def _musa_has_mamba_and_attention(kv_cache_groups) -> bool:
+@@ -1406,13 +1410,22 @@ def _musa_has_mamba_and_attention(kv_cache_groups) -> bool:
+     return has_mamba and has_attn
+ 
+ 
++def _musa_separate_pool_eligible(vllm_config, kv_cache_groups) -> bool:
++    # KV connectors can defer frees through the coordinator's shared-pool API;
++    # keep the upstream shared-pool layout until that API carries pool ownership.
++    return (
++        musa_mamba_separate_pool_enabled()
++        and vllm_config.kv_transfer_config is None
++        and _musa_has_mamba_and_attention(kv_cache_groups)
++    )
++
++
+ def _musa_separated_mamba_attn_tensors(vllm_config, kv_cache_groups, available_memory):
+     """Split KV memory into a small contiguous mamba pool and the attention pool.
+ 
+-    Mamba groups get one dedicated tensor per layer (segregated-contiguous,
+-    indexed by their own block-id space); the mamba pool is sized from the
+-    MambaSpec admission bound so it never binds (attention admission caps
+-    running requests at <= max_num_seqs).
++    Mamba groups get one dedicated tensor per layer, indexed by their own
++    block-id space. The pool is sized from the MambaSpec admission bound so it
++    never binds (attention admission caps running requests at <= max_num_seqs).
+     Returns (kv_cache_tensors, attn_num_blocks, mamba_num_blocks).
+     """
+     mamba_groups = [g for g in kv_cache_groups if isinstance(g.kv_cache_spec, MambaSpec)]
+@@ -1512,9 +1525,7 @@ def get_kv_cache_config_from_groups(
+         num_blocks, kv_cache_tensors = _get_kv_cache_config_packed(
+             vllm_config, kv_cache_groups, available_memory
+         )
+-    elif musa_mamba_separate_pool_enabled() and _musa_has_mamba_and_attention(
+-        kv_cache_groups
+-    ):
++    elif _musa_separate_pool_eligible(vllm_config, kv_cache_groups):
+         # MUSA: mamba state on its own contiguous pool (own block-id space).
+         kv_cache_tensors, num_blocks, musa_mamba_num_blocks = (
+             _musa_separated_mamba_attn_tensors(
+@@ -1944,6 +1955,7 @@ def get_kv_cache_groups(
+ 
+     if (
+         musa_mamba_separate_pool_enabled()
++        and vllm_config.kv_transfer_config is None
+         and not hidden_specs
+         and any(isinstance(spec, MambaSpec) for spec in filtered_spec.values())
+         and any(not isinstance(spec, MambaSpec) for spec in filtered_spec.values())

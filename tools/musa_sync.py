@@ -186,12 +186,42 @@ def _ensure_clone(target: str, repo_arg: str | None):
             text=True,
         )
         _git(clone, "remote", "add", "origin", VLLM_URL).check_returncode()
-        _git(clone, "fetch", "--depth", "1", "origin", target).check_returncode()
-        _git(clone, "checkout", "--force", "--detach", "FETCH_HEAD").check_returncode()
+        checkout_ref = _fetch_target(clone, target)
+        _git(clone, "checkout", "--force", "--detach", checkout_ref).check_returncode()
     except Exception:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
     return clone, True
+
+
+def _fetch_target(repo: Path, target: str) -> str:
+    """Fetch ``target`` and return the local ref that resolves to it.
+
+    Some servers reject direct fetches of an exact, unadvertised commit. In
+    that case fetch the advertised history and verify that the requested commit
+    became reachable before checkout.
+    """
+    direct = _git(repo, "fetch", "--depth", "1", "origin", target)
+    if direct.returncode == 0:
+        return "FETCH_HEAD"
+
+    shallow = _git(repo, "rev-parse", "--is-shallow-repository")
+    fetch_args = (
+        ("fetch", "--unshallow", "origin")
+        if shallow.returncode == 0 and shallow.stdout.strip() == "true"
+        else ("fetch", "origin")
+    )
+    fallback = _git(repo, *fetch_args)
+    if fallback.returncode != 0:
+        raise subprocess.CalledProcessError(
+            fallback.returncode, fallback.args, fallback.stdout, fallback.stderr
+        )
+    resolved = _git(repo, "cat-file", "-e", f"{target}^{{commit}}")
+    if resolved.returncode != 0:
+        raise subprocess.CalledProcessError(
+            direct.returncode, direct.args, direct.stdout, direct.stderr
+        )
+    return target
 
 
 @contextmanager
@@ -326,11 +356,12 @@ def _checkout(target: str) -> int:
         if r.returncode:
             print(r.stderr)
             return 1
-    r = _git(WORKDIR, "fetch", "--depth", "1", "origin", target)
-    if r.returncode:
-        print(r.stderr)
+    try:
+        checkout_ref = _fetch_target(WORKDIR, target)
+    except subprocess.CalledProcessError as exc:
+        print(exc.stderr)
         return 1
-    r = _git(WORKDIR, "checkout", "--force", "--detach", "FETCH_HEAD")
+    r = _git(WORKDIR, "checkout", "--force", "--detach", checkout_ref)
     if r.returncode:
         print(r.stderr)
         return 1

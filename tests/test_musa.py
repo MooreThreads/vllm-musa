@@ -56,6 +56,11 @@ class TestMUSAPlatformBase:
             "vllm_musa.compilation.passes.MusaPostGradPassManager"
         )
 
+    def test_runner_kv_caches_support_multiple_layers_per_index(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        assert MUSAPlatformBase.check_runner_kv_caches_multi_layer() is None
+
     def test_is_cuda_alike_returns_true(self):
         """Test that is_cuda_alike returns True for MUSA."""
         from vllm_musa.platform import MUSAPlatformBase

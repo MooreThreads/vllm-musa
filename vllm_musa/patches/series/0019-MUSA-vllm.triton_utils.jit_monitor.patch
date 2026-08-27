@@ -4,14 +4,14 @@ Date: Wed, 3 Jun 2026 11:47:36 +0000
 Subject: [PATCH] MUSA: vllm.triton_utils.jit_monitor
 
 ---
- vllm/triton_utils/jit_monitor.py | 12 ++++++++++--
+ vllm/utils/jit_monitor.py | 12 ++++++++++--
  1 file changed, 10 insertions(+), 2 deletions(-)
 
-diff --git a/vllm/triton_utils/jit_monitor.py b/vllm/triton_utils/jit_monitor.py
-index 9a7b1695a..12a9fa1b6 100644
---- a/vllm/triton_utils/jit_monitor.py
-+++ b/vllm/triton_utils/jit_monitor.py
-@@ -72,7 +72,11 @@ def _setup_triton_autotuning_print() -> None:
+diff --git a/vllm/utils/jit_monitor.py b/vllm/utils/jit_monitor.py
+index bb0bb8df9a..05809581dc 100644
+--- a/vllm/utils/jit_monitor.py
++++ b/vllm/utils/jit_monitor.py
+@@ -98,7 +98,11 @@ def _setup_triton_autotuning_print() -> None:
      """Enable ``TRITON_PRINT_AUTOTUNING`` unless the user opted out."""
      if not HAS_TRITON:
          return
@@ -24,16 +24,16 @@ index 9a7b1695a..12a9fa1b6 100644
  
      user_val = os.environ.get("TRITON_PRINT_AUTOTUNING")
      if user_val == "0":
-@@ -115,7 +119,11 @@ def _setup_triton_jit_hook() -> None:
-     """Register a ``jit_post_compile_hook`` that warns on compilation."""
+@@ -240,7 +244,11 @@ def _setup_triton_jit_hook() -> None:
+     """Register a jit_post_compile_hook that warns on compilation."""
      if not HAS_TRITON:
          return
--    from triton import knobs  # type: ignore[import-untyped]
+-    from triton import knobs
 +    try:
-+        from triton import knobs  # type: ignore[import-untyped]
++        from triton import knobs
 +    except ImportError:
 +        logger.debug("Triton knobs API is unavailable; skipping JIT monitor setup.")
 +        return
+     from triton.runtime import jit as _triton_jit
  
-     existing_hook = knobs.runtime.jit_post_compile_hook
- 
+     # kernels pass non-JSON-serializable constexprs

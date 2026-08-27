@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.compilation.backends
  1 file changed, 10 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/compilation/backends.py b/vllm/compilation/backends.py
-index dc12acbaf..2019113bb 100644
+index 8fbf5b41f7..841cfd3372 100644
 --- a/vllm/compilation/backends.py
 +++ b/vllm/compilation/backends.py
 @@ -11,7 +11,7 @@ import pprint
@@ -39,7 +39,7 @@ index dc12acbaf..2019113bb 100644
                  patch(
                      "torch._functorch._aot_autograd.autograd_cache.autograd_cache_key",
                      autograd_cache_key,
-@@ -1012,7 +1019,7 @@ class VllmBackend:
+@@ -1017,7 +1024,7 @@ class VllmBackend:
          )
  
      @dynamo_timed("vllm_backend")

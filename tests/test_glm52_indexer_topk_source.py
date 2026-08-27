@@ -70,13 +70,14 @@ def test_glm52_indexer_dispatch_has_shortcut_and_safe_fallback_boundary():
 def test_musa_decode_schedule_metadata_is_precomputed_for_graph_capture():
     series = _read(
         "vllm_musa/patches/series/"
-        "0086-MUSA-vllm.v1.attention.backends.mla.indexer.patch"
+        "0085-MUSA-vllm.v1.attention.backends.mla.indexer.patch"
     )
 
     assert "current_platform.is_musa()" in series
     assert "get_paged_mqa_logits_metadata" in series
-    assert "schedule_metadata = self.scheduler_metadata_buffer" in series
-    assert "schedule_metadata=schedule_metadata" in series
+    assert "self.scheduler_metadata_buffer" in series
+    assert "schedule_metadata = (" in series
+    assert "schedule_metadata[:] = metadata" in series
 
 
 def test_deepseek_v4_dispatch_stays_shape_isolated():

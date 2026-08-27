@@ -4,13 +4,13 @@ Date: Thu, 4 Jun 2026 02:46:37 +0000
 Subject: [PATCH] MUSA(csrc): csrc/type_convert.cuh
 
 ---
- csrc/type_convert.cuh | 8 ++++----
+ csrc/libtorch_stable/type_convert.cuh | 8 ++++----
  1 file changed, 4 insertions(+), 4 deletions(-)
 
-diff --git a/csrc/type_convert.cuh b/csrc/type_convert.cuh
-index 8093c4bc8..2526fa637 100644
---- a/csrc/type_convert.cuh
-+++ b/csrc/type_convert.cuh
+diff --git a/csrc/libtorch_stable/type_convert.cuh b/csrc/libtorch_stable/type_convert.cuh
+index 8093c4bc87..2526fa6372 100644
+--- a/csrc/libtorch_stable/type_convert.cuh
++++ b/csrc/libtorch_stable/type_convert.cuh
 @@ -47,7 +47,7 @@ struct _typeConvert<float> {
    }
  };

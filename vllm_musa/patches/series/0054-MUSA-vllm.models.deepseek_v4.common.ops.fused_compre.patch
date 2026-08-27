@@ -5,20 +5,14 @@ Subject: [PATCH] MUSA:
  vllm.models.deepseek_v4.common.ops.fused_compress_quant_cache
 
 ---
- .../common/ops/fused_compress_quant_cache.py  | 44 +++++++++++++++++--
- 1 file changed, 40 insertions(+), 4 deletions(-)
+ .../common/ops/fused_compress_quant_cache.py  | 43 +++++++++++++++++--
+ 1 file changed, 39 insertions(+), 4 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
-index 9a5e478e3..4ec4d7290 100644
+index 4c9f464ef0..0b678a4834 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
-@@ -23,11 +23,26 @@ from typing import Any
- 
- import torch
- 
-+from vllm.platforms import current_platform
- from vllm.triton_utils import tl, triton
- 
+@@ -35,6 +35,20 @@ else:
  from .fused_indexer_q import _fp32x2_to_fp4x2
  
  
@@ -39,16 +33,16 @@ index 9a5e478e3..4ec4d7290 100644
  def compress_norm_rope_store_triton(
      state_cache: torch.Tensor,
      num_actual: int,
-@@ -102,7 +117,7 @@ def compress_norm_rope_store_triton(
-         SCALE_DIM=scale_dim,
+@@ -113,7 +127,7 @@ def compress_norm_rope_store_triton(
          KV_BLOCK_STRIDE=kv_cache.stride(0),
          num_warps=num_warps,
+         **kernel_kwargs,
 -        **pdl_kwargs,
 +        **_musa_deepseek_v4_compress_cache_pdl_kwargs(state_cache, pdl_kwargs),
      )
  
  
-@@ -200,7 +215,14 @@ def _fused_kv_compress_norm_rope_insert_sparse_attn(
+@@ -212,7 +226,14 @@ def _fused_kv_compress_norm_rope_insert_sparse_attn(
          mask=combined_mask,
          other=float("-inf"),
      )
@@ -64,7 +58,7 @@ index 9a5e478e3..4ec4d7290 100644
  
      kv = tl.load(
          row_base[:, None] + block[None, :],
-@@ -392,7 +414,14 @@ def _fused_kv_compress_norm_rope_insert_indexer_attn(
+@@ -766,7 +787,14 @@ def _fused_kv_compress_norm_rope_insert_indexer_attn(
          mask=combined_mask,
          other=float("-inf"),
      )
@@ -80,7 +74,7 @@ index 9a5e478e3..4ec4d7290 100644
  
      kv = tl.load(
          row_base[:, None] + block[None, :],
-@@ -571,7 +600,14 @@ def _fused_kv_compress_norm_rope_insert_indexer_mxfp4_attn(
+@@ -945,7 +973,14 @@ def _fused_kv_compress_norm_rope_insert_indexer_mxfp4_attn(
          mask=combined_mask,
          other=float("-inf"),
      )

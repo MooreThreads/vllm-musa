@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 30 Jul 2026 10:05:00 +0800
+Subject: [PATCH] perf: reuse proven Qwen sample counts on host
+
+The MUSA Qwen pure-decode selector already proves that every request produces exactly one token and returns a tagged cached count tensor. Reuse its cached host array in AsyncOutput instead of issuing a second per-step DtoH copy. The untagged upstream path remains unchanged for prefill, speculative decoding, non-Qwen models, and every selector fallback.
+---
+ vllm/v1/worker/gpu/async_utils.py | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/v1/worker/gpu/async_utils.py b/vllm/v1/worker/gpu/async_utils.py
+index ba0a66d2bc..0e9f142e44 100644
+--- a/vllm/v1/worker/gpu/async_utils.py
++++ b/vllm/v1/worker/gpu/async_utils.py
+@@ -146,7 +146,16 @@ class AsyncOutput(AsyncModelRunnerOutput):
+             self.num_nans: np.ndarray | None = None
+             if sampler_output.num_nans is not None:
+                 self.num_nans = async_copy_to_np(sampler_output.num_nans)
+-            self.num_sampled_tokens_np = async_copy_to_np(num_sampled_tokens)
++            host_num_sampled_tokens = getattr(
++                num_sampled_tokens,
++                "_vllm_musa_uniform_num_sampled_tokens_host",
++                None,
++            )
++            self.num_sampled_tokens_np = (
++                async_copy_to_np(num_sampled_tokens)
++                if host_num_sampled_tokens is None
++                else host_num_sampled_tokens
++            )
+             self.sampling_mask_tensors: SamplingMaskTensors | None = None
+             if sampler_output.sampling_mask_tensors is not None:
+                 self.sampling_mask_tensors = (

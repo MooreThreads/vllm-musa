@@ -242,6 +242,16 @@ class MUSAPlatformBase(Platform):
             logger.warning("Failed to import from vllm._C_stable_libtorch: %r", e)
 
     @classmethod
+    def check_runner_kv_caches_multi_layer(cls) -> None:
+        """Allow multiple attention caches sharing one decoder layer index.
+
+        The MUSA V2 runner uses the same ordered ``runner_kv_caches`` binding
+        contract as CUDA, ROCm, and XPU. DeepSeek-V4 exercises this with its
+        sparse indexer and MLA caches in the same decoder block.
+        """
+        pass
+
+    @classmethod
     def import_ir_kernels(cls) -> None:
         """Import upstream and MUSA-OOT IR-op providers.
 

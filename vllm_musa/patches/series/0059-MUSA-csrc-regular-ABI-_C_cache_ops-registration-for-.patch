@@ -5,21 +5,21 @@ Subject: [PATCH] MUSA(csrc): regular-ABI _C_cache_ops registration for
  std::string KV-cache ops
 
 ---
- csrc/libtorch_stable/musa_cache_ops_reg.cu | 294 ++++++++++++++++++++
- csrc/torch_bindings.cpp                    | 306 +--------------------
- 2 files changed, 303 insertions(+), 297 deletions(-)
+ csrc/libtorch_stable/musa_cache_ops_reg.cu | 317 +++++++++++++++++++++
+ csrc/torch_bindings.cpp                    | 306 +-------------------
+ 2 files changed, 326 insertions(+), 297 deletions(-)
  create mode 100644 csrc/libtorch_stable/musa_cache_ops_reg.cu
 
 diff --git a/csrc/libtorch_stable/musa_cache_ops_reg.cu b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 new file mode 100644
-index 000000000..b4b30560a
+index 0000000000..fcd5c5de24
 --- /dev/null
 +++ b/csrc/libtorch_stable/musa_cache_ops_reg.cu
-@@ -0,0 +1,294 @@
+@@ -0,0 +1,317 @@
 +// MUSA: regular-ABI registration of the _C_cache_ops library.
 +//
 +// The cache/MLA kernels in libtorch_stable/cache_kernels{,_fused}.cu take
-+// std::string kv_cache_dtype, which torch_musa 2.9's stable ABI cannot marshal
++// std::string kv_cache_dtype, which torch_musa's stable ABI cannot marshal
 +// (from_ivalue throws on StringType at the dispatch boundary). Register them
 +// through a regular at::Tensor TORCH_LIBRARY instead, where std::string passes
 +// natively. Each op is a thin wrapper that borrows the incoming at::Tensor as a
@@ -72,6 +72,11 @@ index 000000000..b4b30560a
 +                          stable::Tensor& kv_cache, stable::Tensor& slot_mapping,
 +                          const std::string& kv_cache_dtype,
 +                          stable::Tensor& scale);
++void concat_and_cache_mla_grouped(stable::Tensor& kv_c, stable::Tensor& k_pe,
++                                  stable::Tensor& kv_cache_ptrs,
++                                  stable::Tensor& slot_mapping,
++                                  int64_t block_size, int64_t block_stride,
++                                  int64_t entry_stride);
 +void concat_and_cache_mla_rope_fused(
 +    stable::Tensor& positions, stable::Tensor& q_pe, stable::Tensor& k_pe,
 +    stable::Tensor& kv_c, stable::Tensor& rope_cos_sin_cache, bool rope_is_neox,
@@ -91,8 +96,8 @@ index 000000000..b4b30560a
 +                     std::optional<stable::Tensor> seq_starts);
 +void cp_gather_and_upconvert_fp8_kv_cache(
 +    stable::Tensor const& src_cache, stable::Tensor const& dst,
-+    stable::Tensor const& block_table, stable::Tensor const& seq_lens,
-+    stable::Tensor const& workspace_starts, int64_t batch_size);
++    stable::Tensor const& block_table, stable::Tensor const& workspace_starts,
++    int64_t batch_size, std::optional<stable::Tensor> seq_starts);
 +void indexer_k_quant_and_cache(stable::Tensor& k, stable::Tensor& kv_cache,
 +                               stable::Tensor& slot_mapping,
 +                               int64_t quant_block_size,
@@ -140,6 +145,14 @@ index 000000000..b4b30560a
 +  auto a = S(kv_c), b = S(k_pe), c = S(cache), d = S(slot), e = S(scale);
 +  ::concat_and_cache_mla(a, b, c, d, dtype, e);
 +}
++void concat_and_cache_mla_grouped(at::Tensor& kv_c, at::Tensor& k_pe,
++                                  at::Tensor& cache_ptrs, at::Tensor& slot,
++                                  int64_t block_size, int64_t block_stride,
++                                  int64_t entry_stride) {
++  auto a = S(kv_c), b = S(k_pe), c = S(cache_ptrs), d = S(slot);
++  ::concat_and_cache_mla_grouped(a, b, c, d, block_size, block_stride,
++                                 entry_stride);
++}
 +void concat_and_cache_mla_rope_fused(at::Tensor& positions, at::Tensor& q_pe,
 +                                     at::Tensor& k_pe, at::Tensor& kv_c,
 +                                     at::Tensor& cos_sin, bool neox,
@@ -169,10 +182,11 @@ index 000000000..b4b30560a
 +  ::cp_gather_cache(S(src), S(dst), S(bt), S(csl), bs, S(seq_starts));
 +}
 +void cp_gather_and_upconvert_fp8_kv_cache(at::Tensor& src, at::Tensor& dst,
-+                                          at::Tensor& bt, at::Tensor& sl,
-+                                          at::Tensor& ws, int64_t bs) {
-+  ::cp_gather_and_upconvert_fp8_kv_cache(S(src), S(dst), S(bt), S(sl), S(ws),
-+                                         bs);
++                                          at::Tensor& bt, at::Tensor& ws,
++                                          int64_t bs,
++                                          std::optional<at::Tensor> seq_starts) {
++  ::cp_gather_and_upconvert_fp8_kv_cache(S(src), S(dst), S(bt), S(ws), bs,
++                                         S(seq_starts));
 +}
 +void indexer_k_quant_and_cache(at::Tensor& k, at::Tensor& cache,
 +                               at::Tensor& slot, int64_t qbs,
@@ -239,6 +253,15 @@ index 000000000..b4b30560a
 +         &mcb::concat_and_cache_mla);
 +
 +  m.def(
++      "concat_and_cache_mla_grouped(Tensor kv_c, Tensor k_pe,"
++      "                             Tensor kv_cache_ptrs,"
++      "                             Tensor slot_mapping,"
++      "                             int block_size, int block_stride,"
++      "                             int entry_stride) -> ()");
++  m.impl("concat_and_cache_mla_grouped", torch::kPrivateUse1,
++         &mcb::concat_and_cache_mla_grouped);
++
++  m.def(
 +      "concat_and_cache_mla_rope_fused("
 +      "                     Tensor positions,"
 +      "                     Tensor! q_pe,"
@@ -275,8 +298,8 @@ index 000000000..b4b30560a
 +
 +  m.def(
 +      "cp_gather_and_upconvert_fp8_kv_cache(Tensor src_cache, Tensor! dst, "
-+      "Tensor block_table, Tensor seq_lens, Tensor workspace_starts, int "
-+      "batch_size) -> ()");
++      "Tensor block_table, Tensor workspace_starts, int batch_size, Tensor? "
++      "seq_starts) -> ()");
 +  m.impl("cp_gather_and_upconvert_fp8_kv_cache", torch::kPrivateUse1,
 +         &mcb::cp_gather_and_upconvert_fp8_kv_cache);
 +
@@ -311,10 +334,10 @@ index 000000000..b4b30560a
 +  m.impl("merge_attn_states", &merge_attn_states);
 +}
 diff --git a/csrc/torch_bindings.cpp b/csrc/torch_bindings.cpp
-index 0250c83ba..bcaa1d6e6 100644
+index 82c852183a..a4e5b2ca4e 100644
 --- a/csrc/torch_bindings.cpp
 +++ b/csrc/torch_bindings.cpp
-@@ -20,116 +20,36 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
+@@ -21,116 +21,36 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
    // vLLM custom ops
    //
  
@@ -431,7 +454,7 @@ index 0250c83ba..bcaa1d6e6 100644
  
    // Quantization ops
  #ifndef USE_MUSA
-@@ -149,65 +69,18 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
+@@ -150,65 +70,18 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
    // https://docs.google.com/document/d/18fBMPuOJ0fY5ZQ6YyrHUppw9FA332CpNtgB6SOIgyuA
  
    // Machete (Dense) Optimized Mixed Precision GEMM for Hopper.
@@ -497,7 +520,7 @@ index 0250c83ba..bcaa1d6e6 100644
    // conditionally compiled so impl registrations are in source file
  
  #endif
-@@ -232,197 +105,27 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
+@@ -233,197 +106,27 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
  #endif
  
    // Mamba selective scan kernel
@@ -631,8 +654,8 @@ index 0250c83ba..bcaa1d6e6 100644
 -
 -  cache_ops.def(
 -      "cp_gather_and_upconvert_fp8_kv_cache(Tensor src_cache, Tensor! dst, "
--      "Tensor block_table, Tensor seq_lens, Tensor workspace_starts, int "
--      "batch_size) -> ()");
+-      "Tensor block_table, Tensor workspace_starts, int batch_size, Tensor? "
+-      "seq_starts) -> ()");
 -  cache_ops.impl("cp_gather_and_upconvert_fp8_kv_cache", torch::kCUDA,
 -                 &cp_gather_and_upconvert_fp8_kv_cache);
 -
@@ -695,7 +718,7 @@ index 0250c83ba..bcaa1d6e6 100644
  #ifdef USE_ROCM
    // Quick Reduce all-reduce kernels
    custom_ar.def(
-@@ -443,4 +146,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _custom_ar), custom_ar) {
+@@ -444,4 +147,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _custom_ar), custom_ar) {
  #endif
  }
  

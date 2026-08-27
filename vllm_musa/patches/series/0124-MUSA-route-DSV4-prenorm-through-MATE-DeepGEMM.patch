@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 20 Aug 2026 12:20:07 +0800
+Subject: [PATCH] MUSA: route DSV4 prenorm through MATE DeepGEMM
+
+---
+ vllm/model_executor/kernels/mhc/tilelang.py | 33 +++++++++++++++++++++
+ vllm/models/deepseek_v4/attention.py        |  4 +--
+ vllm/utils/deep_gemm.py                     | 11 +++++++
+ 3 files changed, 46 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
+index 57f852c60d..7749a7dee1 100644
+--- a/vllm/model_executor/kernels/mhc/tilelang.py
++++ b/vllm/model_executor/kernels/mhc/tilelang.py
+@@ -336,6 +336,34 @@ def mhc_pre_broadcast_tilelang(
+     fn_broadcast: torch.Tensor | None = None,
+ ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+     """First-layer mHC pre for a residual broadcast from ``(T, H)``."""
++    if residual.device.type == "musa":
++        assert norm_weight is not None, (
++            "broadcast mHC pre currently requires fused RMSNorm"
++        )
++        hidden_size = residual.shape[-1]
++        hc_mult = fn.shape[1] // hidden_size
++        residual_out = (
++            residual.unsqueeze(-2)
++            .expand(*residual.shape[:-1], hc_mult, hidden_size)
++            .contiguous()
++        )
++        from vllm_musa.deepseek_v4_mhc import mhc_pre_musa_with_norm
++
++        post_mix, comb_mix, layer_input = mhc_pre_musa_with_norm(
++            residual_out,
++            fn,
++            hc_scale,
++            hc_base,
++            rms_eps,
++            hc_pre_eps,
++            hc_sinkhorn_eps,
++            hc_post_mult_value,
++            sinkhorn_repeat,
++            norm_weight,
++            norm_eps,
++        )
++        return residual_out, post_mix, comb_mix, layer_input
++
+     from vllm.model_executor.kernels.mhc.tilelang_kernels import (
+         compute_num_split,
+         mhc_pre_big_fuse_broadcast_with_norm_tilelang,
+@@ -775,6 +803,11 @@ def hc_head_fused_kernel_tilelang(
+     hc_eps: float,
+ ) -> torch.Tensor:
+     """Apply the fused hc_head kernel and return the (T, H) bf16 result."""
++    if hs_flat.device.type == "musa":
++        from vllm_musa.deepseek_v4_mhc import hc_head_musa
++
++        return hc_head_musa(hs_flat, fn, hc_scale, hc_base, rms_eps, hc_eps)
++
+     num_tokens, hc_mult, hidden_size = hs_flat.shape
+     out = torch.empty(
+         num_tokens, hidden_size, dtype=torch.bfloat16, device=hs_flat.device
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 0c7dd09282..09f2eedd5d 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -126,9 +126,9 @@ def _musa_deepseek_v4_linear_out_dtype(
+ ) -> torch.Tensor:
+     if _musa_deepseek_v4_use_score_fp32_deepgemm(a, weight, out_dtype):
+         try:
+-            from mate import deep_gemm
+-        except ImportError:
+             import deep_gemm
++        except ImportError:
++            from mate import deep_gemm
+ 
+         output = torch.empty(
+             (a.shape[0], weight.shape[0]),
+diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
+index f2391875ae..1ee9e43610 100644
+--- a/vllm/utils/deep_gemm.py
++++ b/vllm/utils/deep_gemm.py
+@@ -298,6 +298,17 @@ def _lazy_init() -> None:
+         _dg, "get_paged_mqa_logits_metadata", None
+     )
+     _tf32_hc_prenorm_gemm_impl = getattr(_dg, "tf32_hc_prenorm_gemm", None)
++    if _tf32_hc_prenorm_gemm_impl is None:
++        # MUSA provides the TF32 HyperConnection prenorm kernel through MATE,
++        # while the standalone deep_gemm package does not expose it.
++        try:
++            import mate.deep_gemm as _mate_dg
++        except Exception:
++            _mate_dg = None
++        if _mate_dg is not None:
++            _tf32_hc_prenorm_gemm_impl = getattr(
++                _mate_dg, "tf32_hc_prenorm_gemm", None
++            )
+     _get_mn_major_tma_aligned_tensor_impl = getattr(
+         _dg, "get_mn_major_tma_aligned_tensor", None
+     )

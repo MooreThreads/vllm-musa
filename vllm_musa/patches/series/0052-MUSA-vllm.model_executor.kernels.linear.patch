@@ -8,14 +8,14 @@ Subject: [PATCH] MUSA: vllm.model_executor.kernels.linear
  1 file changed, 28 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
-index 4ac8d49cd..a75521f33 100644
+index 3413d4a69f..01298768cf 100644
 --- a/vllm/model_executor/kernels/linear/__init__.py
 +++ b/vllm/model_executor/kernels/linear/__init__.py
-@@ -509,7 +509,34 @@ def choose_scaled_mm_linear_kernel(
+@@ -643,7 +643,34 @@ def choose_scaled_mm_linear_kernel(
              scope="global",
          )
  
--    platform_kernels = possible_kernels[current_platform._enum]
+-    platform_kernels = possible_kernels.get(current_platform._enum, [])
 +    platform_kernels = possible_kernels.get(current_platform._enum)
 +    if platform_kernels is None and current_platform.is_musa():
 +        if possible_kernels is _POSSIBLE_FP8_BLOCK_KERNELS:
@@ -46,4 +46,4 @@ index 4ac8d49cd..a75521f33 100644
 +        )
  
      # Apply --linear-backend filtering when set.
-     linear_backend = _get_linear_backend()
+     platform_kernels = _resolve_backend_kernels(platform_kernels, "scaled-mm")

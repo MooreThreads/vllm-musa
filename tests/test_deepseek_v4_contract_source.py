@@ -23,7 +23,7 @@ def test_shared_mlp_owner_guards_and_rmsnorm_instance_contract() -> None:
     layernorm = _source("vllm_musa/model_executor/layers/layernorm.py")
     model_patch = _source(
         "vllm_musa/patches/series/"
-        "0101-MUSA-bind-DeepSeek-V4-optimization-contract.patch"
+        "0104-MUSA-bind-DeepSeek-V4-optimization-contract.patch"
     )
 
     assert "def forward_swiglu_clamp(" in linear
@@ -43,7 +43,7 @@ def test_shared_mlp_owner_guards_and_rmsnorm_instance_contract() -> None:
 def test_sparse_indexer_contract_keeps_glm_entry_shape_local() -> None:
     patch = _source(
         "vllm_musa/patches/series/"
-        "0101-MUSA-bind-DeepSeek-V4-optimization-contract.patch"
+        "0104-MUSA-bind-DeepSeek-V4-optimization-contract.patch"
     )
 
     assert "DEEPSEEK_V4_NATIVE_SPARSE_INDEXER" in patch
@@ -56,19 +56,18 @@ def test_sparse_indexer_contract_keeps_glm_entry_shape_local() -> None:
 def test_mtp_sparse_prefill_fixes_are_bound_at_the_dsv4_owner() -> None:
     patch = _source(
         "vllm_musa/patches/series/"
-        "0102-MUSA-preserve-DeepSeek-V4-MTP-sparse-prefill-headroom.patch"
+        "0106-MUSA-preserve-DeepSeek-V4-MTP-sparse-prefill-headroo.patch"
     )
 
-    assert "DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT" in patch
+    assert "_allow_dsv4_tp8_mtp_direct_out" in patch
     assert "allow_dsv4_tp8_mtp_direct_out=" in patch
-    assert 'attention_backend_hint="flashmla"' in patch
-    assert "deepseek_v4_mtp_sparse_prefill_headroom_bytes" in patch
-    assert "musa_workspace_headroom_bytes" in patch
-    assert "if current_platform.is_musa():" in patch
+    assert "_musa_deepseek_v4_mtp_sparse_prefill_reserve_bytes" in patch
+    assert "available_kv_cache_memory_bytes - sparse_prefill_reserve" in patch
+    assert "current_platform.is_musa()" in patch
 
     queue_fence = _source(
         "vllm_musa/patches/series/"
-        "0103-MUSA-fence-DeepSeek-V4-MTP-prefill-queues.patch"
+        "0107-MUSA-fence-DeepSeek-V4-MTP-mixed-prefill-queues.patch"
     )
     assert "deepseek_v4_mtp_prefill_step_requires_sync" in queue_fence
     assert "scheduled_spec_decode_tokens" not in queue_fence

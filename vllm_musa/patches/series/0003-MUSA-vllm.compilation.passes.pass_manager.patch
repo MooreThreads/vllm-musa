@@ -4,16 +4,16 @@ Date: Wed, 3 Jun 2026 11:47:35 +0000
 Subject: [PATCH] MUSA: vllm.compilation.passes.pass_manager
 
 ---
- vllm/compilation/passes/pass_manager.py | 12 ++++++++++--
- 1 file changed, 10 insertions(+), 2 deletions(-)
+ vllm/compilation/passes/pass_manager.py | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/compilation/passes/pass_manager.py b/vllm/compilation/passes/pass_manager.py
-index 4b98ac577..3033e46f4 100644
+index 4a65376ca0..abeaaf4c20 100644
 --- a/vllm/compilation/passes/pass_manager.py
 +++ b/vllm/compilation/passes/pass_manager.py
-@@ -43,10 +43,15 @@ if current_platform.is_cuda_alike():
+@@ -48,10 +48,15 @@ if current_platform.is_cuda_alike():
+     from .fusion.rope_kvcache_fusion import RopeKVCacheFusionPass
      from .utility.scatter_split_replace import ScatterSplitReplacementPass
-     from .utility.split_coalescing import SplitCoalescingPass
  
 -if current_platform.is_cuda():
 +if current_platform.is_cuda() or current_platform.is_musa():
@@ -28,13 +28,10 @@ index 4b98ac577..3033e46f4 100644
  if current_platform.is_xpu():
      from .fusion.act_quant_fusion import ActivationQuantFusionPass
      from .fusion.rms_quant_fusion import RMSNormQuantFusionPass
-@@ -151,8 +156,11 @@ class PostGradPassManager(CustomGraphPass):  # type: ignore[misc]
-             if self.pass_config.fuse_act_padding and rocm_aiter_ops.is_enabled():
-                 # Run the more specific RMSNorm+router-pad fusion before
+@@ -173,6 +178,9 @@ class PostGradPassManager(CustomGraphPass):  # type: ignore[misc]
                  # AR+RMS, since both consume fused_add_rms_norm.
                  self.passes += [RocmAiterTritonAddRMSNormPadFusionPass(config)]
--
-+
+ 
 +            if current_platform.is_musa() and self.pass_config.fuse_allreduce_rms:
 +                self.passes += [MusaAllReduceRMSNormFusionPass(config)]
 +

@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 20 Aug 2026 12:11:40 +0800
+Subject: [PATCH] MUSA: restore component memory accounting for profiling
+
+---
+ tests/utils_/test_mem_utils.py | 24 +++++++++++++++++++++++-
+ vllm/utils/mem_utils.py        | 22 +++++++++++++++++++++-
+ 2 files changed, 44 insertions(+), 2 deletions(-)
+
+diff --git a/tests/utils_/test_mem_utils.py b/tests/utils_/test_mem_utils.py
+index 19690d1f34..c96b747951 100644
+--- a/tests/utils_/test_mem_utils.py
++++ b/tests/utils_/test_mem_utils.py
+@@ -5,11 +5,33 @@ from unittest.mock import MagicMock, patch
+ import torch
+ from vllm_test_utils.monitor import monitor
+ 
+-from vllm.utils.mem_utils import MemorySnapshot, memory_profiling
++from vllm.utils.mem_utils import (
++    MemoryProfilingResult,
++    MemorySnapshot,
++    _calculate_non_kv_cache_memory,
++    memory_profiling,
++)
+ 
+ from ..utils import create_new_process_for_each_test
+ 
+ 
++def test_memory_profiling_uses_component_accounting_on_musa():
++    result = MemoryProfilingResult(
++        weights_memory=10,
++        torch_peak_increase=20,
++        non_torch_increase=30,
++        total_consumed=100,
++        transient_peak_headroom=50,
++    )
++
++    with patch("vllm.utils.mem_utils.current_platform") as mock_platform:
++        mock_platform.is_musa.return_value = True
++        assert _calculate_non_kv_cache_memory(result) == 60
++
++        mock_platform.is_musa.return_value = False
++        assert _calculate_non_kv_cache_memory(result) == 150
++
++
+ @create_new_process_for_each_test()
+ def test_memory_profiling():
+     # Fake out some model loading + inference memory usage to test profiling
+diff --git a/vllm/utils/mem_utils.py b/vllm/utils/mem_utils.py
+index 6a522a150d..1d9d711c2b 100644
+--- a/vllm/utils/mem_utils.py
++++ b/vllm/utils/mem_utils.py
+@@ -230,6 +230,26 @@ class MemoryProfilingResult:
+         )
+ 
+ 
++def _calculate_non_kv_cache_memory(result: MemoryProfilingResult) -> int:
++    """Return the profiled memory that is unavailable to the KV cache.
++
++    The free-memory-delta accounting was introduced for CUDA CuMem allocators.
++    MUSA does not use that allocator and its runtime/JIT workspaces can remain
++    visible to ``get_memory_info`` after profiling even though they are reused
++    by serving. Treating that whole delta as persistent double counts those
++    workspaces and can reject configurations that fit and served on v0.24.
++    """
++    is_musa = getattr(current_platform, "is_musa", None)
++    if callable(is_musa) and is_musa():
++        return (
++            result.non_torch_increase
++            + result.torch_peak_increase
++            + result.weights_memory
++        )
++
++    return result.total_consumed + result.transient_peak_headroom
++
++
+ @contextlib.contextmanager
+ def memory_profiling(
+     baseline_snapshot: MemorySnapshot,
+@@ -323,4 +343,4 @@ def memory_profiling(
+     result.transient_peak_headroom = (
+         result.after_profile.torch_peak - result.after_profile.torch_allocated
+     )
+-    result.non_kv_cache_memory = result.total_consumed + result.transient_peak_headroom
++    result.non_kv_cache_memory = _calculate_non_kv_cache_memory(result)

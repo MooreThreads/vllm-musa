@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 21 Aug 2026 21:03:10 +0800
+Subject: [PATCH] MUSA: restore contiguous segregated Mamba cache pools
+
+---
+ vllm/model_executor/layers/mamba/abstract.py | 14 +++++++-
+ vllm/v1/worker/gpu/attn_utils.py             | 32 ++++++++++++------
+ vllm/v1/worker/gpu_model_runner.py           | 34 ++++++++++++++------
+ 3 files changed, 61 insertions(+), 19 deletions(-)
+
+diff --git a/vllm/model_executor/layers/mamba/abstract.py b/vllm/model_executor/layers/mamba/abstract.py
+index d06916f697..6321725c73 100644
+--- a/vllm/model_executor/layers/mamba/abstract.py
++++ b/vllm/model_executor/layers/mamba/abstract.py
+@@ -26,12 +26,24 @@ class MambaBase(AttentionLayerBase):
+     kv_cache: tuple[torch.Tensor, ...]
+     supports_dcp: bool = False
+ 
+-    def bind_kv_cache(self, kv_cache: torch.Tensor) -> None:
++    def bind_kv_cache(
++        self, kv_cache: torch.Tensor | list[torch.Tensor] | tuple[torch.Tensor, ...]
++    ) -> None:
+         """Unpack a raw ``[B, 1, 1, C]`` int8 page view into per-state views.
+ 
+         Each block's ``C`` bytes hold the layer's states (e.g. conv, ssm)
+         packed contiguously; slice them out and reinterpret per dtype/shape.
+         """
++        if isinstance(kv_cache, (list, tuple)):
++            expected = len(tuple(self.get_state_shape()))
++            if len(kv_cache) != expected:
++                raise ValueError(
++                    "Unexpected number of Mamba state pools: "
++                    f"got {len(kv_cache)}, expected {expected}"
++                )
++            self.kv_cache = tuple(kv_cache)
++            return
++
+         pages = kv_cache.squeeze(dim=(1, 2))
+         states: list[torch.Tensor] = []
+         offset = 0
+diff --git a/vllm/v1/worker/gpu/attn_utils.py b/vllm/v1/worker/gpu/attn_utils.py
+index 77d56ad882..05fa471b98 100644
+--- a/vllm/v1/worker/gpu/attn_utils.py
++++ b/vllm/v1/worker/gpu/attn_utils.py
+@@ -434,15 +434,29 @@ def _reshape_kv_cache(
+                 )
+ 
+             elif isinstance(kv_cache_spec, MambaSpec):
+-                page_size_bytes = kv_cache_spec.page_size_bytes
+-                # Hold a single contiguous [num_blocks, 1, 1, page_size_bytes]
+-                # int8 page view per layer; the layer's bind_kv_cache unpacks
+-                # each block's bytes into its conv/ssm state views. Keeping
+-                # one tensor per layer lets the KV connector register it
+-                # without special-casing Mamba.
+-                kv_caches[layer_name] = kv_raw_tensor[
+-                    : num_blocks * page_size_bytes
+-                ].view(num_blocks, 1, 1, page_size_bytes)
++                # Segregate the Mamba state fields into independent contiguous
++                # block pools.  Packing conv/SSM bytes into every physical page
++                # gives the SSM view a page-sized block stride, so GDN decode
++                # has to gather and scatter state on every layer invocation.
++                # The block-copy path already handles list-valued Mamba caches.
++                kv_raw_tensor = kv_raw_tensor.view(-1)
++                state_tensors: list[torch.Tensor] = []
++                storage_offset = 0
++                for shape, dtype in zip(
++                    kv_cache_spec.shapes, kv_cache_spec.dtypes
++                ):
++                    state_nbytes = prod(shape) * get_dtype_size(dtype)
++                    end = storage_offset + num_blocks * state_nbytes
++                    if end > kv_raw_tensor.numel():
++                        raise RuntimeError(
++                            "Mamba cache backing is too small for contiguous "
++                            f"state pools: end={end}, size={kv_raw_tensor.numel()}, "
++                            f"shape={shape}, dtype={dtype}, num_blocks={num_blocks}"
++                        )
++                    state = kv_raw_tensor[storage_offset:end].view(dtype)
++                    state_tensors.append(state.view(num_blocks, *shape))
++                    storage_offset = end
++                kv_caches[layer_name] = state_tensors
+             else:
+                 raise NotImplementedError(
+                     f"Unsupported KV cache spec type: {type(kv_cache_spec)}"
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 2b2a665f01..b3ad96f579 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -12,6 +12,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
+ from copy import copy, deepcopy
+ from dataclasses import replace
+ from functools import reduce
++from math import prod
+ from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias, cast
+ 
+ import numpy as np
+@@ -126,6 +127,7 @@ from vllm.utils.mem_utils import DeviceMemoryProfiler, format_gib
+ from vllm.utils.nvtx_pytorch_hooks import PytHooks
+ from vllm.utils.platform_utils import num_compute_units
+ from vllm.utils.torch_utils import (
++    get_dtype_size,
+     PIN_MEMORY,
+     async_tensor_h2d,
+     current_stream,
+@@ -7792,15 +7794,29 @@ class GPUModelRunner(
+                 elif isinstance(kv_cache_spec, MambaSpec):
+                     has_mamba = True
+                     raw_tensor = kv_cache_raw_tensors[layer_name]
+-                    page_size_bytes = kv_cache_spec.page_size_bytes
+-                    # Hold a single contiguous [num_blocks, 1, 1, page_size_bytes]
+-                    # int8 page view per layer; the layer's bind_kv_cache unpacks
+-                    # each block's bytes into its conv/ssm state views. Keeping
+-                    # one tensor per layer lets the KV connector register it
+-                    # without special-casing Mamba.
+-                    kv_caches[layer_name] = raw_tensor[
+-                        : num_blocks * page_size_bytes
+-                    ].view(num_blocks, 1, 1, page_size_bytes)
++                    # Segregate the Mamba state fields into independent
++                    # contiguous block pools.  Packing conv/SSM bytes into
++                    # every physical page gives the SSM view a page-sized
++                    # block stride, forcing GDN decode to gather and scatter
++                    # state on every layer invocation.
++                    raw_tensor = raw_tensor.view(-1)
++                    state_tensors: list[torch.Tensor] = []
++                    storage_offset = 0
++                    for shape, dtype in zip(
++                        kv_cache_spec.shapes, kv_cache_spec.dtypes
++                    ):
++                        state_nbytes = prod(shape) * get_dtype_size(dtype)
++                        end = storage_offset + num_blocks * state_nbytes
++                        if end > raw_tensor.numel():
++                            raise RuntimeError(
++                                "Mamba cache backing is too small for contiguous "
++                                f"state pools: end={end}, size={raw_tensor.numel()}, "
++                                f"shape={shape}, dtype={dtype}, num_blocks={num_blocks}"
++                            )
++                        state = raw_tensor[storage_offset:end].view(dtype)
++                        state_tensors.append(state.view(num_blocks, *shape))
++                        storage_offset = end
++                    kv_caches[layer_name] = state_tensors
+                 else:
+                     raise NotImplementedError
+ 

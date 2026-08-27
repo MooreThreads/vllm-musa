@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.model_executor.layers.quantization.utils.fp8_utils
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/layers/quantization/utils/fp8_utils.py b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
-index 32a2d8689..74db17f55 100644
+index 7910db1925..ca38b437e5 100644
 --- a/vllm/model_executor/layers/quantization/utils/fp8_utils.py
 +++ b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
-@@ -632,7 +632,9 @@ def per_token_group_quant_fp8(
+@@ -600,7 +600,9 @@ def per_token_group_quant_fp8(
      # prefer CUDA/XPU kernel if available
      # TODO(bnell): this causes some fp8 moe test to fail.
      if (

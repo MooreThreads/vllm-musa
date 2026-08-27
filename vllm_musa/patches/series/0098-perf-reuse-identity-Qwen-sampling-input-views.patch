@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 30 Jul 2026 10:04:00 +0800
+Subject: [PATCH] perf: reuse identity Qwen sampling input views
+
+The Qwen uniform decode path already has identity logits indices. Avoid materializing positions and input_ids through two gather kernels before the unfiltered sampler when the MUSA-gated selector proves that the gathers are redundant. The upstream gathers remain the fallback.
+---
+ vllm/v1/worker/gpu/sample/sampler.py | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/sample/sampler.py b/vllm/v1/worker/gpu/sample/sampler.py
+index a78d1369d8..4946c25470 100644
+--- a/vllm/v1/worker/gpu/sample/sampler.py
++++ b/vllm/v1/worker/gpu/sample/sampler.py
+@@ -104,8 +104,6 @@ class Sampler:
+         idx_mapping_np = input_batch.idx_mapping_np
+         cu_num_logits_np = input_batch.cu_num_logits_np
+         expanded_local_pos = input_batch.expanded_local_pos
+-        pos = input_batch.positions[input_batch.logits_indices]
+-        input_ids = input_batch.input_ids[input_batch.logits_indices]
+ 
+         # NOTE(woosuk): We intentionally compute num_nans before sampling to make clear
+         # that num_nans is computed before applying penalties and temperature.
+@@ -116,6 +114,23 @@ class Sampler:
+             idx_mapping_np
+         )
+         return_logprobs = max_num_logprobs != NO_LOGPROBS or max_per_req_token_ids > 0
++        selector = getattr(self, "_musa_select_qwen_sample_input_views", None)
++        sample_inputs = (
++            None
++            if selector is None
++            else selector(
++                logits,
++                input_batch,
++                expanded_idx_mapping,
++                idx_mapping_np,
++                return_logprobs,
++            )
++        )
++        if sample_inputs is None:
++            pos = input_batch.positions[input_batch.logits_indices]
++            input_ids = input_batch.input_ids[input_batch.logits_indices]
++        else:
++            pos, input_ids = sample_inputs
+ 
+         sampled, processed_logits = self.sample(
+             logits,

@@ -708,7 +708,10 @@ def _mhc_prenorm_gemm_sqrsum_deepgemm(
     try:
         from deep_gemm.interface import tf32_hc_prenorm_gemm
     except ImportError:
-        from deep_gemm import tf32_hc_prenorm_gemm
+        try:
+            from deep_gemm import tf32_hc_prenorm_gemm
+        except ImportError:
+            from mate.deep_gemm import tf32_hc_prenorm_gemm
 
     x_flat = residual_flat.view(residual_flat.shape[0], -1).bfloat16()
     num_tokens, hc_hidden_size = x_flat.shape

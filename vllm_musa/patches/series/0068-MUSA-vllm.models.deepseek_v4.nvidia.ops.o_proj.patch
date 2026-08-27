@@ -8,17 +8,17 @@ Subject: [PATCH] MUSA: vllm.models.deepseek_v4.nvidia.ops.o_proj
  1 file changed, 27 insertions(+), 7 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/ops/o_proj.py b/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
-index 18e3b1056..ec5f55015 100644
+index b064fbe9cd..70cc2052b0 100644
 --- a/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
 +++ b/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
-@@ -60,11 +60,31 @@ def deep_gemm_fp8_o_proj(
-         device=o.device,
-         dtype=torch.bfloat16,
+@@ -63,11 +63,31 @@ def deep_gemm_fp8_o_proj(
+     weight_scale = (
+         wo_a.weight_scale if hasattr(wo_a, "weight_scale") else wo_a.weight_scale_inv
      )
 -    fp8_einsum(
 -        "bhr,hdr->bhd",
 -        (o_fp8, o_scale),
--        (wo_a.weight, wo_a.weight_scale_inv),
+-        (wo_a.weight, weight_scale),
 -        z,
 -        recipe=einsum_recipe,
 -    )
@@ -33,7 +33,7 @@ index 18e3b1056..ec5f55015 100644
 +            o_fp8,
 +            o_scale,
 +            wo_a.weight,
-+            wo_a.weight_scale_inv,
++            weight_scale,
 +            z,
 +            "bhr,hdr->bhd",
 +        )
@@ -45,7 +45,7 @@ index 18e3b1056..ec5f55015 100644
 +        fp8_einsum(
 +            "bhr,hdr->bhd",
 +            (o_fp8, o_scale),
-+            (wo_a.weight, wo_a.weight_scale_inv),
++            (wo_a.weight, weight_scale),
 +            z,
 +            recipe=einsum_recipe,
 +        )

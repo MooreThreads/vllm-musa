@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 30 Jul 2026 10:03:00 +0800
+Subject: [PATCH] perf: fuse Qwen next input IDs
+
+---
+ vllm/v1/worker/gpu/input_batch.py  |  7 +++++
+ vllm/v1/worker/gpu/model_runner.py | 46 +++++++++++++++++++++---------
+ 2 files changed, 40 insertions(+), 13 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/input_batch.py b/vllm/v1/worker/gpu/input_batch.py
+index 9a574a4faa..bbb3344677 100644
+--- a/vllm/v1/worker/gpu/input_batch.py
++++ b/vllm/v1/worker/gpu/input_batch.py
+@@ -555,6 +555,8 @@ def _post_update_kernel(
+     all_token_ids_ptr,
+     all_token_ids_stride,
+     total_len_ptr,
++    next_input_ids_ptr,
++    WRITE_NEXT_INPUT_IDS: tl.constexpr,
+ ):
+     req_id = tl.program_id(0)
+     req_state_idx = tl.load(idx_mapping_ptr + req_id)
+@@ -570,6 +572,8 @@ def _post_update_kernel(
+         )
+         tl.store(last_sampled_tokens_ptr + req_state_idx, token_id)
+         tl.store(total_len_ptr + req_state_idx, total_len + num_sampled)
++        if WRITE_NEXT_INPUT_IDS:
++            tl.store(next_input_ids_ptr + req_id, token_id)
+ 
+     for i in range(num_sampled):
+         token_id = tl.load(sampled_tokens_ptr + req_id * sampled_tokens_stride + i)
+@@ -622,6 +626,7 @@ def post_update(
+     all_token_ids: torch.Tensor,
+     # [max_num_reqs]
+     total_len: torch.Tensor,
++    next_input_ids: torch.Tensor | None = None,
+ ) -> None:
+     num_reqs = idx_mapping.shape[0]
+     _post_update_kernel[(num_reqs,)](
+@@ -638,6 +643,8 @@ def post_update(
+         all_token_ids,
+         all_token_ids.stride(0),
+         total_len,
++        next_input_ids if next_input_ids is not None else last_sampled_tokens,
++        WRITE_NEXT_INPUT_IDS=next_input_ids is not None,
+         num_warps=1,
+     )
+ 
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index c52c07f6bb..d0e4376969 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1236,18 +1236,35 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+ 
+         # Some input token ids are directly read from the last sampled tokens
+         # and draft tokens. Also, get the logits indices to sample tokens from.
+-        logits_indices = combine_sampled_and_draft_tokens(
+-            self.input_buffers.input_ids,
+-            idx_mapping,
+-            self.req_states.last_sampled_tokens,
+-            query_start_loc,
+-            seq_lens,
+-            self.req_states.prefill_len.gpu,
+-            self.req_states.draft_tokens,
+-            cu_num_logits,
+-            total_num_logits,
+-            self.model_state.num_new_sampled_tokens_per_step,
+-        )
++        selector = getattr(self, "_musa_select_uniform_decode_model_inputs", None)
++        model_inputs = None
++        if selector is not None:
++            model_inputs = selector(
++                req_ids,
++                num_scheduled_tokens,
++                is_prefilling_np,
++                total_num_draft_tokens,
++                total_num_logits,
++                num_tokens,
++                num_tokens_after_padding,
++                num_reqs_padded,
++            )
++        if model_inputs is None:
++            logits_indices = combine_sampled_and_draft_tokens(
++                self.input_buffers.input_ids,
++                idx_mapping,
++                self.req_states.last_sampled_tokens,
++                query_start_loc,
++                seq_lens,
++                self.req_states.prefill_len.gpu,
++                self.req_states.draft_tokens,
++                cu_num_logits,
++                total_num_logits,
++                self.model_state.num_new_sampled_tokens_per_step,
++            )
++            input_ids = self.input_buffers.input_ids[:num_tokens_after_padding]
++        else:
++            input_ids, logits_indices = model_inputs
+ 
+         # CPU upper bound on seq_lens; padded entries left at zero.
+         num_computed_tokens_np = self.req_states.num_computed_tokens_np[idx_mapping_np]
+@@ -1293,7 +1310,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             is_prefilling_np=batch_req_state.is_prefilling_np,
+             has_prefill=batch_req_state.has_prefill,
+             max_seq_len_np=max_seq_len_np,
+-            input_ids=self.input_buffers.input_ids[:num_tokens_after_padding],
++            input_ids=input_ids,
+             positions=self.input_buffers.positions[:num_tokens_after_padding],
+             is_padding=self.input_buffers.is_padding[:num_tokens_after_padding],
+             logits_indices=logits_indices,
+@@ -1392,6 +1409,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             output_bin_counts = self.sampler.penalties_state.output_bin_counts
+         else:
+             output_bin_counts = None
++        selector = getattr(self, "_musa_select_next_input_ids_buffer", None)
++        next_input_ids = None if selector is None else selector()
+         post_update(
+             idx_mapping,
+             self.req_states.num_computed_tokens.gpu,
+@@ -1403,6 +1422,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             query_start_loc,
+             self.req_states.all_token_ids.gpu,
+             self.req_states.total_len.gpu,
++            next_input_ids=next_input_ids,
+         )
+ 
+         self.model_state.postprocess_state(

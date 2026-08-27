@@ -30,10 +30,10 @@ def test_qwen_patch_consumers_bind_contract_features() -> None:
     )
     fused_mrope = _source(
         "vllm_musa/patches/series/"
-        "0087-MUSA-fuse-QK-RMSNorm-and-MRoPE-for-interleaved-MRoPE.patch"
+        "0086-MUSA-model-fuse-QK-RMSNorm-and-MRoPE-for-interleaved.patch"
     )
     mamba_pool = _source(
-        "vllm_musa/patches/series/0083-MUSA-vllm.v1.core.kv_cache_utils.patch"
+        "vllm_musa/patches/series/0082-MUSA-separate-mamba-state-BlockPools.patch"
     )
 
     assert "QWEN35_SHARED_EXPERT_FOLD" in shared_expert

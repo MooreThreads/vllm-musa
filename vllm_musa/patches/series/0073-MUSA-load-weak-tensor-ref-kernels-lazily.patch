@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: load weak tensor ref kernels lazily
  1 file changed, 6 insertions(+)
 
 diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
-index 9269fbb44..c1ac453e1 100644
+index 0e133a3773..1da1a89401 100644
 --- a/vllm/utils/torch_utils.py
 +++ b/vllm/utils/torch_utils.py
-@@ -763,6 +763,12 @@ def weak_ref_tensor(tensor: Any) -> Any:
+@@ -847,6 +847,12 @@ def weak_ref_tensor(tensor: Any) -> Any:
      This ignores 0-size tensors as those don't allocate any memory.
      """
      if isinstance(tensor, torch.Tensor) and tensor.numel() > 0:

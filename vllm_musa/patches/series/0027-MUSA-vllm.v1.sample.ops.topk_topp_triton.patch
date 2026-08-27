@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.v1.sample.ops.topk_topp_triton
  1 file changed, 15 insertions(+), 20 deletions(-)
 
 diff --git a/vllm/v1/sample/ops/topk_topp_triton.py b/vllm/v1/sample/ops/topk_topp_triton.py
-index d20cac37f..d615fa77d 100755
+index d8f8c8956d..83917e3403 100755
 --- a/vllm/v1/sample/ops/topk_topp_triton.py
 +++ b/vllm/v1/sample/ops/topk_topp_triton.py
-@@ -196,10 +196,7 @@ def _topk_topp_kernel(
+@@ -197,10 +197,7 @@ def _topk_topp_kernel(
                      max_range = max_logit
                      min_range = outlier_pivot
                      search_range = tl.cast(num_outliers, tl.int32)
@@ -23,7 +23,7 @@ index d20cac37f..d615fa77d 100755
                      found_pivot = 0
                      while found_pivot == 0:
                          k_pivot_0 = (max_range - min_range) * 1.0 / 3.0 + min_range
-@@ -372,9 +369,13 @@ def _topk_topp_kernel(
+@@ -373,9 +370,13 @@ def _topk_topp_kernel(
  
                  # Top-k only path.  If there are fewer finite values
                  # than k (e.g. grammar mask), keep everything.
@@ -39,7 +39,7 @@ index d20cac37f..d615fa77d 100755
                      #### TOP-P SAMPLING AFTER TOP-K ####
                      p = tl.load(P + row_id)
                      if p < 1.0:
-@@ -382,10 +383,7 @@ def _topk_topp_kernel(
+@@ -383,10 +384,7 @@ def _topk_topp_kernel(
                          sum_exp_logits = 0.0
                          num_outliers_2 = tl.zeros((), dtype=tl.uint32)
                          search_range = tl.cast(num_outliers, tl.int32)
@@ -51,7 +51,7 @@ index d20cac37f..d615fa77d 100755
  
                          # Third pass: Calculate exp logits and sum, gather outliers
                          if num_outliers > k:
-@@ -493,11 +491,9 @@ def _topk_topp_kernel(
+@@ -494,11 +492,9 @@ def _topk_topp_kernel(
                                  )
  
                              search_range = tl.cast(num_outliers_2, tl.int32)
@@ -66,7 +66,7 @@ index d20cac37f..d615fa77d 100755
  
                              # Fourth pass: Calculate BUFFER and get outliers
                              for i in range(0, search_iters):
-@@ -591,7 +587,9 @@ def _topk_topp_kernel(
+@@ -592,7 +588,9 @@ def _topk_topp_kernel(
                          # Top-k + Top-p path
                          final_pivot = tl.log(p_pivot * sum_exp_logits) + max_logit
  
@@ -77,7 +77,7 @@ index d20cac37f..d615fa77d 100755
              #### STANDALONE TOP-P SAMPLING ####
              p = tl.load(P + row_id)
              if p < 1.0:
-@@ -686,10 +684,7 @@ def _topk_topp_kernel(
+@@ -687,10 +685,7 @@ def _topk_topp_kernel(
                  if sum_outlier_probs > p:
                      min_range = outlier_prob
                      search_range = tl.cast(num_outliers, tl.int32)

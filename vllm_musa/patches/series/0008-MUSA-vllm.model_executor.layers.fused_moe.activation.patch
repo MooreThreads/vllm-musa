@@ -4,19 +4,20 @@ Date: Wed, 3 Jun 2026 11:47:35 +0000
 Subject: [PATCH] MUSA: vllm.model_executor.layers.fused_moe.activation
 
 ---
- vllm/model_executor/layers/fused_moe/activation.py | 5 +++++
- 1 file changed, 5 insertions(+)
+ vllm/model_executor/layers/fused_moe/activation.py | 6 ++++++
+ 1 file changed, 6 insertions(+)
 
 diff --git a/vllm/model_executor/layers/fused_moe/activation.py b/vllm/model_executor/layers/fused_moe/activation.py
-index 2d8d46cac..b833d336d 100644
+index 6585bbe4f4..8d5ea3225b 100644
 --- a/vllm/model_executor/layers/fused_moe/activation.py
 +++ b/vllm/model_executor/layers/fused_moe/activation.py
-@@ -140,6 +140,11 @@ def apply_moe_activation(
-         if clamp_limit is not None:
-             # Fused silu(clamp(gate)) * clamp(up); equivalent to swiglu_limit_func.
-             torch.ops._C.silu_and_mul_with_clamp(output, input, clamp_limit, 1.0, 0.0)
+@@ -232,6 +232,12 @@ def apply_moe_activation(
+             silu_and_mul_with_clamp(
+                 output, input, config.clamp_limit, topk_ids, expert_map
+             )
 +        elif input.device.type == "musa":
 +            from vllm_musa.jit_kernel.csrc.moe import maybe_fast_silu_and_mul
++
 +            if not maybe_fast_silu_and_mul(output, input):
 +                d = input.shape[-1] // 2
 +                output.copy_(F.silu(input[..., :d]) * input[..., d:])

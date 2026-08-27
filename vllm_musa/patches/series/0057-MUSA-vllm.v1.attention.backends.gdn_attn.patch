@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.v1.attention.backends.gdn_attn
  1 file changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/v1/attention/backends/gdn_attn.py b/vllm/v1/attention/backends/gdn_attn.py
-index 340a30403..bb274edec 100644
+index 1a07a6957e..e0319acdcb 100644
 --- a/vllm/v1/attention/backends/gdn_attn.py
 +++ b/vllm/v1/attention/backends/gdn_attn.py
-@@ -280,7 +280,12 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
+@@ -321,7 +321,12 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
                      query_lens,
                      output_size=query_start_loc_cpu[-1].item(),
                  )

@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.model_executor.layers.fused_moe.fused_moe
  1 file changed, 4 insertions(+), 4 deletions(-)
 
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index 49957c8f5..c2c4f5ab5 100644
+index be4930052a..181e3bb1f6 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
-@@ -1732,9 +1732,9 @@ def fused_experts_impl(
+@@ -1845,9 +1845,9 @@ def fused_experts_impl(
          B_bias=w2_bias,
      )
  

@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: keep DeepSeek-V4 MTP RMSNorm branch dtypes stable
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py b/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
-index 874b4f607..5680eaeba 100644
+index 874b4f6079..5680eaebaf 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
 @@ -85,7 +85,9 @@ def _fused_mtp_input_rmsnorm_kernel(

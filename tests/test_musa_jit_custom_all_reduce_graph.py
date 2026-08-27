@@ -368,6 +368,8 @@ def test_graph_staging_meta_partition_starts_after_eager_signal_region() -> None
 
     assert impl._graph_staging_data_start == 1024
     assert impl._graph_staging_meta_start == 1536
+    assert impl._graph_staging_data_offset == 1024
+    assert impl._graph_staging_meta_offset == 1536
     assert impl._graph_staging_meta_start >= impl.meta_size + 1024
     assert impl._graph_staging_data_limit == 3072
     assert impl._graph_staging_meta_limit == 5632
@@ -479,15 +481,46 @@ def test_low_level_custom_ops_cannot_bypass_graph_collective_fallback(
         getattr(impl, impl_name)(*args)
 
 
-def test_graph_staging_recapture_fails_closed_while_old_graphs_may_live() -> None:
+def test_graph_staging_multi_capture_preserves_disjoint_arena_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
     impl._IS_CAPTURING = False
     impl._use_graph_staging_arena = True
-    impl._graph_staging_capture_sealed = True
+    impl._graph_staging_plan = SimpleNamespace(
+        capture_descriptors=frozenset({(5, 1), (10, 2)})
+    )
+    impl._graph_staging_data_offset = 1024
+    impl._graph_staging_meta_offset = 2048
+    impl._graph_staging_ledger = []
+    impl._graph_staging_cpu_refs = []
+    impl._graph_staging_captured_descriptors = set()
+    impl._graph_staging_capture_sealed = False
+    monkeypatch.setattr(impl, "_validate_graph_staging_capture", lambda *_: None)
 
-    with pytest.raises(RuntimeError, match="previously captured graphs"):
-        with impl.capture():
-            pass
+    first_ref = object()
+    with impl.capture():
+        impl._graph_staging_data_offset += 256
+        impl._graph_staging_meta_offset += 512
+        impl._graph_staging_ledger.append((5, 1, "allreduce", 1, 2, 3, 4, 5))
+        impl._graph_staging_cpu_refs.append(first_ref)
+
+    assert impl._graph_staging_captured_descriptors == {(5, 1)}
+    assert not impl._graph_staging_capture_sealed
+
+    with impl.capture():
+        assert impl._graph_staging_data_offset == 1280
+        assert impl._graph_staging_meta_offset == 2560
+        assert impl._graph_staging_ledger == [
+            (5, 1, "allreduce", 1, 2, 3, 4, 5)
+        ]
+        assert impl._graph_staging_cpu_refs == [first_ref]
+        impl._graph_staging_data_offset += 256
+        impl._graph_staging_meta_offset += 512
+        impl._graph_staging_ledger.append((10, 2, "allreduce", 1, 2, 3, 4, 5))
+
+    assert impl._graph_staging_captured_descriptors == {(5, 1), (10, 2)}
+    assert impl._graph_staging_capture_sealed
 
 
 def _capture_consensus_impl() -> object:

@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA(csrc): csrc/topk.cu
  1 file changed, 71 insertions(+), 80 deletions(-)
 
 diff --git a/csrc/libtorch_stable/topk.cu b/csrc/libtorch_stable/topk.cu
-index 7656ba8cf..9313ca368 100644
+index 07b7521f86..eb4e1e070f 100644
 --- a/csrc/libtorch_stable/topk.cu
 +++ b/csrc/libtorch_stable/topk.cu
-@@ -1,51 +1,49 @@
+@@ -1,53 +1,51 @@
  // Persistent TopK kernel for DeepSeek V3 sparse attention indexer.
  // See persistent_topk.cuh for kernel implementation.
  
@@ -42,6 +42,8 @@ index 7656ba8cf..9313ca368 100644
 +                            torch::Tensor& workspace, int64_t max_seq_len) {
    namespace P = vllm::persistent;
  
+   const torch::stable::accelerator::DeviceGuard device_guard(
+       logits.get_device_index());
    const int64_t num_rows = logits.size(0);
    const int64_t stride = logits.stride(0);
 -  const cudaStream_t stream = get_current_cuda_stream();
@@ -82,7 +84,7 @@ index 7656ba8cf..9313ca368 100644
  
      int effective_max_smem;
      if (num_rows <= 4) {
-@@ -101,9 +99,9 @@ void launch_persistent_topk(const torch::stable::Tensor& logits,
+@@ -103,9 +101,9 @@ void launch_persistent_topk(const torch::stable::Tensor& logits,
            &occupancy, P::persistent_topk_kernel<TopK, 1>, P::kThreadsPerBlock,
            smem_size);
      }
@@ -95,7 +97,7 @@ index 7656ba8cf..9313ca368 100644
      if (occupancy < 1) occupancy = 1;
  
      // The cooperative spin-wait barrier only runs when at least one row hits
-@@ -133,29 +131,27 @@ void launch_persistent_topk(const torch::stable::Tensor& logits,
+@@ -135,29 +133,27 @@ void launch_persistent_topk(const torch::stable::Tensor& logits,
      // If the cooperative launch wouldn't fit, fall back to FilteredTopK
      // instead of deadlocking. Only relevant when needs_cooperative.
      if (needs_cooperative && total_ctas > hw_resident_cap) {
@@ -140,7 +142,7 @@ index 7656ba8cf..9313ca368 100644
  
      // Zero the per-group RadixRowState region before launch.
      //
-@@ -183,22 +179,22 @@ void launch_persistent_topk(const torch::stable::Tensor& logits,
+@@ -185,22 +181,22 @@ void launch_persistent_topk(const torch::stable::Tensor& logits,
      //      first red_release. cudaMemsetAsync is stream-ordered: the zero
      //      is globally visible before any CTA runs.
      {
@@ -172,7 +174,7 @@ index 7656ba8cf..9313ca368 100644
      params.ctas_per_group = ctas_per_group;
      params.max_seq_len = static_cast<uint32_t>(max_seq_len);
  
-@@ -207,8 +203,8 @@ void launch_persistent_topk(const torch::stable::Tensor& logits,
+@@ -209,8 +205,8 @@ void launch_persistent_topk(const torch::stable::Tensor& logits,
        auto kernel = &P::persistent_topk_kernel<TOPK_VAL, VS>;                 \
        cudaError_t err = cudaFuncSetAttribute(                                 \
            kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);    \
@@ -183,7 +185,7 @@ index 7656ba8cf..9313ca368 100644
        kernel<<<total_ctas, P::kThreadsPerBlock, smem_size, stream>>>(params); \
      } while (0)
  
-@@ -223,42 +219,37 @@ void launch_persistent_topk(const torch::stable::Tensor& logits,
+@@ -225,42 +221,37 @@ void launch_persistent_topk(const torch::stable::Tensor& logits,
    }
  
    cudaError_t err = cudaGetLastError();
@@ -246,9 +248,9 @@ index 7656ba8cf..9313ca368 100644
 +  TORCH_CHECK(k == 512 || k == 1024 || k == 2048,
 +              "persistent_topk supports k=512, k=1024, or k=2048, got k=", k);
  
-   if (k == 512) {
-     launch_persistent_topk<512>(logits, lengths, output, workspace,
-@@ -271,6 +262,6 @@ void persistent_topk(const torch::stable::Tensor& logits,
+   const torch::stable::accelerator::DeviceGuard device_guard(
+       logits.get_device_index());
+@@ -276,6 +267,6 @@ void persistent_topk(const torch::stable::Tensor& logits,
                                   max_seq_len);
    }
  #else

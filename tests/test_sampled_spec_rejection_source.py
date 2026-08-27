@@ -6,8 +6,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
-REJECTION_PATCH = SERIES / "0028-MUSA-vllm.v1.sample.rejection_sampler.patch"
-MODEL_RUNNER_PATCH = SERIES / "0035-MUSA-vllm.v1.worker.gpu_model_runner.patch"
+REJECTION_PATCH = (
+    SERIES / "0028-MUSA-vllm.v1.sample.rejection_sampler-v0.28-reanchor.patch"
+)
+MODEL_RUNNER_PATCH = (
+    SERIES / "0035-MUSA-vllm.v1.worker.gpu_model_runner-v0.28-reanchor.patch"
+)
+
+
+def _series_patch(number: int) -> str:
+    matches = list(SERIES.glob(f"{number:04d}-*.patch"))
+    assert len(matches) == 1
+    return matches[0].read_text()
 
 
 def test_sampled_spec_decode_has_no_environment_guard() -> None:
@@ -41,3 +51,26 @@ def test_model_runner_does_not_skip_non_greedy_drafter() -> None:
 
     assert "not self.input_batch.sampling_metadata.all_greedy" not in source
     assert "input_fits_in_drafter = False" not in source
+
+
+def test_mrv2_rejection_predicates_keep_musa_triton_rank_stable() -> None:
+    greedy = _series_patch(125)
+    block_verification = _series_patch(128)
+    stochastic = _series_patch(129)
+
+    for source in (greedy, block_verification, stochastic):
+        assert "accepted |= tl.zeros((1,), tl.int1)" in source
+        assert "accepted = tl.sum(accepted.to(tl.int32), axis=0) != 0" in source
+
+
+def test_mrv2_rejection_avoids_chained_runtime_predicates() -> None:
+    source = _series_patch(126)
+
+    assert "if USE_BLOCK_VERIFICATION and (" in source
+    assert "(not is_greedy) & (accepted_length < num_draft_tokens)" in source
+
+
+def test_mrv2_rejection_resampler_uses_v028_gumbel_signature() -> None:
+    source = _series_patch(127)
+
+    assert "residual_logits,\n         block,\n+        block," in source

@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc): csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
  1 file changed, 13 insertions(+), 17 deletions(-)
 
 diff --git a/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh b/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
-index 6e95d72ed..3b7e25dc5 100644
+index 296978f384..f28775521a 100644
 --- a/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
 +++ b/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
 @@ -1,7 +1,6 @@
@@ -19,7 +19,7 @@ index 6e95d72ed..3b7e25dc5 100644
  #include <assert.h>
  #include <float.h>
  #include <stdint.h>
-@@ -547,40 +546,37 @@ __inline__ __device__ Tout scaled_convert(const Tin& x, const float scale) {
+@@ -576,40 +575,37 @@ __inline__ __device__ Tout scaled_convert(const Tin& x, const float scale) {
      vllm::Fp8KVCacheDataType KV_CACHE_DTYPE =                                  \
          vllm::get_fp8_kv_cache_data_type(KV_DTYPE);                            \
      if (KV_CACHE_DTYPE == vllm::Fp8KVCacheDataType::kAuto) {                   \

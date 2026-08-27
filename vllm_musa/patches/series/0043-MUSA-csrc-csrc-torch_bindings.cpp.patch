@@ -4,27 +4,33 @@ Date: Thu, 4 Jun 2026 02:46:36 +0000
 Subject: [PATCH] MUSA(csrc): csrc/torch_bindings.cpp
 
 ---
- csrc/torch_bindings.cpp | 423 +++++++++++++++++++++++++++++++++++++---
- 1 file changed, 401 insertions(+), 22 deletions(-)
+ csrc/torch_bindings.cpp | 422 +++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 415 insertions(+), 7 deletions(-)
 
 diff --git a/csrc/torch_bindings.cpp b/csrc/torch_bindings.cpp
-index e1430c08d..0250c83ba 100644
+index bcf0ce3e1c..82c852183a 100644
 --- a/csrc/torch_bindings.cpp
 +++ b/csrc/torch_bindings.cpp
-@@ -1,7 +1,5 @@
+@@ -1,9 +1,9 @@
 -// Provides torch::Tensor for ops.h (previously included transitively via
 -// cache.h, which is no longer included here after cache ops moved to
 -// _C_stable_libtorch).
 -#include <torch/all.h>
 +#include "torch_musa/csrc/aten/musa/MUSAContext.h"
 +#include "cache.h"
- #include "cuda_utils.h"
++#include "cuda_utils.h"
  #include "ops.h"
  #include "core/registration.h"
-@@ -20,38 +18,376 @@
++#include <torch/all.h>
+ #include <torch/library.h>
+ #include <torch/version.h>
  
- TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
-   // vLLM custom ops
+@@ -17,9 +17,415 @@
+ // https://docs.google.com/document/d/1_W62p8WJOQQUzPsJYa7s701JXt0qf2OfLub2sbkHOaU/edit#heading=h.ptttacy8y1u9
+ // https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/README.md#annotations
+ 
++TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
++  // vLLM custom ops
 +  //
 +
 +  ops.def(
@@ -36,14 +42,10 @@ index e1430c08d..0250c83ba 100644
 +
 +  ops.def("weak_ref_tensor(Tensor input) -> Tensor");
 +  ops.impl("weak_ref_tensor", torch::kCUDA, &weak_ref_tensor);
- 
--#ifdef USE_ROCM
--  // TODO: Remove this once we upgrade to torch 2.11.
--  // ROCm still uses torch 2.10,
--  // So we still need to use unstable torch ABI for now.
-   ops.def("get_cuda_view_from_cpu_tensor(Tensor cpu_tensor) -> Tensor");
-   ops.impl("get_cuda_view_from_cpu_tensor", torch::kCPU,
-            &get_cuda_view_from_cpu_tensor);
++
++  ops.def("get_cuda_view_from_cpu_tensor(Tensor cpu_tensor) -> Tensor");
++  ops.impl("get_cuda_view_from_cpu_tensor", torch::kCPU,
++           &get_cuda_view_from_cpu_tensor);
 +
 +  // Attention ops
 +  // Compute the attention between an input query and the cached
@@ -285,16 +287,9 @@ index e1430c08d..0250c83ba 100644
 +  ops.impl("minimax_allreduce_rms_qk", torch::kCUDA, &minimax_allreduce_rms_qk);
 +
 +  //  conditionally compiled so impl in source file
- #endif
- }
- 
--#ifdef USE_ROCM
--TORCH_LIBRARY_FRAGMENT(CONCAT(TORCH_EXTENSION_NAME, _custom_ar), custom_ar) {
--  // Quick Reduce all-reduce kernels (ROCm-only; stays on legacy _C).
--  custom_ar.def(
--      "qr_all_reduce(int fa, Tensor inp, Tensor out, int quant_level, bool "
--      "cast_bf2half) -> ()");
--  custom_ar.impl("qr_all_reduce", torch::kCUDA, &qr_all_reduce);
++#endif
++}
++
 +TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cache_ops), cache_ops) {
 +  // Cache ops
 +  // Swap in (out) the cache blocks from src to dst.
@@ -302,19 +297,14 @@ index e1430c08d..0250c83ba 100644
 +      "swap_blocks(Tensor src, Tensor! dst,"
 +      "            int block_size_in_bytes, Tensor block_mapping) -> ()");
 +  cache_ops.impl("swap_blocks", torch::kCUDA, &swap_blocks);
- 
--  custom_ar.def("init_custom_qr", &init_custom_qr);
--  custom_ar.def("qr_destroy", &qr_destroy);
--  custom_ar.def("qr_get_handle", &qr_get_handle);
++
 +  // Batch swap: submit all block copies in a single driver call.
 +  cache_ops.def(
 +      "swap_blocks_batch(Tensor src_ptrs, Tensor dst_ptrs,"
 +      "                  Tensor sizes,"
 +      "                  bool is_src_access_order_any=False) -> ()");
 +  cache_ops.impl("swap_blocks_batch", torch::kCPU, &swap_blocks_batch);
- 
--  custom_ar.def("qr_open_handles(int _fa, Tensor[](b!) handles) -> ()");
--  custom_ar.impl("qr_open_handles", torch::kCPU, &qr_open_handles);
++
 +  // Reshape the key and value tensors and cache them.
 +  cache_ops.def(
 +      "reshape_and_cache(Tensor key, Tensor value,"
@@ -323,8 +313,7 @@ index e1430c08d..0250c83ba 100644
 +      "                  str kv_cache_dtype,"
 +      "                  Tensor k_scale, Tensor v_scale) -> ()");
 +  cache_ops.impl("reshape_and_cache", torch::kCUDA, &reshape_and_cache);
- 
--  custom_ar.def("qr_max_size", &qr_max_size);
++
 +  // Reshape the key and value tensors and cache them.
 +  cache_ops.def(
 +      "reshape_and_cache_flash(Tensor key, Tensor value,"
@@ -386,8 +375,8 @@ index e1430c08d..0250c83ba 100644
 +
 +  cache_ops.def(
 +      "cp_gather_and_upconvert_fp8_kv_cache(Tensor src_cache, Tensor! dst, "
-+      "Tensor block_table, Tensor seq_lens, Tensor workspace_starts, int "
-+      "batch_size) -> ()");
++      "Tensor block_table, Tensor workspace_starts, int batch_size, Tensor? "
++      "seq_starts) -> ()");
 +  cache_ops.impl("cp_gather_and_upconvert_fp8_kv_cache", torch::kCUDA,
 +                 &cp_gather_and_upconvert_fp8_kv_cache);
 +
@@ -407,19 +396,21 @@ index e1430c08d..0250c83ba 100644
 +      "dst_scale, Tensor block_table, Tensor cu_seq_lens) -> ()");
 +  cache_ops.impl("cp_gather_indexer_k_quant_cache", torch::kCUDA,
 +                 &cp_gather_indexer_k_quant_cache);
- }
- 
--// TODO: Remove this once ROCm upgrade to torch 2.11.
- TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cuda_utils), cuda_utils) {
-   // Cuda utils
++}
 +
-   // Gets the specified device attribute.
-   cuda_utils.def("get_device_attribute(int attribute, int device_id) -> int");
-   cuda_utils.impl("get_device_attribute", &get_device_attribute);
-@@ -62,6 +398,49 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cuda_utils), cuda_utils) {
-   cuda_utils.impl("get_max_shared_memory_per_block_device_attribute",
-                   &get_max_shared_memory_per_block_device_attribute);
- }
++TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cuda_utils), cuda_utils) {
++  // Cuda utils
++
++  // Gets the specified device attribute.
++  cuda_utils.def("get_device_attribute(int attribute, int device_id) -> int");
++  cuda_utils.impl("get_device_attribute", &get_device_attribute);
++
++  // Gets the maximum shared memory per block device attribute.
++  cuda_utils.def(
++      "get_max_shared_memory_per_block_device_attribute(int device_id) -> int");
++  cuda_utils.impl("get_max_shared_memory_per_block_device_attribute",
++                  &get_max_shared_memory_per_block_device_attribute);
++}
 +
 +TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _custom_ar), custom_ar) {
 +  // Custom all-reduce kernels
@@ -445,23 +436,26 @@ index e1430c08d..0250c83ba 100644
 +  custom_ar.impl("open_mem_handle", torch::kCPU, &open_mem_handle);
 +
 +  custom_ar.def("free_shared_buffer", &free_shared_buffer);
-+#ifdef USE_ROCM
+ #ifdef USE_ROCM
+-TORCH_LIBRARY_FRAGMENT(CONCAT(TORCH_EXTENSION_NAME, _custom_ar), custom_ar) {
+-  // Quick Reduce all-reduce kernels (ROCm-only; stays on legacy _C).
 +  // Quick Reduce all-reduce kernels
-+  custom_ar.def(
-+      "qr_all_reduce(int fa, Tensor inp, Tensor out, int quant_level, bool "
-+      "cast_bf2half) -> ()");
-+  custom_ar.impl("qr_all_reduce", torch::kCUDA, &qr_all_reduce);
+   custom_ar.def(
+       "qr_all_reduce(int fa, Tensor inp, Tensor out, int quant_level, bool "
+       "cast_bf2half) -> ()");
+@@ -27,13 +433,15 @@ TORCH_LIBRARY_FRAGMENT(CONCAT(TORCH_EXTENSION_NAME, _custom_ar), custom_ar) {
+ 
+   custom_ar.def("init_custom_qr", &init_custom_qr);
+   custom_ar.def("qr_destroy", &qr_destroy);
 +
-+  custom_ar.def("init_custom_qr", &init_custom_qr);
-+  custom_ar.def("qr_destroy", &qr_destroy);
-+
-+  custom_ar.def("qr_get_handle", &qr_get_handle);
-+
-+  custom_ar.def("qr_open_handles(int _fa, Tensor[](b!) handles) -> ()");
-+  custom_ar.impl("qr_open_handles", torch::kCPU, &qr_open_handles);
-+
+   custom_ar.def("qr_get_handle", &qr_get_handle);
+ 
+   custom_ar.def("qr_open_handles(int _fa, Tensor[](b!) handles) -> ()");
+   custom_ar.impl("qr_open_handles", torch::kCPU, &qr_open_handles);
+ 
 +  // Max input size in bytes
-+  custom_ar.def("qr_max_size", &qr_max_size);
+   custom_ar.def("qr_max_size", &qr_max_size);
+-}
  #endif
 +}
  

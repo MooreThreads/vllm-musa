@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.v1.worker.gpu_worker
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index 5e266a313..4c4594a47 100644
+index a3b00aaad2..cbc689c572 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
-@@ -248,7 +248,7 @@ class Worker(WorkerBase):
+@@ -313,7 +313,7 @@ class Worker(WorkerBase):
  
      @instrument(span_name="Init device")
      def init_device(self):
@@ -20,7 +20,7 @@ index 5e266a313..4c4594a47 100644
              # This env var set by Ray causes exceptions with graph building.
              os.environ.pop("NCCL_ASYNC_ERROR_HANDLING", None)
              parallel_config = self.parallel_config
-@@ -956,7 +956,7 @@ class Worker(WorkerBase):
+@@ -1173,7 +1173,7 @@ class Worker(WorkerBase):
                          self.profiler_config,
                          worker_name=trace_name,
                          local_rank=self.local_rank,

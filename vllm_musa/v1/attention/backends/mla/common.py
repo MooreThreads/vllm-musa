@@ -30,6 +30,7 @@ from vllm.model_executor.layers.linear import (
 )
 from vllm.platforms import current_platform
 from vllm.v1.attention.backend import AttentionLayer
+from vllm.v1.attention.backends.mla.prefill.base import MLAPrefillBackend
 from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
 
 from vllm_musa.v1.attention.backends.fa_utils import get_flash_attn_version
@@ -83,7 +84,7 @@ use_trtllm_ragged_deepseek_prefill = getattr(
 )
 
 
-class MUSAMLAPrefillBackend:
+class MUSAMLAPrefillBackend(MLAPrefillBackend):
     """Compatibility backend for vLLM v0.22 MLA prefill selection.
 
     MUSA keeps the prefill execution in this module's MLACommonImpl because
@@ -105,13 +106,15 @@ class MUSAMLAPrefillBackend:
         v_head_dim: int,
         vllm_config,
     ) -> None:
-        self.num_heads = num_heads
-        self.scale = scale
-        self.kv_lora_rank = kv_lora_rank
-        self.qk_nope_head_dim = qk_nope_head_dim
-        self.qk_rope_head_dim = qk_rope_head_dim
-        self.v_head_dim = v_head_dim
-        self.vllm_config = vllm_config
+        super().__init__(
+            num_heads=num_heads,
+            scale=scale,
+            kv_lora_rank=kv_lora_rank,
+            qk_nope_head_dim=qk_nope_head_dim,
+            qk_rope_head_dim=qk_rope_head_dim,
+            v_head_dim=v_head_dim,
+            vllm_config=vllm_config,
+        )
 
     @staticmethod
     def get_name() -> str:
@@ -277,7 +280,10 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             self._pad_v &= not current_platform.is_musa()
             # ========================== END ==========================
 
-        self.dcp_world_size: int = -1
+        parallel_config = get_current_vllm_config().parallel_config
+        # Avoid requiring an initialized DCP group in tests and match the
+        # vLLM v0.28 MLA initialization contract.
+        self.dcp_world_size: int = parallel_config.decode_context_parallel_size
 
         self.chunked_prefill_workspace_size = (
             MLACommonMetadataBuilder.determine_chunked_prefill_workspace_size(
@@ -285,7 +291,7 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             )
         )
         self.cp_kv_cache_interleave_size: int = (
-            get_current_vllm_config().parallel_config.cp_kv_cache_interleave_size
+            parallel_config.cp_kv_cache_interleave_size
         )
 
     def _flash_attn_varlen_diff_headdims(

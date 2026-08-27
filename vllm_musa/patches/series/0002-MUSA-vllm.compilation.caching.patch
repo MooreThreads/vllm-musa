@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.compilation.caching
  1 file changed, 11 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/compilation/caching.py b/vllm/compilation/caching.py
-index 62da2d9de..994e681f4 100644
+index 94456fc182..e205f57359 100644
 --- a/vllm/compilation/caching.py
 +++ b/vllm/compilation/caching.py
 @@ -12,7 +12,16 @@ from unittest.mock import patch
@@ -29,7 +29,7 @@ index 62da2d9de..994e681f4 100644
  from torch.utils import _pytree as pytree
  
  import vllm.envs as envs
-@@ -239,7 +248,7 @@ class VllmSerializableFunction(SerializableCallable):  # type: ignore[misc]
+@@ -247,7 +256,7 @@ class VllmSerializableFunction(SerializableCallable):  # type: ignore[misc]
              patch.object(GraphPickler, "reducer_override", _graph_reducer_override),
              patch_pytree_map_over_slice(),
          ):

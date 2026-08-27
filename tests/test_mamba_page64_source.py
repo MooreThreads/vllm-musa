@@ -13,7 +13,7 @@ def _read(name: str) -> str:
 
 
 def test_separate_pool_keeps_attention_and_mamba_page_sizes_independent():
-    source = _read("0083-MUSA-vllm.v1.core.kv_cache_utils.patch")
+    source = _read("0082-MUSA-separate-mamba-state-BlockPools.patch")
     platform = (ROOT / "vllm_musa" / "platform.py").read_text()
 
     assert "musa_mamba_separate_pool_enabled()" in source
@@ -29,7 +29,7 @@ def test_separate_pool_keeps_attention_and_mamba_page_sizes_independent():
 
 def test_mixed_page_memory_check_accounts_for_each_cache_family():
     source = _read(
-        "0088-MUSA-vllm.v1.core.kv_cache_utils-mixed-page-memory.patch"
+        "0088-MUSA-account-separate-Mamba-page-sizes-in-memory-che.patch"
     )
 
     assert "mamba_required_bytes = mamba_page * mamba_num_blocks" in source

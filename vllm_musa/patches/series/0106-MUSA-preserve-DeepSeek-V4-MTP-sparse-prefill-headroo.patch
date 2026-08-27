@@ -1,0 +1,137 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 8 Aug 2026 06:56:54 +0800
+Subject: [PATCH] MUSA: preserve DeepSeek-V4 MTP sparse-prefill headroom
+
+---
+ vllm/models/deepseek_v4/nvidia/flashmla.py | 18 ++++++-
+ vllm/v1/worker/gpu_worker.py               | 60 ++++++++++++++++++++++
+ 2 files changed, 76 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/nvidia/flashmla.py b/vllm/models/deepseek_v4/nvidia/flashmla.py
+index c84070f4f2..4f9f7d1225 100644
+--- a/vllm/models/deepseek_v4/nvidia/flashmla.py
++++ b/vllm/models/deepseek_v4/nvidia/flashmla.py
+@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
+ 
+ import torch
+ 
++from vllm.config import VllmConfig, get_current_vllm_config_or_none
+ from vllm.forward_context import get_forward_context
+ from vllm.models.deepseek_v4.attention import DeepseekV4Attention
+ from vllm.models.deepseek_v4.common.ops import (
+@@ -21,6 +22,7 @@ from vllm.models.deepseek_v4.sparse_mla import (
+     DeepseekV4FlashMLAMetadata,
+ )
+ from vllm.utils.math_utils import round_up
++from vllm.platforms import current_platform
+ from vllm.v1.attention.backend import AttentionCGSupport
+ from vllm.v1.attention.backends.mla.sparse_swa import (
+     DeepseekSparseSWABackend,
+@@ -54,9 +56,17 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
+     backend_cls = DeepseekV4FlashMLABackend
+     swa_backend_cls = DeepseekSparseSWAFlashMLABackend
+ 
+-    def __init__(self, *args, **kwargs) -> None:
+-        super().__init__(*args, **kwargs)
++    def __init__(self, vllm_config: VllmConfig, *args, **kwargs) -> None:
++        super().__init__(vllm_config, *args, **kwargs)
+         self._einsum_recipe, self._tma_aligned_scales = compute_fp8_einsum_recipe()
++        parallel_config = vllm_config.parallel_config
++        spec_config = vllm_config.speculative_config
++        self._allow_dsv4_tp8_mtp_direct_out = (
++            current_platform.is_musa()
++            and spec_config is not None
++            and spec_config.num_speculative_tokens > 0
++            and parallel_config.tensor_parallel_size == 8
++        )
+ 
+     def _o_proj(self, o: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+         return deep_gemm_fp8_o_proj(
+@@ -391,4 +401,8 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
+                 attn_sink=self.attn_sink,
+                 topk_length=combined_lens,
+                 out=output[query_start:query_end],
++                allow_dsv4_tp8_mtp_direct_out=(
++                    self._allow_dsv4_tp8_mtp_direct_out
++                    and get_current_vllm_config_or_none() is not None
++                ),
+             )
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+index cbc689c572..a2ff198437 100644
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -92,6 +92,53 @@ from .utils import request_memory
+ logger = init_logger(__name__)
+ 
+ 
++def _musa_deepseek_v4_mtp_sparse_prefill_reserve_bytes(
++    vllm_config: VllmConfig,
++) -> int:
++    if not current_platform.is_musa():
++        return 0
++    config = vllm_config.model_config.hf_config
++    architectures = set(getattr(config, "architectures", []) or [])
++    if not any("DeepseekV4" in architecture for architecture in architectures):
++        return 0
++    spec_config = vllm_config.speculative_config
++    if spec_config is None or spec_config.num_speculative_tokens <= 0:
++        return 0
++    if vllm_config.parallel_config.tensor_parallel_size != 8:
++        return 0
++
++    model_config = vllm_config.model_config
++    scheduler_config = vllm_config.scheduler_config
++    cache_config = vllm_config.cache_config
++    num_layers = model_config.get_num_layers(
++        vllm_config.parallel_config
++    )
++    sparse_layers = sum(
++        1
++        for layer_idx in range(num_layers)
++        if layer_idx >= getattr(config, "first_k_dense_replace", num_layers)
++        and (layer_idx + 1) % max(1, getattr(config, "k_dense_replace", 1)) != 0
++    )
++    if sparse_layers == 0:
++        return 0
++
++    max_tokens = scheduler_config.max_num_batched_tokens
++    compress_ratio = 4
++    top_k = getattr(config, "index_topk", 2048)
++    window_size = getattr(config, "sliding_window", 0) or 0
++    combined_topk = ((top_k + window_size + 127) // 128) * 128
++    max_model_len = model_config.max_model_len
++    n = (max_model_len + compress_ratio - 1) // compress_ratio
++    m = n + window_size + max_tokens
++    head_dim = getattr(config, "kv_lora_rank", 512)
++
++    per_layer_bytes = (
++        max_tokens * combined_topk * 4
++        + max_tokens * m * head_dim * 2
++    )
++    return int(per_layer_bytes * sparse_layers * cache_config.gpu_memory_utilization)
++
++
+ def _num_workspace_lanes(vllm_config: VllmConfig, use_v2_model_runner: bool) -> int:
+     spec_config = vllm_config.speculative_config
+     return (
+@@ -561,6 +608,19 @@ class Worker(WorkerBase):
+             - profile_result.non_kv_cache_memory
+             - cudagraph_memory_estimate_applied
+         )
++        sparse_prefill_reserve = _musa_deepseek_v4_mtp_sparse_prefill_reserve_bytes(
++            self.vllm_config
++        )
++        if sparse_prefill_reserve:
++            self.available_kv_cache_memory_bytes = max(
++                0,
++                self.available_kv_cache_memory_bytes - sparse_prefill_reserve,
++            )
++            logger.info(
++                "Reserved %s GiB for DeepSeek-V4 TP8 MTP sparse-prefill "
++                "scratch headroom.",
++                format_gib(sparse_prefill_reserve),
++            )
+ 
+         unrequested_memory = self.init_snapshot.free_memory - self.requested_memory
+         logger.debug(

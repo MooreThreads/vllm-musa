@@ -503,6 +503,7 @@ class _MusaJitCustomAllreduceImpl:
             tuple[int, int, str, int, int, int, int, int]
         ] = []
         self._graph_staging_cpu_refs: list[torch.Tensor] = []
+        self._graph_staging_captured_descriptors: set[tuple[int, int]] = set()
         self._graph_staging_capture_sealed = False
 
         if isinstance(device, int):
@@ -648,11 +649,15 @@ class _MusaJitCustomAllreduceImpl:
             self._graph_staging_eager_reserve_bytes = self.max_size
             self._graph_staging_data_start = self.max_size
             self._graph_staging_meta_start = self.max_size
+            self._graph_staging_data_offset = self.max_size
+            self._graph_staging_meta_offset = self.max_size
             self._graph_staging_data_limit = self.max_size
             self._graph_staging_meta_limit = self.max_size
             return
         self._graph_staging_data_start = data_start
         self._graph_staging_meta_start = meta_start
+        self._graph_staging_data_offset = data_start
+        self._graph_staging_meta_offset = meta_start
         self._graph_staging_data_limit = data_limit
         self._graph_staging_meta_limit = meta_limit
 
@@ -660,18 +665,12 @@ class _MusaJitCustomAllreduceImpl:
     def capture(self):
         if self._IS_CAPTURING:
             raise RuntimeError("Nested MUSA custom-allreduce capture is unsupported")
-        if getattr(self, "_use_graph_staging_arena", False) and getattr(
-            self, "_graph_staging_capture_sealed", False
-        ):
-            raise RuntimeError(
-                "MUSA custom AR graph staging arena cannot be reused while "
-                "previously captured graphs may still reference its slots"
-            )
         self._pending_graph_inputs = []
-        self._graph_staging_data_offset = getattr(self, "_graph_staging_data_start", 0)
-        self._graph_staging_meta_offset = getattr(self, "_graph_staging_meta_start", 0)
-        self._graph_staging_ledger = []
-        self._graph_staging_cpu_refs = []
+        # v0.28 captures each graph size in a separate graph_capture context.
+        # Keep the arena cursor, ledger, and tensor references cumulative so
+        # every later descriptor receives fresh slots without invalidating the
+        # storage referenced by graphs captured in earlier contexts.
+        capture_ledger_start = len(getattr(self, "_graph_staging_ledger", ()))
         capture_succeeded = False
         capture_error: BaseException | None = None
         consensus_error: BaseException | None = None
@@ -692,7 +691,21 @@ class _MusaJitCustomAllreduceImpl:
                             capture_error,
                         )
                         if capture_succeeded:
-                            self._graph_staging_capture_sealed = True
+                            new_descriptors = {
+                                (entry[0], entry[1])
+                                for entry in self._graph_staging_ledger[
+                                    capture_ledger_start:
+                                ]
+                            }
+                            self._graph_staging_captured_descriptors.update(
+                                new_descriptors
+                            )
+                            plan = self._graph_staging_plan
+                            self._graph_staging_capture_sealed = (
+                                plan is not None
+                                and self._graph_staging_captured_descriptors
+                                >= plan.capture_descriptors
+                            )
                     except BaseException as exc:
                         consensus_error = exc
             finally:
@@ -825,6 +838,14 @@ class _MusaJitCustomAllreduceImpl:
                 "MUSA custom AR graph staging capture is missing BatchDescriptor"
             )
         descriptor_key = (int(descriptor.num_tokens), int(descriptor.num_reqs))
+        if descriptor_key in getattr(
+            self, "_graph_staging_captured_descriptors", set()
+        ):
+            raise RuntimeError(
+                "MUSA custom AR graph descriptor was already captured while "
+                "the previous graph may still reference its staging slots: "
+                f"descriptor={descriptor_key}"
+            )
         input_bytes = tensor.numel() * tensor.element_size()
         data_size = self._align_graph_staging_size(input_bytes)
         meta_size = self._align_graph_staging_size(self.meta_size + input_bytes)
@@ -1712,6 +1733,7 @@ class _MusaJitCustomAllreduceImpl:
         self._pending_graph_inputs = []
         self._graph_staging_ledger = []
         self._graph_staging_cpu_refs = []
+        self._graph_staging_captured_descriptors = set()
         self._graph_staging_capture_sealed = False
         self._next_graph_slot = 0
         self.disabled = True

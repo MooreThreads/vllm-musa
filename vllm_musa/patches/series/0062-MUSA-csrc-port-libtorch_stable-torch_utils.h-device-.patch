@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc): port libtorch_stable torch_utils.h device APIs
  1 file changed, 25 insertions(+), 21 deletions(-)
 
 diff --git a/csrc/libtorch_stable/torch_utils.h b/csrc/libtorch_stable/torch_utils.h
-index f02346739..cb4729196 100644
+index f02346739e..cb47291966 100644
 --- a/csrc/libtorch_stable/torch_utils.h
 +++ b/csrc/libtorch_stable/torch_utils.h
 @@ -14,6 +14,10 @@

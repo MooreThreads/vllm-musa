@@ -1777,7 +1777,9 @@ class TestBuildTimeSeries:
         assert ba.apply_patch_series(tmp_path, tmp_path / "nope") == []
 
     def test_deepseek_v4_spec_metadata_upload_series_patch_present(self):
-        series = self._SERIES_DIR / "0035-MUSA-vllm.v1.worker.gpu_model_runner.patch"
+        series = self._SERIES_DIR / (
+            "0035-MUSA-vllm.v1.worker.gpu_model_runner-v0.28-reanchor.patch"
+        )
         series = self._read_patch(series)
 
         assert "_spec_cu_num_draft_tokens" in series

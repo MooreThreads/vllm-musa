@@ -119,7 +119,18 @@
 
          num_sms = num_compute_units(self.device.index)
 
-@@ -178,30 +166,45 @@
+@@ -171,40 +159,52 @@
+         query_lens_cpu = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
+         # we use the max but all should be the same due to uniform length requirement
+         max_query_len = query_lens_cpu.max().item()
+-        num_q_heads = self.num_q_heads
+-        if self.dcp_world_size > 1:
+-            num_q_heads *= self.dcp_world_size
+-        num_q_tokens_per_head_k = max_query_len * num_q_heads // 1
++        num_q_tokens_per_head_k = max_query_len * self.num_q_heads // 1
+         scheduler_metadata, _ = get_mla_metadata(
+             seq_lens_device,
+             num_q_tokens_per_head_k,
              1,  # MQA for the decode path
              is_fp8_kvcache=self.is_fp8_kvcache,
          )
@@ -187,7 +198,7 @@
          return FlashMLADecodeMetadata(
              block_table=block_table_tensor,
              seq_lens=seq_lens_device,
-@@ -279,9 +282,9 @@
+@@ -282,9 +282,9 @@
 
          num_decodes = attn_metadata.num_decodes
          q = reshape_query_for_spec_decode(q, num_decodes)
@@ -199,7 +210,7 @@
              device = q.device
              dtype = torch.int32
 
-@@ -308,36 +311,20 @@
+@@ -311,36 +311,20 @@
              # Non-split path ignores num_splits, but the API requires it:
              # zeros of length B+1
              num_splits = torch.zeros((B + 1,), dtype=dtype, device=device)

@@ -4,15 +4,15 @@ Date: Wed, 3 Jun 2026 11:47:36 +0000
 Subject: [PATCH] MUSA: vllm.v1.attention.backends.mla.sparse_swa
 
 ---
- vllm/v1/attention/backends/mla/sparse_swa.py | 49 ++++++++++++++++----
- 1 file changed, 39 insertions(+), 10 deletions(-)
+ vllm/v1/attention/backends/mla/sparse_swa.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/v1/attention/backends/mla/sparse_swa.py b/vllm/v1/attention/backends/mla/sparse_swa.py
-index df23f3437..c88a8b7da 100644
+index d858eb677c..7f6aa36a2c 100644
 --- a/vllm/v1/attention/backends/mla/sparse_swa.py
 +++ b/vllm/v1/attention/backends/mla/sparse_swa.py
-@@ -18,7 +18,7 @@ from vllm.v1.attention.backend import (
-     MultipleOf,
+@@ -26,7 +26,7 @@ from vllm.v1.attention.backends.mla.compressor_utils import (
+     get_dspark_swa_index_width,
  )
  from vllm.v1.attention.backends.utils import split_decodes_and_prefills
 -from vllm.v1.attention.ops.flashmla import FlashMLASchedMeta, get_mla_metadata
@@ -20,71 +20,12 @@ index df23f3437..c88a8b7da 100644
  from vllm.v1.kv_cache_interface import (
      KVCacheSpec,
      MLAAttentionSpec,
-@@ -398,14 +398,21 @@ class DeepseekSparseSWAMetadataBuilder(AttentionMetadataBuilder):
-         )
- 
-         # NOTE: Ensure all metadata tensors maintain fixed memory addresses
--        # for CUDA graph compatibility.
--        query_lens = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
--        x = torch.repeat_interleave(torch.arange(num_reqs), query_lens).pin_memory()
--        token_to_req_indices = self.token_to_req_indices[: x.shape[0]]
--        token_to_req_indices.copy_(x, non_blocking=True)
--
--        is_valid_token = self.is_valid_token[: slot_mapping.shape[0]]
--        is_valid_token.copy_(slot_mapping >= 0)
-+        # for CUDA graph compatibility. Build token-to-request and validity
-+        # metadata on device: the upstream CPU repeat_interleave + pin_memory +
-+        # H2D copy path serializes MTP drafting on MUSA.
-+        num_tokens = slot_mapping.shape[0]
-+        token_to_req_indices = self.token_to_req_indices[:num_tokens]
-+        is_valid_token = self.is_valid_token[:num_tokens]
-+        if num_tokens > 0:
-+            _compute_token_to_req_and_valid_kernel[(num_tokens,)](
-+                token_to_req_indices,
-+                is_valid_token,
-+                slot_mapping,
-+                query_start_loc,
-+                num_reqs,
-+                BLOCK_SIZE=triton.next_power_of_2(max(num_reqs, 1)),
-+            )
- 
-         if num_decode_tokens > 0:
-             self.decode_swa_lens[num_decode_tokens:] = 0
-@@ -608,6 +615,28 @@ def _compute_prefill_metadata_kernel(
-     tl.store(prefill_gather_lens_ptr + offset, gather_len, mask=mask)
- 
- 
-+@triton.jit
-+def _compute_token_to_req_and_valid_kernel(
-+    token_to_req_indices_ptr,
-+    is_valid_token_ptr,
-+    slot_mapping_ptr,
-+    query_start_loc_ptr,
-+    num_reqs: tl.constexpr,
-+    BLOCK_SIZE: tl.constexpr,
-+):
-+    token_idx = tl.program_id(0)
-+    req_idx = tl.full((), 0, tl.int32)
-+    for i in range(0, BLOCK_SIZE):
-+        q_start = tl.load(query_start_loc_ptr + i, mask=i < num_reqs, other=0)
-+        q_end = tl.load(query_start_loc_ptr + i + 1, mask=i < num_reqs, other=0)
-+        in_req = (token_idx >= q_start) & (token_idx < q_end) & (i < num_reqs)
-+        req_idx = tl.where(in_req, i, req_idx)
-+    tl.store(token_to_req_indices_ptr + token_idx, req_idx)
-+
-+    slot = tl.load(slot_mapping_ptr + token_idx)
-+    tl.store(is_valid_token_ptr + token_idx, slot >= 0)
-+
-+
- @triton.jit(do_not_specialize=["token_offset"])
- def _compute_swa_indices_and_lens_kernel(
-     swa_indices_ptr,
-@@ -627,7 +656,7 @@ def _compute_swa_indices_and_lens_kernel(
+@@ -809,7 +809,7 @@ def _compute_swa_indices_and_lens_kernel(
      pid = tl.program_id(0)
      token_idx = pid + token_offset
      is_valid = tl.load(is_valid_token_ptr + token_idx)
 -    if not is_valid:
 +    if is_valid == 0:
          tl.store(swa_lens_ptr + pid, 0)
-         return
- 
+         # Clear the row so a padded token cannot gather through stale indices.
+         for i in range(0, window_size, TRITON_BLOCK_SIZE):

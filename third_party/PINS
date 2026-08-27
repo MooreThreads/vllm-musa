@@ -4,10 +4,10 @@
 # base. KEY=VALUE only — NOT TOML (tomllib is 3.11+, the build box is py3.10,
 # the package floor is 3.10), so the build needs no parser dependency.
 # Human-readable release label plus the immutable source commit used by builds.
-# The public v0.24.0 tag moved after this branch was created, so never build from
-# the mutable tag alone.
-VLLM_TAG=v0.24.0
-VLLM_COMMIT=ee0da84ab9e04ac7610e28580af62c365e898389
+# releases/v0.28.0 is pinned to the exact commit validated by this branch; never
+# build from the moving release branch alone.
+VLLM_TAG=v0.28.0
+VLLM_COMMIT=2cf0a6915ce544dc493a0990f2ea38d81601128a
 # FlashInfer is intentionally DECOUPLED from upstream vLLM's choice. This is the
 # validated sampling/norm source revision; bump it consciously, not in lockstep
 # with VLLM_TAG/VLLM_COMMIT.

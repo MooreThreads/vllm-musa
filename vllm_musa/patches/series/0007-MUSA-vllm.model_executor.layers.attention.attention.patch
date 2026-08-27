@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.model_executor.layers.attention.attention
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/layers/attention/attention.py b/vllm/model_executor/layers/attention/attention.py
-index 3eec58aaf..08b5d5bbc 100644
+index ff0c7a33af..3031ba9525 100644
 --- a/vllm/model_executor/layers/attention/attention.py
 +++ b/vllm/model_executor/layers/attention/attention.py
-@@ -489,7 +489,7 @@ class Attention(nn.Module, AttentionLayerBase):
+@@ -515,7 +515,7 @@ class Attention(nn.Module, AttentionLayerBase):
              # Handle both 2D [num_tokens, hidden] and
              # 3D [num_tokens, heads, head_dim] query
              num_tokens = query.shape[0]

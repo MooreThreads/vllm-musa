@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.attention.backends.mla.flashmla
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/vllm/v1/attention/backends/mla/flashmla.py b/vllm/v1/attention/backends/mla/flashmla.py
-index 533e200ca..535f8978a 100644
+index bb6efe59c8..3d2557a8ff 100644
 --- a/vllm/v1/attention/backends/mla/flashmla.py
 +++ b/vllm/v1/attention/backends/mla/flashmla.py
 @@ -80,7 +80,7 @@ class FlashMLABackend(MLACommonBackend):

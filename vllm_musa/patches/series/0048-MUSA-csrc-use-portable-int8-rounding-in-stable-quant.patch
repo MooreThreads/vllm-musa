@@ -12,7 +12,7 @@ rms_norm_dynamic_per_token_quant int8 output is wrong on mcc.
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh b/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh
-index dbe38092f..0bb6bbd35 100644
+index a81a0b9feb..72d046cadd 100644
 --- a/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh
 +++ b/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh
 @@ -13,7 +13,9 @@ namespace vllm {

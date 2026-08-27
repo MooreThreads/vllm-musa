@@ -5,32 +5,71 @@ Subject: [PATCH] MUSA: allocate DeepSeek-V4 sparse MLA KV tensors without
  offsets
 
 ---
- vllm/v1/core/kv_cache_utils.py | 56 ++++++++++++++++++++++++++++++++--
- 1 file changed, 54 insertions(+), 2 deletions(-)
+ vllm/v1/core/kv_cache_utils.py | 74 +++++++++++++++++++++++++++++++++-
+ 1 file changed, 72 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index b13c23d80..3ea89d5af 100644
+index ad51e4b2b3..e8abd1e9b3 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
-@@ -1293,6 +1293,17 @@ def _get_kv_cache_config_packed(
-     num_blocks = available_memory // total_num_bytes_per_block
-     num_blocks = may_override_num_blocks(vllm_config, num_blocks)
+@@ -1271,6 +1271,27 @@ def _get_packed_kv_cache_layout(
+     return block_stride, layers_by_offset
  
+ 
++def _bucket_layers_by_page_size(
++    kv_cache_groups: list[KVCacheGroupSpec],
++) -> dict[int, list[list[str]]]:
++    """Bucket layers by page size: ``result[ps][slot_idx] = layer_names``."""
++    buckets: dict[int, list[list[str]]] = defaultdict(list)
++    for group in kv_cache_groups:
++        spec = group.kv_cache_spec
++        slot_count: dict[int, int] = defaultdict(int)
++        for layer_name in group.layer_names:
++            if isinstance(spec, UniformTypeKVCacheSpecs):
++                page_size = spec.kv_cache_specs[layer_name].page_size_bytes
++            else:
++                page_size = spec.page_size_bytes
++            slot_idx = slot_count[page_size]
++            slot_count[page_size] += 1
++            if slot_idx == len(buckets[page_size]):
++                buckets[page_size].append([])
++            buckets[page_size][slot_idx].append(layer_name)
++    return buckets
++
++
+ def _use_packed_kv_cache_config(
+     vllm_config: VllmConfig,
+     kv_cache_groups: list[KVCacheGroupSpec],
+@@ -1303,11 +1324,26 @@ def _get_kv_cache_config_packed(
+     Cache groups use dense, overlapping layouts within one block slab. Each
+     emitted tensor aliases the same physical backing allocation.
+     """
+-    block_stride, layers_by_offset = _get_packed_kv_cache_layout(kv_cache_groups)
 +    if _use_musa_deepseek_v4_zero_offset_kv_tensors(kv_cache_groups):
 +        # MATE sparse FlashMLA decode rebuilds page views from the cache tensor
 +        # storage. Offset aliases from the packed backing tensor overrun there,
 +        # so keep the same per-page layout but give each page-size slot an
 +        # offset-zero allocation on MUSA.
++        buckets = _bucket_layers_by_page_size(kv_cache_groups)
++        bytes_per_block = sum(
++            page_size * len(slots) for page_size, slots in buckets.items()
++        )
++        num_blocks = available_memory // bytes_per_block
++        num_blocks = may_override_num_blocks(vllm_config, num_blocks)
 +        return num_blocks, [
-+            KVCacheTensor(size=ps * num_blocks, shared_by=slot)
-+            for ps, slots in buckets.items()
++            KVCacheTensor(size=page_size * num_blocks, shared_by=slot)
++            for page_size, slots in buckets.items()
 +            for slot in slots
 +        ]
-+
-     total_size = total_num_bytes_per_block * num_blocks
+ 
++    block_stride, layers_by_offset = _get_packed_kv_cache_layout(kv_cache_groups)
+     num_blocks = available_memory // block_stride
+     num_blocks = may_override_num_blocks(vllm_config, num_blocks)
+-
+     total_size = block_stride * num_blocks
  
      kv_cache_tensors: list[KVCacheTensor] = []
-@@ -1312,6 +1323,37 @@ def _get_kv_cache_config_packed(
+@@ -1324,6 +1360,40 @@ def _get_kv_cache_config_packed(
      return num_blocks, kv_cache_tensors
  
  
@@ -65,31 +104,9 @@ index b13c23d80..3ea89d5af 100644
 +    return found_deepseek_v4 and found_sparse_swa
 +
 +
- _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
- 
- 
-@@ -1620,12 +1662,22 @@ def _get_kv_cache_groups_uniform_groups(
-     # Possibly padding layer tuples for this.
-     # Additionally, we also pad KV blocks in each SWA layer, to align the page size
-     # with the corresponding layer in the full-MLA group.
--    all_page_sizes = full_mla_spec.get_page_sizes()
-+    # MUSA: some DeepSeek-V4 sparse MLA layouts have SWA page sizes that are
-+    # larger than the full-MLA page sizes. Use all candidate page sizes so SWA
-+    # groups can still be padded to a valid same-or-larger page size.
-+    all_page_sizes = sorted(
-+        ps for spec in grouped_specs for ps in spec.get_page_sizes() if ps > 0
-+    )
-+    min_page_size = all_page_sizes[0]
-+    for spec in grouped_specs:
-+        for layer_spec in spec.kv_cache_specs.values():
-+            if layer_spec.page_size_bytes == 0:
-+                object.__setattr__(layer_spec, "page_size_padded", min_page_size)
++_get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
 +
-     swa_mla_groups = []
-     for sm_spec in swa_mla_specs:
-         sm_page_sizes = sm_spec.get_page_sizes()
-         layers_per_size: dict[int, list[str]] = defaultdict(list)
--        assert max(sm_page_sizes) <= max(all_page_sizes)
- 
-         # Unify page size by padding layers' page_size to the nearest larger page_size.
-         # Compute candidate (nearest larger page_size) for each unique page size.
++
+ def get_kv_cache_config_from_groups(
+     vllm_config: VllmConfig,
+     kv_cache_groups: list[KVCacheGroupSpec],

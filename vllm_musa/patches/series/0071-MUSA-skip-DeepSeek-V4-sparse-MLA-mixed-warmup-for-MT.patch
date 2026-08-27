@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: skip DeepSeek-V4 sparse MLA mixed warmup for MTP
  1 file changed, 11 insertions(+)
 
 diff --git a/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py b/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py
-index 44be769e2..fc2851cdd 100644
+index 80dfd51996..0db34c1191 100644
 --- a/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py
 +++ b/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py
 @@ -225,6 +225,17 @@ def deepseek_v4_sparse_mla_attention_warmup(worker: "Worker") -> None:

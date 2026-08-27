@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 30 Jul 2026 16:00:00 +0800
+Subject: [PATCH] MUSA: DeepSeek-V4 fuse clamp SwiGLU FP8 down projection
+
+---
+ vllm/models/deepseek_v4/nvidia/model.py | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index fbe839cd42..1e497ddb75 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -141,6 +141,13 @@ class DeepseekV4MLP(nn.Module):
+ 
+     def forward(self, x):
+         gate_up, _ = self.gate_up_proj(x)
++        if isinstance(self.act_fn, SiluAndMulWithClamp):
++            fused_forward = getattr(self.down_proj, "forward_swiglu_clamp", None)
++            if fused_forward is not None:
++                fused_output = fused_forward(gate_up, self.act_fn.swiglu_limit)
++                if fused_output is not None:
++                    return fused_output
++
+         x = self.act_fn(gate_up)
+         x, _ = self.down_proj(x)
+         return x

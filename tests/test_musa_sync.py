@@ -59,9 +59,9 @@ def test_report(ms, capsys):
     rc = ms.main(["report"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "144 divergences" in out
-    assert "'1': 86" in out and "'2': 20" in out and "'3': 1" in out
-    assert "'4a': 2" in out and "'5': 27" in out and "'6': 8" in out
+    assert "171 divergences" in out
+    assert "'1': 109" in out and "'2': 23" in out and "'3': 1" in out
+    assert "'4a': 2" in out and "'5': 28" in out and "'6': 8" in out
 
 
 def test_report_doc(ms, capsys):
@@ -81,7 +81,7 @@ def test_probe_upstream(ms, tmp_path):
 
 
 def test_read_pin(ms):
-    assert ms.read_pin("VLLM_TAG") == "v0.24.0"
+    assert ms.read_pin("VLLM_TAG") == "v0.28.0"
     assert ms.read_pin("DOES_NOT_EXIST", "fallback") == "fallback"
 
 
@@ -114,15 +114,7 @@ def test_series_uses_documented_prefixes_and_canonical_metadata():
     duplicate_prefixes = {
         prefix for prefix, count in Counter(prefixes).items() if count > 1
     }
-    assert duplicate_prefixes == {
-        "0088",
-        "0089",
-        "0090",
-        "0094",
-        "0099",
-        "0100",
-        "0101",
-    }
+    assert duplicate_prefixes == set()
     headers = [p.read_bytes().splitlines()[:2] for p in patches]
     zero_commit_header = (
         b"From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001"

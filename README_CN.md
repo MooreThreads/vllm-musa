@@ -45,9 +45,11 @@
 
 | vLLM 版本 | PyTorch 版本 | 引擎    | 状态         |
 |-----------|--------------|---------|--------------|
-| v0.24.0    | 2.11.x       | 仅 V1   | ✅ 已支持    |
+| v0.28.0    | 2.11.x（MUSA）| 仅 V1   | 升级候选     |
 
-> **注意**：本插件使用 vLLM 的 V1 引擎架构（不支持 V0 引擎）。在 V1 引擎内部，vLLM v0.24.0 会为部分架构（如 Qwen3、DeepSeek-V2、Llama）自动选用 **Model Runner V2**，其余架构使用 V1 model runner；两者在 MUSA 上均受支持。设置 `VLLM_USE_V2_MODEL_RUNNER=1` 或 `0` 可强制指定其一。
+> **注意**：当前分支以 `third_party/PINS` 中固定的 vLLM v0.28.0 release
+> commit 为基线。依赖栈有意保留 MUSA PyTorch 2.11 wheel，而不是上游 vLLM
+> CUDA 使用的 PyTorch 2.13；升级候选必须通过构建与模型 smoke 后才能标记为已支持。
 
 ### Docker 镜像
 

@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.model_executor.models.qwen3_moe
  1 file changed, 8 insertions(+)
 
 diff --git a/vllm/model_executor/models/qwen3_moe.py b/vllm/model_executor/models/qwen3_moe.py
-index 6980184cc..5a3311077 100644
+index 5df982d741..cd69e7246e 100644
 --- a/vllm/model_executor/models/qwen3_moe.py
 +++ b/vllm/model_executor/models/qwen3_moe.py
-@@ -57,6 +57,14 @@ from vllm.model_executor.layers.linear import (
+@@ -53,6 +53,14 @@ from vllm.model_executor.layers.linear import (
  from vllm.model_executor.layers.logits_processor import LogitsProcessor
  from vllm.model_executor.layers.quantization import QuantizationConfig
  from vllm.model_executor.layers.rotary_embedding import get_rope

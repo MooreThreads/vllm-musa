@@ -4,25 +4,30 @@ Date: Wed, 3 Jun 2026 11:47:36 +0000
 Subject: [PATCH] MUSA: vllm.v1.spec_decode.llm_base_proposer
 
 ---
- vllm/v1/spec_decode/llm_base_proposer.py | 140 +++++++++++++++++++----
- 1 file changed, 117 insertions(+), 23 deletions(-)
+ vllm/v1/spec_decode/llm_base_proposer.py | 155 ++++++++++++++++++++----
+ 1 file changed, 132 insertions(+), 23 deletions(-)
 
 diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
-index 9f46cbd24..daa0cde9d 100644
+index 29a95caa88..d88cea23da 100644
 --- a/vllm/v1/spec_decode/llm_base_proposer.py
 +++ b/vllm/v1/spec_decode/llm_base_proposer.py
-@@ -14,8 +14,9 @@ from vllm.config import (
+@@ -15,13 +15,14 @@ from vllm.config import (
      get_layers_from_vllm_config,
      replace,
  )
 +from vllm.compilation.cuda_graph import CUDAGraphWrapper
+ 
+ if TYPE_CHECKING:
+     from vllm.v1.spec_decode.vocab_mapping import VocabMapping
+ 
+ from vllm.distributed.eplb.eplb_state import EplbState
  from vllm.distributed.parallel_state import get_pp_group
 -from vllm.forward_context import set_forward_context
 +from vllm.forward_context import BatchDescriptor, set_forward_context
  from vllm.logger import init_logger
  from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
  from vllm.model_executor.model_loader import get_model
-@@ -148,7 +149,12 @@ class SpecDecodeBaseProposer:
+@@ -164,7 +165,12 @@ class SpecDecodeBaseProposer:
          # Keys are initialized later via initialize_cudagraph_keys() called from
          # gpu_model_runner._check_and_update_cudagraph_mode after
          # adjust_cudagraph_sizes_for_spec_decode is called.
@@ -36,7 +41,7 @@ index 9f46cbd24..daa0cde9d 100644
  
          # persistent buffers for cuda graph
          self.input_ids = torch.zeros(
-@@ -466,7 +472,7 @@ class SpecDecodeBaseProposer:
+@@ -533,7 +539,7 @@ class SpecDecodeBaseProposer:
  
          if self.method in ("eagle3", "dflash"):
              model = self.model
@@ -45,7 +50,7 @@ index 9f46cbd24..daa0cde9d 100644
                  model = model.unwrap()
              assert isinstance(
                  model,
-@@ -498,8 +504,12 @@ class SpecDecodeBaseProposer:
+@@ -566,8 +572,12 @@ class SpecDecodeBaseProposer:
              self.build_per_group_and_layer_attn_metadata(common_attn_metadata)
          )
  
@@ -60,7 +65,7 @@ index 9f46cbd24..daa0cde9d 100644
          )
  
          model_kwargs, slot_mapping_size = self.build_model_inputs_first_pass(
-@@ -517,6 +527,7 @@ class SpecDecodeBaseProposer:
+@@ -591,6 +601,7 @@ class SpecDecodeBaseProposer:
              num_tokens=num_input_tokens,
              num_tokens_across_dp=num_tokens_across_dp,
              cudagraph_runtime_mode=cudagraph_runtime_mode,
@@ -68,7 +73,7 @@ index 9f46cbd24..daa0cde9d 100644
              slot_mapping=self._get_slot_mapping(
                  slot_mapping_size, common_attn_metadata.slot_mapping
              ),
-@@ -587,14 +598,25 @@ class SpecDecodeBaseProposer:
+@@ -664,14 +675,25 @@ class SpecDecodeBaseProposer:
          # Generate the remaining draft tokens.
          draft_token_ids_list = [draft_token_ids]
  
@@ -98,7 +103,7 @@ index 9f46cbd24..daa0cde9d 100644
              self.token_arange_np[: batch_size + 1]
          ).clone()
  
-@@ -662,6 +684,7 @@ class SpecDecodeBaseProposer:
+@@ -750,6 +772,7 @@ class SpecDecodeBaseProposer:
                  num_tokens=input_batch_size,
                  num_tokens_across_dp=batch_size_across_dp,
                  cudagraph_runtime_mode=cudagraph_runtime_mode,
@@ -106,7 +111,7 @@ index 9f46cbd24..daa0cde9d 100644
                  slot_mapping=self._get_slot_mapping(input_batch_size),
              ):
                  ret_hidden_states = self.model(**model_kwargs)
-@@ -1240,6 +1263,29 @@ class SpecDecodeBaseProposer:
+@@ -1344,6 +1367,29 @@ class SpecDecodeBaseProposer:
          )
  
          self.model = self._get_model()
@@ -136,7 +141,7 @@ index 9f46cbd24..daa0cde9d 100644
  
          # Find draft layers (attention layers added by draft model)
          all_attn_layers = get_layers_from_vllm_config(
-@@ -1505,22 +1551,48 @@ class SpecDecodeBaseProposer:
+@@ -1634,22 +1680,63 @@ class SpecDecodeBaseProposer:
      def dummy_run(
          self,
          num_tokens: int,
@@ -171,8 +176,23 @@ index 9f46cbd24..daa0cde9d 100644
 +                # Match propose()'s subsequent decode passes which dispatch
 +                # with (batch_size, uniform=True, qdl=1).
 +                uniform_decode = True
-+                num_tokens = common_attn_metadata.num_reqs
++                batch_size = common_attn_metadata.num_reqs
++                num_tokens = batch_size
 +                uniform_decode_query_len = 1
++
++                # The subsequent Eagle draft pass consumes one token per
++                # request, not the target verify pass's
++                # (1 + num_speculative_tokens) tokens per request. Keep the
++                # attention metadata consistent with the draft Q tensor. In
++                # particular, cu_seqlens_q[-1] must equal q.shape[0].
++                common_attn_metadata.num_actual_tokens = batch_size
++                common_attn_metadata.max_query_len = 1
++                common_attn_metadata.query_start_loc[: batch_size + 1] = (
++                    self.arange[: batch_size + 1]
++                )
++                common_attn_metadata.query_start_loc_cpu[: batch_size + 1] = (
++                    torch.from_numpy(self.token_arange_np[: batch_size + 1]).clone()
++                )
 +            else:
 +                mode = self.cudagraph_dispatcher.cudagraph_mode
 +                is_full_sep = (
@@ -196,7 +216,7 @@ index 9f46cbd24..daa0cde9d 100644
  
              # Make sure to use EAGLE's own buffer during cudagraph capture.
              if (
-@@ -1532,12 +1604,30 @@ class SpecDecodeBaseProposer:
+@@ -1661,12 +1733,30 @@ class SpecDecodeBaseProposer:
              else:
                  slot_mapping_dict = slot_mappings or {}
  
@@ -228,7 +248,7 @@ index 9f46cbd24..daa0cde9d 100644
                  slot_mapping=slot_mapping_dict,
              ):
                  if self.supports_mm_inputs:
-@@ -1660,11 +1750,15 @@ class SpecDecodeBaseProposer:
+@@ -1803,11 +1893,15 @@ class SpecDecodeBaseProposer:
      def _determine_batch_execution_and_padding(
          self,
          num_tokens: int,
@@ -245,7 +265,7 @@ index 9f46cbd24..daa0cde9d 100644
          )
          num_tokens_padded = batch_desc.num_tokens
  
-@@ -1699,7 +1793,7 @@ class SpecDecodeBaseProposer:
+@@ -1842,7 +1936,7 @@ class SpecDecodeBaseProposer:
                  assert batch_desc.num_tokens == num_tokens_padded
                  num_tokens_across_dp[dp_rank] = num_tokens_padded
  

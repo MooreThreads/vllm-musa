@@ -154,14 +154,14 @@ VLLM_CSRC_SOURCES = [
     # str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v1.cu"),
     # str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v2.cu"),
     str(_VLLM_REPO.source_dir / "csrc/cuda_view.cu"),
-    # cuda_utils_kernels lives under libtorch_stable/ but upstream compiles it
-    # into the regular _C extension (VLLM_EXT_SRC), not the stable one.
-    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cuda_utils_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/torch_bindings.cpp"),
 ]
 
 VLLM_STABLE_CSRC_SOURCES = [
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/torch_bindings.cpp"),
+    # v0.28 registers _C_cuda_utils from the stable bindings, so its
+    # implementation must be linked into _C_stable_libtorch as upstream does.
+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cuda_utils_kernels.cu"),
     # gptq q_gemm: GPTQ is unused by the FP8/bf16 model matrix and its CUDA half2
     # path does not port cleanly to mcc; its gptq_gemm/gptq_shuffle impls are
     # dropped from the stable bindings to match.
@@ -420,11 +420,11 @@ class _CustomBuildExt(BuildExtension):
         env = os.environ.copy()
         env["VLLM_TARGET_DEVICE"] = "empty"
 
-        # When third_party/vllm is synced via `git archive | tar` it carries no
-        # .git, so vLLM's setuptools-scm cannot derive a version. vLLM's setup.py
-        # consumes VLLM_VERSION_OVERRIDE and forwards it to setuptools-scm.
-        if not (source_dir / ".git").exists():
-            env.setdefault("VLLM_VERSION_OVERRIDE", "0.24.0")
+        # The exact upstream release commit is pinned in third_party/PINS, but
+        # its local Git object set may not contain the corresponding tag.
+        # Always provide the pinned release version so setuptools-scm does not
+        # derive a stale development version from the nearest available tag.
+        env.setdefault("VLLM_VERSION_OVERRIDE", "0.28.0")
 
         # always editable; compat (path-based .pth) -- the default PEP 660 finder
         # mis-resolves vLLM's submodules and loses to a system vLLM.
