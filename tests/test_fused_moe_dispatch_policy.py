@@ -466,6 +466,15 @@ def test_graph_bucket_guard_preserves_existing_mp60_runtime_modes():
             num_active_loras=1,
             present=True,
         ),
+        MusaForwardGraphBucket(
+            num_tokens=4,
+            num_reqs=2,
+            uniform=True,
+            runtime_mode="FULL",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        ),
     ):
         shape = dataclasses.replace(qwen, graph_bucket=descriptor)
         assert (

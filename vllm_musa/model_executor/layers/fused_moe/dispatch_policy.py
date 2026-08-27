@@ -522,6 +522,16 @@ def select_fused_moe_backend(
             not graph_bucket.present
             or graph_bucket.has_lora is not False
             or graph_bucket.num_active_loras != 0
+            or graph_bucket.runtime_mode not in {"NONE", "PIECEWISE", "FULL"}
+        ):
+            return MusaFusedMoeBackend.UPSTREAM
+        # FULL descriptors are graph-static for every calibrated MP. Reject
+        # speculative/nonuniform or mismatched callers globally; only legacy
+        # NONE/PIECEWISE behavior remains an MP60 compatibility exception.
+        if graph_bucket.runtime_mode == "FULL" and (
+            graph_bucket.num_tokens != num_tokens
+            or not graph_bucket.uniform
+            or graph_bucket.num_reqs != graph_bucket.num_tokens
         ):
             return MusaFusedMoeBackend.UPSTREAM
         # Only the new MP56 profile was calibrated by exact FULL decode graph
