@@ -281,10 +281,11 @@ RUN python /tmp/vllm-musa-mate-patch/apply_mate_dynamo_bool_patch.py && \
 
 FROM vllm_musa_deps AS vllm_musa_installed
 
-# setup.py's develop_dynamic_library() installs the vendored vLLM with
-# --no-deps to avoid replacing the MUSA torch stack. Route the explicit vLLM
-# runtime dependency install and the numpy re-pin below through the same public
-# index as the deps stage. PYPI_INDEX_URL comes from docker/build_image.sh.
+# Install the repo in editable mode without resolving dependencies again:
+# MUSA-private wheels are installed from the private index above, while the
+# public vLLM runtime requirements are installed explicitly in the next step.
+# setup.py still installs the patched vLLM checkout and builds native
+# extensions. PYPI_INDEX_URL comes from docker/build_image.sh.
 ARG PYPI_INDEX_URL
 ENV PIP_INDEX_URL=${PYPI_INDEX_URL}
 

@@ -26,16 +26,19 @@ VLLM_COMMIT := $(shell sed -n 's/^VLLM_COMMIT=//p' third_party/PINS)
 VLLM_REF := $(if $(VLLM_COMMIT),$(VLLM_COMMIT),$(VLLM_TAG))
 WORKDIR := third_party/vllm
 PATCHES_DIR := vllm_musa/patches/series
+VLLM_REQUIREMENTS_SOURCE := $(WORKDIR)/requirements/common.txt
+VLLM_REQUIREMENTS_SNAPSHOT := requirements/vllm_common.txt
 
 PATCHES := $(wildcard $(PATCHES_DIR)/*.patch)
 # per-patch stamp files (.<name>.patched) — gitignored; make incremental apply
 PATCHED := $(join $(dir $(PATCHES)),$(addsuffix ed,$(addprefix .,$(notdir $(PATCHES)))))
 
 .NOTPARALLEL:
-.PHONY: checkout apply-patches format-patches clean help
+.PHONY: checkout apply-patches format-patches sync-vllm-requirements \
+	check-vllm-requirements clean help
 
 help:
-	@echo "checkout | apply-patches | format-patches | clean   (pin: $(VLLM_REF) from third_party/PINS)"
+	@echo "checkout | apply-patches | format-patches | sync-vllm-requirements | check-vllm-requirements | clean   (pin: $(VLLM_REF) from third_party/PINS)"
 
 # --- fresh pinned checkout of upstream vLLM (a real git repo: 3-way works) ---
 $(WORKDIR):
@@ -54,6 +57,19 @@ apply-patches:
 #     --no-signature --no-numbered --zero-commit, KEEP blob index lines for 3-way) ---
 format-patches: | $(PATCHES_DIR)
 	python3 tools/musa_sync.py regen
+
+# Keep the outer distribution's runtime metadata in sync with the pinned
+# upstream checkout. The checked-in snapshot is consumed before build commands
+# can clone third_party/vllm, so generation is a maintenance-time operation.
+sync-vllm-requirements: checkout
+	python3 tools/sync_vllm_requirements.py \
+		--source "$(VLLM_REQUIREMENTS_SOURCE)" \
+		--output "$(VLLM_REQUIREMENTS_SNAPSHOT)"
+
+check-vllm-requirements:
+	python3 tools/sync_vllm_requirements.py --check \
+		--source "$(VLLM_REQUIREMENTS_SOURCE)" \
+		--output "$(VLLM_REQUIREMENTS_SNAPSHOT)"
 
 $(PATCHES_DIR):
 	mkdir -p $(PATCHES_DIR)

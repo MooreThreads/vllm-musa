@@ -276,6 +276,13 @@ vllm-musa/
 （`vllm_musa/patches/*.patch.py`），它们是仅有的运行时补丁。两种机制的详情请参阅
 [patches/README.md](vllm_musa/patches/README.md)。
 
+更新上游 vLLM pin 后，准备好 checkout，再刷新并校验提交到仓库的运行时依赖快照：
+
+```bash
+make -f Makefile.sync sync-vllm-requirements
+make -f Makefile.sync check-vllm-requirements
+```
+
 ## 贡献
 
 我们欢迎并重视任何形式的贡献与协作。提交前请设置 pre-commit hooks 以确保代码质量：

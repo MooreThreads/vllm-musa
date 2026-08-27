@@ -99,6 +99,10 @@ def test_musa_image_runtime_dependency_contract():
     assert "fastapi[standard]" in runtime_requirements
     assert "pycountry" in runtime_requirements
     assert '"requirements/common.txt"' in dockerfile
+    assert "without resolving dependencies again" in dockerfile
+    assert (
+        "MUSA-private wheels are installed from the private index above" in dockerfile
+    )
     exact_import_gates = (
         ("torchada", "torchada"),
         ("torch", "torch"),
@@ -372,7 +376,7 @@ def test_wheel_build_wires_bundled_vllm_without_changing_editable_sources():
     assert '"build_py": _CustomBuildPy' in setup
     assert "_CustomBuildExt.prepare_third_party()" in setup
     assert "bundle_vllm_package(source, destination)" in setup
-    assert 'if _is_editable_install:' in setup
+    assert "if _is_editable_install:" in setup
     assert "if _is_editable_install:\n            self._install_vllm" in setup
     assert '("build_ext" in sys.argv and "--inplace" in sys.argv)' in setup
     assert 'vllm = "vllm.entrypoints.cli.main:main"' in pyproject

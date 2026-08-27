@@ -40,6 +40,8 @@ def main() -> None:
     args = parse_args()
     with ZipFile(args.wheel) as archive:
         names = set(archive.namelist())
+        raw_patch_files = sorted(name for name in names if name.endswith(".patch"))
+        assert not raw_patch_files, raw_patch_files
         missing = REQUIRED_FILES - names
         assert not missing, f"missing required wheel files: {sorted(missing)}"
 
@@ -61,11 +63,7 @@ def main() -> None:
             assert "vllm/vllm-rs" in names
             assert "vllm/_rust_tool_parser.abi3.so" in names
 
-        dist_info = {
-            name.split("/", 1)[0]
-            for name in names
-            if ".dist-info/" in name
-        }
+        dist_info = {name.split("/", 1)[0] for name in names if ".dist-info/" in name}
         assert len(dist_info) == 1, dist_info
         (dist_info_dir,) = dist_info
         assert dist_info_dir.startswith("vllm_musa-"), dist_info_dir

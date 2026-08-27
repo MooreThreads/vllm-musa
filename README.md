@@ -286,6 +286,14 @@ source-diff form run **at import time** (`vllm_musa/patches/*.patch.py`); these
 are the only runtime patches. For details on both mechanisms, see
 [patches/README.md](vllm_musa/patches/README.md).
 
+When updating the upstream vLLM pin, refresh and validate the checked-in
+runtime requirement snapshot after preparing the checkout:
+
+```bash
+make -f Makefile.sync sync-vllm-requirements
+make -f Makefile.sync check-vllm-requirements
+```
+
 ## Contributing
 
 We welcome and value any contributions and collaborations. Please set up pre-commit hooks to ensure code quality before submitting:

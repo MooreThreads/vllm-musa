@@ -1,4 +1,6 @@
 include third_party/PINS
 recursive-include build_utils *.py
 recursive-include requirements *.txt
+# Build-time inputs for source and sdist-to-wheel builds. These raw patch files
+# are not package data and are intentionally absent from the final wheel.
 recursive-include vllm_musa/patches/series *.patch

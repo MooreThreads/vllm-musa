@@ -98,4 +98,7 @@ def test_vllm_runtime_requirements_match_prepared_pin():
         pytest.skip("pinned upstream vLLM source is not prepared")
 
     bundled = ROOT / "requirements" / "vllm_common.txt"
+    from tools.sync_vllm_requirements import sync_snapshot
+
+    assert sync_snapshot(upstream, bundled, check=True)
     assert _normalized_requirements(bundled) == _normalized_requirements(upstream)
