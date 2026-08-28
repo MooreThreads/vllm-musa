@@ -1094,12 +1094,26 @@ class _MusaJitCustomAllreduceImpl:
             <= self._GRAPH_REGISTERED_INPUT_MAX_BYTES
         )
 
+    def _is_piecewise_cudagraph_capture(self) -> bool:
+        try:
+            from vllm.config import CUDAGraphMode
+            from vllm.forward_context import (
+                get_forward_context,
+                is_forward_context_available,
+            )
+        except ImportError:
+            return False
+        if not is_forward_context_available():
+            return False
+        return get_forward_context().cudagraph_runtime_mode == CUDAGraphMode.PIECEWISE
+
     def _use_registered_graph_input(self, tensor: torch.Tensor) -> bool:
         return (
             self._use_graph_registered_inputs
             and self._graph_registered_input_eligible(tensor)
             and self._IS_CAPTURING
             and self._is_current_stream_capturing()
+            and not self._is_piecewise_cudagraph_capture()
         )
 
     def should_custom_ar(self, inp: torch.Tensor) -> bool:

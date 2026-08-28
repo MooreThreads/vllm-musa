@@ -310,6 +310,56 @@ def test_mtp_graph_registration_accepts_bounded_multi_capture_inputs():
     )
 
 
+@pytest.mark.parametrize(
+    ("piecewise_capture", "expected"),
+    [(False, True), (True, False)],
+)
+def test_graph_registered_inputs_skip_piecewise_capture(
+    monkeypatch: pytest.MonkeyPatch,
+    piecewise_capture: bool,
+    expected: bool,
+) -> None:
+    impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
+    impl._use_graph_registered_inputs = True
+    impl._graph_registered_input_enabled = True
+    impl._IS_CAPTURING = True
+    monkeypatch.setattr(impl, "_is_current_stream_capturing", lambda: True)
+    monkeypatch.setattr(
+        impl,
+        "_is_piecewise_cudagraph_capture",
+        lambda: piecewise_capture,
+        raising=False,
+    )
+    tensor = torch.empty((128, 2048), dtype=torch.bfloat16)
+
+    assert impl._use_registered_graph_input(tensor) is expected
+
+
+@pytest.mark.parametrize(
+    ("runtime_mode", "expected"),
+    [("FULL", False), ("PIECEWISE", True)],
+)
+def test_piecewise_capture_detects_forward_context(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_mode: str,
+    expected: bool,
+) -> None:
+    from vllm import forward_context
+    from vllm.config import CUDAGraphMode
+
+    monkeypatch.setattr(forward_context, "is_forward_context_available", lambda: True)
+    monkeypatch.setattr(
+        forward_context,
+        "get_forward_context",
+        lambda: SimpleNamespace(
+            cudagraph_runtime_mode=getattr(CUDAGraphMode, runtime_mode)
+        ),
+    )
+    impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
+
+    assert impl._is_piecewise_cudagraph_capture() is expected
+
+
 def test_graph_staging_uses_disjoint_preallocated_slots_per_ordinal(monkeypatch):
     impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
     impl._use_graph_staging_arena = True
