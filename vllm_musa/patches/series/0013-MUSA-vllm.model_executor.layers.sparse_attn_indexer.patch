@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.model_executor.layers.sparse_attn_indexer
  1 file changed, 1326 insertions(+)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index d94b377dbe..b924899c31 100644
+index 600094a..741b203 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -2,9 +2,12 @@
@@ -1316,15 +1316,15 @@ index d94b377dbe..b924899c31 100644
  RADIX_TOPK_WORKSPACE_SIZE = 1024 * 1024
  
  # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
-@@ -750,6 +2038,7 @@ class SparseAttnIndexer(CustomOp):
-         topk_indices_buffer: torch.Tensor,
+@@ -751,6 +2039,7 @@ class SparseAttnIndexer(CustomOp):
          skip_k_cache_insert: bool = False,
          use_fp4_cache: bool = False,
+         compress_ratio: int = 1,
 +        use_musa_native_indexer: bool = False,
      ):
          super().__init__()
          self.k_cache = k_cache
-@@ -771,6 +2060,7 @@ class SparseAttnIndexer(CustomOp):
+@@ -773,6 +2062,7 @@ class SparseAttnIndexer(CustomOp):
          self.dcp_rank = get_dcp_group().rank_in_group if self.dcp_world_size > 1 else 0
          self.cp_kv_cache_interleave_size = parallel_config.cp_kv_cache_interleave_size
          self.use_pcp = parallel_config.prefill_context_parallel_size > 1
@@ -1332,7 +1332,7 @@ index d94b377dbe..b924899c31 100644
          if current_platform.is_cuda() and not has_deep_gemm():
              raise RuntimeError(
                  "Sparse Attention Indexer CUDA op requires DeepGEMM support in "
-@@ -788,6 +2078,42 @@ class SparseAttnIndexer(CustomOp):
+@@ -790,6 +2080,42 @@ class SparseAttnIndexer(CustomOp):
              return self.forward_cuda(hidden_states, q_quant, k, weights)
          elif current_platform.is_rocm():
              return self.forward_hip(hidden_states, q_quant, k, weights)

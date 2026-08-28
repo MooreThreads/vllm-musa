@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 19 Aug 2026 18:47:54 +0800
+Subject: [PATCH] MUSA: tolerate Triton without experimental Gluon
+
+---
+ vllm/triton_utils/__init__.py | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/triton_utils/__init__.py b/vllm/triton_utils/__init__.py
+index 5c9006c..671b4a6 100644
+--- a/vllm/triton_utils/__init__.py
++++ b/vllm/triton_utils/__init__.py
+@@ -12,9 +12,18 @@ if TYPE_CHECKING or HAS_TRITON:
+     import triton
+     import triton.language as tl
+     import triton.language.extra.libdevice as tldevice
+-    from triton.experimental import gluon
+-    from triton.experimental.gluon import language as gl
+     from triton.language.core import _aggregate as aggregate  # noqa: E501
++
++    try:
++        from triton.experimental import gluon
++        from triton.experimental.gluon import language as gl
++    except ImportError:
++        # The MUSA Torch 2.11 stack uses Triton 3.2, which predates Gluon.
++        # Gluon is only consumed by platform-specific AMD kernels, so keep
++        # regular Triton available while making unsupported Gluon use fail
++        # through the same explicit placeholder as a Triton-less install.
++        gluon = TritonLanguagePlaceholder()
++        gl = TritonLanguagePlaceholder()
+ else:
+     triton = TritonPlaceholder()
+     tl = TritonLanguagePlaceholder()

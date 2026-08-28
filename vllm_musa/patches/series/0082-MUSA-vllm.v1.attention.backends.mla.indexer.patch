@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 19 Aug 2026 15:33:16 +0800
+Subject: [PATCH] MUSA vllm.v1.attention.backends.mla.indexer
+
+---
+ vllm/v1/attention/backends/mla/indexer.py | 33 ++++++++++++++++++++---
+ 1 file changed, 29 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
+index ff7c3ff..6710640 100644
+--- a/vllm/v1/attention/backends/mla/indexer.py
++++ b/vllm/v1/attention/backends/mla/indexer.py
+@@ -468,7 +468,7 @@ class DeepSeekV32IndexerDecodeMetadata:
+     seq_lens: torch.Tensor
+     decode_lens: torch.Tensor
+     requires_padding: bool
+-    schedule_metadata: torch.Tensor
++    schedule_metadata: torch.Tensor | None
+     global_seq_lens: torch.Tensor | None = None
+     per_req_decode_lens: torch.Tensor | None = None
+     decode_is_uniform: bool = True
+@@ -1190,9 +1190,34 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+             if seq_lens.dim() == 1:
+                 seq_lens = seq_lens.unsqueeze(-1)
+ 
+-            # DeepGEMM is required for the paged MQA logits on CUDA devices
+-            schedule_metadata = self.scheduler_metadata_buffer
+-            if current_platform.is_cuda() and has_deep_gemm():
++            # XPU keeps its preallocated metadata contract. MUSA either fills
++            # valid provider metadata or records None so its exact Torch path
++            # can fall back safely.
++            schedule_metadata = (
++                None
++                if current_platform.is_musa()
++                else self.scheduler_metadata_buffer
++            )
++            if current_platform.is_musa():
++                try:
++                    from mate import deep_gemm as musa_deep_gemm
++
++                    metadata = musa_deep_gemm.get_paged_mqa_logits_metadata(
++                        seq_lens,
++                        self.kv_cache_spec.storage_block_size,
++                        self.num_sms,
++                    )
++                    schedule_metadata = self.scheduler_metadata_buffer[
++                        : metadata.shape[0]
++                    ]
++                    schedule_metadata[:] = metadata
++                except Exception:
++                    logger.warning_once(
++                        "MUSA sparse indexer could not prepare paged MQA "
++                        "schedule metadata; exact materialized decode will "
++                        "fall back to the Torch path."
++                    )
++            elif current_platform.is_cuda() and has_deep_gemm():
+                 metadata = get_paged_mqa_logits_metadata(
+                     seq_lens,
+                     self.kv_cache_spec.num_states,

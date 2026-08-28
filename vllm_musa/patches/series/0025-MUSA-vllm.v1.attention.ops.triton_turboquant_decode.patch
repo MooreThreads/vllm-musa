@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.attention.ops.triton_turboquant_decode
  1 file changed, 10 insertions(+), 10 deletions(-)
 
 diff --git a/vllm/v1/attention/ops/triton_turboquant_decode.py b/vllm/v1/attention/ops/triton_turboquant_decode.py
-index 3adaf2610d..a699dc91d5 100644
+index 3adaf26..a699dc9 100644
 --- a/vllm/v1/attention/ops/triton_turboquant_decode.py
 +++ b/vllm/v1/attention/ops/triton_turboquant_decode.py
 @@ -218,7 +218,7 @@ def _tq_decode_stage1(

@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 20 Aug 2026 15:20:00 +0800
+Subject: [PATCH] MUSA: pass RNG block to rejection resampler
+
+Follow the v0.28 gumbel helper signature and pass the local vocabulary block
+used for deterministic RNG into the rejection resampler call.
+---
+ vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
+index ac5c7c8..da0e80f 100644
+--- a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
+@@ -828,6 +828,7 @@ def _resample_kernel(
+     value, idx = gumbel_block_argmax(
+         residual_logits,
+         block,
++        block,
+         mask,
+         resample_token_idx,
+         expanded_idx_mapping_ptr,

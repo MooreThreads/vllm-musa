@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.model_executor.layers.attention.attention
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/layers/attention/attention.py b/vllm/model_executor/layers/attention/attention.py
-index ff0c7a33af..3031ba9525 100644
+index ff0c7a3..3031ba9 100644
 --- a/vllm/model_executor/layers/attention/attention.py
 +++ b/vllm/model_executor/layers/attention/attention.py
 @@ -515,7 +515,7 @@ class Attention(nn.Module, AttentionLayerBase):

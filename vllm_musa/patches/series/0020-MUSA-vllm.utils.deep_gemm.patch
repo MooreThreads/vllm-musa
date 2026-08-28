@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.utils.deep_gemm
  1 file changed, 20 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
-index 4b78142c6f..f2391875ae 100644
+index 3fc70c0..98c6d45 100644
 --- a/vllm/utils/deep_gemm.py
 +++ b/vllm/utils/deep_gemm.py
-@@ -69,6 +69,13 @@ class DeepGemmQuantScaleFMT(Enum):
+@@ -74,6 +74,13 @@ class DeepGemmQuantScaleFMT(Enum):
              and is_deep_gemm_supported()
              and (_fp8_gemm_nt_impl is not None)
          )
@@ -25,7 +25,7 @@ index 4b78142c6f..f2391875ae 100644
          if not use_e8m0:
              cls._oracle_cache = cls.FLOAT32  # type: ignore
              return
-@@ -128,6 +135,12 @@ def is_deep_gemm_e8m0_used() -> bool:
+@@ -133,6 +140,12 @@ def is_deep_gemm_e8m0_used() -> bool:
          return False
  
      if envs.VLLM_USE_DEEP_GEMM_E8M0:
@@ -38,7 +38,7 @@ index 4b78142c6f..f2391875ae 100644
          logger.info_once("DeepGEMM E8M0 enabled on current platform.")
          return True
  
-@@ -327,7 +340,7 @@ def get_mk_alignment_for_contiguous_layout() -> list[int]:
+@@ -332,7 +345,7 @@ def get_mk_alignment_for_contiguous_layout() -> list[int]:
      _lazy_init()
      if _get_mk_alignment_for_contiguous_layout_impl is None:
          return _missing()
@@ -47,7 +47,7 @@ index 4b78142c6f..f2391875ae 100644
      return [mk_align_size, mk_align_size]
  
  
-@@ -376,7 +389,12 @@ def set_mk_alignment_for_contiguous_layout(value: int) -> None:
+@@ -381,7 +394,12 @@ def set_mk_alignment_for_contiguous_layout(value: int) -> None:
      dg = _import_deep_gemm()
      if dg is None:
          raise RuntimeError("DeepGEMM is not available")

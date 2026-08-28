@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc): csrc/moe/torch_bindings.cpp
  1 file changed, 17 insertions(+), 43 deletions(-)
 
 diff --git a/csrc/libtorch_stable/moe/torch_bindings.cpp b/csrc/libtorch_stable/moe/torch_bindings.cpp
-index c6467f1c1f..6fb4fd7487 100644
+index c6467f1..6fb4fd7 100644
 --- a/csrc/libtorch_stable/moe/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/moe/torch_bindings.cpp
 @@ -1,26 +1,27 @@

@@ -9,7 +9,7 @@ Subject: [PATCH] MUSA(csrc): csrc/moe/moe_align_sum_kernels.cu
  2 files changed, 133 insertions(+), 161 deletions(-)
 
 diff --git a/csrc/dispatch_utils.h b/csrc/dispatch_utils.h
-index de0c505b7a..33be56698f 100644
+index de0c505..33be566 100644
 --- a/csrc/dispatch_utils.h
 +++ b/csrc/dispatch_utils.h
 @@ -11,6 +11,18 @@
@@ -32,7 +32,7 @@ index de0c505b7a..33be56698f 100644
    AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
    AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
 diff --git a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
-index 98a04de783..a8c09794b2 100644
+index 98a04de..a8c0979 100644
 --- a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 +++ b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 @@ -1,18 +1,15 @@

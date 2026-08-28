@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.model_executor.layers.quantization.fp8
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/layers/quantization/fp8.py b/vllm/model_executor/layers/quantization/fp8.py
-index 9c69ff93d3..6396a3bf77 100644
+index 2069948..0dde60a 100644
 --- a/vllm/model_executor/layers/quantization/fp8.py
 +++ b/vllm/model_executor/layers/quantization/fp8.py
-@@ -142,7 +142,7 @@ class Fp8Config(QuantizationConfig):
+@@ -141,7 +141,7 @@ class Fp8Config(QuantizationConfig):
  
      @classmethod
      def get_min_capability(cls) -> int:

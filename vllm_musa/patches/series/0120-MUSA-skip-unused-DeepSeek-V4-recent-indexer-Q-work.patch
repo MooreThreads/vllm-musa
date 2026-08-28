@@ -1,0 +1,367 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 27 Jul 2026 10:10:00 +0800
+Subject: [PATCH] MUSA: skip unused DeepSeek-V4 recent indexer Q work
+
+(cherry picked from commit 18427abf7be6d140e6c89ee4c489e767cca3e8e9)
+---
+ .../layers/sparse_attn_indexer.py             |  42 ++++++++
+ vllm/models/deepseek_v4/attention.py          | 102 +++++++++++++-----
+ vllm/v1/attention/backends/mla/indexer.py     |  79 ++++++++++++++
+ 3 files changed, 198 insertions(+), 25 deletions(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 741b203..82ea249 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -2122,6 +2122,48 @@ class SparseAttnIndexer(CustomOp):
+                 "CUDA, ROCm and XPU platforms."
+             )
+ 
++    def uses_musa_recent_indices(self) -> bool:
++        """Whether this capture uses the MUSA recent-window approximation."""
++        return (
++            current_platform.is_musa()
++            and _musa_sparse_indexer_is_current_stream_capturing()
++            and not _musa_sparse_indexer_graph_exact_decode_enabled()
++        )
++
++    def forward_musa_recent(self, hidden_states: torch.Tensor) -> torch.Tensor:
++        """Reuse metadata-built recent indices for every C4 layer."""
++        attn_metadata = get_forward_context().attn_metadata
++        metadata = None
++        if isinstance(attn_metadata, dict):
++            metadata = attn_metadata.get(_resolve_layer_name(self.k_cache.prefix))
++        if (
++            isinstance(metadata, DeepseekV32IndexerMetadata)
++            and metadata.recent_indices is not None
++        ):
++            if not metadata.recent_indices_ready:
++                rows = min(
++                    hidden_states.shape[0],
++                    self.topk_indices_buffer.shape[0],
++                    metadata.recent_indices.shape[0],
++                )
++                topk = min(
++                    self.topk_tokens,
++                    self.topk_indices_buffer.shape[1],
++                    metadata.recent_indices.shape[1],
++                )
++                self.topk_indices_buffer[:rows, :topk].copy_(
++                    metadata.recent_indices[:rows, :topk]
++                )
++                metadata.recent_indices_ready = True
++            return self.topk_indices_buffer
++
++        return _musa_fill_recent_sparse_indexer_indices(
++            hidden_states,
++            self.k_cache.prefix,
++            self.topk_tokens,
++            self.topk_indices_buffer,
++        )
++
+     def forward_cuda(
+         self,
+         hidden_states: torch.Tensor,
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 225930f..59f2762 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -465,8 +465,15 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+ 
+         # Keep the attention input preparation in the captured graph. Only the
+         # sparse indexer and MLA attention run in the eager break below.
++        use_musa_recent_indexer = (
++            self.indexer is not None
++            and self.indexer.uses_musa_recent_indices()
++        )
+         qr_kv, kv_score, indexer_kv_score, indexer_weights = (
+-            self._run_parallel_input_projections(hidden_states)
++            self._run_parallel_input_projections(
++                hidden_states,
++                skip_indexer_weights=use_musa_recent_indexer,
++            )
+         )
+         qr, qr_scale, kv = self._split_qkv_and_norm(qr_kv)
+ 
+@@ -480,6 +487,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             indexer_weights,
+             positions,
+             o_padded,
++            use_musa_recent_indexer,
+         )
+         o = o_padded[:, : self.n_local_heads, :]
+ 
+@@ -514,9 +522,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         qr_scale: torch.Tensor | None,
+         kv_score: torch.Tensor,
+         indexer_kv_score: torch.Tensor,
+-        indexer_weights: torch.Tensor,
++        indexer_weights: torch.Tensor | None,
+         positions: torch.Tensor,
+         o_padded: torch.Tensor,
++        use_musa_recent_indexer: bool,
+     ) -> None:
+         """Wide eager region: the whole of ``_prepare_and_attn`` runs eagerly.
+ 
+@@ -533,6 +542,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             indexer_weights,
+             positions,
+             o_padded,
++            use_musa_recent_indexer,
+         )
+ 
+     def _prepare_and_attn(
+@@ -543,9 +553,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         qr_scale: torch.Tensor | None,
+         kv_score: torch.Tensor,
+         indexer_kv_score: torch.Tensor,
+-        indexer_weights: torch.Tensor,
++        indexer_weights: torch.Tensor | None,
+         positions: torch.Tensor,
+         o_padded: torch.Tensor,
++        use_musa_recent_indexer: bool,
+     ) -> None:
+         """Attention input preparation followed by the sparse indexer and MLA.
+ 
+@@ -571,26 +582,50 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         # indexer. ROCm runs the same work sequentially without aux streams.
+         if indexer is not None:
+             assert compressor is not None
+-            q, (indexer_inputs, _) = execute_in_parallel(
+-                project_query_and_cache_kv,
+-                [
+-                    lambda: indexer(
+-                        hidden_states,
+-                        qr,
+-                        indexer_kv_score,
+-                        indexer_weights,
+-                        positions,
+-                        self.indexer_rotary_emb,
+-                        qr_scale,
+-                    ),
+-                    lambda: compressor(kv_score, positions, self.rotary_emb),
+-                ],
+-                self.ln_events[0],
+-                [self.ln_events[1], self.ln_events[2]],
+-                [aux_streams[0], aux_streams[1]] if aux_streams is not None else None,
+-                enable=aux_streams is not None,
+-            )
+-            index_q, index_q_scale, index_weights_out = indexer_inputs
++            assert indexer_kv_score is not None
++            if use_musa_recent_indexer:
++                q, (_, _) = execute_in_parallel(
++                    project_query_and_cache_kv,
++                    [
++                        lambda: indexer.forward_musa_recent(
++                            hidden_states,
++                            indexer_kv_score,
++                            positions,
++                            self.indexer_rotary_emb,
++                        ),
++                        lambda: compressor(kv_score, positions, self.rotary_emb),
++                    ],
++                    self.ln_events[0],
++                    [self.ln_events[1], self.ln_events[2]],
++                    [aux_streams[0], aux_streams[1]]
++                    if aux_streams is not None
++                    else None,
++                    enable=aux_streams is not None,
++                )
++            else:
++                assert indexer_weights is not None
++                q, (indexer_inputs, _) = execute_in_parallel(
++                    project_query_and_cache_kv,
++                    [
++                        lambda: indexer(
++                            hidden_states,
++                            qr,
++                            indexer_kv_score,
++                            indexer_weights,
++                            positions,
++                            self.indexer_rotary_emb,
++                            qr_scale,
++                        ),
++                        lambda: compressor(kv_score, positions, self.rotary_emb),
++                    ],
++                    self.ln_events[0],
++                    [self.ln_events[1], self.ln_events[2]],
++                    [aux_streams[0], aux_streams[1]]
++                    if aux_streams is not None
++                    else None,
++                    enable=aux_streams is not None,
++                )
++                index_q, index_q_scale, index_weights_out = indexer_inputs
+         elif compressor is not None:
+             aux_stream = aux_streams[0] if aux_streams is not None else None
+             q, _ = maybe_execute_in_parallel(
+@@ -640,7 +675,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         return apply_pre_quantized_block_scaled_mm(self.wq_b, qr, qr_scale)
+ 
+     def _run_parallel_input_projections(
+-        self, hidden_states: torch.Tensor
++        self,
++        hidden_states: torch.Tensor,
++        *,
++        skip_indexer_weights: bool = False,
+     ) -> tuple[
+         torch.Tensor,
+         torch.Tensor | None,
+@@ -686,7 +724,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                     torch.float32,
+                 )
+ 
+-            aux_fns[1] = indexer_weights_proj
++            aux_fns[1] = None if skip_indexer_weights else indexer_weights_proj
+             aux_fns[2] = indexer_compressor_kv_score
+ 
+         qr_kv, (kv_score, indexer_weights, indexer_kv_score) = execute_in_parallel(
+@@ -1019,6 +1057,20 @@ class DeepseekV4Indexer(nn.Module):
+             torch.cuda.Event(),
+         ]
+ 
++    def forward_musa_recent(
++        self,
++        hidden_states: torch.Tensor,
++        compressed_kv_score: torch.Tensor,
++        positions: torch.Tensor,
++        rotary_emb: nn.Module,
++    ) -> torch.Tensor:
++        """Maintain indexer K cache and emit recent indices without Q work."""
++        self.compressor(compressed_kv_score, positions, rotary_emb)
++        return self.indexer_op.forward_musa_recent(hidden_states)
++
++    def uses_musa_recent_indices(self) -> bool:
++        return self.indexer_op.uses_musa_recent_indices()
++
+     def forward(
+         self,
+         hidden_states: torch.Tensor,
+diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
+index 6710640..5cd5246 100644
+--- a/vllm/v1/attention/backends/mla/indexer.py
++++ b/vllm/v1/attention/backends/mla/indexer.py
+@@ -1,5 +1,6 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++import os
+ from dataclasses import dataclass
+ 
+ import torch
+@@ -493,6 +494,8 @@ class DeepseekV32IndexerMetadata:
+ 
+     decode: DeepSeekV32IndexerDecodeMetadata | None = None
+     prefill: DeepseekV32IndexerPrefillMetadata | None = None
++    recent_indices: torch.Tensor | None = None
++    recent_indices_ready: bool = False
+ 
+ 
+ def compute_kpool_tail_slot_mapping(
+@@ -636,6 +639,7 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+ 
+     def __init__(self, *args, block_table_width: int, **kwargs) -> None:
+         super().__init__(*args, **kwargs)
++        self.model_config = self.vllm_config.model_config
+         scheduler_config = self.vllm_config.scheduler_config
+         parallel_config = self.vllm_config.parallel_config
+         self.dcp_world_size = parallel_config.decode_context_parallel_size
+@@ -737,6 +741,16 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+             # are whisper block pooling and never reach MLA).
+             assert isinstance(self.kv_cache_spec.tokens_per_state, int)
+             self.compress_ratio = self.kv_cache_spec.tokens_per_state
++        self.recent_indices_buffer: torch.Tensor | None = None
++        if self.compress_ratio == 4 and current_platform.is_musa():
++            self.recent_indices_buffer = torch.empty(
++                (
++                    scheduler_config.max_num_batched_tokens,
++                    self.model_config.hf_config.index_topk,
++                ),
++                dtype=torch.int32,
++                device=self.device,
++            )
+         if self.dcp_world_size > 1 and self.compress_ratio > 1:
+             raise NotImplementedError(
+                 "DCP is not supported with sparse indexer KV compression "
+@@ -1240,6 +1254,16 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+                 write_max_decode_len=max_decode_len,
+             )
+ 
++        recent_indices = None
++        if self.recent_indices_buffer is not None:
++            recent_indices = self._build_recent_indices(
++                num_tokens,
++                num_decode_tokens,
++                num_prefill_tokens,
++                decode_metadata,
++                prefill_metadata,
++            )
++
+         attn_metadata = DeepseekV32IndexerMetadata(
+             seq_lens=common_attn_metadata.seq_lens,
+             max_seq_len=common_attn_metadata.max_seq_len,
+@@ -1250,10 +1274,65 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+             num_prefill_tokens=num_prefill_tokens,
+             prefill=prefill_metadata,
+             decode=decode_metadata,
++            recent_indices=recent_indices,
++            recent_indices_ready=False,
+         )
+ 
+         return attn_metadata
+ 
++    def _build_recent_indices(
++        self,
++        num_tokens: int,
++        num_decode_tokens: int,
++        num_prefill_tokens: int,
++        decode_metadata: DeepSeekV32IndexerDecodeMetadata | None,
++        prefill_metadata: DeepseekV32IndexerPrefillMetadata | None,
++    ) -> torch.Tensor:
++        assert self.recent_indices_buffer is not None
++        out = self.recent_indices_buffer
++        topk = min(self.model_config.hf_config.index_topk, out.shape[1])
++        rows = min(int(num_tokens), out.shape[0])
++        out[:rows, :topk] = -1
++        if topk <= 0 or rows <= 0:
++            return out
++
++        try:
++            cap = int(os.getenv("VLLM_MUSA_SPARSE_INDEXER_FALLBACK_TOPK", "16"))
++        except ValueError:
++            cap = 16
++        cap = max(0, min(cap, topk))
++        if cap <= 0:
++            return out
++
++        def fill_rows(row_start: int, lengths: torch.Tensor) -> None:
++            start = max(0, int(row_start))
++            if start >= rows:
++                return
++            flat_lengths = lengths.reshape(-1).to(torch.long)
++            count = min(flat_lengths.numel(), rows - start)
++            if count <= 0:
++                return
++            row_lengths = flat_lengths[:count].clamp(min=0)
++            counts = row_lengths.clamp(max=cap)
++            starts = (row_lengths - counts).clamp(min=0)
++            offsets = torch.arange(
++                cap, device=out.device, dtype=torch.long
++            ).unsqueeze(0)
++            values = starts.unsqueeze(-1) + offsets
++            valid = offsets < counts.unsqueeze(-1)
++            rows_view = out[start : start + count, :cap]
++            rows_view.copy_(torch.where(valid, values.to(out.dtype), rows_view))
++
++        if num_decode_tokens > 0 and decode_metadata is not None:
++            fill_rows(0, decode_metadata.seq_lens)
++        if num_prefill_tokens > 0 and prefill_metadata is not None:
++            for chunk in prefill_metadata.chunks:
++                fill_rows(
++                    int(chunk.token_start),
++                    chunk.cu_seqlen_ke - chunk.cu_seqlen_ks,
++                )
++        return out
++
+ 
+ def build_prefill_chunk_metadata(
+     start_idx: int,

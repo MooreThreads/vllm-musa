@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc): csrc/torch_bindings.cpp
  1 file changed, 415 insertions(+), 7 deletions(-)
 
 diff --git a/csrc/torch_bindings.cpp b/csrc/torch_bindings.cpp
-index bcf0ce3e1c..82c852183a 100644
+index bcf0ce3..82c8521 100644
 --- a/csrc/torch_bindings.cpp
 +++ b/csrc/torch_bindings.cpp
 @@ -1,9 +1,9 @@

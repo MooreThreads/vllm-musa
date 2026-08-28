@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc-file): csrc/mamba/mamba_ssm/selective_scan_fwd.cu
  1 file changed, 129 insertions(+), 114 deletions(-)
 
 diff --git a/csrc/libtorch_stable/mamba/selective_scan_fwd.cu b/csrc/libtorch_stable/mamba/selective_scan_fwd.cu
-index c17b06a79b..b35a4b2b6d 100644
+index c17b06a..b35a4b2 100644
 --- a/csrc/libtorch_stable/mamba/selective_scan_fwd.cu
 +++ b/csrc/libtorch_stable/mamba/selective_scan_fwd.cu
 @@ -1,9 +1,18 @@

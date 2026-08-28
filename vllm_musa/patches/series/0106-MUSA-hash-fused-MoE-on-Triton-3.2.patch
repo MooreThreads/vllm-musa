@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 19 Aug 2026 19:25:22 +0800
+Subject: [PATCH] MUSA: hash fused MoE on Triton 3.2
+
+---
+ .../layers/fused_moe/fused_moe.py               | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index 28c69c9..856e29a 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -40,6 +40,19 @@ from vllm.utils.torch_utils import direct_register_custom_op
+ 
+ logger = init_logger(__name__)
+ 
++# Triton 3.2 does not expose the tensor-descriptor builtin. Keep descriptor
++# creation behind a module-level symbol so the JIT dependency walker can hash
++# this kernel even when USE_TD is false (as it is for quantized MUSA MoE).
++if hasattr(tl, "make_tensor_descriptor"):
++    make_tensor_descriptor = tl.make_tensor_descriptor
++elif hasattr(tl, "_experimental_make_tensor_descriptor"):
++    make_tensor_descriptor = tl._experimental_make_tensor_descriptor
++else:
++
++    @triton.jit
++    def make_tensor_descriptor(base, shape, strides, block_shape, _builder=None):
++        return None
++
+ 
+ @triton.jit
+ def write_zeros_to_output(
+@@ -447,13 +460,13 @@ def fused_moe_kernel(
+     if USE_TD:
+         # ``tt.descriptor_gather`` requires block_shape[0] == 1 and i32 idx.
+         m_td = num_valid_tokens // top_k
+-        a_desc = tl.make_tensor_descriptor(
++        a_desc = make_tensor_descriptor(
+             base=a_ptr,
+             shape=(m_td, K),
+             strides=(stride_am, stride_ak),
+             block_shape=(1, BLOCK_SIZE_K),
+         )
+-        b_desc = tl.make_tensor_descriptor(
++        b_desc = make_tensor_descriptor(
+             base=b_ptr + off_experts * stride_be,
+             shape=(N, K),
+             strides=(stride_bn, stride_bk),

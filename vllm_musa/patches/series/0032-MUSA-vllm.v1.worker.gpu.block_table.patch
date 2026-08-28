@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.v1.worker.gpu.block_table
  1 file changed, 10 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu/block_table.py b/vllm/v1/worker/gpu/block_table.py
-index 90fc104dc2..6e113e3c8b 100644
+index 5e09383..db6edc7 100644
 --- a/vllm/v1/worker/gpu/block_table.py
 +++ b/vllm/v1/worker/gpu/block_table.py
-@@ -235,7 +235,7 @@ def _gather_block_tables_kernel(
+@@ -241,7 +241,7 @@ def _gather_block_tables_kernel(
  
      stride = tl.load(block_table_strides + group_id)
      max_num_blocks = stride  # stride equals max_num_blocks for this group.
@@ -20,7 +20,7 @@ index 90fc104dc2..6e113e3c8b 100644
      dst_row_ptr = dst_block_table_ptr + batch_idx * stride
  
      if batch_idx >= num_reqs:
-@@ -249,7 +249,7 @@ def _gather_block_tables_kernel(
+@@ -255,7 +255,7 @@ def _gather_block_tables_kernel(
      group_num_blocks_ptr = num_blocks_ptr + group_id * num_blocks_stride
      num_blocks = tl.load(group_num_blocks_ptr + req_idx)
  
@@ -29,16 +29,16 @@ index 90fc104dc2..6e113e3c8b 100644
      src_row_ptr = src_block_table_ptr + req_idx * stride
  
      for i in tl.range(0, num_blocks, BLOCK_SIZE):
-@@ -291,7 +291,7 @@ def _compute_slot_mappings_kernel(
+@@ -298,7 +298,7 @@ def _compute_slot_mappings_kernel(
              tl.store(slot_mapping_ptr + offset, PAD_ID, mask=offset < max_num_tokens)
          return
  
 -    block_table_ptr = _load_ptr(block_table_ptrs + group_id, tl.int32)
 +    block_table_ptr = _load_int32_ptr(block_table_ptrs + group_id)
      block_table_stride = tl.load(block_table_strides + group_id)
-     block_size = tl.load(block_sizes + group_id)
- 
-@@ -321,3 +321,10 @@ def _compute_slot_mappings_kernel(
+     kv_block_size = tl.load(block_sizes + group_id)
+     kernel_block_size = tl.load(kernel_block_sizes + group_id)
+@@ -337,3 +337,10 @@ def _compute_slot_mappings_kernel(
              slot_ids = tl.where(is_local, slot_ids, PAD_ID)
  
          tl.store(slot_mapping_ptr + offset, slot_ids, mask=offset < end_idx)

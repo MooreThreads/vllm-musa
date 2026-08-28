@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.attention.ops.flashmla
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/vllm/v1/attention/ops/flashmla.py b/vllm/v1/attention/ops/flashmla.py
-index c84a495859..bbba514ada 100644
+index c84a495..bbba514 100644
 --- a/vllm/v1/attention/ops/flashmla.py
 +++ b/vllm/v1/attention/ops/flashmla.py
 @@ -55,7 +55,7 @@ def is_flashmla_dense_supported() -> tuple[bool, str | None]:

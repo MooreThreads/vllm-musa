@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc): csrc/type_convert.cuh
  1 file changed, 4 insertions(+), 4 deletions(-)
 
 diff --git a/csrc/libtorch_stable/type_convert.cuh b/csrc/libtorch_stable/type_convert.cuh
-index 8093c4bc87..2526fa6372 100644
+index 8093c4b..2526fa6 100644
 --- a/csrc/libtorch_stable/type_convert.cuh
 +++ b/csrc/libtorch_stable/type_convert.cuh
 @@ -47,7 +47,7 @@ struct _typeConvert<float> {

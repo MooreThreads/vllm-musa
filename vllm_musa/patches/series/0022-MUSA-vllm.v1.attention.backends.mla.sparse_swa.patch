@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.attention.backends.mla.sparse_swa
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/v1/attention/backends/mla/sparse_swa.py b/vllm/v1/attention/backends/mla/sparse_swa.py
-index d858eb677c..7f6aa36a2c 100644
+index 83b1afe..a7f5f02 100644
 --- a/vllm/v1/attention/backends/mla/sparse_swa.py
 +++ b/vllm/v1/attention/backends/mla/sparse_swa.py
 @@ -26,7 +26,7 @@ from vllm.v1.attention.backends.mla.compressor_utils import (
@@ -20,7 +20,7 @@ index d858eb677c..7f6aa36a2c 100644
  from vllm.v1.kv_cache_interface import (
      KVCacheSpec,
      MLAAttentionSpec,
-@@ -809,7 +809,7 @@ def _compute_swa_indices_and_lens_kernel(
+@@ -790,7 +790,7 @@ def _compute_swa_indices_and_lens_kernel(
      pid = tl.program_id(0)
      token_idx = pid + token_offset
      is_valid = tl.load(is_valid_token_ptr + token_idx)

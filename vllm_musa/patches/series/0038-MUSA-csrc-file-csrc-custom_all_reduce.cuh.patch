@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc-file): csrc/custom_all_reduce.cuh
  1 file changed, 476 insertions(+), 118 deletions(-)
 
 diff --git a/csrc/custom_all_reduce.cuh b/csrc/custom_all_reduce.cuh
-index 385a0e0ae7..1cf56b6ad5 100644
+index 385a0e0..1cf56b6 100644
 --- a/csrc/custom_all_reduce.cuh
 +++ b/csrc/custom_all_reduce.cuh
 @@ -1,25 +1,292 @@

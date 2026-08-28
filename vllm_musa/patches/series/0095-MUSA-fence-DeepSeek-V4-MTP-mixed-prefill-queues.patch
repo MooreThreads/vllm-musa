@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 8 Aug 2026 08:20:00 +0800
+Subject: [PATCH] MUSA: fence DeepSeek-V4 MTP mixed prefill queues
+
+---
+ vllm/v1/worker/gpu_model_runner.py | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 06acbe8..b481c0f 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -4643,11 +4643,37 @@ class GPUModelRunner(
+         )
+         self.kv_connector_output = kv_connector_output
+ 
++        # A DSV4 MTP prefill step can enqueue work on several MUSA task queues.
++        # Fence those queues before async scheduling reuses the next step's
++        # graph inputs and metadata.
+         # Now the batch has been launched we can wait for corrections from the
+         # previous model forward without breaking async scheduling.
+         if deferred_state_corrections_fn:
+             deferred_state_corrections_fn()
+ 
++        queue_fence = getattr(
++            self, "_musa_dsv4_mtp_prefill_queue_fence", None
++        )
++        if queue_fence is None:
++            from vllm_musa.optimization_contract.policy import (
++                deepseek_v4_mtp_async_prefill_queue_fence_enabled,
++                deepseek_v4_mtp_prefill_step_requires_sync,
++            )
++
++            queue_fence = (
++                deepseek_v4_mtp_prefill_step_requires_sync
++                if deepseek_v4_mtp_async_prefill_queue_fence_enabled(
++                    self.vllm_config
++                )
++                else False
++            )
++            self._musa_dsv4_mtp_prefill_queue_fence = queue_fence
++        if (
++            queue_fence
++            and queue_fence(scheduler_output)
++            and not torch.musa.is_current_stream_capturing()
++        ):
++            torch.musa.synchronize()
+         return None
+ 
+     def _input_fits_in_drafter(

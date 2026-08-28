@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.model_executor.layers.fused_moe.activation
  1 file changed, 6 insertions(+)
 
 diff --git a/vllm/model_executor/layers/fused_moe/activation.py b/vllm/model_executor/layers/fused_moe/activation.py
-index 6585bbe4f4..8d5ea3225b 100644
+index e9212ca..d10ba81 100644
 --- a/vllm/model_executor/layers/fused_moe/activation.py
 +++ b/vllm/model_executor/layers/fused_moe/activation.py
-@@ -232,6 +232,12 @@ def apply_moe_activation(
+@@ -233,6 +233,12 @@ def apply_moe_activation(
              silu_and_mul_with_clamp(
                  output, input, config.clamp_limit, topk_ids, expert_map
              )

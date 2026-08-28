@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 29 Jun 2026 16:00:00 +0800
+Subject: [PATCH] MUSA: keep DeepSeek-V4 MTP RMSNorm branch dtypes stable
+
+---
+ vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py b/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
+index 874b4f6..5680eae 100644
+--- a/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
++++ b/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
+@@ -85,7 +85,9 @@ def _fused_mtp_input_rmsnorm_kernel(
+         # hnorm path: load prev_hidden[token, slot, :].
+         slot = pid_task - 1
+         row_offset = (token_idx * HC_MULT + slot) * HIDDEN
+-        x = tl.load(prev_hidden_ptr + row_offset + block, mask=mask, other=0.0)
++        x = tl.load(
++            prev_hidden_ptr + row_offset + block, mask=mask, other=0.0
++        ).to(tl.float32)
+         _rmsnorm_row(
+             x,
+             hnorm_weight_ptr,

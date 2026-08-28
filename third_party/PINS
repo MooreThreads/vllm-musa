@@ -4,10 +4,11 @@
 # base. KEY=VALUE only — NOT TOML (tomllib is 3.11+, the build box is py3.10,
 # the package floor is 3.10), so the build needs no parser dependency.
 # Human-readable release label plus the immutable source commit used by builds.
-# releases/v0.28.0 is pinned to the exact commit validated by this branch; never
-# build from the moving release branch alone.
+# GLM-5.3-Flash is not in the v0.28.0 release. Keep that release as the
+# human-readable baseline label, but build from the immutable head of upstream
+# PR #53906 that was validated by this branch.
 VLLM_TAG=v0.28.0
-VLLM_COMMIT=2cf0a6915ce544dc493a0990f2ea38d81601128a
+VLLM_COMMIT=878631b6079d2cf9fb80830ef9cb41b43aded098
 # FlashInfer is intentionally DECOUPLED from upstream vLLM's choice. This is the
 # validated sampling/norm source revision; bump it consciously, not in lockstep
 # with VLLM_TAG/VLLM_COMMIT.

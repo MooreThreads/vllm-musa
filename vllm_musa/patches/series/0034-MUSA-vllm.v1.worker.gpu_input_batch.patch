@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.worker.gpu_input_batch
  1 file changed, 15 insertions(+)
 
 diff --git a/vllm/v1/worker/gpu_input_batch.py b/vllm/v1/worker/gpu_input_batch.py
-index 0b805fca76..69a507f734 100644
+index 7585f4d..671279a 100644
 --- a/vllm/v1/worker/gpu_input_batch.py
 +++ b/vllm/v1/worker/gpu_input_batch.py
 @@ -315,6 +315,8 @@ class InputBatch:
@@ -20,7 +20,7 @@ index 0b805fca76..69a507f734 100644
      @property
      def req_ids(self) -> list[str]:
          # None elements should only be present transiently
-@@ -726,6 +728,7 @@ class InputBatch:
+@@ -724,6 +726,7 @@ class InputBatch:
              self._req_ids.clear()
              self.req_output_token_ids.clear()
              self.spec_token_ids.clear()
@@ -28,7 +28,7 @@ index 0b805fca76..69a507f734 100644
              return
  
          # NOTE(woosuk): This function assumes that the empty_req_indices
-@@ -840,6 +843,8 @@ class InputBatch:
+@@ -838,6 +841,8 @@ class InputBatch:
      def refresh_metadata(self):
          """Apply any batch updates to sampling metadata."""
  
@@ -37,7 +37,7 @@ index 0b805fca76..69a507f734 100644
          if self.is_pooling_model:
              batch_changed = self.batch_update_builder.reset()
              if batch_changed:
-@@ -1115,6 +1120,16 @@ class InputBatch:
+@@ -1113,6 +1118,16 @@ class InputBatch:
      def num_reqs(self) -> int:
          return len(self.req_id_to_index)
  

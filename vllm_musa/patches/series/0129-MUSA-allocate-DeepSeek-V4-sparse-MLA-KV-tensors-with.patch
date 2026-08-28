@@ -1,0 +1,185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 26 Jun 2026 14:33:08 +0800
+Subject: [PATCH] MUSA: allocate DeepSeek-V4 sparse MLA KV tensors without
+ offsets
+
+---
+ vllm/v1/core/kv_cache_utils.py | 88 ++++++++++++++++++++++++++++++++++
+ vllm/v1/kv_cache_interface.py  |  4 ++
+ vllm/v1/worker/utils.py        | 33 ++++++++-----
+ 3 files changed, 114 insertions(+), 11 deletions(-)
+
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index 5929a3f..ddde656 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1535,6 +1535,89 @@ def validate_kv_cache_layout(
+         )
+ 
+ 
++def _use_musa_deepseek_v4_zero_offset_kv_tensors(
++    kv_cache_groups: list[KVCacheGroupSpec],
++) -> bool:
++    """Keep MATE sparse-MLA page tensors at storage offset zero on MUSA."""
++    try:
++        from vllm.platforms import current_platform
++    except Exception:
++        return False
++    if not current_platform.is_musa():
++        return False
++
++    found_deepseek_v4 = False
++    found_sparse_swa = False
++    for group in kv_cache_groups:
++        group_spec = group.kv_cache_spec
++        specs: Iterable[KVCacheSpec] = (
++            group_spec.kv_cache_specs.values()
++            if isinstance(group_spec, UniformTypeKVCacheSpecs)
++            else (group_spec,)
++        )
++        for spec in specs:
++            if getattr(spec, "model_version", None) != "deepseek_v4":
++                continue
++            found_deepseek_v4 = True
++            found_sparse_swa |= isinstance(spec, SlidingWindowMLASpec)
++    return found_deepseek_v4 and found_sparse_swa
++
++
++def _get_musa_deepseek_v4_zero_offset_config(
++    vllm_config: VllmConfig,
++    kv_cache_groups: list[KVCacheGroupSpec],
++    available_memory: int,
++) -> KVCacheConfig:
++    """Allocate each DSV4 page-size slot in an independent offset-zero slab.
++
++    Layers occupying the same logical slot in different cache groups share an
++    allocation ID. Layers in the same group remain disjoint. This preserves
++    the old MUSA zero-offset contract under the new KVCacheTensor stride API.
++    """
++    buckets: dict[int, list[list[str]]] = defaultdict(list)
++    for group in kv_cache_groups:
++        slot_count: dict[int, int] = defaultdict(int)
++        for layer_name in group.layer_names:
++            page_size = _get_per_layer_spec(group, layer_name).page_size_bytes
++            slot_index = slot_count[page_size]
++            slot_count[page_size] += 1
++            if slot_index == len(buckets[page_size]):
++                buckets[page_size].append([])
++            buckets[page_size][slot_index].append(layer_name)
++
++    bytes_per_block = sum(
++        page_size * len(slots) for page_size, slots in buckets.items()
++    )
++    num_blocks = may_override_num_blocks(
++        vllm_config, available_memory // bytes_per_block
++    )
++    kv_cache_tensors: list[KVCacheTensor] = []
++    allocation_id = 1
++    for page_size, slots in buckets.items():
++        size = page_size * num_blocks
++        for shared_layers in slots:
++            for layer_name in shared_layers:
++                kv_cache_tensors.append(
++                    KVCacheTensor(
++                        size=size,
++                        layers=[layer_name],
++                        layer_stride=size,
++                        block_stride=page_size,
++                        offset=0,
++                        musa_allocation_id=allocation_id,
++                    )
++                )
++            allocation_id += 1
++    return KVCacheConfig(
++        num_blocks=num_blocks,
++        kv_cache_tensors=kv_cache_tensors,
++        kv_cache_groups=kv_cache_groups,
++        prefix_cache_retention_interval=(
++            vllm_config.cache_config.prefix_cache_retention_interval
++        ),
++    )
++
++
+ def get_kv_cache_config_from_groups(
+     vllm_config: VllmConfig,
+     kv_cache_groups: list[KVCacheGroupSpec],
+@@ -1626,6 +1709,11 @@ def get_kv_cache_config_from_groups(
+             ),
+         )
+ 
++    if _use_musa_deepseek_v4_zero_offset_kv_tensors(kv_cache_groups):
++        return _get_musa_deepseek_v4_zero_offset_config(
++            vllm_config, kv_cache_groups, available_memory
++        )
++
+     layout = vllm_config.cache_config.get_resolved_kv_cache_layout()
+     validate_kv_cache_layout(layout, kv_cache_groups)
+     bytes_per_block = _get_kv_cache_bytes_per_block(kv_cache_groups)
+diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
+index 914dcf5..cf927ce 100644
+--- a/vllm/v1/kv_cache_interface.py
++++ b/vllm/v1/kv_cache_interface.py
+@@ -1173,6 +1173,10 @@ class KVCacheTensor:
+     block_stride: int
+     offset: int = 0  # byte offset of layers[0]'s block 0
+     musa_mamba_pool: bool = False  # MUSA: backs the separate mamba state pool
++    # MUSA-only backing allocation selector. None preserves the upstream
++    # single shared allocation. Equal non-None IDs alias one task-local
++    # allocation; different IDs are independently allocated at offset zero.
++    musa_allocation_id: int | None = None
+ 
+ 
+ @dataclass
+diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
+index d0d8f38..d72c022 100644
+--- a/vllm/v1/worker/utils.py
++++ b/vllm/v1/worker/utils.py
+@@ -400,25 +400,36 @@ def allocate_kv_cache(
+ ) -> dict[str, torch.Tensor]:
+     """Allocate the KV cache and view it as ``[B, H, N, C]`` per layer.
+ 
+-    Every KVCacheTensor places its layers in the same backing allocation: layer ``l`` of
+-    block ``b`` starts at ``offset + l * layer_stride + b * block_stride``. Cache
+-    groups overlay each other, so tensors may address the same bytes.
++    By default every KVCacheTensor uses the same backing allocation: layer ``l``
++    of block ``b`` starts at ``offset + l * layer_stride + b * block_stride``.
++    MUSA tensors with a non-None ``musa_allocation_id`` use a separate backing;
++    equal IDs still alias. This is required by kernels that rebuild page views
++    from offset zero and by dedicated contiguous Mamba state pools.
+     """
+     if not kv_cache_config.kv_cache_tensors:
+         return {}
+ 
+-    sizes = {tensor.size for tensor in kv_cache_config.kv_cache_tensors}
+-    assert len(sizes) == 1, "KV cache tensors must share one backing allocation."
+-    raw_size = sizes.pop()
+     page_size = 4096
+-    buf = torch.zeros(
+-        ((raw_size + page_size - 1) // page_size) * page_size,
+-        dtype=torch.int8,
+-        device=device,
+-    )
++    backing_sizes: dict[int | None, int] = {}
++    for tensor in kv_cache_config.kv_cache_tensors:
++        allocation_id = tensor.musa_allocation_id
++        previous = backing_sizes.setdefault(allocation_id, tensor.size)
++        assert previous == tensor.size, (
++            "KV cache tensors sharing one backing allocation must have the "
++            f"same size, got {previous} and {tensor.size} for {allocation_id=}"
++        )
++    buffers = {
++        allocation_id: torch.zeros(
++            ((raw_size + page_size - 1) // page_size) * page_size,
++            dtype=torch.int8,
++            device=device,
++        )
++        for allocation_id, raw_size in backing_sizes.items()
++    }
+ 
+     kv_caches: dict[str, torch.Tensor] = {}
+     for tensor in kv_cache_config.kv_cache_tensors:
++        buf = buffers[tensor.musa_allocation_id]
+         layer_name = tensor.layers[0]
+         group_id, group = next(
+             (group_id, group)

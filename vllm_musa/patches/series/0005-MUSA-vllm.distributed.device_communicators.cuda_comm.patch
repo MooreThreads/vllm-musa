@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.distributed.device_communicators.cuda_communicator
  1 file changed, 31 insertions(+), 7 deletions(-)
 
 diff --git a/vllm/distributed/device_communicators/cuda_communicator.py b/vllm/distributed/device_communicators/cuda_communicator.py
-index 06b441c5a4..f068261b63 100644
+index c0f2e0a..a32df68 100644
 --- a/vllm/distributed/device_communicators/cuda_communicator.py
 +++ b/vllm/distributed/device_communicators/cuda_communicator.py
-@@ -116,13 +116,37 @@ class CudaCommunicator(DeviceCommunicatorBase):
+@@ -119,13 +119,37 @@ class CudaCommunicator(DeviceCommunicatorBase):
  
          if use_custom_allreduce and self.aiter_ar_comm is None and self.world_size > 1:
              # Initialize a custom fast all-reduce implementation.

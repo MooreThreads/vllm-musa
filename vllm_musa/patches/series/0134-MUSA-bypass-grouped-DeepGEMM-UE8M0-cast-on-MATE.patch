@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: bypass grouped DeepGEMM UE8M0 cast on MATE 0.2.6
  1 file changed, 6 insertions(+)
 
 diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
-index 1ee9e43610..98a4c9dca1 100644
+index 210625a..c7c0914 100644
 --- a/vllm/utils/deep_gemm.py
 +++ b/vllm/utils/deep_gemm.py
-@@ -504,6 +504,8 @@ def m_grouped_fp8_gemm_nt_contiguous(*args, **kwargs):
+@@ -509,6 +509,8 @@ def m_grouped_fp8_gemm_nt_contiguous(*args, **kwargs):
      _lazy_init()
      if _grouped_impl is None:
          return _missing(*args, **kwargs)
@@ -20,7 +20,7 @@ index 1ee9e43610..98a4c9dca1 100644
      return _grouped_impl(
          *args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs
      )
-@@ -513,6 +515,8 @@ def m_grouped_fp8_fp4_gemm_nt_contiguous(*args, **kwargs):
+@@ -518,6 +520,8 @@ def m_grouped_fp8_fp4_gemm_nt_contiguous(*args, **kwargs):
      _lazy_init()
      if _grouped_fp4_impl is None:
          return _missing(*args, **kwargs)
@@ -29,7 +29,7 @@ index 1ee9e43610..98a4c9dca1 100644
      return _grouped_fp4_impl(
          *args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs
      )
-@@ -522,6 +526,8 @@ def fp8_m_grouped_gemm_nt_masked(*args, **kwargs):
+@@ -527,6 +531,8 @@ def fp8_m_grouped_gemm_nt_masked(*args, **kwargs):
      _lazy_init()
      if _grouped_masked_impl is None:
          return _missing(*args, **kwargs)

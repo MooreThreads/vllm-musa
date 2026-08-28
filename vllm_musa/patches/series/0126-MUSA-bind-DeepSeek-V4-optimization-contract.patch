@@ -1,0 +1,174 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 3 Aug 2026 19:17:49 +0800
+Subject: [PATCH] MUSA: bind DeepSeek-V4 optimization contract
+
+(cherry picked from commit a3fb15bedda21e51bc471380f8e292e312ed10ac)
+---
+ .../layers/sparse_attn_indexer.py             | 26 +++++++++++++++----
+ vllm/models/deepseek_v4/attention.py          | 19 +++++++++++++-
+ vllm/models/deepseek_v4/nvidia/model.py       |  6 +++++
+ 3 files changed, 45 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 82ea249..5653614 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -543,6 +543,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+     topk_indices: torch.Tensor,
+     topk_tokens: int,
+     head_dim: int,
++    allow_deepseek_v4: bool = False,
+ ) -> bool:
+     is_glm52 = (
+         q_quant.ndim == 3
+@@ -557,7 +558,9 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+     implementation_enabled = (
+         is_glm52 and _musa_sparse_indexer_glm52_materialized_enabled()
+     ) or (
+-        is_deepseek_v4 and _musa_sparse_indexer_materialized_prefill_enabled()
++        is_deepseek_v4
++        and allow_deepseek_v4
++        and _musa_sparse_indexer_materialized_prefill_enabled()
+     )
+     if (
+         not implementation_enabled
+@@ -784,6 +787,7 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
+     topk_indices: torch.Tensor,
+     topk_tokens: int,
+     head_dim: int,
++    allow_deepseek_v4_materialized: bool = False,
+ ) -> bool:
+     if (
+         q_quant.ndim == 3
+@@ -859,6 +863,7 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
+         topk_indices[:rows, :topk],
+         topk,
+         head_dim,
++        allow_deepseek_v4_materialized,
+     ):
+         return True
+ 
+@@ -1212,6 +1217,7 @@ def _musa_fill_exact_sparse_indexer_indices(
+     max_model_len: int,
+     topk_indices_buffer: torch.Tensor,
+     use_fp4_cache: bool,
++    use_musa_materialized_prefill: bool = False,
+ ) -> torch.Tensor:
+     if _musa_try_fill_all_sparse_indexer_indices(
+         hidden_states,
+@@ -1278,6 +1284,7 @@ def _musa_fill_exact_sparse_indexer_indices(
+                 topk_indices_buffer[token_start:token_end, :topk_tokens],
+                 topk_tokens,
+                 head_dim,
++                use_musa_materialized_prefill,
+             ):
+                 continue
+             if q_deq is None:
+@@ -2040,6 +2047,7 @@ class SparseAttnIndexer(CustomOp):
+         use_fp4_cache: bool = False,
+         compress_ratio: int = 1,
+         use_musa_native_indexer: bool = False,
++        use_musa_materialized_prefill: bool = False,
+     ):
+         super().__init__()
+         self.k_cache = k_cache
+@@ -2063,6 +2071,7 @@ class SparseAttnIndexer(CustomOp):
+         self.cp_kv_cache_interleave_size = parallel_config.cp_kv_cache_interleave_size
+         self.use_pcp = parallel_config.prefill_context_parallel_size > 1
+         self.use_musa_native_indexer = use_musa_native_indexer
++        self.use_musa_materialized_prefill = use_musa_materialized_prefill
+         if current_platform.is_cuda() and not has_deep_gemm():
+             raise RuntimeError(
+                 "Sparse Attention Indexer CUDA op requires DeepGEMM support in "
+@@ -2084,11 +2093,16 @@ class SparseAttnIndexer(CustomOp):
+             current_platform.is_musa()
+             and (
+                 self.use_musa_native_indexer
+-                or os.getenv(
+-                    "VLLM_MUSA_ENABLE_GLM52_SPARSE_INDEXER_MUSA_IMPL",
+-                    "1",
++                or (
++                    not isinstance(q_quant, tuple)
++                    and q_quant.ndim == 3
++                    and q_quant.shape[1] == 32
++                    and os.getenv(
++                        "VLLM_MUSA_ENABLE_GLM52_SPARSE_INDEXER_MUSA_IMPL",
++                        "1",
++                    )
++                    == "1"
+                 )
+-                == "1"
+                 or os.getenv(
+                     "VLLM_MUSA_ENABLE_TORCH_SPARSE_ATTN_INDEXER_FALLBACK",
+                     "0",
+@@ -2108,6 +2122,7 @@ class SparseAttnIndexer(CustomOp):
+                     self.max_model_len,
+                     self.topk_indices_buffer,
+                     self.use_fp4_cache,
++                    self.use_musa_materialized_prefill,
+                 )
+             except NotImplementedError:
+                 return _musa_fill_recent_sparse_indexer_indices(
+@@ -2126,6 +2141,7 @@ class SparseAttnIndexer(CustomOp):
+         """Whether this capture uses the MUSA recent-window approximation."""
+         return (
+             current_platform.is_musa()
++            and self.use_musa_native_indexer
+             and _musa_sparse_indexer_is_current_stream_capturing()
+             and not _musa_sparse_indexer_graph_exact_decode_enabled()
+         )
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 59f2762..486551e 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -1035,6 +1035,22 @@ class DeepseekV4Indexer(nn.Module):
+             use_fp4_cache=self.use_fp4_kv,
+         )
+ 
++        use_musa_native_indexer = False
++        use_musa_materialized_prefill = False
++        if current_platform.is_musa():
++            from vllm_musa.optimization_contract import (
++                OptimizationFeature,
++                resolve_optimization_contract,
++            )
++
++            optimization_contract = resolve_optimization_contract(vllm_config)
++            use_musa_native_indexer = optimization_contract.prefers(
++                OptimizationFeature.DEEPSEEK_V4_NATIVE_SPARSE_INDEXER
++            )
++            use_musa_materialized_prefill = optimization_contract.prefers(
++                OptimizationFeature.DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER
++            )
++
+         self.indexer_op = SparseAttnIndexer(
+             self.k_cache,
+             self.quant_block_size,
+@@ -1047,7 +1063,8 @@ class DeepseekV4Indexer(nn.Module):
+             skip_k_cache_insert=True,
+             use_fp4_cache=self.use_fp4_kv,
+             compress_ratio=self.compress_ratio,
+-            use_musa_native_indexer=True,
++            use_musa_native_indexer=use_musa_native_indexer,
++            use_musa_materialized_prefill=use_musa_materialized_prefill,
+         )
+ 
+         # None on ROCm — maybe_execute_in_parallel falls back to sequential.
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index cccdfe7..5227328 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -139,6 +139,12 @@ class DeepseekV4MLP(nn.Module):
+             disable_tp=is_sequence_parallel,
+             prefix=f"{prefix}.down_proj",
+         )
++        if current_platform.is_musa():
++            from vllm.config import get_current_vllm_config_or_none
++
++            from vllm_musa.optimization_contract import bind_optimization_contract
++
++            bind_optimization_contract(self.down_proj, get_current_vllm_config_or_none())
+         if hidden_act != "silu":
+             raise ValueError(
+                 f"Unsupported activation: {hidden_act}. Only silu is supported for now."

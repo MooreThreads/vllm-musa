@@ -51,22 +51,7 @@
          "bfloat16",
          "fp8",
          "fp8_e4m3",
-@@ -59,14 +58,6 @@
-         return [64]
-
-     @staticmethod
--    def get_kv_cache_stride_order(
--        include_num_layers_dimension: bool = False,
--    ) -> tuple[int, ...]:
--        if include_num_layers_dimension:
--            return (1, 0, 2, 3)
--        return (0, 1, 2)
--
--    @staticmethod
-     def get_name() -> str:
-         return "FLASHMLA"
-
-@@ -80,7 +71,8 @@
+@@ -72,7 +71,8 @@
 
      @classmethod
      def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
@@ -76,7 +61,7 @@
 
      @classmethod
      def supports_combination(
-@@ -88,7 +80,7 @@
+@@ -80,7 +80,7 @@
          head_size: int,
          dtype: torch.dtype,
          kv_cache_dtype: CacheDType | None,
@@ -85,7 +70,7 @@
          use_mla: bool,
          has_sink: bool,
          use_sparse: bool,
-@@ -96,12 +88,10 @@
+@@ -88,12 +88,10 @@
          device_capability: DeviceCapability,
      ) -> str | None:
          if use_sparse:
@@ -99,7 +84,7 @@
              return is_flashmla_dense_supported()[1]
 
 
-@@ -118,7 +108,7 @@
+@@ -110,7 +108,7 @@
  class FlashMLAMetadataBuilder(MLACommonMetadataBuilder[FlashMLAMetadata]):
      _cudagraph_support: ClassVar[AttentionCGSupport] = AttentionCGSupport.UNIFORM_BATCH
      query_len_support: ClassVar[QueryLenSupport] = QueryLenSupport.UNIFORM
@@ -108,7 +93,7 @@
      # ^ TODO(matt): tune this
 
      def __init__(
-@@ -138,9 +128,7 @@
+@@ -130,9 +128,7 @@
 
          self.cg_buf_tile_scheduler_metadata = None
          self.cg_buf_num_splits = None
@@ -119,7 +104,7 @@
 
          num_sms = num_compute_units(self.device.index)
 
-@@ -171,40 +159,52 @@
+@@ -163,40 +159,52 @@
          query_lens_cpu = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
          # we use the max but all should be the same due to uniform length requirement
          max_query_len = query_lens_cpu.max().item()
@@ -198,7 +183,7 @@
          return FlashMLADecodeMetadata(
              block_table=block_table_tensor,
              seq_lens=seq_lens_device,
-@@ -282,9 +282,9 @@
+@@ -274,9 +282,9 @@
 
          num_decodes = attn_metadata.num_decodes
          q = reshape_query_for_spec_decode(q, num_decodes)
@@ -210,7 +195,7 @@
              device = q.device
              dtype = torch.int32
 
-@@ -311,36 +311,20 @@
+@@ -303,48 +311,20 @@
              # Non-split path ignores num_splits, but the API requires it:
              # zeros of length B+1
              num_splits = torch.zeros((B + 1,), dtype=dtype, device=device)
@@ -260,4 +245,16 @@
 +        )
          o = reshape_attn_output_for_spec_decode(o)
 
+-        if self.need_to_return_lse_for_decode:
+-            # FlashMLA returns LSE as [batch, heads, seq_len]; the DCP reducer
+-            # consumes [tokens, heads]. Flattening matters under spec-decode,
+-            # where seq_len > 1. Only DCP consumes lse, so skip the copy
+-            # otherwise.
+-            num_decodes, q_num_heads, seq_len = lse.shape
+-            lse = (
+-                lse.permute(0, 2, 1)
+-                .reshape(num_decodes * seq_len, q_num_heads)
+-                .contiguous()
+-            )
+-
          return o, lse

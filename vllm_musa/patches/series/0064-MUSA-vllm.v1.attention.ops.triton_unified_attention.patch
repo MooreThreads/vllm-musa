@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.attention.ops.triton_unified_attention
  1 file changed, 18 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index ce4a85cfef..b8f7564fe2 100644
+index ce4a85c..b8f7564 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -34,6 +34,21 @@ logger = init_logger(__name__)

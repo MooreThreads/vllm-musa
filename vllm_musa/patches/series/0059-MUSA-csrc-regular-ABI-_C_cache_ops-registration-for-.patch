@@ -12,7 +12,7 @@ Subject: [PATCH] MUSA(csrc): regular-ABI _C_cache_ops registration for
 
 diff --git a/csrc/libtorch_stable/musa_cache_ops_reg.cu b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 new file mode 100644
-index 0000000000..fcd5c5de24
+index 0000000..fcd5c5d
 --- /dev/null
 +++ b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 @@ -0,0 +1,317 @@
@@ -334,7 +334,7 @@ index 0000000000..fcd5c5de24
 +  m.impl("merge_attn_states", &merge_attn_states);
 +}
 diff --git a/csrc/torch_bindings.cpp b/csrc/torch_bindings.cpp
-index 82c852183a..a4e5b2ca4e 100644
+index 82c8521..a4e5b2c 100644
 --- a/csrc/torch_bindings.cpp
 +++ b/csrc/torch_bindings.cpp
 @@ -21,116 +21,36 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {

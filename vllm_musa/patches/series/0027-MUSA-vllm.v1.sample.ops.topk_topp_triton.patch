@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.sample.ops.topk_topp_triton
  1 file changed, 15 insertions(+), 20 deletions(-)
 
 diff --git a/vllm/v1/sample/ops/topk_topp_triton.py b/vllm/v1/sample/ops/topk_topp_triton.py
-index d8f8c8956d..83917e3403 100755
+index d8f8c89..83917e3 100755
 --- a/vllm/v1/sample/ops/topk_topp_triton.py
 +++ b/vllm/v1/sample/ops/topk_topp_triton.py
 @@ -197,10 +197,7 @@ def _topk_topp_kernel(

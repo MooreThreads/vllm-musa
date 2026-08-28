@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.ir.tolerances
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/vllm/ir/tolerances.py b/vllm/ir/tolerances.py
-index a794a93976..0108aa590a 100644
+index a794a93..0108aa5 100644
 --- a/vllm/ir/tolerances.py
 +++ b/vllm/ir/tolerances.py
 @@ -29,7 +29,7 @@ DEFAULT_TOLERANCES: ToleranceSpec = {

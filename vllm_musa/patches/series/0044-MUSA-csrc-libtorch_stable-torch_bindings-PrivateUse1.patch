@@ -9,7 +9,7 @@ Subject: [PATCH] MUSA(csrc): libtorch_stable torch_bindings PrivateUse1 impls
  2 files changed, 43 insertions(+)
 
 diff --git a/csrc/libtorch_stable/ops.h b/csrc/libtorch_stable/ops.h
-index 5c595bfaf4..c403805a60 100644
+index 31983fc..a9bca9f 100644
 --- a/csrc/libtorch_stable/ops.h
 +++ b/csrc/libtorch_stable/ops.h
 @@ -11,8 +11,14 @@
@@ -28,10 +28,10 @@ index 5c595bfaf4..c403805a60 100644
    // Get the raw data pointer
    void* data_ptr = tensor.mutable_data_ptr();
 diff --git a/csrc/libtorch_stable/torch_bindings.cpp b/csrc/libtorch_stable/torch_bindings.cpp
-index 28090ce5dc..d0ab455224 100644
+index c9bcba1..a3e1ef3 100644
 --- a/csrc/libtorch_stable/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/torch_bindings.cpp
-@@ -704,6 +704,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -707,6 +707,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
        "Tensor(h!) n_gram_ids) -> ()");
  }
  
@@ -39,7 +39,7 @@ index 28090ce5dc..d0ab455224 100644
  STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
    // LongCat n-gram embedding index kernel.
    ops.impl("ngram_compute_n_gram_ids", TORCH_BOX(&ngram_compute_n_gram_ids));
-@@ -872,6 +873,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C_cuda_utils, cuda_utils) {
+@@ -874,6 +875,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C_cuda_utils, cuda_utils) {
    cuda_utils.def(
        "get_max_shared_memory_per_block_device_attribute(int device_id) -> int");
  }
@@ -47,7 +47,7 @@ index 28090ce5dc..d0ab455224 100644
  
  STABLE_TORCH_LIBRARY_IMPL(_C_cuda_utils, CompositeExplicitAutograd,
                            cuda_utils) {
-@@ -884,6 +886,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cuda_utils, CompositeExplicitAutograd,
+@@ -886,6 +888,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cuda_utils, CompositeExplicitAutograd,
  // there is no device to dispatch on. CompositeExplicitAutograd makes them
  // available for all backends. This is the stable ABI equivalent of calling
  // ops.impl("op_name", &func) without a dispatch key in the non-stable API.
@@ -55,7 +55,7 @@ index 28090ce5dc..d0ab455224 100644
  STABLE_TORCH_LIBRARY_IMPL(_C, CompositeExplicitAutograd, ops) {
  #ifndef USE_ROCM
    ops.impl("cutlass_scaled_mm_supports_fp8",
-@@ -1057,5 +1060,39 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {
+@@ -1059,5 +1062,39 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {
    ops.impl("cp_gather_indexer_k_quant_cache",
             TORCH_BOX(&cp_gather_indexer_k_quant_cache));
  }

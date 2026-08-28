@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 19 Aug 2026 15:30:51 +0800
+Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
+
+---
+ vllm/v1/core/kv_cache_coordinator.py | 29 ++++++++++++++++++++++++----
+ 1 file changed, 25 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
+index 01c3bc7..909c456 100644
+--- a/vllm/v1/core/kv_cache_coordinator.py
++++ b/vllm/v1/core/kv_cache_coordinator.py
+@@ -11,9 +11,11 @@ from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
+ from vllm.v1.core.kv_cache_utils import (
+     BlockHash,
+     KVCacheBlock,
++    musa_mamba_separate_pool_enabled,
+ )
+ from vllm.v1.core.single_type_kv_cache_manager import (
+     CrossAttentionManager,
++    MambaManager,
+     SingleTypeKVCacheManager,
+     get_manager_for_kv_cache_spec,
+ )
+@@ -103,6 +105,19 @@ class KVCacheCoordinator(ABC):
+             metrics_collector=metrics_collector,
+         )
+ 
++        self.musa_mamba_block_pools: dict[int, BlockPool] = {}
++        mamba_num_blocks = kv_cache_config.musa_mamba_num_blocks
++        if musa_mamba_separate_pool_enabled() and mamba_num_blocks is not None:
++            for group_id, group in enumerate(kv_cache_config.kv_cache_groups):
++                if isinstance(group.kv_cache_spec, MambaSpec):
++                    self.musa_mamba_block_pools[group_id] = BlockPool(
++                        num_gpu_blocks=mamba_num_blocks,
++                        enable_caching=False,
++                        hash_block_size=hash_block_size,
++                        enable_kv_cache_events=False,
++                        metrics_collector=None,
++                    )
++
+         # KV cache group indices that get the EAGLE last-block drop.
+         self.eagle_group_ids: set[int] = {
+             i for i, g in enumerate(kv_cache_config.kv_cache_groups) if g.is_eagle_group
+@@ -138,7 +153,7 @@ class KVCacheCoordinator(ABC):
+                 kv_cache_spec=kv_cache_group.kv_cache_spec,
+                 max_in_flight_tokens=max_in_flight_tokens,
+                 max_model_len=max_model_len,
+-                block_pool=self.block_pool,
++                block_pool=self.musa_mamba_block_pools.get(i, self.block_pool),
+                 enable_caching=enable_caching,
+                 kv_cache_group_id=i,
+                 dcp_world_size=dcp_world_size,
+@@ -195,6 +210,10 @@ class KVCacheCoordinator(ABC):
+         """
+         num_blocks_to_allocate = 0
+         for i, manager in enumerate(self.single_type_managers):
++            if i in self.musa_mamba_block_pools and isinstance(manager, MambaManager):
++                # Dedicated Mamba pools are sized from max_num_seqs and do not
++                # constrain admission against the attention pool.
++                continue
+             if isinstance(manager, CrossAttentionManager):
+                 # For cross-attention, we issue a single static allocation
+                 # of blocks based on the number of encoder input tokens.
+@@ -688,7 +707,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+ 
+             # Try to find an existing group with the same spec
+             for idx, group in enumerate(self.attention_groups):
+-                if group.spec == spec:
++                if group.spec == spec and i not in self.musa_mamba_block_pools:
+                     assert manager_cls is group.manager_cls, (
+                         "Expected same manager class for identical KV cache specs."
+                     )
+@@ -853,7 +872,9 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+                     block_hashes=block_hashes,
+                     max_length=_max_length,
+                     kv_cache_group_ids=group_ids,
+-                    block_pool=self.block_pool,
++                    block_pool=self.single_type_managers[
++                        group_ids[0]
++                    ].block_pool,
+                     kv_cache_spec=spec,
+                     drop_eagle_block=drop_eagle_block,
+                     alignment_tokens=self._cache_hit_alignment_tokens,
+@@ -922,7 +943,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+                 block_hashes=block_hashes,
+                 max_length=max_cache_hit_length,
+                 kv_cache_group_ids=group_ids,
+-                block_pool=self.block_pool,
++                block_pool=self.single_type_managers[group_ids[0]].block_pool,
+                 kv_cache_spec=spec,
+                 drop_eagle_block=use_eagle,
+                 alignment_tokens=self._cache_hit_alignment_tokens,

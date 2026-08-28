@@ -11,10 +11,10 @@ Subject: [PATCH] MUSA(csrc): drop unboxable stable ops, guard non-core
  3 files changed, 49 insertions(+), 8 deletions(-)
 
 diff --git a/csrc/libtorch_stable/activation_kernels.cu b/csrc/libtorch_stable/activation_kernels.cu
-index aa2c1b6b92..941b14d6ec 100644
+index 56d0058..f2c7a78 100644
 --- a/csrc/libtorch_stable/activation_kernels.cu
 +++ b/csrc/libtorch_stable/activation_kernels.cu
-@@ -260,7 +260,8 @@ packed_gelu_tanh_kernel(const packed_t& val, const float /*alpha*/) {
+@@ -268,7 +268,8 @@ packed_gelu_tanh_kernel(const packed_t& val, const float /*alpha*/) {
              scalar_t, typename vllm::PackedTypeConverter<scalar_t>::Type,      \
              KERNEL<scalar_t>,                                                  \
              PACKED_KERNEL<typename vllm::PackedTypeConverter<scalar_t>::Type>, \
@@ -24,7 +24,7 @@ index aa2c1b6b92..941b14d6ec 100644
              out.mutable_data_ptr<scalar_t>(),                                  \
              input.const_data_ptr<scalar_t>(), d, LIMIT, ALPHA, BETA);          \
        });                                                                      \
-@@ -332,6 +333,7 @@ void gelu_tanh_and_mul(torch::stable::Tensor& out,    // [..., d]
+@@ -340,6 +341,7 @@ void gelu_tanh_and_mul(torch::stable::Tensor& out,    // [..., d]
  
  namespace vllm {
  
@@ -32,7 +32,7 @@ index aa2c1b6b92..941b14d6ec 100644
  template <typename T>
  __device__ __forceinline__ T fatrelu_kernel(const T& x, const float threshold) {
    const float f = (float)x;
-@@ -465,6 +467,7 @@ __global__ void swigluoai_and_mul_kernel(
+@@ -473,6 +475,7 @@ __global__ void swigluoai_and_mul_kernel(
      }
    }
  }
@@ -40,7 +40,7 @@ index aa2c1b6b92..941b14d6ec 100644
  
  // SITU (Kimi SituGLU) gated activation. Non-interleaved layout:
  // input = [gate(d), up(d)] per token.
-@@ -528,6 +531,7 @@ __global__ void masked_situ_and_mul_kernel(
+@@ -798,6 +801,7 @@ __global__ void masked_situ_and_mul_kernel(
  
  }  // namespace vllm
  
@@ -48,7 +48,7 @@ index aa2c1b6b92..941b14d6ec 100644
  #define LAUNCH_ACTIVATION_GATE_KERNEL_WITH_PARAM(KERNEL, PACKED_KERNEL, PARAM) \
    auto dtype = input.scalar_type();                                            \
    int d = input.size(-1) / 2;                                                  \
-@@ -615,6 +619,7 @@ void swigluoai_and_mul(torch::stable::Tensor& out,    // [..., d]
+@@ -885,6 +889,7 @@ void swigluoai_and_mul(torch::stable::Tensor& out,    // [..., d]
                         double alpha, double limit) {
    LAUNCH_SIGLUOAI_AND_MUL(vllm::swigluoai_and_mul, alpha, limit);
  }
@@ -56,7 +56,7 @@ index aa2c1b6b92..941b14d6ec 100644
  
  // Kimi SITU gated activation. `linear_beta <= 0` means "unset" (up passed
  // through), matching SituAndMul(linear_beta=None) on the Python side.
-@@ -737,7 +742,8 @@ __global__ void activation_kernel(
+@@ -1124,7 +1129,8 @@ __global__ void activation_kernel(
      dim3 block(std::min(d / vec_size, 1024));                                  \
      if (CUDA_VERSION >= 12090 && cc_major >= 10 && num_tokens > 128) {         \
        VLLM_STABLE_DISPATCH_FLOATING_TYPES(dtype, "activation_kernel", [&] {    \
@@ -67,7 +67,7 @@ index aa2c1b6b92..941b14d6ec 100644
                                           input.const_data_ptr<scalar_t>(), d); \
        });                                                                      \
 diff --git a/csrc/libtorch_stable/quantization/activation_kernels.cu b/csrc/libtorch_stable/quantization/activation_kernels.cu
-index a140a043c2..2afdd15fb6 100644
+index a140a04..2afdd15 100644
 --- a/csrc/libtorch_stable/quantization/activation_kernels.cu
 +++ b/csrc/libtorch_stable/quantization/activation_kernels.cu
 @@ -304,10 +304,10 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
@@ -86,7 +86,7 @@ index a140a043c2..2afdd15fb6 100644
    int warp_id = tid >> 5;
    int lane_id = tid & 0x1f;
 diff --git a/csrc/libtorch_stable/torch_bindings.cpp b/csrc/libtorch_stable/torch_bindings.cpp
-index d0ab455224..1ec9d8af90 100644
+index a3e1ef3..274d5ae 100644
 --- a/csrc/libtorch_stable/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/torch_bindings.cpp
 @@ -184,10 +184,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
@@ -158,7 +158,7 @@ index d0ab455224..1ec9d8af90 100644
  
    // Check if cutlass_scaled_mm_fp4 is supported for CUDA devices
    // of the given capability
-@@ -511,6 +523,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -506,6 +518,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
  #endif
  
    // Horizontally-fused MiniMax-M3 QK-norm + partial NeoX RoPE + KV-insert.
@@ -166,7 +166,7 @@ index d0ab455224..1ec9d8af90 100644
    ops.def(
        "fused_minimax_m3_qknorm_rope_kv_insert("
        "Tensor! qkv, Tensor q_norm_weight, Tensor k_norm_weight, "
-@@ -523,6 +536,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -518,6 +531,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
        "int block_size, Tensor!? q_out, Tensor!? index_q_out, "
        "str kv_cache_dtype, bool skip_index_branch=False, "
        "Tensor!? q_fp8_out=None, float q_fp8_scale=1.0) -> ()");
@@ -174,7 +174,7 @@ index d0ab455224..1ec9d8af90 100644
  
  #ifdef VLLM_ENABLE_FUSED_KDA_DECODE
    ops.def(
-@@ -606,12 +620,14 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -601,12 +615,14 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
    ops.def("gelu_tanh_and_mul(Tensor! out, Tensor input) -> ()");
  
    // FATReLU implementation.
@@ -189,7 +189,7 @@ index d0ab455224..1ec9d8af90 100644
  
    // SituGLU implementation used in Kimi models.
    ops.def(
-@@ -1071,18 +1087,37 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {
+@@ -1073,18 +1089,37 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {
  // translate the CUDA dispatch-key token like torch.library's Python path does).
  STABLE_TORCH_LIBRARY_IMPL(_C, PrivateUse1, ops) {
    ops.impl("weak_ref_tensor", TORCH_BOX(&weak_ref_tensor));

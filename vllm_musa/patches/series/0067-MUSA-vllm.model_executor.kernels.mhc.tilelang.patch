@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.model_executor.kernels.mhc.tilelang
  1 file changed, 49 insertions(+)
 
 diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
-index c3c773d07f..57f852c60d 100644
+index c3c773d..57f852c 100644
 --- a/vllm/model_executor/kernels/mhc/tilelang.py
 +++ b/vllm/model_executor/kernels/mhc/tilelang.py
 @@ -126,6 +126,26 @@ def mhc_pre_tilelang(

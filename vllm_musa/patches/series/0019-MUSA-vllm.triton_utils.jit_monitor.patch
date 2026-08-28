@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.triton_utils.jit_monitor
  1 file changed, 10 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/utils/jit_monitor.py b/vllm/utils/jit_monitor.py
-index bb0bb8df9a..05809581dc 100644
+index bb0bb8d..0580958 100644
 --- a/vllm/utils/jit_monitor.py
 +++ b/vllm/utils/jit_monitor.py
 @@ -98,7 +98,11 @@ def _setup_triton_autotuning_print() -> None:

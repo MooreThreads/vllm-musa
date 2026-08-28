@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 26 Aug 2026 12:08:10 +0800
+Subject: [PATCH] MUSA: keep DeepSeek-V4 on MRV1 by default
+
+Keep the faster MRV1 path as the MUSA default for DeepSeek-V4.
+
+Preserve explicit V2 opt-in and the DSpark V2 override.
+---
+ vllm/config/vllm.py | 20 +++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
+index 87c3c64..fce1ee4 100644
+--- a/vllm/config/vllm.py
++++ b/vllm/config/vllm.py
+@@ -98,12 +98,22 @@ def default_breakable_cudagraph_architectures() -> frozenset[str]:
+     """Architectures defaulting to breakable CUDA graphs on this platform."""
+     from vllm.platforms import current_platform
+ 
++    excluded: set[str] = set()
+     if current_platform.is_rocm():
+-        return DEFAULT_BREAKABLE_CUDAGRAPH_ARCHITECTURES - {
+-            "DeepseekV32ForCausalLM",
+-            "DeepseekV32MTPModel",
+-        }
+-    return DEFAULT_BREAKABLE_CUDAGRAPH_ARCHITECTURES
++        excluded.update(
++            {
++                "DeepseekV32ForCausalLM",
++                "DeepseekV32MTPModel",
++                "DeepseekV4ForCausalLM",
++            }
++        )
++    is_musa = getattr(current_platform, "is_musa", None)
++    if callable(is_musa) and is_musa():
++        # DeepSeek V4 is faster on MRV1 on ROCm and MUSA. Its attention layer
++        # selects the eager region MRV1 needs, and MUSA uses FULL_DECODE_ONLY
++        # rather than piecewise graphs for this deployment.
++        excluded.add("DeepseekV4ForCausalLM")
++    return DEFAULT_BREAKABLE_CUDAGRAPH_ARCHITECTURES - excluded
+ 
+ 
+ class OptimizationLevel(IntEnum):

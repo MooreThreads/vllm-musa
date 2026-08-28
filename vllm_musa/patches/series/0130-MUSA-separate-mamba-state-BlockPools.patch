@@ -1,0 +1,195 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 14 Jul 2026 12:00:00 +0800
+Subject: [PATCH] MUSA: separate mamba state BlockPools
+
+Give mamba state its own contiguous BlockPools, sized from max_num_seqs so they
+never bind, and keep them out of the attention pool's proportional shrink. The
+mamba groups then own small contiguous block-id spaces and mate's GDN decode
+updates the recurrent state in place instead of gathering and scattering it.
+
+Hybrid models select the dedicated pool automatically from the resolved policy.
+---
+ vllm/v1/core/kv_cache_utils.py | 155 +++++++++++++++++++++++++++++++--
+ 1 file changed, 146 insertions(+), 9 deletions(-)
+
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index ddde656..99a1d52 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1618,6 +1618,127 @@ def _get_musa_deepseek_v4_zero_offset_config(
+     )
+ 
+ 
++def musa_mamba_separate_pool_enabled() -> bool:
++    """Whether MUSA may assign non-GLM Mamba groups dedicated block pools."""
++    try:
++        from vllm.platforms import current_platform
++    except Exception:
++        return False
++    return current_platform.is_musa()
++
++
++def _musa_has_mamba_and_attention(
++    kv_cache_groups: list[KVCacheGroupSpec],
++) -> bool:
++    has_mamba = any(
++        isinstance(group.kv_cache_spec, MambaSpec) for group in kv_cache_groups
++    )
++    has_attention = any(
++        not isinstance(group.kv_cache_spec, MambaSpec)
++        for group in kv_cache_groups
++    )
++    return has_mamba and has_attention
++
++
++def _musa_separate_pool_eligible(
++    vllm_config: VllmConfig,
++    kv_cache_groups: list[KVCacheGroupSpec],
++) -> bool:
++    # GLM-5.3-Flash has an upstream model-specific shared layout and native
++    # KDA/cache-manager contract. It must win over the older generic MUSA
++    # Mamba optimization. KV connectors still require the shared pool API.
++    return (
++        musa_mamba_separate_pool_enabled()
++        and vllm_config.kv_transfer_config is None
++        and _musa_has_mamba_and_attention(kv_cache_groups)
++        and _glm5_next_tensor_layout(kv_cache_groups) is None
++    )
++
++
++def _musa_separated_mamba_attn_config(
++    vllm_config: VllmConfig,
++    kv_cache_groups: list[KVCacheGroupSpec],
++    available_memory: int,
++) -> KVCacheConfig:
++    """Build independent attention and contiguous Mamba backing allocations."""
++    mamba_groups = [
++        group
++        for group in kv_cache_groups
++        if isinstance(group.kv_cache_spec, MambaSpec)
++    ]
++    attn_groups = [
++        group
++        for group in kv_cache_groups
++        if not isinstance(group.kv_cache_spec, MambaSpec)
++    ]
++    mamba_page = get_uniform_page_size(
++        group.kv_cache_spec for group in mamba_groups
++    )
++    mamba_blocks_per_request = max(
++        cdiv(
++            group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
++            mamba_page,
++        )
++        for group in mamba_groups
++    )
++    mamba_num_blocks = (
++        vllm_config.scheduler_config.max_num_seqs * mamba_blocks_per_request + 1
++    )
++    mamba_layers = [
++        layer_name for group in mamba_groups for layer_name in group.layer_names
++    ]
++    mamba_bytes = mamba_page * mamba_num_blocks * len(mamba_layers)
++
++    profiling_num_blocks = (
++        vllm_config.cache_config.num_gpu_blocks_override
++        if available_memory == 0
++        else None
++    )
++    if profiling_num_blocks is not None:
++        attn_memory = profiling_num_blocks * _pool_bytes_per_block(attn_groups)
++    else:
++        if mamba_bytes >= available_memory:
++            raise ValueError("MUSA separate Mamba pool needs more memory than available")
++        attn_memory = available_memory - mamba_bytes
++
++    # This recursive call cannot re-enter this branch because attn_groups has
++    # no Mamba spec. It preserves the new generic layout/stride calculation.
++    attn_config = get_kv_cache_config_from_groups(
++        vllm_config, attn_groups, attn_memory
++    )
++    kv_cache_tensors = list(attn_config.kv_cache_tensors)
++    allocation_id = 1 + max(
++        (
++            tensor.musa_allocation_id or 0
++            for tensor in attn_config.kv_cache_tensors
++        ),
++        default=0,
++    )
++    for layer_name in mamba_layers:
++        size = mamba_page * mamba_num_blocks
++        kv_cache_tensors.append(
++            KVCacheTensor(
++                size=size,
++                layers=[layer_name],
++                layer_stride=size,
++                block_stride=mamba_page,
++                musa_mamba_pool=True,
++                musa_allocation_id=allocation_id,
++            )
++        )
++        allocation_id += 1
++
++    return KVCacheConfig(
++        num_blocks=attn_config.num_blocks,
++        kv_cache_tensors=kv_cache_tensors,
++        kv_cache_groups=kv_cache_groups,
++        prefix_cache_retention_interval=(
++            vllm_config.cache_config.prefix_cache_retention_interval
++        ),
++        musa_mamba_num_blocks=mamba_num_blocks,
++    )
++
++
+ def get_kv_cache_config_from_groups(
+     vllm_config: VllmConfig,
+     kv_cache_groups: list[KVCacheGroupSpec],
+@@ -1714,6 +1835,11 @@ def get_kv_cache_config_from_groups(
+             vllm_config, kv_cache_groups, available_memory
+         )
+ 
++    if _musa_separate_pool_eligible(vllm_config, kv_cache_groups):
++        return _musa_separated_mamba_attn_config(
++            vllm_config, kv_cache_groups, available_memory
++        )
++
+     layout = vllm_config.cache_config.get_resolved_kv_cache_layout()
+     validate_kv_cache_layout(layout, kv_cache_groups)
+     bytes_per_block = _get_kv_cache_bytes_per_block(kv_cache_groups)
+@@ -2161,15 +2287,26 @@ def get_kv_cache_groups(
+         if not isinstance(v, HiddenStateCacheSpec)
+     }
+ 
+-    # Prefer preserving each layer's cache semantics. If physical pages cannot
+-    # be unified, try a supported allocation-only fallback before failing.
+-    try:
+-        filtered_spec = unify_kv_cache_spec_page_size(filtered_spec)
+-    except NotImplementedError:
+-        fallback_groups = _try_get_full_allocation_fallback_groups(kv_cache_spec)
+-        if fallback_groups is None:
+-            raise
+-        return fallback_groups
++    # Dedicated MUSA Mamba pools have independent page sizes and block-id
++    # spaces. Preserve backend-preferred pages for non-GLM hybrid models.
++    if (
++        musa_mamba_separate_pool_enabled()
++        and vllm_config.kv_transfer_config is None
++        and not hidden_specs
++        and any(isinstance(spec, MambaSpec) for spec in filtered_spec.values())
++        and any(not isinstance(spec, MambaSpec) for spec in filtered_spec.values())
++    ):
++        pass
++    else:
++        # Prefer preserving each layer's cache semantics. If physical pages
++        # cannot be unified, try a supported allocation-only fallback.
++        try:
++            filtered_spec = unify_kv_cache_spec_page_size(filtered_spec)
++        except NotImplementedError:
++            fallback_groups = _try_get_full_allocation_fallback_groups(kv_cache_spec)
++            if fallback_groups is None:
++                raise
++            return fallback_groups
+     groups = _get_kv_cache_groups_uniform_page_size(filtered_spec)
+ 
+     # Add hidden-state layers back with page aligned to the common page.

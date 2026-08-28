@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.distributed.device_communicators.all2all
  1 file changed, 2 deletions(-)
 
 diff --git a/vllm/distributed/device_communicators/all2all.py b/vllm/distributed/device_communicators/all2all.py
-index 5abe7568a2..9b264619a7 100644
+index eb187a9..d63069b 100644
 --- a/vllm/distributed/device_communicators/all2all.py
 +++ b/vllm/distributed/device_communicators/all2all.py
 @@ -238,7 +238,6 @@ class DeepEPHTAll2AllManager(DeepEPAll2AllManagerBase):

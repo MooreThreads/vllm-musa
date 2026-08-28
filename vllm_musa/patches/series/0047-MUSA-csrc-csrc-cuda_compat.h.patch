@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc): csrc/cuda_compat.h
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/csrc/cuda_compat.h b/csrc/cuda_compat.h
-index d7d589db62..3893d6a97c 100644
+index d7d589d..3893d6a 100644
 --- a/csrc/cuda_compat.h
 +++ b/csrc/cuda_compat.h
 @@ -69,7 +69,7 @@ struct Utils {

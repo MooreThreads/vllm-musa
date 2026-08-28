@@ -12,7 +12,7 @@ Subject: [PATCH] MUSA(csrc): build the relocated MoE kernels as a regular
  4 files changed, 155 insertions(+), 165 deletions(-)
 
 diff --git a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
-index a8c09794b2..70410120f4 100644
+index a8c0979..7041012 100644
 --- a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 +++ b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 @@ -9,7 +9,7 @@
@@ -25,7 +25,7 @@ index a8c09794b2..70410120f4 100644
  #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
  
 diff --git a/csrc/libtorch_stable/moe/moe_ops.h b/csrc/libtorch_stable/moe/moe_ops.h
-index 03525a05f9..8986d5da4e 100644
+index 03525a0..8986d5d 100644
 --- a/csrc/libtorch_stable/moe/moe_ops.h
 +++ b/csrc/libtorch_stable/moe/moe_ops.h
 @@ -1,74 +1,74 @@
@@ -173,7 +173,7 @@ index 03525a05f9..8986d5da4e 100644
 +                      const torch::Tensor& mat_b);
  #endif
 diff --git a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
-index 098644a1b9..776cdfddaa 100644
+index 098644a..776cdfd 100644
 --- a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
 +++ b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
 @@ -19,14 +19,13 @@
@@ -404,7 +404,7 @@ index 098644a1b9..776cdfddaa 100644
      }
  }
 diff --git a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
-index 976eebac3d..b5290648b2 100644
+index 976eeba..b529064 100644
 --- a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
 +++ b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
 @@ -20,14 +20,13 @@

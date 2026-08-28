@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 26 Aug 2026 10:12:26 +0800
+Subject: [PATCH] MUSA: keep DeepSeek-V4 hc_head on fused TileLang
+
+---
+ vllm/model_executor/kernels/mhc/tilelang.py | 5 -----
+ vllm/tilelang_utils/__init__.py             | 6 +++++-
+ 2 files changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
+index 7749a7d..46007e8 100644
+--- a/vllm/model_executor/kernels/mhc/tilelang.py
++++ b/vllm/model_executor/kernels/mhc/tilelang.py
+@@ -803,11 +803,6 @@ def hc_head_fused_kernel_tilelang(
+     hc_eps: float,
+ ) -> torch.Tensor:
+     """Apply the fused hc_head kernel and return the (T, H) bf16 result."""
+-    if hs_flat.device.type == "musa":
+-        from vllm_musa.deepseek_v4_mhc import hc_head_musa
+-
+-        return hc_head_musa(hs_flat, fn, hc_scale, hc_base, rms_eps, hc_eps)
+-
+     num_tokens, hc_mult, hidden_size = hs_flat.shape
+     out = torch.empty(
+         num_tokens, hidden_size, dtype=torch.bfloat16, device=hs_flat.device
+diff --git a/vllm/tilelang_utils/__init__.py b/vllm/tilelang_utils/__init__.py
+index 83829fc..438f023 100644
+--- a/vllm/tilelang_utils/__init__.py
++++ b/vllm/tilelang_utils/__init__.py
+@@ -12,7 +12,11 @@ from typing import TYPE_CHECKING, Any
+ from vllm.platforms import current_platform
+ from vllm.utils.import_utils import has_tilelang
+ 
+-if TYPE_CHECKING or current_platform.is_cuda():
++if (
++    TYPE_CHECKING
++    or current_platform.is_cuda()
++    or current_platform.is_musa()
++):
+     if not has_tilelang():
+         raise ImportError(
+             "tilelang is required for mhc but is not installed. Install it with "

@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 6 Aug 2026 19:28:00 +0800
+Subject: [PATCH] MUSA: enable Qwen3.5 shared fold for TP-only MoE
+
+The vLLM EP process group is constructed with TP ranks even when expert
+parallelism is disabled.  Using its size as a fold guard therefore disables
+the fold on the normal TP8 Qwen3.5 path, although every rank owns the full
+routed expert stack.  Gate on the explicit expert-parallel setting instead.
+---
+ vllm/model_executor/models/qwen3_next.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
+index 34c0d3b..ab11062 100644
+--- a/vllm/model_executor/models/qwen3_next.py
++++ b/vllm/model_executor/models/qwen3_next.py
+@@ -233,7 +233,7 @@ class Qwen3NextSparseMoeBlock(nn.Module):
+             and optimization_contract.prefers(
+                 OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD
+             )
+-            and self.ep_size <= 1
++            and not parallel_config.enable_expert_parallel
+             and not self.enable_eplb
+             and config.shared_expert_intermediate_size == config.moe_intermediate_size
+             and _musa_shared_expert_foldable(self.shared_expert)

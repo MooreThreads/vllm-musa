@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc): csrc/topk.cu
  1 file changed, 71 insertions(+), 80 deletions(-)
 
 diff --git a/csrc/libtorch_stable/topk.cu b/csrc/libtorch_stable/topk.cu
-index 07b7521f86..eb4e1e070f 100644
+index 07b7521..eb4e1e0 100644
 --- a/csrc/libtorch_stable/topk.cu
 +++ b/csrc/libtorch_stable/topk.cu
 @@ -1,53 +1,51 @@

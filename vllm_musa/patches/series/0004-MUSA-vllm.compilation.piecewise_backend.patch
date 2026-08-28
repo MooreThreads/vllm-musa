@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.compilation.piecewise_backend
  1 file changed, 7 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/compilation/piecewise_backend.py b/vllm/compilation/piecewise_backend.py
-index b647e0d858..d89472d135 100644
+index b647e0d..d89472d 100644
 --- a/vllm/compilation/piecewise_backend.py
 +++ b/vllm/compilation/piecewise_backend.py
 @@ -6,6 +6,7 @@ import io

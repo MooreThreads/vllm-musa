@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.worker.gpu.sample.penalties
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/vllm/v1/worker/gpu/sample/penalties.py b/vllm/v1/worker/gpu/sample/penalties.py
-index 25cb2f211d..820bae5d49 100644
+index 25cb2f2..820bae5 100644
 --- a/vllm/v1/worker/gpu/sample/penalties.py
 +++ b/vllm/v1/worker/gpu/sample/penalties.py
 @@ -129,7 +129,7 @@ def _penalties_kernel(

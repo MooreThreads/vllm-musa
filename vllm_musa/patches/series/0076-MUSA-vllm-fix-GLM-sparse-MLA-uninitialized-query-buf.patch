@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 8 Jul 2026 12:00:00 +0800
+Subject: [PATCH] MUSA(vllm): fix GLM sparse MLA uninitialized query buffers
+
+GLM-5.2 TP8 exposes two uninitialized-buffer paths in the sparse MLA BF16
+prefill path: head padding used new_empty for padded heads, and concat_mla_q
+left stale values in the reused q_concat_buffer. Zero the padded heads and use
+a fresh full-write torch.cat for the MQA query concatenation so padded/stale
+NaNs cannot leak into the TileLang sparse attention kernel.
+---
+ vllm/v1/attention/backends/mla/flashmla_sparse.py | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+index e134cd1..7f0b561 100644
+--- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
++++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+@@ -911,7 +911,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+                 f"Padding num_heads from {actual_num_heads} to "
+                 f"{padded_num_heads} for BF16 sparse prefill kernel"
+             )
+-            q_padded = q.new_empty((q.shape[0], padded_num_heads, q.shape[2]))
++            q_padded = q.new_zeros((q.shape[0], padded_num_heads, q.shape[2]))
+             q_padded[:, :actual_num_heads, :] = q
+             q = q_padded
+ 
+@@ -942,8 +942,9 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+         actual_num_heads = self.num_heads
+         if isinstance(q, tuple):
+             ql_nope, q_pe = q
+-            q = self.q_concat_buffer[: ql_nope.shape[0]]
+-            ops.concat_mla_q(ql_nope, q_pe, q)
++            # MUSA: concat_mla_q leaves the reused q_concat_buffer partially written
++            # (stale NaN/garbage); use a fresh full-write cat instead.
++            q = torch.cat([ql_nope, q_pe], dim=-1)
+         else:
+             actual_num_heads = q.shape[1]
+ 

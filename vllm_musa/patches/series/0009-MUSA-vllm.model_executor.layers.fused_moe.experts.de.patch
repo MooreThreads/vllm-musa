@@ -9,7 +9,7 @@ Subject: [PATCH] MUSA:
  1 file changed, 8 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py b/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
-index 211364d24b..f0179e4a0d 100644
+index 211364d..f0179e4 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
 @@ -355,9 +355,12 @@ class DeepGemmExperts(mk.FusedMoEExpertsModular):

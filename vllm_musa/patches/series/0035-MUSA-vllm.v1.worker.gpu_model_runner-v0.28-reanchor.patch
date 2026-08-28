@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.v1.worker.gpu_model_runner (v0.28 reanchor)
  1 file changed, 83 insertions(+), 16 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 9087f87854..682227ecee 100644
+index 0d514b9..06acbe8 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -625,6 +625,9 @@ class GPUModelRunner(
+@@ -624,6 +624,9 @@ class GPUModelRunner(
          self.encoder_cudagraph_manager: EncoderCudaGraphManager | None = None
  
          self.use_aux_hidden_state_outputs = False
@@ -21,7 +21,7 @@ index 9087f87854..682227ecee 100644
          # Set up speculative decoding.
          # NOTE(Jiayi): currently we put the entire draft model on
          # the last PP rank. This is not ideal if there are many
-@@ -680,6 +683,9 @@ class GPUModelRunner(
+@@ -679,6 +682,9 @@ class GPUModelRunner(
              elif self.speculative_config.use_dflash():
                  self.drafter = DFlashProposer(self.vllm_config, self.device, self)
                  self.use_aux_hidden_state_outputs = True
@@ -31,7 +31,7 @@ index 9087f87854..682227ecee 100644
              elif self.speculative_config.method == "suffix":
                  self.drafter = SuffixDecodingProposer(self.vllm_config)
              elif self.speculative_config.use_eagle():
-@@ -688,6 +694,11 @@ class GPUModelRunner(
+@@ -687,6 +693,11 @@ class GPUModelRunner(
                      self.use_aux_hidden_state_outputs = (
                          self.drafter.eagle3_use_aux_hidden_state
                      )
@@ -43,7 +43,7 @@ index 9087f87854..682227ecee 100644
              elif self.speculative_config.method == "medusa":
                  self.drafter = MedusaProposer(
                      vllm_config=self.vllm_config, device=self.device
-@@ -893,6 +904,25 @@ class GPUModelRunner(
+@@ -895,6 +906,25 @@ class GPUModelRunner(
          self.query_pos = self._make_buffer(arange_size, dtype=torch.int64)
          self._arange_scratch = np.empty(arange_size, dtype=np.int64)
  
@@ -69,7 +69,7 @@ index 9087f87854..682227ecee 100644
          # Layer pairings for cross-layer KV sharing.
          # If an Attention layer `layer_name` is in the keys of this dict, it
          # means this layer will perform attention using the keys and values
-@@ -2963,17 +2993,48 @@ class GPUModelRunner(
+@@ -2912,17 +2942,48 @@ class GPUModelRunner(
          # [0, 1, 2, 5, 6, 9]
          target_logits_indices += self._arange_scratch[: cu_num_draft_tokens[-1]]
  
@@ -129,7 +129,7 @@ index 9087f87854..682227ecee 100644
  
          # Compute the draft token ids.
          # draft_token_indices:      [  1,   2,   3, 105, 106, 208]
-@@ -4746,6 +4807,7 @@ class GPUModelRunner(
+@@ -4686,6 +4747,7 @@ class GPUModelRunner(
              input_fits_in_drafter = self._input_fits_in_drafter(
                  spec_decode_common_attn_metadata
              )
@@ -137,7 +137,7 @@ index 9087f87854..682227ecee 100644
              # Whether the drafter runs a GPU model forward (and thus carries
              # TP/EP/DP collectives), independent of padded-batch timing.
              drafter_runs_model_forward = (
-@@ -6101,6 +6163,7 @@ class GPUModelRunner(
+@@ -6037,6 +6099,7 @@ class GPUModelRunner(
          )
  
          attn_metadata: PerLayerAttnMetadata | None = None
@@ -145,7 +145,7 @@ index 9087f87854..682227ecee 100644
  
          slot_mappings_by_group, slot_mappings = self._get_slot_mappings(
              num_tokens_padded=num_tokens_padded,
-@@ -6175,7 +6238,7 @@ class GPUModelRunner(
+@@ -6111,7 +6174,7 @@ class GPUModelRunner(
                  self.input_batch.block_table.commit_block_table(num_reqs_padded)
  
                  pad_attn = cudagraph_runtime_mode == CUDAGraphMode.FULL
@@ -154,7 +154,7 @@ index 9087f87854..682227ecee 100644
                      num_tokens=num_tokens_unpadded,
                      num_tokens_padded=num_tokens_padded if pad_attn else None,
                      num_reqs=num_reqs_padded,
-@@ -6290,13 +6353,16 @@ class GPUModelRunner(
+@@ -6226,13 +6289,16 @@ class GPUModelRunner(
                      | Gemma4Proposer,
                  )
                  assert self.speculative_config is not None
@@ -175,7 +175,7 @@ index 9087f87854..682227ecee 100644
                      )
                      or (
                          not is_graph_capturing
-@@ -6316,6 +6382,7 @@ class GPUModelRunner(
+@@ -6252,6 +6318,7 @@ class GPUModelRunner(
  
                  self.drafter.dummy_run(
                      num_tokens,

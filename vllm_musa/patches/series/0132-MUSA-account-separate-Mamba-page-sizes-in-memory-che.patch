@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 22 Jul 2026 15:36:00 +0800
+Subject: [PATCH] MUSA: account separate Mamba page sizes in memory checks
+
+The separate Mamba pool keeps attention and recurrent-state page sizes
+independent. Avoid the upstream uniform-page assertion when checking whether
+the configured max model length fits. Include the fixed per-sequence Mamba
+reservation and the minimum attention capacity in the required byte count.
+---
+ vllm/v1/core/kv_cache_utils.py | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index 99a1d52..7398257 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -2425,6 +2425,38 @@ def _max_memory_usage_bytes_from_groups(
+             total_blocks += 1
+         return total_blocks * (len(mla_names) * mla_page + len(idx_names) * idx_page)
+ 
++    if _musa_separate_pool_eligible(vllm_config, kv_cache_groups):
++        mamba_groups = [
++            group
++            for group in kv_cache_groups
++            if isinstance(group.kv_cache_spec, MambaSpec)
++        ]
++        attn_groups = [
++            group
++            for group in kv_cache_groups
++            if not isinstance(group.kv_cache_spec, MambaSpec)
++        ]
++        mamba_page = get_uniform_page_size(
++            group.kv_cache_spec for group in mamba_groups
++        )
++        mamba_blocks_per_request = max(
++            cdiv(
++                group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
++                mamba_page,
++            )
++            for group in mamba_groups
++        )
++        mamba_num_blocks = (
++            vllm_config.scheduler_config.max_num_seqs
++            * mamba_blocks_per_request
++            + 1
++        )
++        mamba_layers = sum(len(group.layer_names) for group in mamba_groups)
++        mamba_required_bytes = mamba_page * mamba_num_blocks * mamba_layers
++        return mamba_required_bytes + _max_memory_usage_bytes_from_groups(
++            vllm_config, attn_groups
++        )
++
+     bytes_per_block = _pool_bytes_per_block(kv_cache_groups)
+     total_blocks = 0
+     for group in kv_cache_groups:

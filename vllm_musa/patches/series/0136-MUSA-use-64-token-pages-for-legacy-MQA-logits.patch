@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 28 Aug 2026 19:31:19 +0000
+Subject: [PATCH] MUSA: use 64-token pages for legacy MQA logits
+
+---
+ vllm/utils/deep_gemm.py                              | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
+index 33d82cf..6484fad 100644
+--- a/vllm/utils/deep_gemm.py
++++ b/vllm/utils/deep_gemm.py
+@@ -29,10 +29,12 @@ _DEEPGEMM_BLACKWELL_EXCLUDED_MODEL_TYPES: set[str] = {
+     "qwen3_5_moe_text",
+ }
+ 
+-# KV page sizes (in cache entries) supported by the paged-MQA logits kernels
+-# (fp8_fp4_paged_mqa_logits / get_paged_mqa_logits_metadata). Larger storage
+-# blocks must be virtually split into one of these page sizes.
+-PAGED_MQA_PAGE_SIZES = (32, 64)
++# KV page sizes (in cache entries) supported by the paged-MQA logits kernels.
++# The unified CUDA API supports both sizes, while MUSA DeepGEMM 0.2.6 exposes
++# the legacy FP8-only kernel whose MATE backend accepts block_kv=64 only.
++# Larger storage blocks must be virtually split into one of these page sizes.
++_is_musa_build = getattr(torch.version, "musa", None) is not None
++PAGED_MQA_PAGE_SIZES = (64,) if _is_musa_build else (32, 64)
+ 
+ 
+ def should_auto_disable_deep_gemm(model_type: str | None) -> bool:

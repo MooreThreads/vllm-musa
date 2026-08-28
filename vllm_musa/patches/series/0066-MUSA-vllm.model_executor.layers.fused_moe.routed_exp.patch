@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.model_executor.layers.fused_moe.routed_experts
  1 file changed, 46 insertions(+), 18 deletions(-)
 
 diff --git a/vllm/model_executor/layers/fused_moe/routed_experts.py b/vllm/model_executor/layers/fused_moe/routed_experts.py
-index 87fc3b1c36..6eb3291c02 100644
+index 574d165..2c23494 100644
 --- a/vllm/model_executor/layers/fused_moe/routed_experts.py
 +++ b/vllm/model_executor/layers/fused_moe/routed_experts.py
-@@ -473,6 +473,39 @@ class RoutedExperts(PluggableLayer):
+@@ -474,6 +474,39 @@ class RoutedExperts(PluggableLayer):
                      expert_data = expert_data.narrow(dim, 0, loaded_weight.shape[dim])
          return expert_data
  
@@ -51,7 +51,7 @@ index 87fc3b1c36..6eb3291c02 100644
      def _load_w13(
          self,
          expert_data: torch.Tensor,
-@@ -491,22 +524,17 @@ class RoutedExperts(PluggableLayer):
+@@ -492,22 +525,17 @@ class RoutedExperts(PluggableLayer):
          # Only narrow if the loaded_weight is not a scalar (0-dim tensor)
          # and we're not loading the full weight
          if not load_full and loaded_weight.ndim > 0:
@@ -80,7 +80,7 @@ index 87fc3b1c36..6eb3291c02 100644
          # Narrow parameter and load.
          # w1, gate_proj: Load into first logical weight of w13.
          if shard_id == "w1":
-@@ -534,21 +562,21 @@ class RoutedExperts(PluggableLayer):
+@@ -535,21 +563,21 @@ class RoutedExperts(PluggableLayer):
      ):
          # Index the loaded weight for tp sharding.
          # down_proj: "RowParallel" so tp sharding on input_dim

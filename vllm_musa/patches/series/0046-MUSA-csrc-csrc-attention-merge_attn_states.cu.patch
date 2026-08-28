@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc): csrc/attention/merge_attn_states.cu
  1 file changed, 48 insertions(+), 55 deletions(-)
 
 diff --git a/csrc/libtorch_stable/attention/merge_attn_states.cu b/csrc/libtorch_stable/attention/merge_attn_states.cu
-index cc89397f68..067acb4dd7 100644
+index cc89397..067acb4 100644
 --- a/csrc/libtorch_stable/attention/merge_attn_states.cu
 +++ b/csrc/libtorch_stable/attention/merge_attn_states.cu
 @@ -1,14 +1,14 @@

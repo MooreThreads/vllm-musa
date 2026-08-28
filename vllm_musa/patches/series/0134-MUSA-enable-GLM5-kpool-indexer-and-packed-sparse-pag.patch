@@ -1,0 +1,225 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 28 Aug 2026 18:30:56 +0000
+Subject: [PATCH] MUSA: enable GLM5 kpool indexer and packed sparse pages
+
+---
+ .../layers/sparse_attn_indexer_kpool.py       | 95 ++++++++++++++++++-
+ .../attention/backends/mla/flashmla_sparse.py |  4 +
+ .../v1/attention/backends/mla/sparse_utils.py | 20 +++-
+ 3 files changed, 114 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+index 5924d9f..bd08f31 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+@@ -47,6 +47,79 @@ RADIX_TOPK_WORKSPACE_SIZE = 1024 * 1024
+ # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
+ MXFP4_BLOCK_SIZE = 32
+ 
++
++def _musa_topk_rows(
++    logits: torch.Tensor,
++    row_starts: torch.Tensor,
++    row_ends: torch.Tensor,
++    out: torch.Tensor,
++    topk: int,
++) -> None:
++    """Functional MUSA fallback for the CUDA-only per-row top-k kernels.
++
++    Only columns in ``[row_starts, row_ends)`` participate. Rows shorter than
++    ``topk`` are padded with -1, matching the sentinel consumed by the sparse
++    indexer pool-expansion path.
++    """
++    num_rows, num_columns = logits.shape
++    effective_k = min(topk, num_columns)
++    out.fill_(-1)
++    if num_rows == 0 or effective_k == 0:
++        return
++
++    row_starts = row_starts.reshape(-1)[:num_rows].to(torch.int64)
++    row_ends = row_ends.reshape(-1)[:num_rows].to(torch.int64)
++    row_starts = row_starts.clamp(min=0, max=num_columns)
++    row_ends = row_ends.clamp(min=0, max=num_columns)
++    columns = torch.arange(num_columns, device=logits.device, dtype=torch.int64)
++    valid = (columns[None, :] >= row_starts[:, None]) & (
++        columns[None, :] < row_ends[:, None]
++    )
++    masked_logits = logits.masked_fill(~valid, float("-inf"))
++    indices = torch.topk(
++        masked_logits, effective_k, dim=-1, largest=True, sorted=False
++    ).indices.to(torch.int32)
++
++    selected_valid = (indices >= row_starts[:, None]) & (
++        indices < row_ends[:, None]
++    )
++    indices.masked_fill_(~selected_valid, -1)
++    out[:, :effective_k].copy_(indices)
++
++
++def _musa_top_k_per_row_prefill(
++    logits: torch.Tensor,
++    row_starts: torch.Tensor,
++    row_ends: torch.Tensor,
++    out: torch.Tensor,
++    topk: int,
++) -> None:
++    _musa_topk_rows(logits, row_starts, row_ends, out, topk)
++
++
++def _musa_top_k_per_row_decode(
++    logits: torch.Tensor,
++    next_n: int,
++    seq_lens: torch.Tensor,
++    out: torch.Tensor,
++    topk: int,
++) -> None:
++    num_rows = logits.shape[0]
++    rows = torch.arange(num_rows, device=logits.device, dtype=torch.int64)
++    if seq_lens.ndim == 2:
++        row_ends = seq_lens.reshape(-1)[:num_rows]
++    else:
++        batch_indices = torch.div(rows, next_n, rounding_mode="floor")
++        next_n_offsets = rows.remainder(next_n)
++        row_ends = (
++            seq_lens.reshape(-1)[batch_indices]
++            - next_n
++            + next_n_offsets
++            + 1
++        )
++    row_starts = torch.zeros_like(row_ends)
++    _musa_topk_rows(logits, row_starts, row_ends, out, topk)
++
+ # kpool write helper: form pools from the current token batch and compress them
+ # into the index K cache via the fused Triton kernel.
+ 
+@@ -562,7 +635,15 @@ def sparse_attn_indexer_kpool(
+                     chunk.token_start : chunk.token_end, :topk_tokens
+                 ]
+ 
+-            if current_platform.is_xpu():
++            if current_platform.is_musa():
++                _musa_top_k_per_row_prefill(
++                    logits,
++                    chunk.cu_seqlen_ks,
++                    chunk.cu_seqlen_ke,
++                    topk_dst,
++                    select_k,
++                )
++            elif current_platform.is_xpu():
+                 xpu_ops.top_k_per_row_prefill(  # type: ignore[attr-defined]
+                     logits,
+                     chunk.cu_seqlen_ks,
+@@ -837,7 +918,15 @@ def sparse_attn_indexer_kpool(
+                 attn_metadata_narrowed.max_seq_len,
+             )
+         else:
+-            if current_platform.is_xpu():
++            if current_platform.is_musa():
++                _musa_top_k_per_row_decode(
++                    logits,
++                    next_n,
++                    seq_lens,
++                    topk_dst,
++                    select_k,
++                )
++            elif current_platform.is_xpu():
+                 xpu_ops.top_k_per_row_decode(  # type: ignore[attr-defined]
+                     logits,
+                     next_n,
+@@ -991,7 +1080,7 @@ class SparseAttnIndexerKpool(CustomOp):
+         index_kpool: int = 1,
+         positions: torch.Tensor | None = None,
+     ):
+-        if current_platform.is_cuda() or current_platform.is_xpu():
++        if current_platform.is_cuda() or current_platform.is_xpu() or current_platform.is_musa():
+             return self.forward_cuda(
+                 hidden_states,
+                 q_quant,
+diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+index 7f0b561..fc16d47 100644
+--- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
++++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+@@ -641,12 +641,16 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+         kv_rows, block_stride_rows = flat_kv_row_view(
+             kv_c_and_k_pe_cache, attn_metadata.block_size
+         )
++        blocks_per_stride = (
++            kv_c_and_k_pe_cache.shape[1] // attn_metadata.block_size
++        )
+         topk_indices, topk_length = triton_convert_req_index_to_global_index(
+             attn_metadata.req_id_per_token[: topk_indices.shape[0]],
+             attn_metadata.block_table,
+             topk_indices,
+             BLOCK_SIZE=attn_metadata.block_size,
+             BLOCK_STRIDE_ROWS=block_stride_rows,
++            BLOCKS_PER_STRIDE=blocks_per_stride,
+             NUM_TOPK_TOKENS=topk_indices.shape[1],
+             return_valid_counts=True,
+         )
+diff --git a/vllm/v1/attention/backends/mla/sparse_utils.py b/vllm/v1/attention/backends/mla/sparse_utils.py
+index ef92557..f6a0065 100644
+--- a/vllm/v1/attention/backends/mla/sparse_utils.py
++++ b/vllm/v1/attention/backends/mla/sparse_utils.py
+@@ -24,7 +24,13 @@ def flat_kv_row_view(
+         "silently misaddress"
+     )
+     block_stride_rows = kv_cache.stride(0) // head_dim
+-    num_rows = (num_blocks - 1) * block_stride_rows + block_size
++    assert kv_cache.shape[1] % block_size == 0, (
++        f"physical cache block size {kv_cache.shape[1]} must be divisible by "
++        f"kernel block size {block_size}"
++    )
++    # Keep every subpage of the final packed block addressable. The cache may
++    # expose a 128-token allocator page to a 64-token kernel.
++    num_rows = (num_blocks - 1) * block_stride_rows + kv_cache.shape[1]
+     rows = kv_cache.as_strided((num_rows, head_dim), (head_dim, 1))
+     return rows, block_stride_rows
+ 
+@@ -43,6 +49,7 @@ def _convert_req_index_to_global_index_kernel(
+     max_num_blocks_per_req: tl.constexpr,
+     BLOCK_SIZE: tl.constexpr,
+     BLOCK_STRIDE_ROWS: tl.constexpr,
++    BLOCKS_PER_STRIDE: tl.constexpr,
+     BLOCK_N: tl.constexpr,  # tile width along columns
+     HAS_PREFILL: tl.constexpr,
+     COUNT_VALID: tl.constexpr,  # whether to count valid indices
+@@ -109,7 +116,13 @@ def _convert_req_index_to_global_index_kernel(
+     bt_ptr = block_table_ptr + req * bt_stride0 + block_id * bt_stride1
+     is_invalid_tok |= ~valid_block | is_remote
+     base = tl.load(bt_ptr, mask=valid_block & ~is_prefill & ~is_remote, other=0)
+-    out_val = base * BLOCK_STRIDE_ROWS + inblock_off
++    logical_block = base // BLOCKS_PER_STRIDE
++    subblock = base % BLOCKS_PER_STRIDE
++    out_val = (
++        logical_block * BLOCK_STRIDE_ROWS
++        + subblock * BLOCK_SIZE
++        + inblock_off
++    )
+ 
+     # Override with prefill output if prefill is enabled
+     if HAS_PREFILL:
+@@ -180,6 +193,7 @@ def triton_convert_req_index_to_global_index(
+     token_indices: torch.Tensor,  # int32 [num_tokens, NUM_TOPK_TOKENS]
+     BLOCK_SIZE: int = 64,
+     BLOCK_STRIDE_ROWS: int | None = None,
++    BLOCKS_PER_STRIDE: int = 1,
+     NUM_TOPK_TOKENS: int = 2048,
+     BLOCK_N: int = 128,  # tile width along columns
+     HAS_PREFILL_WORKSPACE: bool = False,
+@@ -218,6 +232,7 @@ def triton_convert_req_index_to_global_index(
+         "is allocated like token_indices, so a longer req_id writes out of bounds"
+     )
+     assert token_indices.shape[1] == NUM_TOPK_TOKENS
++    assert BLOCKS_PER_STRIDE > 0
+     assert NUM_TOPK_TOKENS % BLOCK_N == 0, (
+         f"NUM_TOPK_TOKENS ({NUM_TOPK_TOKENS}) must be divisible by BLOCK_N ({BLOCK_N})"
+     )
+@@ -281,6 +296,7 @@ def triton_convert_req_index_to_global_index(
+         max_num_blocks_per_req,
+         BLOCK_SIZE,
+         BLOCK_STRIDE_ROWS if BLOCK_STRIDE_ROWS is not None else BLOCK_SIZE,
++        BLOCKS_PER_STRIDE,
+         block_n,
+         HAS_PREFILL_WORKSPACE,
+         return_valid_counts,

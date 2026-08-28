@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.profiler.wrapper
  1 file changed, 2 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/profiler/wrapper.py b/vllm/profiler/wrapper.py
-index 2f56d0fc7c..9b8f448315 100644
+index 877a390..5bc3eea 100644
 --- a/vllm/profiler/wrapper.py
 +++ b/vllm/profiler/wrapper.py
-@@ -162,11 +162,12 @@ class WorkerProfiler(ABC):
+@@ -164,11 +164,12 @@ class WorkerProfiler(ABC):
          return nullcontext()
  
  

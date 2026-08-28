@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.models.deepseek_v4.nvidia.flashmla
  1 file changed, 11 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/flashmla.py b/vllm/models/deepseek_v4/nvidia/flashmla.py
-index a6a24ae0cc..c84070f4f2 100644
+index b8eed8a..0d065e6 100644
 --- a/vllm/models/deepseek_v4/nvidia/flashmla.py
 +++ b/vllm/models/deepseek_v4/nvidia/flashmla.py
 @@ -26,7 +26,7 @@ from vllm.v1.attention.backends.mla.sparse_swa import (
@@ -20,7 +20,7 @@ index a6a24ae0cc..c84070f4f2 100644
      flash_mla_sparse_fwd,
      flash_mla_with_kvcache,
  )
-@@ -207,8 +207,18 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
+@@ -204,8 +204,18 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
                  topk_indices = attn_metadata.c128a_global_decode_topk_indices
                  topk_lens = attn_metadata.c128a_decode_topk_lens
  

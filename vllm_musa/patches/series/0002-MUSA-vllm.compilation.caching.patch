@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.compilation.caching
  1 file changed, 11 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/compilation/caching.py b/vllm/compilation/caching.py
-index 94456fc182..e205f57359 100644
+index 94456fc..e205f57 100644
 --- a/vllm/compilation/caching.py
 +++ b/vllm/compilation/caching.py
 @@ -12,7 +12,16 @@ from unittest.mock import patch

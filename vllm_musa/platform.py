@@ -616,6 +616,22 @@ class MUSAPlatformBase(Platform):
             scheduler_config.disable_chunked_mm_input = True
 
     @classmethod
+    def _get_indexer_block_alignment(
+        cls, vllm_config: "VllmConfig"
+    ) -> int | None:
+        index_kpool = getattr(
+            vllm_config.model_config.hf_text_config, "index_kpool", None
+        )
+        if not index_kpool or index_kpool <= 1:
+            return None
+        from vllm.utils.deep_gemm import PAGED_MQA_PAGE_SIZES
+
+        # kpool paged-MQA indexer: the storage block (block_size /
+        # index_kpool) is virtually split into pool pages, so block_size
+        # must be a multiple of index_kpool * min(PAGED_MQA_PAGE_SIZES).
+        return index_kpool * min(PAGED_MQA_PAGE_SIZES)
+
+    @classmethod
     def update_block_size_for_backend(cls, vllm_config: "VllmConfig") -> None:
         model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
@@ -623,12 +639,15 @@ class MUSAPlatformBase(Platform):
         # spaces. In the no-prefix-cache mode used by Qwen3.5/Qwen3.6 serving,
         # do not let upstream inflate the attention block to the full recurrent
         # state page (1056 tokens for Qwen3.6-35B-A3B). That inflation wastes
-        # attention KV capacity and forces avoidable request preemption.
+        # attention KV capacity and forces avoidable request preemption. Models
+        # with a kpool indexer (GLM-5.3-Flash) keep their native coupled cache
+        # grouping and must run the common hybrid-page alignment below.
         separate_mamba_pages = (
             model_config is not None
             and cache_config is not None
             and model_config.is_hybrid
             and cache_config.mamba_cache_mode == "none"
+            and cls._get_indexer_block_alignment(vllm_config) is None
             and resolve_optimization_contract(vllm_config).prefers(
                 OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
             )

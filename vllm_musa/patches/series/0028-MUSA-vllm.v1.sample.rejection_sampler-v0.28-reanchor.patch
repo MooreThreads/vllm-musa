@@ -9,7 +9,7 @@ Subject: [PATCH] MUSA: vllm.v1.sample.rejection_sampler (v0.28 reanchor)
  2 files changed, 83 insertions(+), 4 deletions(-)
 
 diff --git a/tests/v1/sample/test_rejection_sampler.py b/tests/v1/sample/test_rejection_sampler.py
-index b02e53af8d..e2e9b83fd6 100644
+index b02e53a..e2e9b83 100644
 --- a/tests/v1/sample/test_rejection_sampler.py
 +++ b/tests/v1/sample/test_rejection_sampler.py
 @@ -14,6 +14,7 @@ from vllm.v1.sample.metadata import SamplingMetadata
@@ -82,7 +82,7 @@ index b02e53af8d..e2e9b83fd6 100644
  def test_frequency_penalties(rejection_sampler):
      """Test rejection sampling with frequency penalties"""
 diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
-index a1baf0a808..7611fabef5 100644
+index a1baf0a..7611fab 100644
 --- a/vllm/v1/sample/rejection_sampler.py
 +++ b/vllm/v1/sample/rejection_sampler.py
 @@ -12,6 +12,7 @@ import torch.nn as nn

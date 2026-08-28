@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 19 Aug 2026 18:19:33 +0800
+Subject: [PATCH] MUSA(csrc): fix relocated MoE helper includes
+
+---
+ csrc/libtorch_stable/moe/topk_softmax_kernels.cu       | 4 ++--
+ csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
+index 776cdfd..7bae15b 100644
+--- a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
++++ b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
+@@ -24,8 +24,8 @@
+ #include <c10/cuda/CUDAGuard.h>
+ 
+ #include "cuda_compat.h"
+-#include "cub_helpers.h"
+-#include "torch_utils.h"
++#include "../cub_helpers.h"
++#include "../torch_utils.h"
+ 
+ #ifndef USE_ROCM
+     #include <cuda_bf16.h>
+diff --git a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
+index b529064..a349160 100644
+--- a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
++++ b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
+@@ -25,8 +25,8 @@
+ #include <c10/cuda/CUDAGuard.h>
+ 
+ #include "cuda_compat.h"
+-#include "cub_helpers.h"
+-#include "torch_utils.h"
++#include "../cub_helpers.h"
++#include "../torch_utils.h"
+ #ifndef USE_ROCM
+   #include <cuda_bf16.h>
+   #include <cuda_fp16.h>

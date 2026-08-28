@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 19 Aug 2026 19:11:40 +0800
+Subject: [PATCH] MUSA: adapt Qwen decode selector to v0.28 inputs
+
+---
+ vllm/v1/worker/gpu/model_runner.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 8fc9f54..ce807e4 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1276,8 +1276,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         if selector is not None:
+             model_inputs = selector(
+                 req_ids,
+-                num_scheduled_tokens,
+-                is_prefilling_np,
++                num_scheduled_tokens_np,
++                batch_req_state.is_prefilling_np,
+                 total_num_draft_tokens,
+                 total_num_logits,
+                 num_tokens,

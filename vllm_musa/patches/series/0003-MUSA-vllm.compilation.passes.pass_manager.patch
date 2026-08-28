@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.compilation.passes.pass_manager
  1 file changed, 9 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/compilation/passes/pass_manager.py b/vllm/compilation/passes/pass_manager.py
-index 4a65376ca0..abeaaf4c20 100644
+index 4a65376..abeaaf4 100644
 --- a/vllm/compilation/passes/pass_manager.py
 +++ b/vllm/compilation/passes/pass_manager.py
 @@ -48,10 +48,15 @@ if current_platform.is_cuda_alike():
