@@ -21,6 +21,19 @@ diff --git a/vllm/v1/worker/gpu/sample/gumbel.py b/vllm/v1/worker/gpu/sample/gum
 index fab53fe..f889d1f 100644
 --- a/vllm/v1/worker/gpu/sample/gumbel.py
 +++ b/vllm/v1/worker/gpu/sample/gumbel.py
+@@ -60,6 +60,11 @@ def tl_rand64(seed, offset, includes_zero: tl.constexpr):
+ @triton.jit
+ def tl_rand64(seed, offset, includes_zero: tl.constexpr):
+-    lo, hi, _, _ = tl.randint4x(seed, offset)
++    # Triton 3.2 selects randint4x's integer width from the counter dtype.
++    # The sharded-vocab path passes an int64 global block, but tl_rand64
++    # combines two 32-bit lanes into one 64-bit draw.  Force the counter back
++    # to uint32 before randint4x so the following equal-width bitcasts remain
++    # valid on MUSA Triton.
++    lo, hi, _, _ = tl.randint4x(seed, offset.to(tl.uint32))
+     lo = lo.to(tl.uint32, bitcast=True).to(tl.uint64)
+     hi = hi.to(tl.uint32, bitcast=True).to(tl.uint64)
+     r = (hi << 32) | lo
 @@ -77,6 +77,7 @@ def tl_rand64(seed, offset, includes_zero: tl.constexpr):
  def gumbel_block_argmax(
      logits,
@@ -103,6 +116,18 @@ index fab53fe..f889d1f 100644
 +        return sampled
 +    sampled_values = local_max.gather(dim=-1, index=max_block_idx).view(-1)
 +    return sampled, sampled_values
+diff --git a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
+index 0cfbdf4..0000000 100644
+--- a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
+@@ -405,6 +405,7 @@ def _resample_kernel(
+     value, idx = gumbel_block_argmax(
+         residual_logits,
+         block,
++        block,
+         mask,
+         resample_token_idx,
+         expanded_idx_mapping_ptr,
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
 index f342e99..f51dae0 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
