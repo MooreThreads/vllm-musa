@@ -3,15 +3,6 @@ From: musa <musa@local>
 Date: Mon, 24 Aug 2026 11:00:00 +0000
 Subject: [PATCH] MUSA: make DeepEP Buffer shutdown cleanup compatible
 
-<<<<<<<< HEAD:vllm_musa/patches/series/0133-MUSA-deepep-buffer-shutdown-cleanup.patch
-========
----
- vllm/distributed/device_communicators/all2all.py | 16 ++++++++++++++--
- 1 file changed, 14 insertions(+), 2 deletions(-)
-
-diff --git a/vllm/distributed/device_communicators/all2all.py b/vllm/distributed/device_communicators/all2all.py
-index d63069b..8f603a3 100644
->>>>>>>> 66df75cf (MUSA: enable GLM-5.3-Flash on upstream PR 53906):vllm_musa/patches/series/0117-MUSA-make-DeepEP-Buffer-shutdown-cleanup-compatible.patch
 --- a/vllm/distributed/device_communicators/all2all.py
 +++ b/vllm/distributed/device_communicators/all2all.py
 @@ -189,11 +189,23 @@

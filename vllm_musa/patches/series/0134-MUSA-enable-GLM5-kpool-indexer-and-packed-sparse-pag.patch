@@ -8,7 +8,8 @@ Subject: [PATCH] MUSA: enable GLM5 kpool indexer and packed sparse pages
  vllm/models/glm5next/nvidia/attention.py      |  2 +-
  .../attention/backends/mla/flashmla_sparse.py |  4 +
  .../v1/attention/backends/mla/sparse_utils.py | 20 +++-
- 4 files changed, 115 insertions(+), 6 deletions(-)
+ vllm/v1/kv_cache_interface.py                 |  1 +
+ 5 files changed, 116 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
 index 5924d9f..bd08f31 100644
@@ -240,3 +241,11 @@ index ef92557..f6a0065 100644
          block_n,
          HAS_PREFILL_WORKSPACE,
          return_valid_counts,
+diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
+index 16a1001..f4a03de 100644
+--- a/vllm/v1/kv_cache_interface.py
++++ b/vllm/v1/kv_cache_interface.py
+@@ -823,2 +823,3 @@
+ class KpoolTailSpec(SlidingWindowSpec):
++    storage_block_size: int | None = None
+     """One-block circular scratch cache for a kpool indexer's raw tail."""
