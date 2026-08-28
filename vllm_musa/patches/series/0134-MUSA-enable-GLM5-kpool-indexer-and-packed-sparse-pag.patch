@@ -5,9 +5,10 @@ Subject: [PATCH] MUSA: enable GLM5 kpool indexer and packed sparse pages
 
 ---
  .../layers/sparse_attn_indexer_kpool.py       | 95 ++++++++++++++++++-
+ vllm/models/glm5next/nvidia/attention.py      |  2 +-
  .../attention/backends/mla/flashmla_sparse.py |  4 +
  .../v1/attention/backends/mla/sparse_utils.py | 20 +++-
- 3 files changed, 114 insertions(+), 5 deletions(-)
+ 4 files changed, 115 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
 index 5924d9f..bd08f31 100644
@@ -156,6 +157,22 @@ index 7f0b561..fc16d47 100644
 +            BLOCKS_PER_STRIDE=blocks_per_stride,
              NUM_TOPK_TOKENS=topk_indices.shape[1],
              return_valid_counts=True,
+         )
+diff --git a/vllm/models/glm5next/nvidia/attention.py b/vllm/models/glm5next/nvidia/attention.py
+index 400d706..3c916fa 100644
+--- a/vllm/models/glm5next/nvidia/attention.py
++++ b/vllm/models/glm5next/nvidia/attention.py
+@@ -197,4 +197,5 @@ class Glm5NextTailCache(DeepseekV32IndexerCache):
+             head_size_v=0,
+             dtype=torch.bfloat16,
+             sliding_window=self._index_kpool,
++            storage_block_size=self._index_kpool,
+         )
+@@ -580,5 +581,4 @@ class Glm5NextAttention(nn.Module):
+             quant_config,
+             prefix,
+             skip_topk=False,
+-            fuse_qkv_rmsnorm=True,
          )
 diff --git a/vllm/v1/attention/backends/mla/sparse_utils.py b/vllm/v1/attention/backends/mla/sparse_utils.py
 index ef92557..f6a0065 100644

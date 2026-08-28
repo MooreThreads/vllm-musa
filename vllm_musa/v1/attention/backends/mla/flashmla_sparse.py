@@ -125,6 +125,46 @@ _core_sparse.FlashMLASchedMeta = _musa_sched_meta
 @register_backend(AttentionBackendEnum.FLASHMLA_SPARSE)
 class MUSAFlashMLASparseBackend(FlashMLASparseBackend):
     @classmethod
+    def get_supported_head_sizes(cls) -> list[int]:
+        # MATE 0.2.6 supports both the DeepSeek-V3.2 layout (512 NoPE +
+        # 64 RoPE) and GLM-5.3-Flash's MLA-nope layout (512 NoPE + 0 RoPE).
+        return [512, 576]
+
+    @classmethod
+    def get_kv_cache_block_dim(
+        cls,
+        block_size: int,
+        num_kv_heads: int,
+        head_size: int,
+        cache_dtype_str: str = "auto",
+    ) -> int:
+        # get_kv_cache_shape is block-first for both the ordinary and packed
+        # layouts. Do not use the generic sentinel-shape probe: the 512-wide
+        # layout folds two 64-token kernel pages into one allocator page.
+        return 0
+
+    @staticmethod
+    def get_kv_cache_shape(
+        num_blocks: int,
+        block_size: int,
+        num_kv_heads: int,
+        head_size: int,
+        cache_dtype_str: str = "auto",
+    ) -> tuple[int, ...]:
+        if head_size == 512 and block_size == 64:
+            if num_blocks % 2 != 0:
+                raise ValueError(
+                    "GLM-5.3 packed sparse MLA requires an even number of "
+                    f"64-token kernel blocks, got {num_blocks}."
+                )
+            # Preserve the exact element/byte count:
+            #   N * 64 * 512 == (N / 2) * 128 * 512.
+            # The block table still addresses 64-token kernel pages; the
+            # sparse-index remap resolves IDs 2b/2b+1 into the two subpages.
+            return (num_blocks // 2, block_size * 2, head_size)
+        return (num_blocks, block_size, head_size)
+
+    @classmethod
     def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
         return capability.major == 3 and is_flashmla_sparse_supported()[0]
 
