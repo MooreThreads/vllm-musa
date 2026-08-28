@@ -7,7 +7,7 @@ Subject: [PATCH] perf: add gated sharded Qwen Gumbel logits path
  .../model_executor/layers/logits_processor.py |  2 ++
  vllm/v1/worker/gpu/sample/gumbel.py           | 18 +++++++---
  vllm/v1/worker/gpu_model_runner.py            | 35 +++++++++++++++++--
- 3 files changed, 49 insertions(+), 6 deletions(-)
+ 3 files changed, 55 insertions(+), 7 deletions(-)
 
 diff --git a/vllm/model_executor/layers/logits_processor.py b/vllm/model_executor/layers/logits_processor.py
 index ab8d1d4102..efeb62095e 100644
@@ -26,6 +26,19 @@ diff --git a/vllm/v1/worker/gpu/sample/gumbel.py b/vllm/v1/worker/gpu/sample/gum
 index 28c6e0f402..e261180a25 100644
 --- a/vllm/v1/worker/gpu/sample/gumbel.py
 +++ b/vllm/v1/worker/gpu/sample/gumbel.py
+@@ -60,6 +60,11 @@ def tl_rand64(seed, offset, includes_zero: tl.constexpr):
+ @triton.jit
+ def tl_rand64(seed, offset, includes_zero: tl.constexpr):
+-    lo, hi, _, _ = tl.randint4x(seed, offset)
++    # Triton 3.2 selects randint4x's integer width from the counter dtype.
++    # The sharded-vocab path passes an int64 global block, but tl_rand64
++    # combines two 32-bit lanes into one 64-bit draw.  Force the counter back
++    # to uint32 before randint4x so the following equal-width bitcasts remain
++    # valid on MUSA Triton.
++    lo, hi, _, _ = tl.randint4x(seed, offset.to(tl.uint32))
+     lo = lo.to(tl.uint32, bitcast=True).to(tl.uint64)
+     hi = hi.to(tl.uint32, bitcast=True).to(tl.uint64)
+     r = (hi << 32) | lo
 @@ -125,6 +125,7 @@ def gumbel_noised_argmax(
  def gumbel_block_argmax(
      logits,
