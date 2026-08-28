@@ -14,13 +14,13 @@ producing numerically equivalent output from a single kernel.
 
 The fold appends one expert to the routed stack, so it stays off under expert
 parallelism and EPLB, whose expert_map is built for the unfolded count.
-The MUSA optimization contract selects the fold for Qwen3.5/3.6 MoE models.
+The MUSA runtime plan selects the fold for Qwen3.5/3.6 MoE models.
 ---
  vllm/model_executor/models/qwen3_next.py | 66 +++++++++++++++++++++++-
  1 file changed, 64 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
-index b241baca6c..13316eff78 100644
+index b241baca6c..066152b1d1 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
 @@ -110,6 +110,39 @@ def _is_shared_expert_fse_compatible(quant_config) -> bool:
@@ -73,16 +73,16 @@ index b241baca6c..13316eff78 100644
 +        # weight format the routed expert stack can absorb. The fold appends one
 +        # expert to the routed stack, which an expert-parallel expert_map built for
 +        # the unfolded count would not know about.
-+        from vllm_musa.optimization_contract import (
-+            OptimizationFeature,
-+            resolve_optimization_contract,
++        from vllm_musa.runtime_plan import (
++            RuntimeDecision,
++            resolve_runtime_plan,
 +        )
 +
-+        optimization_contract = resolve_optimization_contract(vllm_config)
++        runtime_plan = resolve_runtime_plan(vllm_config)
 +        self._musa_shared_fold = (
 +            getattr(torch.version, "musa", None) is not None
-+            and optimization_contract.prefers(
-+                OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD
++            and runtime_plan.enabled(
++                RuntimeDecision.QWEN35_SHARED_EXPERT_FOLD
 +            )
 +            and self.ep_size <= 1
 +            and not self.enable_eplb

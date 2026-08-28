@@ -263,7 +263,7 @@ def test_a2a_backend_selects_a2a_lse_reduce(monkeypatch):
         ("alibi_slopes", torch.ones(2), "ALiBi"),
     ],
 )
-def test_forward_with_dcp_rejects_unsupported_features(attr, value, message):
+def test_forward_with_dcp_rejects_unsupported_decisions(attr, value, message):
     impl = _make_impl()
     setattr(impl, attr, value)
 

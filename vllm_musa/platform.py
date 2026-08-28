@@ -4,7 +4,10 @@
 pymtml. However, it should not initialize musa context.
 """
 
+import json
 import os
+import sys
+from bisect import bisect_left
 from collections.abc import Callable
 from functools import cache, wraps
 from pathlib import Path
@@ -32,19 +35,30 @@ else:
 
 import pymtml as pynvml
 
-from vllm_musa.optimization_contract import (
+from vllm_musa.runtime_plan import (
+    RUNTIME_PLAN_TRANSPORT_KEY,
     ModelFamily,
-    OptimizationFeature,
+    RuntimeDecision,
+    publish_runtime_plan_transport,
+    resolve_runtime_plan,
 )
-from vllm_musa.optimization_contract import policy as contract_policy
-from vllm_musa.optimization_contract import (
-    resolve_optimization_contract,
+from vllm_musa.runtime_plan import policy as plan_policy
+from vllm_musa.tuning import (
+    DEFAULT_FUSED_ADD_RMSNORM_MIN_ROWS,
+    configure_fused_add_rmsnorm_min_rows,
+    is_fused_add_rmsnorm_tuned_hidden_size,
 )
-from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
+engine_plan_logger = init_logger("vllm.engine_plan")
 
 _QWEN3_VL_ARCHITECTURES = {"Qwen3VLForConditionalGeneration"}
+_MUSA_FUSED_MOE_INTERNAL_POLICY_ENV = "VLLM_MUSA_INTERNAL_FUSED_MOE_DISPATCH_POLICY"
+_MUSA_FUSED_MOE_INTERNAL_PLAN_ID_ENV = "VLLM_MUSA_INTERNAL_FUSED_MOE_PLAN_ID"
+_MUSA_FUSED_MOE_INTERNAL_FINGERPRINT_ENV = (
+    "VLLM_MUSA_INTERNAL_FUSED_MOE_PLAN_FINGERPRINT"
+)
+_MUSA_FUSED_MOE_INTERNAL_PROFILE_ENV = "VLLM_MUSA_INTERNAL_FUSED_MOE_PROFILE"
 
 
 def _is_torch_211_or_newer() -> bool:
@@ -161,7 +175,10 @@ def _should_route_quantized_piecewise_ops_native(vllm_config: Any) -> bool:
 
 
 def _configure_fused_add_rmsnorm_compile_range(
-    vllm_config: Any, *, native_custom_ops: bool
+    vllm_config: Any,
+    *,
+    native_custom_ops: bool,
+    min_rows: int = DEFAULT_FUSED_ADD_RMSNORM_MIN_ROWS,
 ) -> bool:
     """Split compilation at the measured fused-add RMSNorm profit boundary."""
     ir_priority = getattr(
@@ -184,21 +201,347 @@ def _configure_fused_add_rmsnorm_compile_range(
         native_custom_ops
         or model_config is None
         or not callable(get_hidden_size)
-        or get_hidden_size() != 5120
+        or not is_fused_add_rmsnorm_tuned_hidden_size(get_hidden_size())
         or getattr(model_config, "dtype", None) != torch.bfloat16
         or getattr(model_config, "enforce_eager", False)
         or max_tokens is None
-        or max_tokens < FUSED_ADD_RMSNORM_MIN_ROWS
+        or max_tokens < min_rows
     ):
         return False
 
     comp = vllm_config.compilation_config
     endpoints = list(comp.compile_ranges_endpoints or [])
-    fallback_endpoint = FUSED_ADD_RMSNORM_MIN_ROWS - 1
+    fallback_endpoint = min_rows - 1
+    if fallback_endpoint <= 0:
+        return False
     if fallback_endpoint in endpoints:
         return False
     comp.compile_ranges_endpoints = sorted([*endpoints, fallback_endpoint])
     return True
+
+
+def _configure_fused_moe_compile_ranges(
+    vllm_config: Any,
+    *,
+    boundaries: tuple[int, ...],
+) -> bool:
+    """Split dynamic compile ranges where a sealed MoE backend can change."""
+
+    if not boundaries or getattr(
+        getattr(vllm_config, "model_config", None), "enforce_eager", False
+    ):
+        return False
+    compilation_config = getattr(vllm_config, "compilation_config", None)
+    if compilation_config is None:
+        return False
+    unsupported = tuple(boundary for boundary in boundaries if boundary <= 1)
+    if unsupported:
+        raise RuntimeError(
+            "MUSA fused-MoE RuntimePlan cannot represent a backend transition "
+            "immediately after token 1 with this vLLM compile-range lifecycle: "
+            f"boundaries={unsupported}. Retune or smooth the policy so tokens 1 "
+            "and 2 use the same backend."
+        )
+    endpoints = list(
+        getattr(compilation_config, "compile_ranges_endpoints", None) or ()
+    )
+    updated = sorted(set(endpoints).union(boundaries))
+    if updated == endpoints:
+        return False
+    compilation_config.compile_ranges_endpoints = updated
+    return True
+
+
+def _validate_fused_moe_compile_ranges(
+    vllm_config: Any,
+    *,
+    boundaries: tuple[int, ...],
+) -> None:
+    """Validate RuntimePlan boundaries after vLLM finalizes compile ranges.
+
+    RuntimePlan owns tactic selection, not the graph-memory budget. This
+    validation only verifies that vLLM preserved every plan transition when it
+    constructed the final compile ranges.
+    """
+
+    if not boundaries or getattr(
+        getattr(vllm_config, "model_config", None), "enforce_eager", False
+    ):
+        return
+    compilation_config = getattr(vllm_config, "compilation_config", None)
+    scheduler_config = getattr(vllm_config, "scheduler_config", None)
+    if compilation_config is None or scheduler_config is None:
+        return
+
+    max_tokens = getattr(scheduler_config, "max_num_batched_tokens", None)
+    if max_tokens is None or int(max_tokens) <= 0:
+        return
+    max_tokens = int(max_tokens)
+    finalized_endpoints = tuple(
+        int(endpoint)
+        for endpoint in (
+            getattr(compilation_config, "compile_ranges_endpoints", None) or ()
+        )
+    )
+    expected = tuple(boundary for boundary in boundaries if 0 < boundary < max_tokens)
+    missing = tuple(
+        boundary for boundary in expected if boundary not in finalized_endpoints
+    )
+    if missing:
+        raise RuntimeError(
+            "vLLM dropped MUSA fused-MoE RuntimePlan compile boundaries during "
+            f"finalization: missing={missing}, final={finalized_endpoints}. "
+            "Refusing to compile a range that can bake more than one tactic."
+        )
+
+
+def _fused_moe_capture_policy_entries(
+    value: object,
+) -> tuple[tuple[dict[str, object], tuple[dict[str, object], ...]], ...]:
+    policy = _runtime_plan_mapping(value)
+    entries = policy.get("entries", ())
+    if not isinstance(entries, tuple):
+        return ()
+    decoded = []
+    for raw_entry in entries:
+        entry = _runtime_plan_mapping(raw_entry)
+        shape = _runtime_plan_mapping(entry.get("shape"))
+        ranges = entry.get("ranges", ())
+        if shape.get("graph_mode") != "capture" or not isinstance(ranges, tuple):
+            continue
+        decoded.append(
+            (
+                shape,
+                tuple(_runtime_plan_mapping(raw_range) for raw_range in ranges),
+            )
+        )
+    return tuple(decoded)
+
+
+def _fused_moe_policy_backend(
+    ranges: tuple[dict[str, object], ...],
+    tokens: int,
+) -> str | None:
+    for token_range in ranges:
+        minimum = token_range.get("min_tokens")
+        maximum = token_range.get("max_tokens")
+        backend = token_range.get("backend")
+        if (
+            isinstance(minimum, int)
+            and not isinstance(minimum, bool)
+            and isinstance(maximum, int)
+            and not isinstance(maximum, bool)
+            and isinstance(backend, str)
+            and minimum <= tokens <= maximum
+        ):
+            return backend
+    return None
+
+
+def _validate_fused_moe_cudagraph_padding(
+    vllm_config: Any,
+    *,
+    policy: object,
+    uniform_decode_query_len: int,
+) -> None:
+    """Reject graph padding that crosses a RuntimePlan tactic transition."""
+
+    capture_entries = _fused_moe_capture_policy_entries(policy)
+    if not capture_entries:
+        return
+    if int(uniform_decode_query_len) != 1:
+        raise RuntimeError(
+            "Contextual fused-MoE CUDAGraph RuntimePlans do not yet support "
+            "speculative decode or draft graph domains; "
+            f"uniform_decode_query_len={uniform_decode_query_len}. Retune "
+            "without speculative decode or disable the contextual capture "
+            "policy."
+        )
+    compilation_config = getattr(vllm_config, "compilation_config", None)
+    scheduler_config = getattr(vllm_config, "scheduler_config", None)
+    if compilation_config is None or scheduler_config is None:
+        return
+
+    from vllm.config import CUDAGraphMode
+
+    cudagraph_mode = getattr(compilation_config, "cudagraph_mode", None)
+    if cudagraph_mode is None:
+        return
+    if cudagraph_mode == CUDAGraphMode.NONE:
+        raise RuntimeError(
+            "MUSA fused-MoE RuntimePlan contains capture policy entries, but "
+            "the resolved CUDAGraph mode is NONE"
+        )
+    capture_sizes = tuple(
+        sorted(
+            {
+                int(size)
+                for size in (
+                    getattr(compilation_config, "cudagraph_capture_sizes", None) or ()
+                )
+                if int(size) > 0
+            }
+        )
+    )
+    if not capture_sizes:
+        return
+
+    mixed_mode = cudagraph_mode.mixed_mode()
+    if mixed_mode != CUDAGraphMode.NONE:
+        reachable = range(1, capture_sizes[-1] + 1)
+        graph_capture_sizes = frozenset(capture_sizes)
+    elif cudagraph_mode.decode_mode() == CUDAGraphMode.FULL:
+        query_len = max(1, int(uniform_decode_query_len))
+        max_num_seqs = int(getattr(scheduler_config, "max_num_seqs", 0) or 0)
+        max_decode_tokens = query_len * max_num_seqs
+        reachable = range(query_len, max_decode_tokens + 1, query_len)
+        graph_capture_sizes = frozenset(
+            size for size in capture_sizes if query_len <= size <= max_decode_tokens
+        )
+    else:
+        return
+
+    for shape, ranges in capture_entries:
+        for actual_tokens in reachable:
+            index = bisect_left(capture_sizes, actual_tokens)
+            if index == len(capture_sizes):
+                continue
+            padded_tokens = capture_sizes[index]
+            if padded_tokens not in graph_capture_sizes:
+                continue
+            actual_backend = _fused_moe_policy_backend(ranges, actual_tokens)
+            padded_backend = _fused_moe_policy_backend(ranges, padded_tokens)
+            if actual_backend == padded_backend:
+                continue
+            raise RuntimeError(
+                "MUSA fused-MoE RuntimePlan CUDAGraph padding crosses a tactic "
+                "transition: "
+                f"actual_tokens={actual_tokens}, padded_tokens={padded_tokens}, "
+                f"actual_backend={actual_backend or 'unplanned'}, "
+                f"padded_backend={padded_backend or 'unplanned'}, "
+                f"capture_sizes={capture_sizes}, graph_mode={cudagraph_mode}, "
+                f"shape=(E={shape.get('local_experts')},"
+                f"N={shape.get('w1_output_size')},K={shape.get('hidden_size')},"
+                f"topk={shape.get('top_k')}). Configure an aligned capture "
+                "size or rebuild the capture policy from reachable padded graph "
+                "keys. RuntimePlan will not expand the graph-memory budget."
+            )
+
+
+def _json_runtime_plan_value(value: object) -> object:
+    if isinstance(value, tuple):
+        return [_json_runtime_plan_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_runtime_plan_value(item) for key, item in value.items()}
+    return value
+
+
+def _runtime_plan_mapping(value: object) -> dict[str, object]:
+    if not isinstance(value, tuple):
+        return {}
+    return {
+        item[0]: item[1]
+        for item in value
+        if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
+    }
+
+
+def _fused_moe_policy_boundaries(value: object) -> tuple[int, ...]:
+    policy = _runtime_plan_mapping(value)
+    entries = policy.get("entries", ())
+    boundaries: set[int] = set()
+    if not isinstance(entries, tuple):
+        return ()
+    for raw_entry in entries:
+        entry = _runtime_plan_mapping(raw_entry)
+        ranges = entry.get("ranges", ())
+        if not isinstance(ranges, tuple):
+            continue
+        for raw_range in ranges:
+            token_range = _runtime_plan_mapping(raw_range)
+            maximum = token_range.get("max_tokens")
+            if isinstance(maximum, int) and not isinstance(maximum, bool):
+                boundaries.add(maximum)
+    return tuple(sorted(boundaries))
+
+
+def _materialize_fused_moe_runtime_policy(plan: Any) -> tuple[int, ...]:
+    """Transport the validated policy without importing the heavy MoE module."""
+
+    value = plan.value(RuntimeDecision.MUSA_FUSED_MOE_DISPATCH_POLICY, ())
+    resolution = plan.decision_resolution
+    receipt = (
+        resolution.plan_id if resolution is not None else "",
+        resolution.fingerprint if resolution is not None else plan.fingerprint,
+        plan.profile,
+    )
+    names = (
+        _MUSA_FUSED_MOE_INTERNAL_POLICY_ENV,
+        _MUSA_FUSED_MOE_INTERNAL_PLAN_ID_ENV,
+        _MUSA_FUSED_MOE_INTERNAL_FINGERPRINT_ENV,
+        _MUSA_FUSED_MOE_INTERNAL_PROFILE_ENV,
+    )
+    if value:
+        os.environ[names[0]] = json.dumps(
+            _json_runtime_plan_value(value),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        os.environ[names[1]], os.environ[names[2]], os.environ[names[3]] = receipt
+    else:
+        for name in names:
+            os.environ.pop(name, None)
+    module = sys.modules.get(
+        "vllm_musa.model_executor.layers.fused_moe.dispatch_policy"
+    )
+    configure = getattr(module, "configure_fused_moe_runtime_policy", None)
+    if callable(configure):
+        configure(
+            value,
+            plan_id=receipt[0],
+            plan_fingerprint=receipt[1],
+            profile=receipt[2],
+        )
+    return _fused_moe_policy_boundaries(value)
+
+
+def materialize_fused_moe_runtime_policy_for_worker(
+    vllm_config: Any,
+    *,
+    worker_rank: int,
+) -> tuple[int, ...] | None:
+    """Install contextual fused-MoE decisions in a spawned TP worker.
+
+    The dispatch-policy module keeps process-local state. A worker may be
+    spawned by a process that was started before the API parent materialized
+    its RuntimePlan environment, so reconstruct the cached, fingerprinted plan
+    from the serialized ``vllm_config`` instead of relying on inheritance.
+    """
+
+    plan = resolve_runtime_plan(vllm_config)
+    boundaries = _materialize_fused_moe_runtime_policy(plan)
+    if boundaries is None:
+        return None
+    resolution = plan.decision_resolution
+    policy = plan.value(RuntimeDecision.MUSA_FUSED_MOE_DISPATCH_POLICY, ())
+    source = plan.decision_source(RuntimeDecision.MUSA_FUSED_MOE_DISPATCH_POLICY)
+    if source != "engine_plan" or resolution is None or not resolution.plan_id:
+        return boundaries
+    engine_plan_logger.info(
+        "Materialized MUSA fused-MoE dispatch RuntimePlan policy: "
+        "profile=%s profile_config_id=%s profile_config_fingerprint=%s "
+        "entries=%d source=%s plan_id=%s plan_fingerprint=%s worker_rank=%d",
+        plan.profile,
+        plan.profile_config_id,
+        plan.profile_config_fingerprint,
+        len(policy),
+        source,
+        resolution.plan_id,
+        resolution.fingerprint,
+        worker_rank,
+    )
+    return boundaries
 
 
 class MUSAPlatformBase(Platform):
@@ -302,6 +645,20 @@ class MUSAPlatformBase(Platform):
         from vllm.config.compilation import CompilationMode
         from vllm.config.kernel import IrOpPriorityConfig
 
+        from vllm_musa.engine_plugins import get_engine_plugin_application
+
+        application = get_engine_plugin_application(vllm_config)
+        if application is not None:
+            engine_plan_logger.info(
+                "Active vLLM-MUSA engine plan: plugin=%s plan=%s variant=%s "
+                "context=%s tactics=%s fallback=%s",
+                application.plugin_name,
+                application.plan_id,
+                application.selected_variant or "none",
+                application.context_fingerprint or "none",
+                application.selected_tactics,
+                application.fallback_reason or "none",
+            )
         cc = vllm_config.compilation_config
         using_inductor = cc.backend == "inductor" and cc.mode != CompilationMode.NONE
         if using_inductor:
@@ -338,10 +695,10 @@ class MUSAPlatformBase(Platform):
         # MoE on native by default because a 100-prompt Qwen3.6 TP8 sweep
         # regressed 2.81% as eager-faithful BF16 rounding changed expert routes.
         # Users can still explicitly select the generic provider for A/B work.
-        contract = resolve_optimization_contract(vllm_config)
+        plan = resolve_runtime_plan(vllm_config)
         gated_qkv_rms_norm_rope = (
             ["musa_inductor", "native"]
-            if using_inductor and contract.model.has_routed_experts is not True
+            if using_inductor and plan.model.has_routed_experts is not True
             else ["native"]
         )
         return IrOpPriorityConfig.with_default(
@@ -395,6 +752,36 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def apply_config_platform_defaults(cls, vllm_config: "VllmConfig") -> None:
+        # Engine-plan plugins must run before vLLM freezes IR provider priority
+        # and derives fusion defaults from it.  With no enabled plugin this is
+        # an exact no-op.
+        from vllm_musa.engine_plugins import apply_engine_plugin_defaults
+
+        engine_application = apply_engine_plugin_defaults(vllm_config)
+        if engine_application is not None:
+            engine_plan_logger.info(
+                "Applied vLLM-MUSA engine plan defaults: plugin=%s plan=%s "
+                "fingerprint=%s variant=%s tactics=%s fallback=%s settings=%s",
+                engine_application.plugin_name,
+                engine_application.plan_id,
+                engine_application.plan_fingerprint,
+                engine_application.selected_variant or "legacy",
+                engine_application.selected_tactics,
+                engine_application.fallback_reason or "none",
+                engine_application.applied_settings,
+            )
+
+            # EngineCore/TP workers can be spawned before vLLM reaches its
+            # late ``finalize_config`` hook.  Publish the exact validated
+            # decision projection immediately after plugin selection so the
+            # worker's serialized VllmConfig is self-contained.  The late
+            # hook below re-resolves and verifies the same immutable decision
+            # projection after vLLM has finalized its execution defaults.
+            publish_runtime_plan_transport(
+                vllm_config,
+                resolve_runtime_plan(vllm_config),
+            )
+
         # Ensure custom ops are enabled for MUSA platform so that
         # OOT forward implementations (forward_oot) are dispatched.
         # This must be set here (before VllmConfig.__post_init__ defaults)
@@ -528,19 +915,73 @@ class MUSAPlatformBase(Platform):
         parallel_config = vllm_config.parallel_config
         model_config = vllm_config.model_config
 
-        # The fused-add provider is profitable from
-        # FUSED_ADD_RMSNORM_MIN_ROWS onward. vLLM picks IR implementations once
-        # per dynamic compile range and drops shape guards, so split immediately
-        # below that threshold rather than freezing a decision from a symbolic
-        # example-value hint. This is shape/dtype based and applies to any model
-        # exposing the IR op.
+        # vLLM picks IR implementations once per dynamic compile range and
+        # drops shape guards. Materialize the RuntimePlan crossover before
+        # compilation, then split immediately below it so every range observes
+        # one stable runner choice.
+        plan = resolve_runtime_plan(vllm_config)
+        if (
+            plan.profile == "deepseek_v4.tp8_flash_base_mtp"
+            and spec_config is not None
+            and getattr(spec_config, "attention_backend", None) is None
+        ):
+            # vLLM normally auto-selects the draft backend independently.  The
+            # validated DeepSeek-V4 MTP profile is narrower: target and draft
+            # share the same fixed-page FlashMLA sparse layout, and clearing the
+            # backend while cloning the draft config makes the RuntimePlan
+            # regress to ``deepseek_v4.unvalidated``.  Materialize only this
+            # exact profile; explicit draft choices and every other model keep
+            # upstream's independent-selection behavior.
+            spec_config.attention_backend = AttentionBackendEnum.FLASHMLA
+            logger.info(
+                "Materialized FLASHMLA for the validated DeepSeek-V4 MTP "
+                "draft RuntimePlan profile"
+            )
+        selected_min_rows = int(
+            plan.value(
+                RuntimeDecision.MUSA_FUSED_ADD_RMSNORM_MIN_ROWS,
+                DEFAULT_FUSED_ADD_RMSNORM_MIN_ROWS,
+            )
+        )
+        # The fused-MoE policy is a compile/capture-static decision. Transport
+        # it exactly once here, before vLLM creates compiled ranges or captures
+        # a graph; the heavy dispatcher decodes it on module import (or uses an
+        # already loaded immutable table) and request dispatch only reads that
+        # table.
+        moe_policy = plan.value(RuntimeDecision.MUSA_FUSED_MOE_DISPATCH_POLICY, ())
+        resolution = plan.decision_resolution
+        moe_boundaries = _materialize_fused_moe_runtime_policy(plan)
+        if moe_policy:
+            logger.info(
+                "Materialized MUSA fused-MoE dispatch RuntimePlan policy "
+                "profile=%s plan_id=%s fingerprint=%s before compilation/capture",
+                plan.profile,
+                resolution.plan_id if resolution is not None else "none",
+                resolution.fingerprint if resolution is not None else plan.fingerprint,
+            )
+        if _configure_fused_moe_compile_ranges(
+            vllm_config,
+            boundaries=moe_boundaries,
+        ):
+            logger.info(
+                "Splitting MUSA fused-MoE compile ranges at token boundaries=%s",
+                moe_boundaries,
+            )
+        configure_fused_add_rmsnorm_min_rows(selected_min_rows)
+        logger.info(
+            "Materialized MUSA fused-add RMSNorm threshold=%d from runtime "
+            "plan profile=%s",
+            selected_min_rows,
+            plan.profile,
+        )
         if _configure_fused_add_rmsnorm_compile_range(
             vllm_config,
             native_custom_ops=musa_envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get(),
+            min_rows=selected_min_rows,
         ):
             logger.info(
                 "Splitting MUSA fused-add RMSNorm compile ranges at %d rows",
-                FUSED_ADD_RMSNORM_MIN_ROWS - 1,
+                selected_min_rows - 1,
             )
 
         if parallel_config.worker_cls == "auto":
@@ -591,10 +1032,23 @@ class MUSAPlatformBase(Platform):
                 if not use_flashmla_sparse:
                     use_flashmla_sparse = True
 
-                sparse_block_size = (
-                    contract_policy.deepseek_v4_flashmla_sparse_page_size(vllm_config)
+                sparse_block_size = plan_policy.deepseek_v4_flashmla_sparse_page_size(
+                    vllm_config
                 )
                 if use_flashmla_sparse and cache_config.block_size != sparse_block_size:
+                    dsv4_page_decision = (
+                        RuntimeDecision.DEEPSEEK_V4_FLASHMLA_SPARSE_PAGE_SIZE
+                    )
+                    if (
+                        plan.model.family is ModelFamily.DEEPSEEK_V4
+                        and plan.supports(dsv4_page_decision)
+                        and getattr(cache_config, "user_specified_block_size", False)
+                    ):
+                        raise RuntimeError(
+                            "The explicit DeepSeek-V4 KV block size "
+                            f"{cache_config.block_size} conflicts with the "
+                            f"RuntimePlan layout {sparse_block_size}"
+                        )
                     cache_config.block_size = sparse_block_size
                     logger.info(
                         "Forcing kv cache block size to %d for FlashMLASparse backend.",
@@ -615,6 +1069,120 @@ class MUSAPlatformBase(Platform):
             )
             scheduler_config.disable_chunked_mm_input = True
 
+        # Validate after every MUSA platform override has been applied.  The
+        # plugin receipt is provenance for the resolved runtime configuration,
+        # not merely for the input JSON document.
+        from vllm_musa.engine_plugins import validate_engine_plugin_runtime
+
+        engine_receipt = validate_engine_plugin_runtime(vllm_config)
+        if engine_receipt is not None:
+            engine_plan_logger.info(
+                "Validated vLLM-MUSA engine plan: plugin=%s version=%s plan=%s "
+                "fingerprint=%s variant=%s tactics=%s context=%s fallback=%s "
+                "settings=%s",
+                engine_receipt.plugin_name,
+                engine_receipt.plugin_version,
+                engine_receipt.plan_id,
+                engine_receipt.plan_fingerprint,
+                engine_receipt.selected_variant or "legacy",
+                engine_receipt.selected_tactics,
+                engine_receipt.context_fingerprint or "legacy",
+                engine_receipt.fallback_reason or "none",
+                engine_receipt.validated_settings,
+            )
+
+    @classmethod
+    def finalize_config(cls, vllm_config: "VllmConfig") -> None:
+        """Validate and publish plan state after vLLM finalizes config."""
+
+        plan = resolve_runtime_plan(vllm_config)
+        moe_policy = plan.value(
+            RuntimeDecision.MUSA_FUSED_MOE_DISPATCH_POLICY,
+            (),
+        )
+        _validate_fused_moe_compile_ranges(
+            vllm_config,
+            boundaries=_fused_moe_policy_boundaries(moe_policy),
+        )
+        # Verify the transport after the plugin and every plan-dependent
+        # final-config invariant have been validated. TP workers rehydrate its
+        # immutable decision projection from VllmConfig.additional_config;
+        # they never reopen the plan path or depend on inherited environment.
+        publish_runtime_plan_transport(vllm_config, plan)
+
+    @classmethod
+    def validate_cudagraph_config(
+        cls,
+        vllm_config: "VllmConfig",
+        *,
+        uniform_decode_query_len: int,
+    ) -> None:
+        """Validate the resolved graph padding domain against RuntimePlan."""
+
+        plan = resolve_runtime_plan(vllm_config)
+        from vllm_musa.engine_plugins import (
+            validate_engine_plugin_cudagraph_runtime,
+        )
+
+        validate_engine_plugin_cudagraph_runtime(
+            vllm_config,
+            required=plan.decision_resolution is not None,
+            serialized_transport=bool(
+                getattr(vllm_config, "additional_config", {}).get(
+                    RUNTIME_PLAN_TRANSPORT_KEY
+                )
+            ),
+        )
+        policy = plan.value(
+            RuntimeDecision.MUSA_FUSED_MOE_DISPATCH_POLICY,
+            (),
+        )
+        _validate_fused_moe_cudagraph_padding(
+            vllm_config,
+            policy=policy,
+            uniform_decode_query_len=uniform_decode_query_len,
+        )
+        if _fused_moe_capture_policy_entries(policy):
+            compilation_config = vllm_config.compilation_config
+            resolution = plan.decision_resolution
+            rank = (
+                torch.distributed.get_rank()
+                if torch.distributed.is_initialized()
+                else -1
+            )
+            logger.info(
+                "MUSA RuntimePlan CUDAGraph padding validated: plan_id=%s "
+                "plan_fingerprint=%s rank=%d graph_mode=%s capture_sizes=%s "
+                "uniform_decode_query_len=%d",
+                resolution.plan_id if resolution is not None else plan.profile,
+                resolution.fingerprint if resolution is not None else plan.fingerprint,
+                rank,
+                compilation_config.cudagraph_mode,
+                compilation_config.cudagraph_capture_sizes,
+                uniform_decode_query_len,
+            )
+
+    @classmethod
+    def _find_all_non_ssm_backends(
+        cls, vllm_config: "VllmConfig"
+    ) -> tuple[type[Any], ...]:
+        """Return every distinct live attention backend participating in KV layout."""
+        from vllm.config.vllm import get_layers_from_vllm_config
+        from vllm.model_executor.layers.attention_layer_base import (
+            AttentionLayerBase,
+        )
+
+        attention_layers = get_layers_from_vllm_config(
+            vllm_config,
+            AttentionLayerBase,  # type: ignore[type-abstract]
+        )
+        backends: dict[type[Any], None] = {}
+        for layer in attention_layers.values():
+            backend_cls = layer.get_attn_backend()
+            if not backend_cls.is_ssm():
+                backends.setdefault(backend_cls, None)
+        return tuple(backends)
+
     @classmethod
     def update_block_size_for_backend(cls, vllm_config: "VllmConfig") -> None:
         model_config = vllm_config.model_config
@@ -629,8 +1197,9 @@ class MUSAPlatformBase(Platform):
             and cache_config is not None
             and model_config.is_hybrid
             and cache_config.mamba_cache_mode == "none"
-            and resolve_optimization_contract(vllm_config).prefers(
-                OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
+            and resolve_runtime_plan(vllm_config).selected(
+                RuntimeDecision.HYBRID_KV_CACHE_POOL_LAYOUT,
+                "separate",
             )
         )
         if separate_mamba_pages:
@@ -662,17 +1231,55 @@ class MUSAPlatformBase(Platform):
         # whatever super() picked. A user --block-size and fixed-page kernels that
         # cannot take 64 (sparse MLA at 256) are left as super() resolved them.
         super().update_block_size_for_backend(vllm_config)
-        if (
-            model_config is None
-            or cache_config is None
-            or cache_config.user_specified_block_size
-            or model_config.is_hybrid
-        ):
+        if model_config is None or cache_config is None:
             return
-        if (
-            resolve_optimization_contract(vllm_config).model.family
-            is ModelFamily.DEEPSEEK_V4
-        ):
+        plan = resolve_runtime_plan(vllm_config)
+        if plan.model.family is ModelFamily.DEEPSEEK_V4:
+            decision = RuntimeDecision.DEEPSEEK_V4_FLASHMLA_SPARSE_PAGE_SIZE
+            if not plan.supports(decision):
+                return
+            backend_classes = cls._find_all_non_ssm_backends(vllm_config)
+            if not backend_classes:
+                raise RuntimeError(
+                    "Cannot validate the DeepSeek-V4 RuntimePlan KV layout "
+                    "because no live attention backends were discovered"
+                )
+            planned_block_size = int(plan.value(decision))
+            from vllm.config.vllm import set_current_vllm_config
+
+            unsupported_backends: list[str] = []
+            for backend_cls in backend_classes:
+                with set_current_vllm_config(vllm_config):
+                    backend_supports_plan = backend_cls.supports_block_size(
+                        planned_block_size
+                    )
+                if not backend_supports_plan:
+                    unsupported_backends.append(backend_cls.get_name())
+            if unsupported_backends:
+                raise RuntimeError(
+                    "DeepSeek-V4 RuntimePlan KV block size "
+                    f"{planned_block_size} is unsupported by the live "
+                    f"backends {', '.join(sorted(unsupported_backends))}"
+                )
+            backend_names = ",".join(
+                sorted(backend_cls.get_name() for backend_cls in backend_classes)
+            )
+            if cache_config.block_size != planned_block_size:
+                raise RuntimeError(
+                    "DeepSeek-V4 RuntimePlan KV block size drifted after live "
+                    f"backend discovery: planned={planned_block_size}, "
+                    f"actual={cache_config.block_size}, "
+                    f"backends={backend_names}"
+                )
+            logger.info(
+                "Validated final DeepSeek-V4 RuntimePlan KV block size=%d: "
+                "backends=%s profile=%s.",
+                planned_block_size,
+                backend_names,
+                plan.profile,
+            )
+            return
+        if cache_config.user_specified_block_size or model_config.is_hybrid:
             return
         backend_cls = cls._find_non_ssm_backend(vllm_config)
         if backend_cls is None:
@@ -857,7 +1464,9 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def get_device_communicator_cls(cls) -> str:
-        return "vllm.distributed.device_communicators.cuda_communicator.CudaCommunicator"  # noqa
+        return (
+            "vllm.distributed.device_communicators.cuda_communicator.CudaCommunicator"  # noqa
+        )
 
     @classmethod
     def supports_fp8(cls) -> bool:

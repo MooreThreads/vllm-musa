@@ -24,7 +24,7 @@ def test_qwen_unit_temperature_metadata_gate_is_fail_closed() -> None:
     assert "temperature_cpu == np.float32(1.0)" in source
     assert "VLLM_MUSA_QWEN_SKIP_UNIT_TEMPERATURE" not in source
     assert "uniform_temperature=uniform_temperature" in source
-    assert "resolve_optimization_contract" in source
+    assert "resolve_runtime_plan" in source
     assert "QWEN_LEGACY_SAMPLING" in source
 
 
@@ -32,7 +32,7 @@ def test_qwen_unit_temperature_sampler_keeps_original_fallback() -> None:
     source = SAMPLER.read_text()
 
     assert "def _can_skip_legacy_qwen_unit_temperature" in source
-    assert "prefers_optimization" in source
+    assert "runtime_plan_enabled" in source
     assert "QWEN_LEGACY_SAMPLING" in source
     assert 'getattr(sampling_metadata, "all_random", False)' in source
     assert "_is_qwen_sampler_vocab(logits)" in source

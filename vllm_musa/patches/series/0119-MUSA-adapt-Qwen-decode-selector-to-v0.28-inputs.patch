@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: adapt Qwen decode selector to v0.28 inputs
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index d0e4376969..79953a7558 100644
+index 5760ec45b2..0fb1e58519 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
-@@ -1241,8 +1241,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1239,8 +1239,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
          if selector is not None:
              model_inputs = selector(
                  req_ids,

@@ -3,19 +3,15 @@ From: musa <musa@local>
 Date: Tue, 14 Jul 2026 12:00:00 +0800
 Subject: [PATCH] MUSA(model): fuse QK-RMSNorm and MRoPE for interleaved MRoPE
 
-Fuse QK-RMSNorm and MRoPE into one MUSA kernel for interleaved-MRoPE gated
-attention. The text-only NeoX fusion rejects these models and the IR provider
-keeps routed MoE on native, so they otherwise run the eager rotary path and
-issue a long tail of elementwise kernels.
+Fuse QK-RMSNorm and MRoPE into one MUSA kernel for interleaved-MRoPE gated attention. The text-only NeoX fusion rejects these models and the IR provider keeps routed MoE on native, so they otherwise run the eager rotary path and issue a long tail of elementwise kernels.
 
-The IR operation stays as the fallback for every shape this kernel declines.
-The MUSA optimization contract selects the Qwen3.5/3.6 BF16 scope.
+The IR operation stays as the fallback for every shape this kernel declines. The MUSA RuntimePlan selects the Qwen3.5/3.6 BF16 scope.
 ---
  vllm/model_executor/models/qwen3_next.py | 76 ++++++++++++++++++++++++
  1 file changed, 76 insertions(+)
 
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
-index 793276ff1a..f6f9fa33c7 100644
+index 778c2ccdd8..59491e7af5 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
 @@ -287,6 +287,23 @@ class Qwen3NextSparseMoeBlock(nn.Module):
@@ -46,19 +42,19 @@ index 793276ff1a..f6f9fa33c7 100644
          self.mrope_interleaved = bool(
              getattr(self.rotary_emb, "mrope_interleaved", False)
          )
-+        from vllm_musa.optimization_contract import (
-+            OptimizationFeature,
-+            resolve_optimization_contract,
++        from vllm_musa.runtime_plan import (
++            RuntimeDecision,
++            resolve_runtime_plan,
 +        )
 +
-+        optimization_contract = resolve_optimization_contract(
++        runtime_plan = resolve_runtime_plan(
 +            model_config=model_config
 +        )
 +        self._musa_fused_qk_mrope = (
 +            self.attn_output_gate
 +            and current_platform.is_musa()
-+            and optimization_contract.prefers(
-+                OptimizationFeature.QWEN35_INTERLEAVED_MROPE_QK
++            and runtime_plan.enabled(
++                RuntimeDecision.QWEN35_INTERLEAVED_MROPE_QK
 +            )
 +            and len(self.mrope_section) == 3
 +            and self.mrope_interleaved

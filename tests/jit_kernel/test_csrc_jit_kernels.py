@@ -166,6 +166,9 @@ def test_csrc_fused_add_rmsnorm_accepts_effective_fp32_weight(
     ("rows", "hidden", "dtype", "weight_dtype", "expected"),
     [
         (1, 2048, torch.bfloat16, torch.bfloat16, False),
+        (1, 4096, torch.bfloat16, torch.bfloat16, False),
+        (64, 4096, torch.bfloat16, torch.bfloat16, True),
+        (64, 4096, torch.bfloat16, torch.float32, True),
         (1, 5120, torch.bfloat16, torch.bfloat16, False),
         (63, 5120, torch.bfloat16, torch.bfloat16, False),
         (64, 5120, torch.bfloat16, torch.bfloat16, True),
@@ -176,7 +179,7 @@ def test_csrc_fused_add_rmsnorm_accepts_effective_fp32_weight(
         (64, 5120, torch.float16, torch.float16, False),
     ],
 )
-def test_ir_fused_add_rmsnorm_jit_dispatch_is_h5120_only(
+def test_ir_fused_add_rmsnorm_jit_dispatch_uses_registered_hidden_sizes(
     rows: int,
     hidden: int,
     dtype: torch.dtype,
@@ -225,6 +228,7 @@ def test_ir_fused_add_rmsnorm_c_ext_branch_preserves_broad_shapes() -> None:
         _fused_add_rms_norm_supports_args,
         _select_musa_fused_add_rms_norm_impl,
     )
+
     device = torch.device("musa")
     x = torch.empty((1, 5376), device=device, dtype=torch.bfloat16)
     residual = torch.empty_like(x)
@@ -521,12 +525,8 @@ def test_csrc_topk_fuses_qwen_shared_gate(dtype: torch.dtype) -> None:
         (rows, routed_experts + 1), device=device, dtype=dtype
     )
 
-    weights = torch.empty(
-        (rows, routed_topk + 1), device=device, dtype=torch.float32
-    )
-    ids = torch.empty(
-        (rows, routed_topk + 1), device=device, dtype=torch.int32
-    )
+    weights = torch.empty((rows, routed_topk + 1), device=device, dtype=torch.float32)
+    ids = torch.empty((rows, routed_topk + 1), device=device, dtype=torch.int32)
     topk_softmax(
         weights,
         ids,
@@ -539,9 +539,7 @@ def test_csrc_topk_fuses_qwen_shared_gate(dtype: torch.dtype) -> None:
         combined_logits[:, :routed_experts], routed_topk, True
     )
     shared_weights = torch.sigmoid(combined_logits[:, routed_experts:]).float()
-    shared_ids = torch.full(
-        (rows, 1), routed_experts, device=device, dtype=torch.int32
-    )
+    shared_ids = torch.full((rows, 1), routed_experts, device=device, dtype=torch.int32)
     ref_weights = torch.cat((routed_weights, shared_weights), dim=-1)
     ref_ids = torch.cat((routed_ids, shared_ids), dim=-1)
 

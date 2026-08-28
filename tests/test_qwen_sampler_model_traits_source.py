@@ -1,4 +1,4 @@
-"""Source contract for contract-bound Qwen sampler fast paths."""
+"""Source checks for plan-bound Qwen sampler fast paths."""
 
 import ast
 
@@ -21,12 +21,12 @@ AUTO_FAST_PATH_SOURCES = (
 )
 
 
-def test_sampler_traits_are_resolved_by_the_contract() -> None:
+def test_sampler_traits_are_resolved_by_the_plan() -> None:
     source = PATCH.read_text()
 
     assert "VLLM_MUSA_QWEN" not in source
-    assert "resolve_optimization_contract" in source
-    assert "_musa_optimization_contract" in source
+    assert "resolve_runtime_plan" in source
+    assert "_musa_runtime_plan" in source
     assert "QWEN_LEGACY_SAMPLING" in source
     assert "_musa_qwen_family" not in source
 
@@ -48,7 +48,7 @@ def test_followup_qwen_fast_paths_use_model_traits_without_env_flags() -> None:
     sources = {path: path.read_text() for path in AUTO_FAST_PATH_SOURCES}
 
     assert all("VLLM_MUSA_QWEN" not in source for source in sources.values())
-    assert "prefers_optimization" in sources[AUTO_FAST_PATH_SOURCES[0]]
+    assert "runtime_plan_enabled" in sources[AUTO_FAST_PATH_SOURCES[0]]
     assert "QWEN_UNIFORM_SAMPLE_COUNTS" in sources[AUTO_FAST_PATH_SOURCES[1]]
     assert "QWEN_SAMPLE_INPUT_VIEWS" in sources[AUTO_FAST_PATH_SOURCES[2]]
     assert "QWEN_UNIFORM_DECODE_VIEWS" in sources[AUTO_FAST_PATH_SOURCES[3]]

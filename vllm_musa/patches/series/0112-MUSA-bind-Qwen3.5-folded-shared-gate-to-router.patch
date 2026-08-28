@@ -13,7 +13,7 @@ shared column directly.
  1 file changed, 1 insertion(+)
 
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
-index 528b623db4..450f23f287 100644
+index 37c7751539..04757e798b 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
 @@ -258,6 +258,7 @@ class Qwen3NextSparseMoeBlock(nn.Module):

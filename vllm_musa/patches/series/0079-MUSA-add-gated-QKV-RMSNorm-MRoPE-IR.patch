@@ -453,7 +453,7 @@ index 0000000000..a293942fb6
 +        weight_offset,
 +    )
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
-index 13316eff78..793276ff1a 100644
+index 066152b1d1..778c2ccdd8 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
 @@ -8,6 +8,7 @@ from itertools import islice

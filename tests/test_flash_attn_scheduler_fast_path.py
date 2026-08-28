@@ -8,7 +8,6 @@ import pytest
 import torch
 
 import vllm_musa.v1.attention.backends.flash_attn as flash_attn
-from tests.qwen_contract_test_utils import qwen_sampler
 from vllm_musa.v1.attention.backends.flash_attn import (
     FlashAttentionMetadataBuilder,
     _is_musa_qwen_text_generation_architecture,
@@ -123,9 +122,7 @@ def _make_graph_size_64_builder(*, is_qwen_family: bool):
     builder.kv_cache_dtype = torch.bfloat16
     builder.model_config = SimpleNamespace(dtype=torch.bfloat16)
     builder.cache_config = SimpleNamespace(cache_dtype="auto")
-    builder._musa_optimization_contract = qwen_sampler(
-        enabled=is_qwen_family
-    )._musa_optimization_contract
+    builder._musa_qwen_fa3_scheduler = is_qwen_family
     builder._use_qwen_single_request_scheduler_lookup = True
     builder._sm_count_query_succeeded = True
     builder._cu_seqlens_k_buffer = torch.empty(65, dtype=torch.int32)

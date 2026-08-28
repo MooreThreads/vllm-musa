@@ -32,11 +32,12 @@ from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     MusaFusedMoeBackend,
     MusaFusedMoeShape,
     has_calibrated_dimensions,
+    has_runtime_policy_dimensions,
     parse_dispatch_backend,
-    select_fused_moe_backend,
+    resolve_fused_moe_backend,
     thresholds_for_shape,
 )
-from vllm_musa.optimization_contract import (
+from vllm_musa.runtime_plan import (
     matches_qwen35_moe_bf16_decode_gemv_layer,
     matches_qwen35_moe_bf16_prefill_layer,
 )
@@ -96,6 +97,22 @@ def _env_int(name: str, default: int) -> int:
         return int(os.environ.get(name, default))
     except ValueError:
         return default
+
+
+def _musa_process_rank() -> int:
+    """Return an auditable rank without assuming distributed is initialized."""
+
+    try:
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            return int(torch.distributed.get_rank())
+    except (RuntimeError, ValueError):
+        pass
+    for name in ("RANK", "LOCAL_RANK"):
+        try:
+            return int(os.environ[name])
+        except (KeyError, ValueError):
+            continue
+    return -1
 
 
 def _requested_gemv_block(shape: MusaFusedMoeShape | None) -> tuple[int, int]:
@@ -943,6 +960,7 @@ def _moe_deepgemm_bf16_prefill_impl(
         get_mk_alignment_for_contiguous_layout,
         mk_alignment_scope,
     )
+
     from vllm_musa.jit_kernel.post_reorder import post_reorder_triton_kernel
     from vllm_musa.jit_kernel.tilelang.deep_gemm_contig_preprocess import (
         can_use_bf16_tilelang,
@@ -1907,6 +1925,7 @@ def _musa_fused_experts_impl_dispatch(
     policy = None
     shape = None
     requested_gemv_block = (0, 0)
+    runtime_plan_forced_upstream = False
 
     # Keep the expensive contract matcher off unrelated MoE calls.  The
     # tensor geometry is the runtime half of the Qwen3.5/3.6 model contract;
@@ -1976,7 +1995,24 @@ def _musa_fused_experts_impl_dispatch(
     # and for the explicit rollback path. This wrapper sits on every MoE layer.
     if (
         _MUSA_FUSED_MOE_REQUESTED_BACKEND != MusaFusedMoeBackend.UPSTREAM
-        and (use_fp8_w8a8 or qwen35_bf16_decode_gemv or musa_bf16_decode_gemv)
+        and (
+            use_fp8_w8a8
+            or qwen35_bf16_decode_gemv
+            or musa_bf16_decode_gemv
+            or (
+                hidden_states.dim() == 2
+                and w1.dim() == 3
+                and w2.dim() == 3
+                and topk_ids.dim() == 2
+                and has_runtime_policy_dimensions(
+                    local_experts=w1.shape[0],
+                    w1_output_size=w1.shape[1],
+                    w2_input_size=w2.shape[2],
+                    hidden_size=w1.shape[2],
+                    top_k=topk_ids.shape[1],
+                )
+            )
+        )
         and not use_int8_w8a8
         and not use_int8_w8a16
         and not use_int4_w4a16
@@ -1989,6 +2025,13 @@ def _musa_fused_experts_impl_dispatch(
                 and w2.dim() == 3
                 and topk_ids.dim() == 2
                 and has_calibrated_dimensions(
+                    local_experts=w1.shape[0],
+                    w1_output_size=w1.shape[1],
+                    w2_input_size=w2.shape[2],
+                    hidden_size=w1.shape[2],
+                    top_k=topk_ids.shape[1],
+                )
+                or has_runtime_policy_dimensions(
                     local_experts=w1.shape[0],
                     w1_output_size=w1.shape[1],
                     w2_input_size=w2.shape[2],
@@ -2069,7 +2112,24 @@ def _musa_fused_experts_impl_dispatch(
                 w1_bias=w1_bias,
                 w2_bias=w2_bias,
             )
-            if can_use_gemv or can_use_grouped_gemm:
+            # Resolve the sealed RuntimePlan even when the requested native
+            # tactic is ineligible for this quantization/layout.  In that
+            # case the plan may deliberately select the upstream backend; the
+            # receipt still proves that the production dispatcher consulted
+            # the plan instead of silently falling through to a catalog
+            # default.  The backend implementation remains unchanged.
+            runtime_policy_dimensions = has_runtime_policy_dimensions(
+                local_experts=w1.shape[0],
+                w1_output_size=w1.shape[1],
+                w2_input_size=w2.shape[2],
+                hidden_size=w1.shape[2],
+                top_k=topk_ids.shape[1],
+            )
+            if (
+                can_use_gemv
+                or can_use_grouped_gemm
+                or runtime_policy_dimensions
+            ):
                 stream_is_capturing = _musa_stream_is_capturing()
                 shape = _musa_fused_moe_shape(
                     hidden_states=hidden_states,
@@ -2086,7 +2146,7 @@ def _musa_fused_experts_impl_dispatch(
                     multiprocessor_count=multiprocessor_count,
                 )
                 policy = thresholds_for_shape(shape)
-                backend = select_fused_moe_backend(
+                selection = resolve_fused_moe_backend(
                     shape=shape,
                     num_tokens=hidden_states.shape[0],
                     can_use_gemv=can_use_gemv,
@@ -2094,6 +2154,32 @@ def _musa_fused_experts_impl_dispatch(
                     stream_is_capturing=stream_is_capturing,
                     requested=_MUSA_FUSED_MOE_REQUESTED_BACKEND,
                     thresholds=policy,
+                )
+                backend = selection.backend
+                runtime_plan_forced_upstream = selection.source.startswith(
+                    "runtime_plan"
+                )
+                logger.info_once(
+                    "MUSA fused-MoE dispatch receipt: backend=%s source=%s "
+                    "policy=%s plan_id=%s plan_fingerprint=%s "
+                    "shape=(E=%d,N=%d,K=%d,topk=%d,graph=%s,mp=%d) "
+                    "rank=%d actual_tokens=%d tokens=[%s,%s]",
+                    backend.value,
+                    selection.source,
+                    selection.policy_identity,
+                    selection.plan_id or "none",
+                    selection.plan_fingerprint or "none",
+                    shape.local_experts,
+                    shape.w1_output_size,
+                    shape.hidden_size,
+                    shape.top_k,
+                    shape.graph_mode,
+                    shape.multiprocessor_count,
+                    _musa_process_rank(),
+                    int(hidden_states.shape[0]),
+                    selection.min_tokens if selection.min_tokens is not None else "-",
+                    selection.max_tokens if selection.max_tokens is not None else "-",
+                    scope="process",
                 )
                 if backend == MusaFusedMoeBackend.GEMV:
                     requested_gemv_block = _requested_gemv_block(shape)
@@ -2122,23 +2208,6 @@ def _musa_fused_experts_impl_dispatch(
             ocp_mx_scheme=ocp_mx_scheme,
             per_channel_quant=per_channel_quant,
             global_num_experts=global_num_experts,
-        )
-
-    if backend != MusaFusedMoeBackend.UPSTREAM:
-        assert policy is not None
-        assert shape is not None
-        logger.info_once(
-            "MUSA fused-MoE dispatcher selected backend=%s policy=%s for "
-            "shape=(E=%d,N=%d,K=%d,topk=%d,graph=%s,mp=%d,gemv_block=%s).",
-            backend.value,
-            policy.source,
-            shape.local_experts,
-            shape.w1_output_size,
-            shape.hidden_size,
-            shape.top_k,
-            shape.graph_mode,
-            shape.multiprocessor_count,
-            shape.gemv_block,
         )
 
     if backend == MusaFusedMoeBackend.GROUPED_GEMM:
@@ -2208,6 +2277,7 @@ def _musa_fused_experts_impl_dispatch(
 
     prefer_upstream_qwen_prefill = (
         _MUSA_FUSED_MOE_REQUESTED_BACKEND == MusaFusedMoeBackend.AUTO
+        and not runtime_plan_forced_upstream
         and _is_calibrated_qwen_moe_bf16_prefill_shape(
             hidden_states,
             w1,
@@ -2247,6 +2317,7 @@ def _musa_fused_experts_impl_dispatch(
 
     bf16_prefill_candidate = (
         _MUSA_FUSED_MOE_REQUESTED_BACKEND == MusaFusedMoeBackend.AUTO
+        and not runtime_plan_forced_upstream
         and not prefer_upstream_qwen_prefill
         and not use_fp8_w8a8
         and hidden_states.shape[0] >= _DEEPGEMM_BF16_PREFILL_MIN_TOKENS
@@ -2293,6 +2364,7 @@ def _musa_fused_experts_impl_dispatch(
     )
     if (
         _MUSA_FUSED_MOE_REQUESTED_BACKEND == MusaFusedMoeBackend.AUTO
+        and not runtime_plan_forced_upstream
         and deepgemm_prefill_candidate
         and not _musa_stream_is_capturing()
     ):

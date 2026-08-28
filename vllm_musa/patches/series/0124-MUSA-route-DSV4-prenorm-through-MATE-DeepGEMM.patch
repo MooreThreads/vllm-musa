@@ -61,7 +61,7 @@ index 57f852c60d..7749a7dee1 100644
      out = torch.empty(
          num_tokens, hidden_size, dtype=torch.bfloat16, device=hs_flat.device
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 0c7dd09282..09f2eedd5d 100644
+index 52f7d6efc6..0fb0f3690e 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
 @@ -126,9 +126,9 @@ def _musa_deepseek_v4_linear_out_dtype(

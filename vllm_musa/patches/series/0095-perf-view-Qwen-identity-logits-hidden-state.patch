@@ -8,10 +8,10 @@ Subject: [PATCH] perf: view Qwen identity logits hidden state
  1 file changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index e54350cc0e..c52c07f6bb 100644
+index b19ac543b3..090fc1bdf5 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
-@@ -1345,7 +1345,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1343,7 +1343,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
          input_batch: InputBatch,
          grammar_output: GrammarOutput | None,
      ) -> tuple[SamplerOutput, torch.Tensor, torch.Tensor]:

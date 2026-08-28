@@ -7,10 +7,10 @@ Subject: [PATCH] perf(musa): unify Qwen runtime fast paths
  .../model_executor/layers/logits_processor.py | 14 ++++-
  vllm/v1/attention/backends/gdn_attn.py        |  7 ++-
  vllm/v1/sample/metadata.py                    |  3 +
- vllm/v1/worker/gpu/model_runner.py            |  9 +++
+ vllm/v1/worker/gpu/model_runner.py            |  7 +++
  vllm/v1/worker/gpu_input_batch.py             | 15 +++++
- vllm/v1/worker/gpu_model_runner.py            | 60 +++++++++++++++++--
- 6 files changed, 100 insertions(+), 8 deletions(-)
+ vllm/v1/worker/gpu_model_runner.py            | 56 +++++++++++++++++--
+ 6 files changed, 94 insertions(+), 8 deletions(-)
 
 diff --git a/vllm/model_executor/layers/logits_processor.py b/vllm/model_executor/layers/logits_processor.py
 index e86328c702..ab8d1d4102 100644
@@ -87,22 +87,20 @@ index fa4ceac8e7..98fc48d095 100644
 +    uniform_top_k: int | None = None
 +    uniform_temperature: float | None = None
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index d68666cf4a..e54350cc0e 100644
+index d68666cf4a..b19ac543b3 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
-@@ -416,6 +416,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -416,6 +416,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                      self.speculative_config,
                      self.device,
                  )
-+            from vllm_musa.optimization_contract import resolve_optimization_contract
++            from vllm_musa.runtime_plan import resolve_runtime_plan
 +
-+            optimization_contract = resolve_optimization_contract(
-+                model_config=self.model_config
-+            )
-+            self.sampler._musa_optimization_contract = optimization_contract
++            runtime_plan = resolve_runtime_plan(model_config=self.model_config)
++            self.sampler._musa_runtime_plan = runtime_plan
 +            topk_topp_sampler = getattr(self.sampler, "topk_topp_sampler", None)
 +            if topk_topp_sampler is not None:
-+                topk_topp_sampler._musa_optimization_contract = optimization_contract
++                topk_topp_sampler._musa_runtime_plan = runtime_plan
              self.prompt_logprobs_worker = PromptLogprobsWorker(
                  self.max_num_reqs,
                  logprobs_mode=self.model_config.logprobs_mode,
@@ -140,33 +138,29 @@ index 69a507f734..738a3e8eae 100644
  
      def get_pooling_params(self) -> list[PoolingParams]:
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 682227ecee..3a040031b3 100644
+index 682227ecee..3a0b78faff 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -790,6 +790,32 @@ class GPUModelRunner(
+@@ -790,6 +790,28 @@ class GPUModelRunner(
              use_replayssm=self.cache_config.use_replayssm,
          )
  
-+        from vllm_musa.optimization_contract import (
-+            OptimizationFeature,
-+            resolve_optimization_contract,
++        from vllm_musa.runtime_plan import (
++            RuntimeDecision,
++            resolve_runtime_plan,
 +        )
 +
-+        optimization_contract = resolve_optimization_contract(
++        runtime_plan = resolve_runtime_plan(
 +            self.vllm_config,
 +            is_pooling_model=self.is_pooling_model,
 +        )
 +        is_musa_qwen_text_generation = (
 +            current_platform.is_musa()
-+            and optimization_contract.prefers(
-+                OptimizationFeature.QWEN_LEGACY_SAMPLING
-+            )
++            and runtime_plan.enabled(RuntimeDecision.QWEN_LEGACY_SAMPLING)
 +        )
 +        self.sampler._musa_qwen_legacy_sampling = is_musa_qwen_text_generation
-+        self.sampler._musa_optimization_contract = optimization_contract
-+        self.sampler.topk_topp_sampler._musa_optimization_contract = (
-+            optimization_contract
-+        )
++        self.sampler._musa_runtime_plan = runtime_plan
++        self.sampler.topk_topp_sampler._musa_runtime_plan = runtime_plan
 +        self._musa_qwen_uniform_decode_logits_indices = (
 +            torch.arange(self.max_num_reqs, dtype=torch.int32, device=self.device)
 +            if is_musa_qwen_text_generation
@@ -176,7 +170,7 @@ index 682227ecee..3a040031b3 100644
          # Separate cuda stream for overlapping transfer of sampled token ids from
          # GPU to CPU when async scheduling is enabled.
          self.async_output_copy_stream: torch.cuda.Stream | None = None
-@@ -2045,6 +2071,8 @@ class GPUModelRunner(
+@@ -2045,6 +2067,8 @@ class GPUModelRunner(
          self,
          scheduler_output: "SchedulerOutput",
          num_scheduled_tokens: np.ndarray,
@@ -185,7 +179,7 @@ index 682227ecee..3a040031b3 100644
      ) -> tuple[
          torch.Tensor,
          SpecDecodeMetadata | None,
-@@ -2331,7 +2359,13 @@ class GPUModelRunner(
+@@ -2331,7 +2355,13 @@ class GPUModelRunner(
              # from these partial requests, we do so for simplicity.
              # We will ignore the sampled tokens from the partial requests.
              # TODO: Support prompt logprobs.
@@ -200,7 +194,7 @@ index 682227ecee..3a040031b3 100644
              spec_decode_metadata = None
              num_sampled_tokens = np.ones(num_reqs, dtype=np.int32)
          else:
-@@ -4428,8 +4462,20 @@ class GPUModelRunner(
+@@ -4428,8 +4458,20 @@ class GPUModelRunner(
              max_num_scheduled_tokens = int(num_scheduled_tokens_np.max())
              num_tokens_unpadded = scheduler_output.total_num_scheduled_tokens
  
@@ -222,7 +216,7 @@ index 682227ecee..3a040031b3 100644
              )
  
              cascade_attn_prefix_lens = None
-@@ -4657,13 +4703,19 @@ class GPUModelRunner(
+@@ -4657,13 +4699,19 @@ class GPUModelRunner(
                          kv_connector_output,
                      )
  

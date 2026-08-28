@@ -396,7 +396,7 @@ def test_graph_staging_gate_uses_forward_context_descriptor(
     plan = custom_ar._graph_staging_plan_for_current_model()
     if plan is None:
         # Build the exact contract without depending on process-global config.
-        from vllm_musa.optimization_contract.policy import (
+        from vllm_musa.runtime_plan.policy import (
             deepseek_v4_mtp_car_graph_staging_plan,
         )
 

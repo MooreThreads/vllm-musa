@@ -12,6 +12,20 @@ Python package that plugs into vLLM's platform and general plugin system to enab
 
 ## Module Overview
 
+### `runtime_plan/` – Unified optimization planning
+
+Model, topology, compile, graph-capture, and request-path choices are resolved
+through one immutable runtime plan. See [Runtime plans](runtime_plan.md) for the
+decision catalog, lifecycle rules, built-in plan projection, and extension
+workflow. See [Model-specific engine plans](engine_plan.md) for the baseline →
+profile → bounded-search workflow, or start with the
+[AutoTuner quickstart](autotuner_quickstart.md) for domain discovery, timing
+artifacts, plan construction, and clean replay.
+
+See [Declarative RuntimePlan profiles](runtime_profiles.md) for versioned
+per-model defaults, the closed condition language, tunability ownership, and
+the evidence-backed config-only update workflow.
+
 ### `musa.py` – Platform Definition
 
 Implements `MUSAPlatform` (out-of-tree `Platform` subclass) with two variants auto-selected at import:

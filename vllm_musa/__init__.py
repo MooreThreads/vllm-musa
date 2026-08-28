@@ -20,7 +20,10 @@ __all__ = [
     "register_custom_ops",
     "collect_env",
 ]
-__version__ = "0.1.24"
+# Canonical package version.  ``pyproject.toml`` reads this literal through
+# ``tool.setuptools.dynamic`` so source checkouts (including uninstalled
+# overlays) and installed distribution metadata expose the same identity.
+__version__ = "0.1.28"
 
 logger = logging.getLogger(__name__)
 
@@ -142,8 +145,13 @@ def _register_patches() -> None:
 
 def _register_ops() -> None:
     """Register OOT custom ops (activation, layernorm, fused_moe, etc.)."""
+    # Preserve registration order: generic model-executor ops must exist before
+    # the fused-MoE module performs its import-time registration and prewarm.
+    # isort: off
     import vllm_musa.model_executor  # noqa: F401
     import vllm_musa.jit_kernel.csrc.moe as _moe  # noqa: F401
+
+    # isort: on
 
     _moe.prewarm()
 

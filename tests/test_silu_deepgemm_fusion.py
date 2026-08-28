@@ -156,12 +156,14 @@ def _validated_qwen3_config(**overrides):
     ],
 )
 def test_validated_qwen3_8b_auto_scope(overrides) -> None:
-    from vllm_musa.optimization_contract import policy
-    from vllm_musa.optimization_contract.types import OptimizationFeature
+    from vllm_musa.runtime_plan import policy
+    from vllm_musa.runtime_plan.types import RuntimeDecision
 
-    feature = OptimizationFeature.QWEN3_DENSE_FP8_POST_GRAD_FUSIONS
-    assert policy.prefers_feature(_validated_qwen3_config(), feature)
-    assert not policy.prefers_feature(_validated_qwen3_config(**overrides), feature)
+    feature = RuntimeDecision.QWEN3_DENSE_FP8_POST_GRAD_FUSIONS
+    assert policy.runtime_plan_enabled(_validated_qwen3_config(), feature)
+    assert not policy.runtime_plan_enabled(
+        _validated_qwen3_config(**overrides), feature
+    )
 
 
 def test_default_auto_scope_is_evaluated_per_config() -> None:

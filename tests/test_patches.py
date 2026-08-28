@@ -30,6 +30,17 @@ class TestPatchFileNaming:
             # config shims are object patches too, alongside the vllm.* ones)
             assert module_name.startswith(("vllm", "torch"))
 
+    def test_runtime_plan_worker_materialization_precedes_base_worker(self):
+        worker_source = (Path(__file__).parents[1] / "vllm_musa/worker.py").read_text()
+        helper = "materialize_fused_moe_runtime_policy_for_worker("
+        assert worker_source.index(helper) < worker_source.index("super().__init__(")
+
+        gpu_worker_patch = (
+            Path(__file__).parents[1]
+            / "vllm_musa/patches/series/0036-MUSA-vllm.v1.worker.gpu_worker.patch"
+        ).read_text()
+        assert "materialize_fused_moe_runtime_policy_for_worker" not in gpu_worker_patch
+
 
 class TestCustomOpsRuntimePatches:
     def test_rms_norm_wrapper_is_registered_on_vllm_custom_ops(self, monkeypatch):
@@ -105,12 +116,12 @@ class TestModelOptFp8CapabilityPatch:
     def test_modelopt_fp8_uses_musa_capability_floor(self):
         patch_path = (
             Path(__file__).parent.parent
-            / "vllm_musa/patches/series/0099-MUSA-allow-ModelOpt-FP8-on-MUSA-capability.patch"
+            / "vllm_musa/patches/series/0100-MUSA-allow-ModelOpt-FP8-on-MUSA-capability.patch"
         )
         source = patch_path.read_text()
 
         assert "vllm/model_executor/layers/quantization/modelopt.py" in source
-        assert "-        return 89" in source
+        assert "-        return 80" in source
         assert "+        return 31" in source
 
 
@@ -147,14 +158,14 @@ class TestCompilationBackendPatch:
 
     def test_qwen2_presplit_keeps_baseline_split_and_hashes_helper(self, monkeypatch):
         from vllm_musa.compilation import qwen2_rope_kv_presplit as presplit
-        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
+        from vllm_musa.runtime_plan import policy
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
+        monkeypatch.setattr(policy, "runtime_plan_enabled", lambda *_args: True)
         monkeypatch.setattr(
             presplit, "qwen2_rope_kv_backend_supported", lambda _config: True
         )
@@ -190,14 +201,14 @@ class TestCompilationBackendPatch:
 
     def test_qwen2_presplit_mismatch_keeps_baseline_config(self, monkeypatch):
         from vllm_musa.compilation import qwen2_rope_kv_presplit as presplit
-        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
+        from vllm_musa.runtime_plan import policy
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
+        monkeypatch.setattr(policy, "runtime_plan_enabled", lambda *_args: True)
         monkeypatch.setattr(
             presplit, "qwen2_rope_kv_backend_supported", lambda _config: True
         )
@@ -220,14 +231,14 @@ class TestCompilationBackendPatch:
 
     def test_qwen2_presplit_rejects_unsupported_attention_backend(self, monkeypatch):
         from vllm_musa.compilation import qwen2_rope_kv_presplit as presplit
-        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
+        from vllm_musa.runtime_plan import policy
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
+        monkeypatch.setattr(policy, "runtime_plan_enabled", lambda *_args: True)
         monkeypatch.setattr(
             presplit, "qwen2_rope_kv_backend_supported", lambda _config: False
         )
@@ -252,14 +263,14 @@ class TestCompilationBackendPatch:
         text_config_source: str,
     ):
         from vllm_musa.compilation import qwen3_qk_rope_kv_presplit as presplit
-        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
+        from vllm_musa.runtime_plan import policy
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
+        monkeypatch.setattr(policy, "runtime_plan_enabled", lambda *_args: True)
         monkeypatch.setattr(
             presplit,
             "qwen3_qk_rope_kv_backend_supported",
@@ -304,14 +315,14 @@ class TestCompilationBackendPatch:
 
     def test_qwen3_presplit_missing_layer_count_is_fail_closed(self, monkeypatch):
         from vllm_musa.compilation import qwen3_qk_rope_kv_presplit as presplit
-        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
+        from vllm_musa.runtime_plan import policy
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
+        monkeypatch.setattr(policy, "runtime_plan_enabled", lambda *_args: True)
 
         def unexpected_backend_check(*_args, **_kwargs):
             pytest.fail("backend support must not run without a layer count")
@@ -340,14 +351,14 @@ class TestCompilationBackendPatch:
 
     def test_qwen3_presplit_site_mismatch_is_atomic(self, monkeypatch):
         from vllm_musa.compilation import qwen3_qk_rope_kv_presplit as presplit
-        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
+        from vllm_musa.runtime_plan import policy
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
+        monkeypatch.setattr(policy, "runtime_plan_enabled", lambda *_args: True)
         monkeypatch.setattr(
             presplit,
             "qwen3_qk_rope_kv_backend_supported",
@@ -386,14 +397,14 @@ class TestCompilationBackendPatch:
 
     def test_qwen3_presplit_rejects_unsupported_attention_backend(self, monkeypatch):
         from vllm_musa.compilation import qwen3_qk_rope_kv_presplit as presplit
-        from vllm_musa.optimization_contract import policy
         from vllm_musa.patches import _get_patch_files, _load_patch_module
+        from vllm_musa.runtime_plan import policy
 
         patch_file = next(
             f for m, f in _get_patch_files() if m == "vllm.compilation.backends"
         )
         patch_module = _load_patch_module(patch_file)
-        monkeypatch.setattr(policy, "prefers_feature", lambda *_args: True)
+        monkeypatch.setattr(policy, "runtime_plan_enabled", lambda *_args: True)
         monkeypatch.setattr(
             presplit,
             "qwen3_qk_rope_kv_backend_supported",
@@ -777,6 +788,7 @@ class TestMUSAPlatformDefaults:
             cache_config=SimpleNamespace(
                 block_size=cache_block_size,
                 cache_dtype="fp8" if is_deepseek_v4 else "auto",
+                kv_cache_dtype_skip_layers=[],
             ),
             scheduler_config=SimpleNamespace(
                 is_multimodal_model=False,
@@ -784,9 +796,11 @@ class TestMUSAPlatformDefaults:
                 max_num_seqs=1 if is_deepseek_v4 else 64,
             ),
             attention_config=SimpleNamespace(backend=attention_backend),
-            quant_config=SimpleNamespace(weight_block_size=[128, 128])
-            if is_deepseek_v4
-            else None,
+            quant_config=(
+                SimpleNamespace(weight_block_size=[128, 128])
+                if is_deepseek_v4
+                else None
+            ),
             compilation_config=SimpleNamespace(
                 custom_ops=[],
                 inductor_compile_config={},
@@ -811,6 +825,74 @@ class TestMUSAPlatformDefaults:
 
         assert vllm_config.compilation_config.max_cudagraph_capture_size is None
         assert vllm_config.compilation_config.custom_ops == ["all"]
+
+    def test_engine_plan_runtime_decisions_materialize_in_worker(self, monkeypatch):
+        import vllm_musa.platform as musa_platform
+
+        resolution = SimpleNamespace(
+            plan_id="plan-1",
+            fingerprint="sha256:plan",
+        )
+        plan = SimpleNamespace(
+            profile="qwen3_moe",
+            fingerprint="sha256:runtime-plan",
+            profile_config_id="profile-1",
+            profile_config_fingerprint="sha256:profile",
+            decision_resolution=resolution,
+            decision_source=lambda _decision: "engine_plan",
+            value=lambda _decision, _default: (object(),),
+        )
+        resolved = []
+        materialized = []
+        monkeypatch.setattr(
+            musa_platform,
+            "resolve_runtime_plan",
+            lambda config: resolved.append(config) or plan,
+        )
+        monkeypatch.setattr(
+            musa_platform,
+            "_materialize_fused_moe_runtime_policy",
+            lambda value: materialized.append(value) or (2, 63, 8192),
+        )
+
+        vllm_config = self._make_vllm_config(
+            architectures=["Qwen3MoeForCausalLM"],
+        )
+        boundaries = musa_platform.materialize_fused_moe_runtime_policy_for_worker(
+            vllm_config,
+            worker_rank=3,
+        )
+
+        assert resolved == [vllm_config]
+        assert materialized == [plan]
+        assert boundaries == (2, 63, 8192)
+
+    def test_worker_builtin_policy_does_not_emit_plan_receipt(self, monkeypatch):
+        import vllm_musa.platform as musa_platform
+
+        plan = SimpleNamespace(
+            fingerprint="sha256:runtime-plan",
+            decision_resolution=None,
+            decision_source=lambda _decision: "catalog_fallback",
+            value=lambda _decision, _default: (),
+        )
+        monkeypatch.setattr(
+            musa_platform,
+            "resolve_runtime_plan",
+            lambda _config: plan,
+        )
+        monkeypatch.setattr(
+            musa_platform,
+            "_materialize_fused_moe_runtime_policy",
+            lambda _plan: (),
+        )
+
+        assert (
+            musa_platform.materialize_fused_moe_runtime_policy_for_worker(
+                object(), worker_rank=0
+            )
+            == ()
+        )
 
     @pytest.mark.parametrize(
         ("architectures", "torch211_or_newer", "expected"),
@@ -990,11 +1072,11 @@ class TestMUSAPlatformDefaults:
             assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
 
     def test_deepseek_v4_tp8_uses_contract_without_profile_env(self):
-        from vllm_musa.optimization_contract import (
-            OptimizationFeature,
-            resolve_optimization_contract,
-        )
         from vllm_musa.platform import MUSAPlatformBase
+        from vllm_musa.runtime_plan import (
+            RuntimeDecision,
+            resolve_runtime_plan,
+        )
 
         vllm_config = self._make_vllm_config(
             architectures=["DeepseekV4ForCausalLM"],
@@ -1017,12 +1099,12 @@ class TestMUSAPlatformDefaults:
 
             MUSAPlatformBase.check_and_update_config(vllm_config)
 
-            contract = resolve_optimization_contract(vllm_config)
-            assert contract.prefers(
-                OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
+            plan = resolve_runtime_plan(vllm_config)
+            assert (
+                plan.value(RuntimeDecision.DEEPSEEK_V4_FLASHMLA_SPARSE_PAGE_SIZE) == 256
             )
-            assert contract.prefers(
-                OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
+            assert plan.enabled(
+                RuntimeDecision.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
             )
             assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
             assert "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X" not in os.environ
@@ -1065,7 +1147,7 @@ class TestMUSAPlatformDefaults:
 
         assert vllm_config.cache_config.block_size == 256
 
-    def test_deepseek_v4_non_tp8_flashmla_keeps_generic_page64(self):
+    def test_deepseek_v4_non_tp8_uses_model_page256(self):
         from vllm_musa.platform import MUSAPlatformBase
 
         vllm_config = self._make_vllm_config(
@@ -1073,12 +1155,12 @@ class TestMUSAPlatformDefaults:
             tensor_parallel_size=4,
             use_mla=True,
             index_topk=512,
-            cache_block_size=256,
+            cache_block_size=64,
         )
 
         MUSAPlatformBase.check_and_update_config(vllm_config)
 
-        assert vllm_config.cache_config.block_size == 64
+        assert vllm_config.cache_config.block_size == 256
 
     def test_non_deepseek_sparse_mla_keeps_generic_page64(self):
         from vllm_musa.platform import MUSAPlatformBase
@@ -1090,6 +1172,22 @@ class TestMUSAPlatformDefaults:
             index_topk=512,
             cache_block_size=256,
         )
+
+        MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.cache_config.block_size == 64
+
+    def test_non_deepseek_explicit_sparse_page_avoids_dsv4_rejection(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["OtherSparseMLAForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=256,
+        )
+        vllm_config.cache_config.user_specified_block_size = True
 
         MUSAPlatformBase.check_and_update_config(vllm_config)
 
@@ -1158,6 +1256,7 @@ class TestMUSAPlatformDefaults:
                     user_specified_block_size=user_specified,
                     mamba_cache_mode=mamba_cache_mode,
                     mamba_page_size_padded=1056,
+                    kv_cache_dtype_skip_layers=[],
                 ),
             )
 
@@ -1203,6 +1302,345 @@ class TestMUSAPlatformDefaults:
         MUSAPlatformBase.update_block_size_for_backend(cfg)
         assert cfg.cache_config.block_size == 16
         assert cfg.cache_config.mamba_page_size_padded == 1056
+
+    def test_find_all_non_ssm_backends_deduplicates_live_layer_backends(
+        self, monkeypatch
+    ):
+        import vllm.config.vllm as vllm_config_module
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        class _AttentionA:
+            @staticmethod
+            def is_ssm():
+                return False
+
+        class _AttentionB:
+            @staticmethod
+            def is_ssm():
+                return False
+
+        class _SSM:
+            @staticmethod
+            def is_ssm():
+                return True
+
+        class _Layer:
+            def __init__(self, backend):
+                self.backend = backend
+
+            def get_attn_backend(self):
+                return self.backend
+
+        monkeypatch.setattr(
+            vllm_config_module,
+            "get_layers_from_vllm_config",
+            lambda vllm_config, layer_type: {
+                "attention-a-0": _Layer(_AttentionA),
+                "ssm": _Layer(_SSM),
+                "attention-b": _Layer(_AttentionB),
+                "attention-a-1": _Layer(_AttentionA),
+            },
+        )
+
+        assert MUSAPlatformBase._find_all_non_ssm_backends(object()) == (
+            _AttentionA,
+            _AttentionB,
+        )
+
+    def test_deepseek_v4_mtp_validates_final_model_page_layout(self, monkeypatch):
+        from vllm.v1.attention.backend import AttentionBackend, MultipleOf
+
+        from vllm_musa.platform import MUSAPlatformBase
+        from vllm_musa.runtime_plan import resolve_runtime_plan
+
+        class _DeepseekV4Backend(AttentionBackend):
+            @staticmethod
+            def get_supported_kernel_block_sizes():
+                return [MultipleOf(64)]
+
+            @staticmethod
+            def get_preferred_block_size(default_block_size):
+                del default_block_size
+                return 256
+
+            @staticmethod
+            def get_name():
+                return "DEEPSEEK_SPARSE_SWA"
+
+        config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+        config.scheduler_config.max_num_seqs = 4
+        config.scheduler_config.async_scheduling = True
+        config.speculative_config = SimpleNamespace(method="mtp")
+        config.cache_config.user_specified_block_size = False
+        config.cache_config.mamba_cache_mode = "none"
+        config.cache_config.mamba_page_size_padded = None
+        monkeypatch.setattr(
+            MUSAPlatformBase,
+            "_find_non_ssm_backend",
+            classmethod(lambda cls, vllm_config: _DeepseekV4Backend),
+        )
+        monkeypatch.setattr(
+            MUSAPlatformBase,
+            "_find_all_non_ssm_backends",
+            classmethod(lambda cls, vllm_config: (_DeepseekV4Backend,)),
+        )
+
+        MUSAPlatformBase.check_and_update_config(config)
+        assert resolve_runtime_plan(config).profile == (
+            "deepseek_v4.tp8_flash_base_mtp"
+        )
+        assert config.cache_config.block_size == 256
+
+        MUSAPlatformBase.update_block_size_for_backend(config)
+
+        assert config.cache_config.block_size == 256
+
+    def test_deepseek_v4_rejects_explicit_incompatible_page64(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+        config.scheduler_config.max_num_seqs = 4
+        config.scheduler_config.async_scheduling = True
+        config.speculative_config = SimpleNamespace(method="mtp")
+        config.cache_config.user_specified_block_size = True
+
+        with pytest.raises(RuntimeError, match="explicit DeepSeek-V4 KV block size"):
+            MUSAPlatformBase.check_and_update_config(config)
+
+    def test_deepseek_v4_mtp_materializes_draft_flashmla_backend(self):
+        from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+        config.scheduler_config.max_num_seqs = 4
+        config.scheduler_config.async_scheduling = True
+        config.speculative_config = SimpleNamespace(
+            method="mtp",
+            attention_backend=None,
+        )
+
+        MUSAPlatformBase.check_and_update_config(config)
+
+        assert (
+            config.speculative_config.attention_backend is AttentionBackendEnum.FLASHMLA
+        )
+
+    def test_deepseek_v4_mtp_upstream_draft_clone_keeps_exact_plan(self, monkeypatch):
+        from vllm.v1.attention.backends.registry import AttentionBackendEnum
+        from vllm.v1.spec_decode import llm_base_proposer
+
+        from vllm_musa.platform import MUSAPlatformBase
+        from vllm_musa.runtime_plan import resolve_runtime_plan
+
+        config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+        config.scheduler_config.max_num_seqs = 4
+        config.scheduler_config.async_scheduling = True
+        config.speculative_config = SimpleNamespace(
+            method="mtp",
+            attention_backend=None,
+            moe_backend=None,
+            kv_cache_dtype=None,
+        )
+        MUSAPlatformBase.check_and_update_config(config)
+
+        def _reconstruct(base, **changes):
+            derived = SimpleNamespace(**vars(base))
+            for name, value in changes.items():
+                setattr(derived, name, value)
+            if hasattr(derived, "model_config"):
+                MUSAPlatformBase.check_and_update_config(derived)
+            return derived
+
+        monkeypatch.setattr(llm_base_proposer, "replace", _reconstruct)
+        proposer = object.__new__(llm_base_proposer.SpecDecodeBaseProposer)
+        proposer.speculative_config = config.speculative_config
+        proposer.vllm_config = config
+
+        draft_config = proposer._create_draft_vllm_config()
+
+        assert draft_config.attention_config.backend is AttentionBackendEnum.FLASHMLA
+        assert (
+            resolve_runtime_plan(draft_config).profile
+            == "deepseek_v4.tp8_flash_base_mtp"
+        )
+
+    def test_deepseek_v4_mtp_preserves_explicit_draft_backend(self):
+        from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+        config.scheduler_config.max_num_seqs = 4
+        config.scheduler_config.async_scheduling = True
+        config.speculative_config = SimpleNamespace(
+            method="mtp",
+            attention_backend=AttentionBackendEnum.FLASH_ATTN,
+        )
+
+        MUSAPlatformBase.check_and_update_config(config)
+
+        assert (
+            config.speculative_config.attention_backend
+            is AttentionBackendEnum.FLASH_ATTN
+        )
+
+    def test_non_exact_deepseek_v4_mtp_keeps_draft_backend_unset(self):
+        from vllm_musa.platform import MUSAPlatformBase
+        from vllm_musa.runtime_plan import resolve_runtime_plan
+
+        config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=4,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+        config.scheduler_config.max_num_seqs = 4
+        config.scheduler_config.async_scheduling = True
+        config.speculative_config = SimpleNamespace(
+            method="mtp",
+            attention_backend=None,
+        )
+
+        MUSAPlatformBase.check_and_update_config(config)
+
+        assert resolve_runtime_plan(config).profile == "deepseek_v4.unvalidated"
+        assert config.speculative_config.attention_backend is None
+
+    def test_deepseek_v4_final_layout_rejects_backend_drift(self, monkeypatch):
+        from vllm.v1.attention.backend import AttentionBackend, MultipleOf
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        class _PrefersPage64Backend(AttentionBackend):
+            @staticmethod
+            def get_supported_kernel_block_sizes():
+                return [MultipleOf(64)]
+
+            @staticmethod
+            def get_preferred_block_size(default_block_size):
+                del default_block_size
+                return 64
+
+            @staticmethod
+            def get_name():
+                return "PREFERS_PAGE_64"
+
+        config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+        config.scheduler_config.max_num_seqs = 4
+        config.scheduler_config.async_scheduling = True
+        config.speculative_config = SimpleNamespace(method="mtp")
+        config.cache_config.user_specified_block_size = False
+        config.cache_config.mamba_cache_mode = "none"
+        config.cache_config.mamba_page_size_padded = None
+        monkeypatch.setattr(
+            MUSAPlatformBase,
+            "_find_non_ssm_backend",
+            classmethod(lambda cls, vllm_config: _PrefersPage64Backend),
+        )
+        monkeypatch.setattr(
+            MUSAPlatformBase,
+            "_find_all_non_ssm_backends",
+            classmethod(lambda cls, vllm_config: (_PrefersPage64Backend,)),
+        )
+
+        MUSAPlatformBase.check_and_update_config(config)
+        with pytest.raises(RuntimeError, match="drifted after live backend"):
+            MUSAPlatformBase.update_block_size_for_backend(config)
+
+    def test_deepseek_v4_explicit_page_still_validates_live_backend(self, monkeypatch):
+        from vllm.v1.attention.backend import AttentionBackend
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        class _CompatiblePageBackend(AttentionBackend):
+            @staticmethod
+            def get_supported_kernel_block_sizes():
+                return [256]
+
+            @staticmethod
+            def get_name():
+                return "PAGE_256"
+
+        class _IncompatiblePageBackend(AttentionBackend):
+            @staticmethod
+            def get_supported_kernel_block_sizes():
+                return [192]
+
+            @staticmethod
+            def get_name():
+                return "PAGE_192_ONLY"
+
+        config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=256,
+        )
+        config.scheduler_config.max_num_seqs = 4
+        config.scheduler_config.async_scheduling = True
+        config.speculative_config = SimpleNamespace(method="mtp")
+        config.cache_config.user_specified_block_size = True
+        config.cache_config.mamba_cache_mode = "none"
+        config.cache_config.mamba_page_size_padded = None
+        monkeypatch.setattr(
+            MUSAPlatformBase,
+            "_find_non_ssm_backend",
+            classmethod(lambda cls, vllm_config: _CompatiblePageBackend),
+        )
+        monkeypatch.setattr(
+            MUSAPlatformBase,
+            "_find_all_non_ssm_backends",
+            classmethod(
+                lambda cls, vllm_config: (
+                    _CompatiblePageBackend,
+                    _IncompatiblePageBackend,
+                )
+            ),
+        )
+
+        MUSAPlatformBase.check_and_update_config(config)
+        with pytest.raises(RuntimeError, match="unsupported by the live backend"):
+            MUSAPlatformBase.update_block_size_for_backend(config)
 
     def test_dense_fp8_does_not_cap_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase
@@ -1747,7 +2185,7 @@ class TestBuildTimeSeries:
 
     def test_gemma_norm_series_patch_uses_generic_inplace_ir_contract(self):
         series = (
-            self._SERIES_DIR / "0079-MUSA-allow-Gemma-RMSNorm-residual-donation.patch"
+            self._SERIES_DIR / "0078-MUSA-allow-Gemma-RMSNorm-residual-donation.patch"
         )
         series = self._read_patch(series)
 
@@ -1757,7 +2195,7 @@ class TestBuildTimeSeries:
         assert "vllm/model_executor/models/qwen3_5_mtp.py" not in series
 
     def test_gated_qkv_series_patch_uses_generic_ir_contract(self):
-        series = self._SERIES_DIR / "0080-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch"
+        series = self._SERIES_DIR / "0079-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch"
         series = self._read_patch(series)
 
         assert '@register_op(activations=["packed_qkv"])' in series
@@ -1771,6 +2209,38 @@ class TestBuildTimeSeries:
         assert "VLLM_MUSA_EXPERIMENTAL_GATED_QKV_MROPE" not in series
         assert "current_platform.is_musa()" not in series
         assert "override_tolerance(torch.bfloat16, atol=2e-2, rtol=1.6e-2)" in series
+
+    def test_runtime_plan_compile_warmup_patch_disables_lazy_cudagraph(self):
+        series = (
+            self._SERIES_DIR / "0134-MUSA-finalize-RuntimePlan-graph-lifecycle.patch"
+        )
+        series = self._read_patch(series)
+
+        assert "+        current_platform.finalize_config(self)" in series
+        assert "+        cudagraph_runtime_mode: CUDAGraphMode | None = None," in series
+        assert (
+            "+        force_eager_cudagraph = "
+            "cudagraph_runtime_mode == CUDAGraphMode.NONE" in series
+        )
+        assert series.count("force_eager_cudagraph=force_eager_cudagraph") == 2
+        assert series.count("need_eager=is_profile or force_eager_cudagraph") == 3
+        assert "+    def validate_cudagraph_config(" in series
+
+    def test_runtime_plan_graph_padding_hook_runs_after_resolution(self):
+        series = self._SERIES_DIR / "0134-MUSA-finalize-RuntimePlan-graph-lifecycle.patch"
+        series = self._read_patch(series)
+
+        assert "+    def validate_cudagraph_config(" in series
+        assert "+        uniform_decode_query_len: int," in series
+        assert series.count("+        current_platform.validate_cudagraph_config(") == 1
+        validate = "+        current_platform.validate_cudagraph_config("
+        query_len = (
+            "+            uniform_decode_query_len=self.uniform_decode_query_len,"
+        )
+        dispatcher = "self.cudagraph_dispatcher = CudagraphDispatcher"
+        assert validate in series
+        assert query_len in series
+        assert series.index(validate) < series.index(dispatcher)
 
     def test_apply_patch_series_missing_dir_is_noop(self, tmp_path):
         ba = self._load_build_apply()

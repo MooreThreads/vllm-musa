@@ -7,6 +7,9 @@ repos:
       - id: check-symlinks
       - id: destroyed-symlinks
       - id: trailing-whitespace
+        # Unified-diff context uses a single leading space on otherwise blank
+        # lines. Stripping it corrupts the checked-in vLLM patch series.
+        exclude: '^vllm_musa/patches/series/.*\.patch$'
       - id: end-of-file-fixer
       - id: check-yaml
         args: [--allow-multiple-documents]

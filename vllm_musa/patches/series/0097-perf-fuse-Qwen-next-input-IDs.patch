@@ -48,10 +48,10 @@ index 9a574a4faa..bbb3344677 100644
      )
  
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index c52c07f6bb..d0e4376969 100644
+index 090fc1bdf5..5760ec45b2 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
-@@ -1236,18 +1236,35 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1234,18 +1234,35 @@ class GPUModelRunner(LoRAModelRunnerMixin):
  
          # Some input token ids are directly read from the last sampled tokens
          # and draft tokens. Also, get the logits indices to sample tokens from.
@@ -99,7 +99,7 @@ index c52c07f6bb..d0e4376969 100644
  
          # CPU upper bound on seq_lens; padded entries left at zero.
          num_computed_tokens_np = self.req_states.num_computed_tokens_np[idx_mapping_np]
-@@ -1293,7 +1310,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1291,7 +1308,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              is_prefilling_np=batch_req_state.is_prefilling_np,
              has_prefill=batch_req_state.has_prefill,
              max_seq_len_np=max_seq_len_np,
@@ -108,7 +108,7 @@ index c52c07f6bb..d0e4376969 100644
              positions=self.input_buffers.positions[:num_tokens_after_padding],
              is_padding=self.input_buffers.is_padding[:num_tokens_after_padding],
              logits_indices=logits_indices,
-@@ -1392,6 +1409,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1390,6 +1407,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              output_bin_counts = self.sampler.penalties_state.output_bin_counts
          else:
              output_bin_counts = None
@@ -117,7 +117,7 @@ index c52c07f6bb..d0e4376969 100644
          post_update(
              idx_mapping,
              self.req_states.num_computed_tokens.gpu,
-@@ -1403,6 +1422,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1401,6 +1420,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              query_start_loc,
              self.req_states.all_token_ids.gpu,
              self.req_states.total_len.gpu,

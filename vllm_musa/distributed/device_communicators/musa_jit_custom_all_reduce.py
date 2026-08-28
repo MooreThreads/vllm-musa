@@ -12,12 +12,12 @@ from vllm.logger import init_logger
 from vllm.utils.torch_utils import direct_register_custom_op
 
 from vllm_musa.jit_kernel.csrc import allreduce as jit_ar
-from vllm_musa.optimization_contract import (
+from vllm_musa.runtime_plan import (
     ModelFamily,
-    OptimizationFeature,
-    resolve_optimization_contract,
+    RuntimeDecision,
+    resolve_runtime_plan,
 )
-from vllm_musa.optimization_contract.policy import (
+from vllm_musa.runtime_plan.policy import (
     DeepSeekV4MtpCarGraphStagingPlan,
     deepseek_v4_mtp_car_graph_guard_enabled,
     deepseek_v4_mtp_car_graph_staging_plan,
@@ -57,11 +57,11 @@ def _use_graph_registered_inputs_for_current_model() -> bool:
     except (ImportError, RuntimeError):
         return True
 
-    contract = resolve_optimization_contract(vllm_config)
-    feature = OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD
-    if contract.model.family is not ModelFamily.DEEPSEEK_V4:
+    plan = resolve_runtime_plan(vllm_config)
+    decision = RuntimeDecision.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD
+    if plan.model.family is not ModelFamily.DEEPSEEK_V4:
         return True
-    if not contract.supports(feature):
+    if not plan.supports(decision):
         return False
 
     compilation_config = getattr(vllm_config, "compilation_config", None)
@@ -441,6 +441,11 @@ class _MusaJitCustomAllreduceImpl:
     _SUPPORTED_WORLD_SIZES = (2, 4, 6, 8)
     _MAX_CAR_SIZE = 512 * 1024 * 1024
     _GRAPH_REGISTERED_INPUT_MAX_BYTES = 512 * 1024
+    # Keep the safe baseline available for lightweight objects constructed by
+    # backend probes/tests before __init__ has populated model-specific plans.
+    # A missing plan must never accidentally select a graph staging path.
+    _use_graph_staging_arena = False
+    _use_graph_collective_fallback = False
 
     def __init__(
         self,

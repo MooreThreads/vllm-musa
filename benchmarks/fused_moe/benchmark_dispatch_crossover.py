@@ -12,10 +12,12 @@ the result with serving A/B before adding a policy entry.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import importlib.metadata
 import inspect
 import json
+import math
 import os
 import statistics
 import subprocess
@@ -23,18 +25,198 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
+
+
+def _normalize_dump_roots(roots: list[Path]) -> list[Path]:
+    normalized: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        resolved = root.expanduser().resolve()
+        key = str(resolved)
+        if key not in seen:
+            seen.add(key)
+            normalized.append(resolved)
+    return normalized
+
+
+def _scan_musa_device_dumps(
+    roots: list[Path],
+) -> tuple[dict[str, dict[str, int | str]], list[str]]:
+    """Snapshot MUSA device dumps without modifying existing evidence."""
+
+    dumps: dict[str, dict[str, int | str]] = {}
+    errors: list[str] = []
+    for root in _normalize_dump_roots(roots):
+        try:
+            if not root.exists():
+                errors.append(f"{root}: dump root does not exist")
+                continue
+            if not root.is_dir():
+                errors.append(f"{root}: dump root is not a directory")
+                continue
+            candidates = sorted(root.glob("*.mudmp"))
+        except OSError as exc:
+            errors.append(f"{root}: {type(exc).__name__}: {exc}")
+            continue
+        for candidate in candidates:
+            try:
+                stat = candidate.stat()
+                path = str(candidate.resolve())
+            except (OSError, RuntimeError) as exc:
+                errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
+                continue
+            dumps[path] = {
+                "path": path,
+                "size_bytes": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "device": stat.st_dev,
+                "inode": stat.st_ino,
+            }
+    return dumps, errors
+
+
+def _device_dump_evidence(
+    *,
+    roots: list[Path],
+    baseline: dict[str, dict[str, int | str]],
+    baseline_errors: list[str],
+) -> dict[str, Any]:
+    current, current_errors = _scan_musa_device_dumps(roots)
+    new_dumps = [current[path] for path in sorted(set(current) - set(baseline))]
+    changed_dumps = [
+        current[path]
+        for path in sorted(set(current).intersection(baseline))
+        if current[path] != baseline[path]
+    ]
+    missing_preexisting = sorted(set(baseline) - set(current))
+    scan_errors = [*baseline_errors, *current_errors]
+    normalized_roots = _normalize_dump_roots(roots)
+    return {
+        "passed": (
+            not new_dumps
+            and not changed_dumps
+            and not missing_preexisting
+            and not scan_errors
+        ),
+        "search_patterns": [str(root / "*.mudmp") for root in normalized_roots],
+        "preexisting_dumps": [baseline[path] for path in sorted(baseline)],
+        "new_dumps": new_dumps,
+        "changed_preexisting_dumps": changed_dumps,
+        "missing_preexisting_dumps": missing_preexisting,
+        "scan_errors": scan_errors,
+    }
+
+
+def _benchmark_source_root() -> Path:
+    configured = os.environ.get("VLLM_MUSA_SOURCE_ROOT")
+    if configured:
+        source_root = Path(configured).expanduser().resolve()
+    else:
+        source_root = next(
+            (
+                parent
+                for parent in Path(__file__).resolve().parents
+                if (parent / ".git").exists()
+            ),
+            None,
+        )
+    if source_root is None or not (source_root / ".git").exists():
+        raise RuntimeError(
+            "qualified fused-MoE evidence requires an exact Git source checkout"
+        )
+    return source_root
+
+
+def _git_directory(source_root: Path) -> Path:
+    dot_git = source_root / ".git"
+    if dot_git.is_dir():
+        return dot_git.resolve()
+    if not dot_git.is_file():
+        raise RuntimeError(f"Git metadata is missing from {source_root}")
+    declaration = dot_git.read_text().strip()
+    prefix = "gitdir: "
+    if not declaration.startswith(prefix):
+        raise RuntimeError(f"unsupported Git worktree metadata in {dot_git}")
+    git_directory = Path(declaration[len(prefix) :])
+    if not git_directory.is_absolute():
+        git_directory = dot_git.parent / git_directory
+    git_directory = git_directory.resolve()
+    if not git_directory.is_dir():
+        raise RuntimeError(f"Git directory does not exist: {git_directory}")
+    return git_directory
+
+
+def acquire_exclusive_benchmark_lock() -> tuple[TextIO, dict[str, Any]]:
+    """Serialize measurements sharing one source checkout and visible GPU.
+
+    SOL isolates a leased GPU from other tasks. This process lock additionally
+    prevents an agent from launching several route/seed sweeps concurrently on
+    that same leased device, which would invalidate timing independence.
+    """
+
+    source_root = _benchmark_source_root()
+    visible_devices = os.environ.get("MUSA_VISIBLE_DEVICES", "default-device-0")
+    device_scope = hashlib.sha256(visible_devices.encode()).hexdigest()[:16]
+    lock_path = _git_directory(source_root) / (
+        f"musa-fused-moe-crossover-{device_scope}.lock"
+    )
+    lock_file = lock_path.open("a+")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        lock_file.close()
+        raise RuntimeError(
+            "another fused-MoE benchmark already owns the exclusive process "
+            f"lock for MUSA_VISIBLE_DEVICES={visible_devices!r}: {lock_path}"
+        ) from exc
+    lock_file.seek(0)
+    lock_file.truncate()
+    lock_file.write(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "visible_devices": visible_devices,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    lock_file.flush()
+    os.fsync(lock_file.fileno())
+    return lock_file, {
+        "acquired": True,
+        "path": str(lock_path),
+        "pid": os.getpid(),
+        "visible_devices": visible_devices,
+    }
+
+
+# The MUSA runtime emits ``core_*.mudmp`` into the process working directory.
+# Snapshot it before importing the runtime stack so an import-time dump cannot
+# be mistaken for pre-existing evidence later in this invocation.
+_INVOCATION_DUMP_ROOT = Path.cwd().resolve()
+_INVOCATION_DUMP_BASELINE, _INVOCATION_DUMP_SCAN_ERRORS = _scan_musa_device_dumps(
+    [_INVOCATION_DUMP_ROOT]
+)
 
 # isort: off
-import torchada  # noqa: F401  # must patch before torch ecosystem imports
-import torch
-import torch.nn.functional as F
+import torchada  # noqa: E402, F401  # must patch before torch ecosystem imports
+import torch  # noqa: E402
+import torch.nn.functional as F  # noqa: E402
+
 # isort: on
 
-from mate.testing.utils import bench_gpu_time_with_musa_event
+from mate.testing.utils import bench_gpu_time_with_musa_event  # noqa: E402
 
-from vllm_musa.model_executor.layers.fused_moe import fused_moe
-from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
+from vllm_musa.engine_plan.fused_moe_contract import (  # noqa: E402
+    FUSED_MOE_CROSSOVER_SCHEMA,
+    FUSED_MOE_MAX_ERROR_THRESHOLDS,
+    FUSED_MOE_MIN_COSINE_THRESHOLDS,
+    FUSED_MOE_MIN_QUALIFIED_L2_FLUSH_MB,
+)
+from vllm_musa.model_executor.layers.fused_moe import fused_moe  # noqa: E402
+from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (  # noqa: E402
     MusaFusedMoeBackend,
     MusaFusedMoeShape,
 )
@@ -56,6 +238,7 @@ class Result:
     tokens: int
     backend: str
     samples_ms: list[float]
+    round_medians_ms: list[float]
     median_ms: float | None
     p20_ms: float | None
     p95_ms: float | None
@@ -130,10 +313,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--repeats-per-round", type=int, default=10)
     parser.add_argument("--rounds", type=int, default=3)
-    parser.add_argument("--l2-flush-mb", type=int, default=8192)
+    parser.add_argument(
+        "--l2-flush-mb",
+        type=int,
+        default=FUSED_MOE_MIN_QUALIFIED_L2_FLUSH_MB,
+    )
     parser.add_argument("--seed", type=int, default=20260720)
-    parser.add_argument("--atol", type=float, default=0.02)
-    parser.add_argument("--rtol", type=float, default=0.08)
     parser.add_argument("--gemv-max-relative-l2", type=float, default=0.06)
     parser.add_argument("--gemv-min-cosine", type=float, default=0.998)
     parser.add_argument("--gemv-max-row-relative-l2", type=float, default=0.08)
@@ -154,6 +339,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grouped-max-normalized-abs-diff", type=float, default=0.05)
     parser.add_argument("--regression-margin", type=float, default=0.03)
     parser.add_argument("--max-iqr-ratio", type=float, default=0.10)
+    parser.add_argument(
+        "--graph-capture",
+        action="store_true",
+        help="time backend graph replays and emit capture-scoped policy keys",
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
@@ -174,18 +364,38 @@ def command_output(command: list[str]) -> str | None:
         return None
 
 
+def file_sha256(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 def repo_provenance() -> dict[str, Any]:
     module_path = Path(inspect.getfile(fused_moe)).resolve()
-    repo = next(
-        (
-            parent
-            for parent in (module_path.parent, *module_path.parents)
-            if (parent / ".git").exists()
-        ),
-        None,
-    )
+    source_root = os.environ.get("VLLM_MUSA_SOURCE_ROOT")
+    if source_root:
+        repo = Path(source_root).resolve()
+    else:
+        repo = next(
+            (
+                parent
+                for parent in (module_path.parent, *module_path.parents)
+                if (parent / ".git").exists()
+            ),
+            None,
+        )
     if repo is None:
-        return {"module_path": str(module_path), "repo": None}
+        return {
+            "module_path": str(module_path),
+            "repo": None,
+            "overlay_matches_source": False,
+        }
+    source_module_path = (
+        repo / "vllm_musa" / "model_executor" / "layers" / "fused_moe" / "fused_moe.py"
+    )
+    module_sha256 = file_sha256(module_path)
+    source_module_sha256 = file_sha256(source_module_path)
     head = command_output(["git", "-C", str(repo), "rev-parse", "HEAD"])
     status = command_output(["git", "-C", str(repo), "status", "--short"])
     try:
@@ -201,6 +411,14 @@ def repo_provenance() -> dict[str, Any]:
         "repo": str(repo),
         "head": head,
         "status": status,
+        "source_module_path": str(source_module_path),
+        "module_sha256": module_sha256,
+        "source_module_sha256": source_module_sha256,
+        "overlay_matches_source": bool(
+            module_sha256
+            and source_module_sha256
+            and module_sha256 == source_module_sha256
+        ),
         "dirty_patch_sha256": diff_sha256,
         "custom_ops_module": str(Path(inspect.getfile(fused_moe.musa_ops)).resolve()),
     }
@@ -453,6 +671,22 @@ def build_backends(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bo
         "deepgemm_prefill": deepgemm_prefill,
         "upstream": upstream,
     }, capabilities
+
+
+def capture_backend(
+    function: Any,
+) -> tuple[Any, torch.Tensor]:
+    """Capture one already-warmed backend and return its replay callable/output."""
+
+    graph = torch.cuda.CUDAGraph()
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        with torch.cuda.graph(graph):
+            output = function()
+    torch.cuda.current_stream().wait_stream(stream)
+    synchronize()
+    return graph.replay, output
 
 
 def dispatcher_smoke(
@@ -774,8 +1008,126 @@ def recommend_thresholds(
     }
 
 
+def _validate_finite_nonnegative(name: str, value: float) -> None:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise ValueError(f"{name} must be finite and non-negative")
+
+
+def validate_measurement_parameters(
+    args: argparse.Namespace,
+    *,
+    backend_count: int,
+) -> None:
+    """Reject settings that cannot support qualified timing evidence."""
+
+    if args.warmup <= 0:
+        raise ValueError("warmup must be positive")
+    if args.repeats_per_round < 3:
+        raise ValueError("repeats-per-round must be at least three")
+    if args.rounds < 3 or args.rounds % backend_count != 0:
+        raise ValueError(
+            "rounds must be at least three and a multiple of backend count"
+        )
+    if (
+        not isinstance(args.l2_flush_mb, int)
+        or isinstance(args.l2_flush_mb, bool)
+        or args.l2_flush_mb <= 0
+    ):
+        raise ValueError(
+            "l2-flush-mb must be positive for cold-cache timing; "
+            f"values below {FUSED_MOE_MIN_QUALIFIED_L2_FLUSH_MB} MiB "
+            "remain diagnostic and cannot qualify a plan"
+        )
+    if args.seed < 0:
+        raise ValueError("seed must be non-negative")
+
+    for name, canonical_maximum in FUSED_MOE_MAX_ERROR_THRESHOLDS:
+        value = getattr(args, name)
+        _validate_finite_nonnegative(name.replace("_", "-"), value)
+        if value > canonical_maximum:
+            raise ValueError(
+                f"{name.replace('_', '-')} exceeds canonical maximum "
+                f"{canonical_maximum}"
+            )
+    for name, canonical_minimum in FUSED_MOE_MIN_COSINE_THRESHOLDS:
+        value = getattr(args, name)
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or not canonical_minimum <= value <= 1
+        ):
+            raise ValueError(
+                f"{name.replace('_', '-')} is below canonical minimum; "
+                f"must be in [{canonical_minimum}, 1]"
+            )
+    if (
+        not isinstance(args.regression_margin, (int, float))
+        or isinstance(args.regression_margin, bool)
+        or not math.isfinite(args.regression_margin)
+        or not 0 < args.regression_margin < 1
+    ):
+        raise ValueError("regression-margin must be finite and between zero and one")
+    if args.max_iqr_ratio != 0.10:
+        raise ValueError("max-iqr-ratio must be 0.10 for qualified evidence")
+
+
+def validate_shape(shape: Shape) -> None:
+    for name in ("experts", "hidden_size", "intermediate_size"):
+        if getattr(shape, name) <= 0:
+            raise ValueError(f"{name.replace('_', '-')} must be positive")
+    if shape.top_k <= 0 or shape.top_k > shape.experts:
+        raise ValueError("top-k must be in [1, experts]")
+    if shape.hidden_size % shape.block_size != 0:
+        raise ValueError("hidden-size must be aligned to block-size")
+    if shape.intermediate_size % shape.block_size != 0:
+        raise ValueError("intermediate-size must be aligned to block-size")
+
+
+def candidate_recommendation(
+    results: list[Result],
+    tokens: list[int],
+    *,
+    qualified: bool,
+    regression_margin: float,
+    max_iqr_ratio: float,
+) -> dict[str, int | None]:
+    """Return a candidate only when every qualification gate passed.
+
+    Keeping this decision in one small function makes it impossible for a
+    device fault, provenance mismatch, or failed correctness gate to leave a
+    stale threshold recommendation in an otherwise unqualified artifact.
+    """
+
+    if not qualified:
+        return {"gemv_max_tokens": None, "grouped_gemm_min_tokens": None}
+    return recommend_thresholds(
+        results,
+        tokens,
+        regression_margin,
+        max_iqr_ratio,
+    )
+
+
 def main() -> int:
     args = parse_args()
+    # Ensure the second dump root exists before taking its baseline snapshot;
+    # otherwise a new output directory would look like a scan failure even
+    # though the benchmark itself has not started.
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    dump_roots = _normalize_dump_roots([_INVOCATION_DUMP_ROOT, args.output.parent])
+    dump_baseline = dict(_INVOCATION_DUMP_BASELINE)
+    dump_baseline_errors = list(_INVOCATION_DUMP_SCAN_ERRORS)
+    extra_roots = [root for root in dump_roots if root != _INVOCATION_DUMP_ROOT]
+    extra_baseline, extra_errors = _scan_musa_device_dumps(extra_roots)
+    dump_baseline.update(extra_baseline)
+    dump_baseline_errors.extend(extra_errors)
+
     shape = Shape(
         name=args.name,
         experts=args.experts,
@@ -788,7 +1140,9 @@ def main() -> int:
     if args.sweep_kind == "dense" and tokens:
         dense_prefix_max = min(max(tokens), args.dense_prefix_max)
         tokens = sorted(set(tokens).union(range(1, dense_prefix_max + 1)))
-    requested_backends = [value for value in args.backends.split(",") if value]
+    requested_backends = [
+        value.strip() for value in args.backends.split(",") if value.strip()
+    ]
     unknown = set(requested_backends) - {
         "gemv",
         "grouped_gemm",
@@ -797,24 +1151,27 @@ def main() -> int:
     }
     if unknown:
         raise ValueError(f"unsupported backends: {sorted(unknown)}")
+    if len(requested_backends) != len(set(requested_backends)):
+        raise ValueError("backends must not contain duplicates")
     if "upstream" not in requested_backends:
         raise ValueError("upstream is mandatory as the correctness reference")
+    if args.graph_capture and any(
+        backend not in {"gemv", "upstream"} for backend in requested_backends
+    ):
+        raise ValueError(
+            "graph-capture timing currently supports only gemv and upstream"
+        )
     if not tokens or min(tokens) <= 0:
         raise ValueError("tokens must contain positive integers")
     if args.dense_prefix_max <= 0:
         raise ValueError("dense-prefix-max must be positive")
     if args.oracle_probe_tokens <= 0:
         raise ValueError("oracle-probe-tokens must be positive")
-    if not 0 < args.regression_margin < 1:
-        raise ValueError("regression-margin must be between zero and one")
-    if args.max_iqr_ratio <= 0:
-        raise ValueError("max-iqr-ratio must be positive")
-    if shape.top_k <= 0 or shape.top_k > shape.experts:
-        raise ValueError("top-k must be in [1, experts]")
+    validate_shape(shape)
     if args.folded_shared_expert and (shape.experts < 2 or shape.top_k < 2):
         raise ValueError("folded shared expert requires experts >= 2 and top-k >= 2")
-    if args.rounds <= 0 or args.rounds % len(requested_backends) != 0:
-        raise ValueError("rounds must be a positive multiple of backend count")
+    validate_measurement_parameters(args, backend_count=len(requested_backends))
+    benchmark_lock_file, benchmark_lock_evidence = acquire_exclusive_benchmark_lock()
 
     w1 = quantized_weight(
         (shape.experts, 2 * shape.intermediate_size, shape.hidden_size), args.seed
@@ -852,10 +1209,10 @@ def main() -> int:
         w1_scale_shape=tuple(w1_scale.shape),
         w2_scale_shape=tuple(w2_scale.shape),
         gemv_block=os.environ.get("VLLM_MUSA_GEMV_MOE_BLOCK", "auto"),
-        graph_mode="eager",
+        graph_mode="capture" if args.graph_capture else "eager",
     )
     metadata = {
-        "schema": "musa-fused-moe-crossover.v6",
+        "schema": FUSED_MOE_CROSSOVER_SCHEMA,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "argv": sys.argv,
         "shape": asdict(shape),
@@ -870,13 +1227,13 @@ def main() -> int:
         "gemv_recommendation_requires_contiguous_prefix": True,
         "grouped_recommendation_requires_contiguous_suffix": True,
         "backends": requested_backends,
+        "measurement_mode": "graph_replay" if args.graph_capture else "eager",
         "warmup": args.warmup,
         "repeats_per_round": args.repeats_per_round,
         "rounds": args.rounds,
+        "selection_samples": "per_round_median",
         "l2_flush_mb": args.l2_flush_mb,
         "cold_cache": True,
-        "atol": args.atol,
-        "rtol": args.rtol,
         "gemv_max_relative_l2": args.gemv_max_relative_l2,
         "gemv_min_cosine": args.gemv_min_cosine,
         "gemv_max_row_relative_l2": args.gemv_max_row_relative_l2,
@@ -910,6 +1267,7 @@ def main() -> int:
         "torch_musa_runtime": getattr(torch.version, "musa", None),
         "packages": package_versions(),
         "repo": repo_provenance(),
+        "exclusive_process_lock": benchmark_lock_evidence,
         "mthreads_gmi": command_output(["mthreads-gmi", "-q"]),
         "mcc_version": command_output(["mcc", "--version"]),
         "estimated_static_bytes": (
@@ -921,6 +1279,7 @@ def main() -> int:
     }
     results: list[Result] = []
     dispatcher_evidence: dict[str, Any] = {}
+    graph_replay_evidence: dict[str, Any] = {}
     deepgemm_dispatch_evidence: dict[str, Any] = {}
     deepgemm_implementation: dict[str, str] = {}
     oracle_evidence: dict[str, Any] | None = None
@@ -1061,25 +1420,27 @@ def main() -> int:
         unsupported = [name for name in requested_backends if not capabilities[name]]
         if unsupported:
             raise RuntimeError(f"production capability gate rejected: {unsupported}")
-        outputs: dict[str, torch.Tensor] = {}
+        direct_outputs: dict[str, torch.Tensor] = {}
         errors: dict[str, str] = {}
         for backend in requested_backends:
             try:
-                outputs[backend] = backends[backend]().detach().clone()
+                direct_outputs[backend] = backends[backend]().detach().clone()
                 synchronize()
             except Exception as exc:
                 errors[backend] = f"{type(exc).__name__}: {exc}"
 
         dispatcher_evidence[str(token_count)] = dispatcher_smoke(
-            kwargs, requested_backends, outputs
+            kwargs, requested_backends, direct_outputs
         )
         if "deepgemm_prefill" in requested_backends:
             deepgemm_implementation[str(token_count)] = deepgemm_prefill_implementation(
                 kwargs
             )
-            if "deepgemm_prefill" in outputs:
+            if "deepgemm_prefill" in direct_outputs:
                 deepgemm_dispatch_evidence[str(token_count)] = (
-                    deepgemm_prefill_dispatch_smoke(kwargs, outputs["deepgemm_prefill"])
+                    deepgemm_prefill_dispatch_smoke(
+                        kwargs, direct_outputs["deepgemm_prefill"]
+                    )
                 )
             else:
                 deepgemm_dispatch_evidence[str(token_count)] = {
@@ -1087,8 +1448,39 @@ def main() -> int:
                     "error": errors.get("deepgemm_prefill", "direct output missing"),
                 }
 
-        reference = outputs.get("upstream")
+        timing_backends = dict(backends)
+        outputs = dict(direct_outputs)
+        if args.graph_capture:
+            token_graph_evidence: dict[str, Any] = {}
+            for backend in requested_backends:
+                if backend in errors:
+                    continue
+                try:
+                    replay, captured_output = capture_backend(backends[backend])
+                    replay()
+                    synchronize()
+                    captured = captured_output.detach().clone()
+                    outputs[backend] = captured
+                    timing_backends[backend] = replay
+                    expected = direct_outputs[backend]
+                    difference = (captured.float() - expected.float()).abs()
+                    token_graph_evidence[backend] = {
+                        "passed": bool(torch.equal(captured, expected)),
+                        "max_abs_diff": float(difference.max().item()),
+                    }
+                except Exception as exc:
+                    errors[backend] = f"{type(exc).__name__}: {exc}"
+                    token_graph_evidence[backend] = {
+                        "passed": False,
+                        "error": errors[backend],
+                    }
+            graph_replay_evidence[str(token_count)] = token_graph_evidence
+
+        reference = direct_outputs.get("upstream")
         samples: dict[str, list[float]] = {name: [] for name in requested_backends}
+        round_medians: dict[str, list[float]] = {
+            name: [] for name in requested_backends
+        }
         for round_index in range(args.rounds):
             offset = round_index % len(requested_backends)
             order = requested_backends[offset:] + requested_backends[:offset]
@@ -1097,13 +1489,16 @@ def main() -> int:
                     continue
                 try:
                     measurements = bench_gpu_time_with_musa_event(
-                        backends[backend],
+                        timing_backends[backend],
                         dry_run_iters=args.warmup,
                         repeat_iters=args.repeats_per_round,
                         l2_flush=True,
                         l2_flush_size_mb=args.l2_flush_mb,
                     )
                     samples[backend].extend(float(value) for value in measurements)
+                    round_medians[backend].append(
+                        float(statistics.median(measurements))
+                    )
                 except Exception as exc:
                     errors[backend] = f"{type(exc).__name__}: {exc}"
                 finally:
@@ -1165,7 +1560,8 @@ def main() -> int:
                         and min_row_cosine >= args.grouped_min_row_cosine
                         and normalized_abs_diff <= args.grouped_max_normalized_abs_diff
                     )
-            timings = samples[backend]
+            raw_timings = samples[backend]
+            timings = round_medians[backend]
             q25 = quantile(timings, 0.25) if timings else None
             q75 = quantile(timings, 0.75) if timings else None
             results.append(
@@ -1173,13 +1569,14 @@ def main() -> int:
                     shape=asdict(shape),
                     tokens=token_count,
                     backend=backend,
-                    samples_ms=timings,
+                    samples_ms=raw_timings,
+                    round_medians_ms=timings,
                     median_ms=statistics.median(timings) if timings else None,
                     p20_ms=quantile(timings, 0.2) if timings else None,
                     p95_ms=quantile(timings, 0.95) if timings else None,
                     iqr_ms=(q75 - q25) if q25 is not None and q75 is not None else None,
-                    min_ms=min(timings) if timings else None,
-                    max_ms=max(timings) if timings else None,
+                    min_ms=min(raw_timings) if raw_timings else None,
+                    max_ms=max(raw_timings) if raw_timings else None,
                     max_abs_diff=diff_max,
                     mean_abs_diff=diff_mean,
                     relative_l2_error=relative_l2,
@@ -1200,29 +1597,58 @@ def main() -> int:
         del hidden_states, topk_ids, topk_weights, outputs, reference
         torch.musa.empty_cache()
 
+    # Drain every stream before the final filesystem snapshot so an
+    # asynchronously reported device fault cannot race the qualification gate.
+    synchronize()
+    device_dump_evidence = _device_dump_evidence(
+        roots=dump_roots,
+        baseline=dump_baseline,
+        baseline_errors=dump_baseline_errors,
+    )
     qualified = bool(
-        dispatcher_evidence
+        device_dump_evidence["passed"]
+        and args.l2_flush_mb >= FUSED_MOE_MIN_QUALIFIED_L2_FLUSH_MB
+        and metadata["repo"].get("head")
+        and metadata["repo"].get("status") == ""
+        and metadata["repo"].get("overlay_matches_source") is True
+        and dispatcher_evidence
         and all(item["passed"] for item in dispatcher_evidence.values())
         and (
             not deepgemm_dispatch_evidence
             or all(item["passed"] for item in deepgemm_dispatch_evidence.values())
         )
+        and (
+            not args.graph_capture
+            or bool(graph_replay_evidence)
+            and all(
+                item.get("passed") is True
+                for evidence in graph_replay_evidence.values()
+                for item in evidence.values()
+            )
+        )
         and all(
-            result.error is None and result.correctness_pass is True
+            result.error is None
+            and result.correctness_pass is True
+            and result.finite is True
+            and result.non_poison is True
             for result in results
         )
     )
-    candidate = (
-        recommend_thresholds(
-            results, tokens, args.regression_margin, args.max_iqr_ratio
-        )
-        if qualified
-        else {"gemv_max_tokens": None, "grouped_gemm_min_tokens": None}
+    candidate = candidate_recommendation(
+        results,
+        tokens,
+        qualified=qualified,
+        regression_margin=args.regression_margin,
+        max_iqr_ratio=args.max_iqr_ratio,
     )
     payload = {
         "metadata": metadata,
         "qualification": {
             "passed": qualified,
+            "device_dump_free": device_dump_evidence["passed"],
+            "cold_cache_flush_qualified": (
+                args.l2_flush_mb >= FUSED_MOE_MIN_QUALIFIED_L2_FLUSH_MB
+            ),
             "reference_backend": {
                 "gemv": "sampled-fp32-oracle-and-rowwise-normalized-envelope",
                 "grouped_gemm": "upstream-normalized-envelope",
@@ -1234,17 +1660,21 @@ def main() -> int:
                 "CUDAGraph, and serving A/B gates remain"
             ),
         },
+        "musa_device_dump_evidence": device_dump_evidence,
         "oracle_evidence": oracle_evidence,
         "dispatcher_smoke_by_tokens": dispatcher_evidence,
+        "graph_replay_smoke_by_tokens": graph_replay_evidence,
         "deepgemm_dispatch_smoke_by_tokens": deepgemm_dispatch_evidence,
         "deepgemm_implementation_by_tokens": deepgemm_implementation,
         "candidate_recommendation": candidate,
         "results": [asdict(result) for result in results],
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    json.dump(payload, sys.stdout, indent=2, sort_keys=True)
+    args.output.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    )
+    json.dump(payload, sys.stdout, indent=2, sort_keys=True, allow_nan=False)
     sys.stdout.write("\n")
+    benchmark_lock_file.close()
     return 0 if qualified else 1
 
 

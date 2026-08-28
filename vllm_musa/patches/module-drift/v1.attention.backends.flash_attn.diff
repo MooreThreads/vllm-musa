@@ -92,9 +92,9 @@
 +from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
 +from vllm.v1.kv_cache_interface import AttentionSpec
 +
-+from vllm_musa.optimization_contract import (
-+    OptimizationFeature,
-+    resolve_optimization_contract,
++from vllm_musa.runtime_plan import (
++    RuntimeDecision,
++    resolve_runtime_plan,
 +)
 +from vllm_musa.v1.attention.backends.fa_utils import (
 +    flash_attn_supports_fp8,
@@ -116,8 +116,8 @@
 
 -class FlashAttentionBackend(AttentionBackend):
 +def _is_musa_qwen_text_generation_architecture(model_config: Any) -> bool:
-+    return resolve_optimization_contract(model_config=model_config).prefers(
-+        OptimizationFeature.QWEN_FA3_SCHEDULER
++    return resolve_runtime_plan(model_config=model_config).enabled(
++        RuntimeDecision.QWEN_FA3_SCHEDULER
 +    )
 +
 +
@@ -164,10 +164,10 @@
 +        return False
 +
 +    max_num_seqs = getattr(scheduler_config, "max_num_seqs", None)
-+    contract = resolve_optimization_contract(vllm_config)
++    plan = resolve_runtime_plan(vllm_config)
 +
 +    return (
-+        contract.prefers(OptimizationFeature.QWEN_FA3_SINGLE_REQUEST_METADATA)
++        plan.enabled(RuntimeDecision.QWEN_FA3_SINGLE_REQUEST_METADATA)
 +        and isinstance(max_num_seqs, int)
 +        and max_num_seqs >= 1
 +        and getattr(vllm_config, "speculative_config", None) is None
@@ -618,15 +618,18 @@
 
      def __init__(
          self,
-@@ -443,6 +495,7 @@
+@@ -443,6 +495,10 @@
 
          self.max_num_splits = 0  # No upper bound on the number of splits.
          self.aot_schedule = get_flash_attn_version() == 3
-+        self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
++        self._musa_runtime_plan = resolve_runtime_plan(vllm_config)
++        self._musa_qwen_fa3_scheduler = self._musa_runtime_plan.enabled(
++            RuntimeDecision.QWEN_FA3_SCHEDULER
++        )
 
          try:
              from vllm.distributed.parallel_state import get_dcp_group
-@@ -454,14 +507,6 @@
+@@ -454,14 +510,6 @@
              self.dcp_world_size = 1
              self.dcp_rank = 0
 
@@ -641,7 +644,7 @@
          self.cp_kv_cache_interleave_size = (
              self.parallel_config.cp_kv_cache_interleave_size
          )
-@@ -470,6 +515,16 @@
+@@ -470,6 +518,16 @@
              self.compilation_config.cudagraph_mode.has_full_cudagraphs()
          )
          self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
@@ -658,7 +661,7 @@
 
          if self.use_full_cuda_graph and self.aot_schedule:
              # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
-@@ -492,46 +547,38 @@
+@@ -492,46 +550,38 @@
              self.max_num_splits = (
                  self.attention_config.flash_attn_max_num_splits_for_cuda_graph
              )
@@ -730,7 +733,7 @@
 
      def build(
          self,
-@@ -553,11 +600,25 @@
+@@ -553,11 +603,25 @@
          slot_mapping = common_attn_metadata.slot_mapping
          causal = common_attn_metadata.causal
 
@@ -761,7 +764,7 @@
 
          if self.aot_sliding_window is None:
              self.aot_sliding_window = (-1, -1)
-@@ -585,87 +646,153 @@
+@@ -585,87 +649,151 @@
              # usage, because the intermediate buffers of size [num_splits,
              # num_heads, num_tokens, head_size] are allocated. Therefore,
              # we only set num_splits when using cuda graphs.
@@ -828,9 +831,7 @@
 +                self.model_config.dtype == torch.bfloat16
 +                and self.kv_cache_dtype in ("auto", "bfloat16", torch.bfloat16)
 +            ),
-+            is_qwen_family=self._musa_optimization_contract.prefers(
-+                OptimizationFeature.QWEN_FA3_SCHEDULER
-+            ),
++            is_qwen_family=self._musa_qwen_fa3_scheduler,
 +            use_full_cuda_graph=self.use_full_cuda_graph,
 +            common_prefix_len=common_prefix_len,
 +            dcp_world_size=self.dcp_world_size,
@@ -975,7 +976,7 @@
          elif use_cascade:
              cu_prefix_query_lens = torch.tensor(
                  [0, num_actual_tokens], dtype=torch.int32, device=self.device
-@@ -675,41 +802,107 @@
+@@ -675,41 +803,107 @@
              )
              # Use GPU tensor directly - no CPU sync needed
              suffix_kv_lens = seq_lens[:num_reqs] - common_prefix_len
@@ -1104,7 +1105,7 @@
 
          attn_metadata = FlashAttentionMetadata(
              num_actual_tokens=num_actual_tokens,
-@@ -717,14 +910,21 @@
+@@ -717,14 +911,21 @@
              query_start_loc=query_start_loc,
              max_seq_len=max_seq_len,
              seq_lens=seq_lens,
@@ -1130,7 +1131,7 @@
              use_cascade=use_cascade,
              common_prefix_len=common_prefix_len,
              scheduler_metadata=scheduler_metadata,
-@@ -735,50 +935,6 @@
+@@ -735,50 +936,6 @@
              max_num_splits=max_num_splits,
              causal=causal,
          )
@@ -1181,7 +1182,7 @@
          return attn_metadata
 
      def update_block_table(
-@@ -789,30 +945,11 @@
+@@ -789,30 +946,11 @@
      ) -> FlashAttentionMetadata:
          new_metadata = copy.copy(metadata)
          new_metadata.block_table = blk_table
@@ -1215,7 +1216,7 @@
 
      def use_cascade_attention(self, *args, **kwargs) -> bool:
          return use_cascade_attention(*args, **kwargs)
-@@ -861,40 +998,44 @@
+@@ -861,40 +999,44 @@
          self.vllm_flash_attn_version = get_flash_attn_version(
              requires_alibi=alibi_slopes is not None,
              head_size=head_size,
@@ -1276,7 +1277,7 @@
 
          vllm_config = get_current_vllm_config_or_none()
          dcp_a2a = (
-@@ -902,15 +1043,9 @@
+@@ -902,15 +1044,9 @@
              and vllm_config.parallel_config.decode_context_parallel_size > 1
              and vllm_config.parallel_config.dcp_comm_backend == "a2a"
          )
@@ -1295,7 +1296,7 @@
 
      def forward(
          self,
-@@ -920,7 +1055,7 @@
+@@ -920,7 +1056,7 @@
          value: torch.Tensor,
          kv_cache: torch.Tensor,
          attn_metadata: FlashAttentionMetadata,
@@ -1304,7 +1305,7 @@
          output_scale: torch.Tensor | None = None,
          output_block_scale: torch.Tensor | None = None,
      ) -> torch.Tensor:
-@@ -931,7 +1066,7 @@
+@@ -931,7 +1067,7 @@
              key: shape = [num_tokens, num_kv_heads, head_size]
              value: shape = [num_tokens, num_kv_heads, head_size]
              kv_cache: shape =
@@ -1313,7 +1314,7 @@
              attn_metadata: Metadata for attention.
          Returns:
              shape = [num_tokens, num_heads * head_size]
-@@ -939,9 +1074,10 @@
+@@ -939,9 +1075,10 @@
                {q,k,v}_descale to be (num_sequences, num_kv_heads).
                We use torch's .expand() to avoid duplicating values
          """
@@ -1327,7 +1328,7 @@
 
          if output_scale is not None or output_block_scale is not None:
              raise NotImplementedError(
-@@ -978,30 +1114,16 @@
+@@ -978,30 +1115,16 @@
                  layer,
              )
 
@@ -1367,7 +1368,7 @@
 
          if not attn_metadata.use_cascade:
              cu_seqlens_q = attn_metadata.query_start_loc
-@@ -1013,11 +1135,7 @@
+@@ -1013,11 +1136,7 @@
 
              descale_shape = (cu_seqlens_q.shape[0] - 1, self.num_kv_heads)
 
@@ -1380,7 +1381,7 @@
              k_descale = layer._k_scale.expand(descale_shape)
              v_descale = layer._v_scale.expand(descale_shape)
 
-@@ -1036,116 +1154,220 @@
+@@ -1036,116 +1155,220 @@
                  )
                  return output
              else:
@@ -1703,7 +1704,7 @@
          # Cascade attention (rare case).
          cascade_attention(
              output[:num_actual_tokens],
-@@ -1175,6 +1397,406 @@
+@@ -1175,6 +1398,407 @@
          )
          return output
 
@@ -1915,9 +1916,11 @@
 +
 +    def qwen3_qk_rope_kvcache_supported(self) -> bool:
 +        """Whether this layer is inside a validated Qwen3 cache-out envelope."""
-+        supported_shape = (
-+            (self.num_heads, self.num_kv_heads, self.head_size)
-+            in ((16, 8, 128), (32, 8, 128), (4, 1, 256), (32, 2, 256))
++        supported_shape = (self.num_heads, self.num_kv_heads, self.head_size) in (
++            (16, 8, 128),
++            (32, 8, 128),
++            (4, 1, 256),
++            (32, 2, 256),
 +        )
 +        return (
 +            get_flash_attn_version() == 3
@@ -1981,8 +1984,7 @@
 +                and is_interleaved
 +                and self.head_size == 256
 +                and cos_sin_cache.shape[-1] == 64
-+                and (mrope_section_t, mrope_section_h, mrope_section_w)
-+                == (11, 11, 10)
++                and (mrope_section_t, mrope_section_h, mrope_section_w) == (11, 11, 10)
 +            )
 +            paged_cache_supported = (
 +                h256_paged_specialization
@@ -2110,7 +2112,7 @@
      def do_kv_cache_update(
          self,
          layer: torch.nn.Module,
-@@ -1188,10 +1810,7 @@
+@@ -1188,10 +1812,7 @@
              # we use direct Q, K, V tensors without caching
              return
 
@@ -2122,7 +2124,7 @@
 
          # Reshape the input keys and values and store them in the cache.
          # Skip this if sharing KV cache with an earlier attention layer.
-@@ -1211,182 +1830,6 @@
+@@ -1211,182 +1832,6 @@
              layer._v_scale,
          )
 
@@ -2305,7 +2307,7 @@
      def _forward_encoder_attention(
          self,
          query: torch.Tensor,
-@@ -1406,12 +1849,12 @@
+@@ -1406,12 +1851,12 @@
              attn_metadata: Encoder attention metadata
              layer: The attention layer
          """
@@ -2322,7 +2324,7 @@
              raise NotImplementedError(
                  "quantization is not supported for encoder attention"
              )
-@@ -1422,202 +1865,28 @@
+@@ -1422,202 +1867,28 @@
          max_seqlen_q = attn_metadata.max_query_len
          max_seqlen_k = attn_metadata.max_query_len
 
@@ -2531,7 +2533,7 @@
 
 
  def use_cascade_attention(
-@@ -1726,9 +1995,10 @@
+@@ -1726,9 +1997,10 @@
  ) -> torch.Tensor:
      assert alibi_slopes is None, "Cascade attention does not support ALiBi."
      # TODO: Support sliding window.

@@ -19,6 +19,20 @@ _SUPPORTED_SPLITS = {
     (4096, 1024, 1024): (32, 8),
 }
 
+# The raw-FX matcher below is intentionally limited to the dense text Qwen3
+# envelope.  Keep the values passed to the expanded fused-op ABI next to that
+# envelope instead of relying on omitted arguments (the kernel also serves
+# Qwen3.5's richer MRoPE path).
+_TEXT_QWEN3_ROPE_ARGS = {
+    "is_neox": True,
+    "mrope_section_t": 64,
+    "mrope_section_h": 0,
+    "mrope_section_w": 0,
+    "is_interleaved": False,
+    "eps": 1e-6,
+    "gemma": False,
+}
+
 
 def qwen3_qk_rope_kv_backend_supported(
     vllm_config: Any,
@@ -360,6 +374,7 @@ def apply_qwen3_qk_rope_kv_presplit(
                     "cos_sin_cache": candidate.cos_sin_cache,
                     "q_out": q_out,
                     "k_out": k_out,
+                    **_TEXT_QWEN3_ROPE_ARGS,
                     "layer_name": candidate.layer_name,
                 },
             )

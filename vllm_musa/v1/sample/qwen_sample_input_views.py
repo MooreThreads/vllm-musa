@@ -8,11 +8,12 @@ from typing import Any
 import numpy as np
 import torchada  # noqa: F401
 import torch
+
 # isort: on
 
-from vllm_musa.optimization_contract import (
-    OptimizationFeature,
-    prefers_optimization,
+from vllm_musa.runtime_plan import (
+    RuntimeDecision,
+    runtime_plan_enabled,
 )
 
 
@@ -24,9 +25,9 @@ def _select_qwen_sample_input_views(
     idx_mapping_np: np.ndarray,
     return_logprobs: bool,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
-    if not prefers_optimization(
+    if not runtime_plan_enabled(
         sampler,
-        OptimizationFeature.QWEN_SAMPLE_INPUT_VIEWS,
+        RuntimeDecision.QWEN_SAMPLE_INPUT_VIEWS,
     ):
         return None
     if return_logprobs:

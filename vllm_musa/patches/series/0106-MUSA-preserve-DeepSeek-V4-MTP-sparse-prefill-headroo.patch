@@ -4,12 +4,12 @@ Date: Sat, 8 Aug 2026 06:56:54 +0800
 Subject: [PATCH] MUSA: preserve DeepSeek-V4 MTP sparse-prefill headroom
 
 ---
- vllm/models/deepseek_v4/nvidia/flashmla.py | 18 ++++++-
+ vllm/models/deepseek_v4/nvidia/flashmla.py | 32 +++++++++++-
  vllm/v1/worker/gpu_worker.py               | 60 ++++++++++++++++++++++
- 2 files changed, 76 insertions(+), 2 deletions(-)
+ 2 files changed, 90 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/flashmla.py b/vllm/models/deepseek_v4/nvidia/flashmla.py
-index c84070f4f2..4f9f7d1225 100644
+index c84070f4f2..774a7f661b 100644
 --- a/vllm/models/deepseek_v4/nvidia/flashmla.py
 +++ b/vllm/models/deepseek_v4/nvidia/flashmla.py
 @@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
@@ -28,7 +28,7 @@ index c84070f4f2..4f9f7d1225 100644
  from vllm.v1.attention.backend import AttentionCGSupport
  from vllm.v1.attention.backends.mla.sparse_swa import (
      DeepseekSparseSWABackend,
-@@ -54,9 +56,17 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
+@@ -54,9 +56,31 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
      backend_cls = DeepseekV4FlashMLABackend
      swa_backend_cls = DeepseekSparseSWAFlashMLABackend
  
@@ -45,10 +45,24 @@ index c84070f4f2..4f9f7d1225 100644
 +            and spec_config.num_speculative_tokens > 0
 +            and parallel_config.tensor_parallel_size == 8
 +        )
++        if current_platform.is_musa():
++            from vllm_musa.runtime_plan import (
++                RuntimeDecision,
++                resolve_runtime_plan,
++            )
++
++            plan_vllm_config = get_current_vllm_config_or_none() or vllm_config
++            runtime_plan = resolve_runtime_plan(
++                plan_vllm_config,
++                attention_backend_hint="flashmla",
++            )
++            self._allow_dsv4_tp8_mtp_direct_out &= runtime_plan.enabled(
++                RuntimeDecision.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT
++            )
  
      def _o_proj(self, o: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
          return deep_gemm_fp8_o_proj(
-@@ -391,4 +401,8 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
+@@ -391,4 +415,8 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
                  attn_sink=self.attn_sink,
                  topk_length=combined_lens,
                  out=output[query_start:query_end],

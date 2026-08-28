@@ -189,6 +189,14 @@ ccache --show-stats
 
 Once installed, the plugin is **automatically detected** by vLLM. Simply run vLLM as usual:
 
+For offline operator tactic selection and immutable RuntimePlan replay, see the
+[AutoTuner quickstart](docs/vllm_musa/autotuner_quickstart.md) and the
+[full engine-plan contract](docs/vllm_musa/engine_plan.md). AutoTuner produces
+timing evidence; only the plan built from that evidence is consumed by normal
+serving.
+Repository-owned defaults for registered code paths are documented in
+[Declarative RuntimePlan profiles](docs/vllm_musa/runtime_profiles.md).
+
 ```python
 from vllm import LLM, SamplingParams
 

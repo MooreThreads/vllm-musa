@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Source contract for uniform single-token decode logits indices."""
+"""Source checks for uniform single-token decode logits indices."""
 
 from pathlib import Path
 
@@ -11,16 +11,16 @@ PATCH = (
     / "series"
     / "0090-perf-musa-unify-Qwen-runtime-fast-paths.patch"
 )
-CONTRACT = ROOT / "vllm_musa" / "optimization_contract" / "qwen.py"
+RUNTIME_PLAN = ROOT / "vllm_musa" / "runtime_plan" / "qwen.py"
 
 
 def test_uniform_decode_patch_reuses_uploaded_request_indices() -> None:
     source = PATCH.read_text()
-    contract = CONTRACT.read_text()
+    plan_source = RUNTIME_PLAN.read_text()
 
     assert "current_platform.is_musa()" in source
-    assert "not execution.has_speculative_config" in contract
-    assert "not execution.is_pooling_model" in contract
+    assert "not execution.has_speculative_config" in plan_source
+    assert "not execution.is_pooling_model" in plan_source
     for architecture in (
         "Qwen2ForCausalLM",
         "Qwen2MoeForCausalLM",
@@ -29,7 +29,7 @@ def test_uniform_decode_patch_reuses_uploaded_request_indices() -> None:
         "Qwen3_5ForConditionalGeneration",
         "Qwen3_5MoeForConditionalGeneration",
     ):
-        assert architecture in contract
+        assert architecture in plan_source
     assert "VLLM_MUSA_QWEN_UNIFORM_DECODE_LOGITS_INDICES" not in source
     assert "max_num_scheduled_tokens == 1" in source
     assert "num_tokens_unpadded == num_reqs" in source

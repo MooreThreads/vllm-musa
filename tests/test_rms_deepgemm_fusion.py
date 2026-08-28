@@ -160,7 +160,7 @@ def test_default_auto_scope_is_evaluated_per_config(
     validated = object()
     other = object()
     monkeypatch.setattr(
-        "vllm_musa.optimization_contract.policy.prefers_feature",
+        "vllm_musa.runtime_plan.policy.runtime_plan_enabled",
         lambda config, _feature: config is validated,
     )
 
