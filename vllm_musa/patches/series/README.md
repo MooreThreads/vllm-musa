@@ -39,9 +39,9 @@ MUSA Buffer implementations. The final patch adds Hy4-preview runtime support,
 routes sparse MLA and the 32-head/128-dimension indexer through the existing
 MUSA backends, keeps iHC on the ordinary PyTorch path without `hpc-ops`, and
 fails fast on pipeline partitions that begin with an uninitialized shared
-indexer layer. The final patch snapshots MUSA speculative token buffers before
-side-stream PP broadcasts so the next decode step cannot overwrite an in-flight
-send.
+indexer layer. The MTP/PP follow-up patches add the relay interface and snapshot
+MUSA speculative token buffers before side-stream broadcasts so the next decode
+step cannot overwrite an in-flight send.
 The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime
