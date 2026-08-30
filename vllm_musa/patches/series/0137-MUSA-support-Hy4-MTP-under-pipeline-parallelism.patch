@@ -1,0 +1,311 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sun, 30 Aug 2026 19:01:11 +0800
+Subject: [PATCH] MUSA: support Hy4 MTP under pipeline parallelism
+
+---
+ vllm/models/hy_v4/nvidia/mtp.py               | 20 ++++++-
+ .../attention/backends/mla/flashmla_sparse.py | 10 +++-
+ vllm/v1/worker/gpu/model_runner.py            | 10 ++++
+ vllm/v1/worker/gpu/pp_utils.py                | 60 ++++++++++++++++++-
+ vllm/v1/worker/gpu_worker.py                  | 30 ++++++++--
+ 5 files changed, 122 insertions(+), 8 deletions(-)
+
+diff --git a/vllm/models/hy_v4/nvidia/mtp.py b/vllm/models/hy_v4/nvidia/mtp.py
+index 4d10196ad6..76d6cfd12a 100644
+--- a/vllm/models/hy_v4/nvidia/mtp.py
++++ b/vllm/models/hy_v4/nvidia/mtp.py
+@@ -29,6 +29,7 @@ from vllm.model_executor.model_loader.weight_utils import (
+     maybe_remap_kv_scale_name,
+ )
+ from vllm.model_executor.models.deepseek_v2 import _try_load_fp8_indexer_wk
++from vllm.model_executor.models.interfaces import SupportsPP
+ from vllm.model_executor.models.utils import (
+     get_pp_missing_layer_names,
+     is_pp_missing_parameter,
+@@ -507,7 +508,7 @@ class HYV4MultiTokenPredictor(nn.Module):
+         return self.logits_processor(lm_head, proj_input)
+ 
+ 
+-class HYV4MTP(nn.Module):
++class HYV4MTP(nn.Module, SupportsPP):
+     """HY V4 MTP draft head.
+ 
+     Not a pipeline-parallel stage: the draft head always runs on a single rank,
+@@ -554,6 +555,23 @@ class HYV4MTP(nn.Module):
+             ), "Sparse HYV4 MTP attention backend requires a top-k indices buffer"
+             attn_impl.topk_indices_buffer = topk_indices_buffer
+ 
++    def make_empty_intermediate_tensors(
++        self,
++        batch_size: int,
++        dtype: torch.dtype,
++        device: torch.device,
++    ) -> IntermediateTensors:
++        """Provide the PP profiling interface; the draft head runs on PP-last."""
++        return IntermediateTensors(
++            {
++                "hidden_states": torch.empty(
++                    (batch_size, self.config.hidden_size),
++                    dtype=dtype,
++                    device=device,
++                )
++            }
++        )
++
+     def forward(
+         self,
+         input_ids: torch.Tensor,
+diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+index 07b294c002..23389a4c34 100644
+--- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
++++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+@@ -559,6 +559,8 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+             topk_indices_buffer=topk_indices_buffer,
+             **mla_args,
+         )
++
++        self._indexer = indexer
+         self.softmax_scale = scale
+         # Prefill BF16 kernel requires 64 on Hopper, 128 on Blackwell
+         self.prefill_padding = (
+@@ -869,8 +871,12 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+         num_actual_toks = q.shape[0]
+ 
+         # Get topk indices
+-        assert self.topk_indices_buffer is not None
+-        topk_indices = self.topk_indices_buffer[:num_actual_toks]
++        if self._indexer is not None:
++            topk_indices_buffer = self._indexer.topk_indices_buffer
++        else:
++            topk_indices_buffer = self.topk_indices_buffer
++        assert topk_indices_buffer is not None
++        topk_indices = topk_indices_buffer[:num_actual_toks]
+ 
+         use_fp8_cache = self.kv_cache_dtype == "fp8_ds_mla"
+ 
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 79953a7558..70df8adc75 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -293,6 +293,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 max_num_reqs=self.max_num_reqs,
+                 num_speculative_steps=self.num_speculative_steps,
+                 device=self.device,
++                relay_draft_tokens=self.speculative_config is not None,
+             )
+ 
+         # Samplers and decode_query_len created in load_model() after
+@@ -959,7 +960,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         if self.pp_handler is not None:
+             outputs = self.pp_handler.get_prev_sampled_outputs()
+             if outputs is not None:
++                draft_tokens = outputs.pop("draft_tokens", None)
++                idx_mapping = outputs["idx_mapping"]
+                 self.postprocess_sampled(**outputs)
++                if draft_tokens is not None:
++                    valid = idx_mapping >= 0
++                    self.req_states.draft_tokens[idx_mapping[valid]] = draft_tokens[
++                        valid
++                    ]
+ 
+     def add_requests(self, scheduler_output: SchedulerOutput) -> None:
+         for new_req_data in scheduler_output.scheduled_new_reqs:
+@@ -1874,6 +1882,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                     mm_inputs=mm_inputs,
+                 )
+             self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
++            if self.pp_handler is not None:
++                self.pp_handler.broadcast_draft(draft_tokens, input_batch)
+             if self.adaptive_verification is not None:
+                 self.adaptive_verification.record_confidences(
+                     self.speculator.draft_token_confidence_probs, input_batch
+diff --git a/vllm/v1/worker/gpu/pp_utils.py b/vllm/v1/worker/gpu/pp_utils.py
+index 9b1786cbe4..83d81210b7 100644
+--- a/vllm/v1/worker/gpu/pp_utils.py
++++ b/vllm/v1/worker/gpu/pp_utils.py
+@@ -30,6 +30,10 @@ class PendingRecv:
+     # Snapshot of slot generation counters at receive time, used to
+     # detect requests aborted since then.
+     gen_at_receive_np: np.ndarray  # [num_reqs]
++    # Spec decode: proposed draft tokens relayed from the last rank, scattered
++    # into the non-last rank's req_states.draft_tokens on consume. None when the
++    # last rank has no speculator to relay from (see `relay_draft_tokens`).
++    draft_tokens: torch.Tensor | None = None  # [num_reqs, max_sample_len - 1]
+ 
+ 
+ def compute_need_sampled_mask(input_batch: InputBatch) -> np.ndarray | None:
+@@ -60,11 +64,16 @@ class PPHandler:
+     """
+ 
+     def __init__(
+-        self, max_num_reqs: int, num_speculative_steps: int, device: torch.device
++        self,
++        max_num_reqs: int,
++        num_speculative_steps: int,
++        device: torch.device,
++        relay_draft_tokens: bool = False,
+     ):
+         self.is_last_rank = get_pp_group().is_last_rank
+         self.last_rank = get_pp_group().last_rank
+         self.max_sample_len = num_speculative_steps + 1
++        self.relay_draft_tokens = relay_draft_tokens
+         self.device = device
+         self.main_stream = torch.cuda.current_stream(device)
+         self.broadcast_stream = torch.cuda.Stream(device)
+@@ -121,6 +130,7 @@ class PPHandler:
+             num_sampled=slot.num_sampled,
+             num_rejected=slot.num_rejected,
+             idx_mapping=idx_mapping,
++            draft_tokens=slot.draft_tokens,
+         )
+ 
+     def receive(self, input_batch: InputBatch) -> bool:
+@@ -149,12 +159,25 @@ class PPHandler:
+             torch.distributed.broadcast(
+                 combined, src=self.last_rank, group=self.broadcast_group
+             )
++            draft_tokens = None
++            if self.relay_draft_tokens:
++                draft_tokens = torch.empty(
++                    num_reqs,
++                    self.max_sample_len - 1,
++                    dtype=torch.int64,
++                    device=self.device,
++                )
++                torch.distributed.broadcast(
++                    draft_tokens, src=self.last_rank, group=self.broadcast_group
++                )
+             event = self.broadcast_stream.record_event()
+             num_sampled, num_rejected = combined.unbind(dim=0)
+             # Must record_stream since these were allocated on broadcast stream but
+             # later used on the main stream.
+             sampled_tokens.record_stream(self.main_stream)
+             combined.record_stream(self.main_stream)
++            if draft_tokens is not None:
++                draft_tokens.record_stream(self.main_stream)
+         self.queue[-1] = PendingRecv(
+             event,
+             sampled_tokens,
+@@ -164,6 +187,7 @@ class PPHandler:
+             input_batch.idx_mapping_np,
+             need_sampled_mask,
+             gen_at_receive_np,
++            draft_tokens,
+         )
+         return bool(need_sampled_mask.all())
+ 
+@@ -181,6 +205,23 @@ class PPHandler:
+ 
+         assert sampled_token_ids.dtype == torch.int64
+ 
++        width = sampled_token_ids.shape[-1]
++        # The receiver always posts a [num_reqs, max_sample_len] buffer, but under
++        # spec decode the sampler emits width 1 on any step with no draft tokens
++        # (prefill, first decode) and width (num_spec+1) only once rejection
++        # sampling has run. Pad to max_sample_len so the NCCL broadcast element
++        # count matches the receiver on EVERY step (an unpadded width-1 send vs a
++        # width-(num_spec+1) recv is a count mismatch that deadlocks the receiver).
++        # Trailing -1 columns are placeholders ignored by post_update, which
++        # advances each request by its per-request num_sampled valid count.
++        if width != self.max_sample_len:
++            assert width < self.max_sample_len
++            padded = sampled_token_ids.new_full(
++                (sampled_token_ids.shape[0], self.max_sample_len), -1
++            )
++            padded[:, :width] = sampled_token_ids
++            sampled_token_ids = padded
++
+         if current_platform.is_xpu():
+             self.main_stream.synchronize()
+ 
+@@ -197,3 +238,20 @@ class PPHandler:
+             )
+             for tensor in (sampled_token_ids, num_sampled, num_rejected):
+                 tensor.record_stream(self.broadcast_stream)
++
++    def broadcast_draft(
++        self, draft_tokens: torch.Tensor, input_batch: InputBatch
++    ) -> None:
++        """Relay PP-last proposals to the ranks that verify the next step."""
++        assert self.is_last_rank
++        if not self.relay_draft_tokens:
++            return
++        if compute_need_sampled_mask(input_batch) is None:
++            return
++        draft_tokens = draft_tokens.to(torch.int64).contiguous()
++        with torch.cuda.stream(self.broadcast_stream):
++            self.broadcast_stream.wait_stream(self.main_stream)
++            torch.distributed.broadcast(
++                draft_tokens, src=self.last_rank, group=self.broadcast_group
++            )
++            draft_tokens.record_stream(self.broadcast_stream)
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+index 4d16486407..7bec117eb3 100644
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -227,6 +227,12 @@ class Worker(WorkerBase):
+         self.use_v2_model_runner = vllm_config.use_v2_model_runner
+         # pending non-blocking PP send work from the previous iteration
+         self._pp_send_work: list[Handle] = []
++        # MUSA queues a large number of kernels during V2 warmup. Fence each
++        # model call only while warmup_kernels() is active so a later, global
++        # synchronize does not trip the device watchdog. This must not use
++        # MUSA_LAUNCH_BLOCKING, which is cached when the runtime initializes
++        # and would also serialize steady-state inference.
++        self._musa_sync_warmup_model_calls = False
+ 
+         # Resolved lazily on first sleep/wake; persists worker-process state.
+         self._sleep_mode_backend: SleepModeBackend | None = None
+@@ -862,7 +868,14 @@ class Worker(WorkerBase):
+ 
+         if self.use_v2_model_runner:
+             # V2: Run full execute_model + sample_tokens to JIT compile triton kernels.
+-            warmup_kernels(self.model_runner, self.execute_model, self.sample_tokens)
++            previous_sync_warmup_calls = self._musa_sync_warmup_model_calls
++            self._musa_sync_warmup_model_calls = current_platform.is_musa()
++            try:
++                warmup_kernels(
++                    self.model_runner, self.execute_model, self.sample_tokens
++                )
++            finally:
++                self._musa_sync_warmup_model_calls = previous_sync_warmup_calls
+         elif get_pp_group().is_last_rank:
+             # V1: Warm up sampler and preallocate memory buffer for logits and other
+             # sampling related tensors of max possible shape to avoid memory
+@@ -1101,7 +1114,10 @@ class Worker(WorkerBase):
+     def sample_tokens(
+         self, grammar_output: "GrammarOutput | None"
+     ) -> ModelRunnerOutput | AsyncModelRunnerOutput:
+-        return self.model_runner.sample_tokens(grammar_output)
++        output = self.model_runner.sample_tokens(grammar_output)
++        if self._musa_sync_warmup_model_calls:
++            torch.musa.synchronize()
++        return output
+ 
+     @torch.inference_mode()
+     @with_gpu_sync_check
+@@ -1179,7 +1195,10 @@ class Worker(WorkerBase):
+             ):
+                 if (
+                     current_platform.is_musa()
+-                    and os.getenv("VLLM_MUSA_SYNC_EXECUTE_MODEL") == "1"
++                    and (
++                        self._musa_sync_warmup_model_calls
++                        or os.getenv("VLLM_MUSA_SYNC_EXECUTE_MODEL") == "1"
++                    )
+                 ):
+                     torch.musa.synchronize()
+                 return output
+@@ -1200,7 +1219,10 @@ class Worker(WorkerBase):
+ 
+         if (
+             current_platform.is_musa()
+-            and os.getenv("VLLM_MUSA_SYNC_EXECUTE_MODEL") == "1"
++            and (
++                self._musa_sync_warmup_model_calls
++                or os.getenv("VLLM_MUSA_SYNC_EXECUTE_MODEL") == "1"
++            )
+         ):
+             for handle in self._pp_send_work:
+                 handle.wait()
