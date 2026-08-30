@@ -13,8 +13,8 @@ index c9a4a2f2ff..e88defbf2a 100644
 +++ b/vllm/utils/deep_gemm.py
 @@ -30,6 +30,17 @@ _DEEPGEMM_BLACKWELL_EXCLUDED_MODEL_TYPES: set[str] = {
  }
-
-
+ 
+ 
 +def _is_musa_runtime() -> bool:
 +    """Detect torch_musa without relying on the lazy vLLM platform proxy.
 +
@@ -28,7 +28,7 @@ index c9a4a2f2ff..e88defbf2a 100644
 +
  def should_auto_disable_deep_gemm(model_type: str | None) -> bool:
      """Check if DeepGemm should be auto-disabled for this model on Blackwell.
-
+ 
 @@ -69,7 +80,7 @@ class DeepGemmQuantScaleFMT(Enum):
              and is_deep_gemm_supported()
              and (_fp8_gemm_nt_impl is not None)
@@ -40,7 +40,7 @@ index c9a4a2f2ff..e88defbf2a 100644
                  "not supported by the MUSA DeepGEMM backend."
 @@ -135,7 +146,7 @@ def is_deep_gemm_e8m0_used() -> bool:
          return False
-
+ 
      if envs.VLLM_USE_DEEP_GEMM_E8M0:
 -        if current_platform.is_musa():
 +        if _is_musa_runtime():

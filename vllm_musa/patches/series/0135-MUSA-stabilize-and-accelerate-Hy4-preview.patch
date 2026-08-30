@@ -21,7 +21,7 @@ index 128db903d4..bf21878646 100644
 +++ b/vllm/distributed/parallel_state.py
 @@ -1054,6 +1054,7 @@ class GroupCoordinator:
          assert len(tensor_keys) == len(tensor_list)
-
+ 
          handles: list[Handle] = []
 +        musa_p2p_ops: list[torch.distributed.P2POp] = []
          for key, tensor in zip(tensor_keys, tensor_list):
@@ -29,7 +29,7 @@ index 128db903d4..bf21878646 100644
                  continue
 @@ -1064,6 +1065,20 @@ class GroupCoordinator:
                  tensor = tensor.reshape(all_gather_size, -1)[all_gather_rank]
-
+ 
              comm_group = metadata_group if tensor.is_cpu else group
 +            if (
 +                not tensor.is_cpu
@@ -51,19 +51,19 @@ index 128db903d4..bf21878646 100644
 @@ -1071,6 +1086,9 @@ class GroupCoordinator:
                  tensor.record_stream(torch.cuda.current_stream(tensor.device))
              handles.append(handle)
-
+ 
 +        if musa_p2p_ops:
 +            handles.extend(torch.distributed.batch_isend_irecv(musa_p2p_ops))
 +
          return handles
-
+ 
      def recv_tensor_dict(
 @@ -1149,6 +1167,7 @@ class GroupCoordinator:
          tensor_dict: dict[str, Any] = {}
          handles: list[Handle] = []
          postprocess: list[Callable[[], None]] = []
 +        musa_p2p_ops: list[torch.distributed.P2POp] = []
-
+ 
          for key, value in recv_metadata_list:
              if isinstance(value, TensorMetadata):
 @@ -1167,10 +1186,24 @@ class GroupCoordinator:
@@ -92,7 +92,7 @@ index 128db903d4..bf21878646 100644
 +                            slice_tensor, src=self.ranks[src], group=comm_group
 +                        )
 +                        handles.append(handle)
-
+ 
                      def _postprocess(
                          key: str = key,
 @@ -1187,14 +1220,31 @@ class GroupCoordinator:
@@ -124,12 +124,12 @@ index 128db903d4..bf21878646 100644
                      tensor_dict[key] = full_tensor
              else:
                  tensor_dict[key] = value
-
+ 
 +        if musa_p2p_ops:
 +            handles.extend(torch.distributed.batch_isend_irecv(musa_p2p_ops))
 +
          return tensor_dict, handles, postprocess
-
+ 
      def barrier(self):
 diff --git a/vllm/models/hy_v4/nvidia/flashmla_sparse.py b/vllm/models/hy_v4/nvidia/flashmla_sparse.py
 index fba8b6d88e..2fe29a6a42 100644
@@ -146,7 +146,7 @@ index fba8b6d88e..2fe29a6a42 100644
 @@ -215,6 +216,20 @@ class HYV4FlashMLASparseImpl(FlashMLASparseImpl):
              q_padded[:, :, :actual_num_heads, :] = q
              q = q_padded
-
+ 
 +        token_batch = (
 +            _running_on_musa
 +            and q.size(0) == 1
@@ -170,27 +170,27 @@ index fba8b6d88e..2fe29a6a42 100644
              attn_sink=attn_sink,
 +            topk_length=topk_length,
          )
-
+ 
          # Slice output and lse back to actual head count if we padded
 @@ -233,6 +249,10 @@ class HYV4FlashMLASparseImpl(FlashMLASparseImpl):
              out = out[:, :, :actual_num_heads, :]
              lse = lse[:, :actual_num_heads, :]
-
+ 
 +        if token_batch:
 +            out = out.transpose(0, 1).contiguous()
 +            lse = lse.permute(2, 1, 0).contiguous()
 +
          return out, lse
-
+ 
      def _bf16_flash_mla_kernel(
 diff --git a/vllm/models/hy_v4/nvidia/hc.py b/vllm/models/hy_v4/nvidia/hc.py
 index 60b06a4181..0e40f88d2d 100644
 --- a/vllm/models/hy_v4/nvidia/hc.py
 +++ b/vllm/models/hy_v4/nvidia/hc.py
 @@ -19,6 +19,135 @@ from transformers import PretrainedConfig
-
+ 
  from vllm.model_executor.layers.linear import ReplicatedLinear
-
+ 
 +_running_on_musa = getattr(torch.version, "musa", None) is not None
 +if _running_on_musa:
 +    from mate.deep_gemm import tf32_hc_prenorm_gemm
@@ -320,13 +320,13 @@ index 60b06a4181..0e40f88d2d 100644
 +    ihc_post_kernel(hidden_size=6144)(x, residual, post, out)
 +    return out
 +
-
+ 
  class HYV4HCPreLayer(nn.Module):
      """iHC pre-processing layer (2D-activation adaptation).
 @@ -90,12 +219,30 @@ class HYV4HCPreLayer(nn.Module):
          hc = self.hc_mult
          hc_eps = self.hc_eps
-
+ 
 -        x_flat = x.flatten(1).float()  # [num_tokens, hc*d]
 -
 -        rsqrt = torch.rsqrt(
@@ -356,7 +356,7 @@ index 60b06a4181..0e40f88d2d 100644
 +                x_flat.square().mean(-1, keepdim=True) + self.layernorm_epsilon
 +            )
 +            mixes = self.hc_fn(x_flat)[0] * rsqrt  # [num_tokens, 2*hc]
-
+ 
          pre_raw = mixes[..., :hc]
          post_raw = mixes[..., hc : 2 * hc]
 @@ -144,6 +291,10 @@ class HYV4HCPostLayer(nn.Module):
@@ -399,9 +399,9 @@ index be8e49f21e..bec3ad61d6 100644
 --- a/vllm/models/hy_v4/nvidia/moe.py
 +++ b/vllm/models/hy_v4/nvidia/moe.py
 @@ -19,6 +19,50 @@ from vllm.model_executor.layers.quantization import QuantizationConfig
-
+ 
  logger = init_logger(__name__)
-
+ 
 +_running_on_musa = getattr(torch.version, "musa", None) is not None
 +if _running_on_musa:
 +    from mate.deep_gemm import tf32_hc_prenorm_gemm
@@ -446,18 +446,18 @@ index be8e49f21e..bec3ad61d6 100644
 +    )
 +    return partial.sum(dim=0)
 +
-
+ 
  class HYV4FeedForward(nn.Module):
      """Dense SwiGLU feed-forward block.
 @@ -182,7 +226,9 @@ class HYV4MoEFused(nn.Module):
-
+ 
          # router_logits: (num_tokens, n_experts); the gate stores fp32 weights
          # and emits fp32 logits, so no explicit upcast is needed here.
 -        router_logits, _ = self.gate(hidden_states)
 +        router_logits = _musa_router_projection(hidden_states, self.gate.weight)
 +        if router_logits is None:
 +            router_logits, _ = self.gate(hidden_states)
-
+ 
          final_hidden_states = self.experts(
              hidden_states=hidden_states, router_logits=router_logits
 diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
@@ -465,7 +465,7 @@ index e62e02779c..07b294c002 100644
 --- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
 +++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
 @@ -327,10 +327,17 @@ class FlashMLASparseMetadataBuilder(
-
+ 
          # Use padded head count since that's what the kernel will see
          padded_heads = self.fp8_decode_padded_heads
 -
@@ -486,7 +486,7 @@ index e62e02779c..07b294c002 100644
              topk=self.topk_tokens,
              num_heads_q=padded_heads,
 @@ -340,8 +347,10 @@ class FlashMLASparseMetadataBuilder(
-
+ 
          fp8_metadata = FlashMLASparseMetadata.FP8KernelMetadata(
              scheduler_metadata=scheduler_metadata,
 -            cache_lens=self.max_model_len_tensor[:1],
@@ -496,7 +496,7 @@ index e62e02779c..07b294c002 100644
 +            .expand(token_batch, 1)
 +            .contiguous(),
          )
-
+ 
          return fp8_metadata
 @@ -623,9 +632,10 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
          num_mqa_tokens = q.shape[0]
@@ -509,7 +509,7 @@ index e62e02779c..07b294c002 100644
 +            0,
 +            fp8_metadata.num_prefill_tokens,
 +        ), "FP8 sparse MLA expects either the decode subset or the full batch"
-
+ 
          prefill_request_ids = None
          prefill_workspace_starts = None
 @@ -736,12 +746,13 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
@@ -525,7 +525,7 @@ index e62e02779c..07b294c002 100644
              NUM_TOPK_TOKENS=topk_indices.shape[1],
 +            return_valid_counts=True,
          )
-
+ 
          assert attn_metadata.fp8_extra_metadata is not None
 @@ -755,6 +766,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
              kv_c_and_k_pe_cache=kv_c_and_k_pe_cache,
@@ -533,7 +533,7 @@ index e62e02779c..07b294c002 100644
              kernel_metadata=fp8_metadata,
 +            topk_length=topk_length,
          )
-
+ 
          # Output is (1, T, H, D_v), squeeze back to (T, H, D_v)
 @@ -766,6 +778,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
          kv_c_and_k_pe_cache: torch.Tensor,
@@ -549,7 +549,7 @@ index e62e02779c..07b294c002 100644
              softmax_scale=self.softmax_scale,
 +            topk_length=topk_length,
          )
-
+ 
          # Slice output back to actual head count if we padded
 diff --git a/vllm/v1/executor/multiproc_executor.py b/vllm/v1/executor/multiproc_executor.py
 index df20a90d51..600b97eff7 100644
@@ -567,7 +567,7 @@ index df20a90d51..600b97eff7 100644
 +        ), "collective_rpc should not be called on follower node"
          if self.is_failed:
              raise RuntimeError("Executor failed.")
-
+ 
 @@ -628,9 +628,7 @@ class WorkerProc:
              # driver worker, exposing peer_response_handles for driver worker
              # that include handles for all ranks
@@ -577,7 +577,7 @@ index df20a90d51..600b97eff7 100644
 -                )
 +                get_inner_dp_world_group().create_single_reader_mq_broadcasters(reader_rank_in_group=0)
              )
-
+ 
      @instrument(span_name="Worker init")
 @@ -1027,28 +1025,33 @@ class WorkerProc:
          """Main busy loop for Multiprocessing Workers"""
@@ -604,10 +604,10 @@ index df20a90d51..600b97eff7 100644
 +                func = getattr(self.worker, method)
 +            elif isinstance(method, bytes):
 +                func = partial(cloudpickle.loads(method), self.worker)
-
+ 
 -                output = func(*args, **kwargs)
 +            output = func(*args, **kwargs)
-
+ 
 -                if output_rank is None or self.rank == output_rank:
 -                    self.handle_output(output)
 -            except Exception as e:
@@ -630,7 +630,7 @@ index df20a90d51..600b97eff7 100644
 +            # containing its string representation before transport.
 +            if output_rank is None or self.rank == output_rank:
 +                self.handle_output(e)
-
+ 
      @staticmethod
      def setup_proc_title_and_log_prefix(enable_ep: bool) -> None:
 diff --git a/vllm/v1/worker/gpu/async_utils.py b/vllm/v1/worker/gpu/async_utils.py
@@ -654,14 +654,14 @@ index 0e9f142e44..9262dedf16 100644
 +            and os.getenv("VLLM_MUSA_USE_SYNC_OUTPUT_COPY") == "1"
 +        )
          self._has_fault: torch.Tensor | None = None
-
+ 
 -        with stream(copy_stream, main_stream):
 -            copy_stream.wait_stream(main_stream)
 +        output_stream = main_stream if self._musa_sync_copy else copy_stream
 +        with stream(output_stream, main_stream):
 +            if not self._musa_sync_copy:
 +                copy_stream.wait_stream(main_stream)
-
+ 
              self.sampled_token_ids = async_copy_to_np(sampler_output.sampled_token_ids)
              self.logprobs_tensors: LogprobsTensors | None = None
 @@ -171,10 +178,19 @@ class AsyncOutput(AsyncModelRunnerOutput):
@@ -678,12 +678,12 @@ index 0e9f142e44..9262dedf16 100644
 +                ).numpy()
 +            else:
 +                self.copy_event.record(copy_stream)
-
+ 
      def get_output(self) -> ModelRunnerOutput:
 -        self.copy_event.synchronize()
 +        if not self._musa_sync_copy:
 +            self.copy_event.synchronize()
-
+ 
          # NOTE(woosuk): The following code is to ensure compatibility with
          # the existing model runner.
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
@@ -701,7 +701,7 @@ index b3ad96f579..c4fd52bb41 100644
 @@ -2726,7 +2727,11 @@ class GPUModelRunner(
                  cm.block_table_tensor = _get_block_table(kv_cache_gid)
                  cm.slot_mapping = slot_mappings[kv_cache_gid]
-
+ 
 -            if self.speculative_config and spec_decode_common_attn_metadata is None:
 +            if (
 +                self.drafter is not None
@@ -732,7 +732,7 @@ index b3ad96f579..c4fd52bb41 100644
 @@ -6470,7 +6479,7 @@ class GPUModelRunner(
              else:
                  hidden_states = outputs
-
+ 
 -            if self.speculative_config and (
 +            if self.drafter is not None and self.speculative_config and (
                  self.speculative_config.use_eagle()
@@ -740,7 +740,7 @@ index b3ad96f579..c4fd52bb41 100644
                  or self.speculative_config.uses_extract_hidden_states()
 @@ -7487,7 +7496,7 @@ class GPUModelRunner(
          self.calculate_reorder_batch_threshold()
-
+ 
          # Initialize drafter attention backend
 -        if self.speculative_config and (
 +        if self.drafter is not None and self.speculative_config and (
@@ -749,7 +749,7 @@ index b3ad96f579..c4fd52bb41 100644
          ):
 @@ -7541,7 +7550,7 @@ class GPUModelRunner(
          )
-
+ 
          # Initialize drafter's cudagraph dispatcher if using spec decode.
 -        if self.speculative_config and (
 +        if self.drafter is not None and self.speculative_config and (
@@ -774,17 +774,17 @@ index a2ff198437..4d16486407 100644
 @@ -132,10 +130,7 @@ def _musa_deepseek_v4_mtp_sparse_prefill_reserve_bytes(
      m = n + window_size + max_tokens
      head_dim = getattr(config, "kv_lora_rank", 512)
-
+ 
 -    per_layer_bytes = (
 -        max_tokens * combined_topk * 4
 -        + max_tokens * m * head_dim * 2
 -    )
 +    per_layer_bytes = max_tokens * combined_topk * 4 + max_tokens * m * head_dim * 2
      return int(per_layer_bytes * sparse_layers * cache_config.gpu_memory_utilization)
-
-
+ 
+ 
 @@ -329,9 +324,9 @@ class Worker(WorkerBase):
-
+ 
          allocator = get_mem_allocator_instance()
          if tag == "weights":
 -            assert allocator.get_current_usage() == 0, (
@@ -794,7 +794,7 @@ index a2ff198437..4d16486407 100644
 +                allocator.get_current_usage() == 0
 +            ), "CuMem allocator can only be used for one instance per process."
          return allocator.use_memory_pool(tag=tag)
-
+ 
      @contextmanager
 @@ -1182,6 +1177,11 @@ class Worker(WorkerBase):
              if isinstance(
@@ -806,12 +806,12 @@ index a2ff198437..4d16486407 100644
 +                ):
 +                    torch.musa.synchronize()
                  return output
-
+ 
          assert isinstance(output, IntermediateTensors)
 @@ -1198,6 +1198,15 @@ class Worker(WorkerBase):
              all_gather_tensors=all_gather_tensors,
          )
-
+ 
 +        if (
 +            current_platform.is_musa()
 +            and os.getenv("VLLM_MUSA_SYNC_EXECUTE_MODEL") == "1"
@@ -822,5 +822,5 @@ index a2ff198437..4d16486407 100644
 +            torch.musa.synchronize()
 +
          return None
-
+ 
      def take_draft_token_ids(self) -> DraftTokenIds | None:

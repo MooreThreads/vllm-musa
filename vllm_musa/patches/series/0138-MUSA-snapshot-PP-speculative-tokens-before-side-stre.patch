@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sun, 30 Aug 2026 21:54:36 +0800
+Subject: [PATCH] MUSA: snapshot PP speculative tokens before side-stream send
+
+---
+ vllm/v1/worker/gpu/pp_utils.py | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/vllm/v1/worker/gpu/pp_utils.py b/vllm/v1/worker/gpu/pp_utils.py
+index 83d81210b7..6da710d91d 100644
+--- a/vllm/v1/worker/gpu/pp_utils.py
++++ b/vllm/v1/worker/gpu/pp_utils.py
+@@ -222,6 +222,12 @@ class PPHandler:
+             padded[:, :width] = sampled_token_ids
+             sampled_token_ids = padded
+ 
++        # MUSA may let the main stream reuse the sampler buffer while the
++        # side-stream collective is still consuming it. ``record_stream`` only
++        # protects allocator lifetime, so take a small snapshot for the send.
++        if current_platform.is_musa():
++            sampled_token_ids = sampled_token_ids.contiguous().clone()
++
+         if current_platform.is_xpu():
+             self.main_stream.synchronize()
+ 
+@@ -248,7 +254,11 @@ class PPHandler:
+             return
+         if compute_need_sampled_mask(input_batch) is None:
+             return
++        # AutoRegressiveSpeculator uses a persistent proposal buffer. Protect
++        # the side-stream send from the next main-stream write on MUSA.
+         draft_tokens = draft_tokens.to(torch.int64).contiguous()
++        if current_platform.is_musa():
++            draft_tokens = draft_tokens.clone()
+         with torch.cuda.stream(self.broadcast_stream):
+             self.broadcast_stream.wait_stream(self.main_stream)
+             torch.distributed.broadcast(

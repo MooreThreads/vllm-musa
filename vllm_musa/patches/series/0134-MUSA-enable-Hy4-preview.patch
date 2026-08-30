@@ -57,7 +57,7 @@ index 2b93113b7e..bcddacf3f7 100644
 @@ -621,6 +622,13 @@ class SpeculativeConfig:
                  {"n_predict": n_predict, "architectures": ["HYV3MTPModel"]}
              )
-
+ 
 +        if hf_config.model_type in ("hy_v4", "hy_v4_internal"):
 +            hf_config.model_type = "hy_v4_mtp"
 +            n_predict = getattr(hf_config, "num_nextn_predict_layers", None)
@@ -69,7 +69,7 @@ index 2b93113b7e..bcddacf3f7 100644
              mtp_config = getattr(hf_config, "mtp_config", None) or {}
              hf_config = getattr(hf_config, "text_config", hf_config)
 @@ -998,7 +1006,7 @@ class SpeculativeConfig:
-
+ 
                      if isinstance(
                          self.draft_model_config.hf_config,
 -                        (EAGLEConfig, SpeculatorsConfig),
@@ -113,7 +113,7 @@ index efeb62095e..242ad4c9ab 100644
 @@ -211,7 +212,9 @@ class LogitsProcessor(PluggableLayer):
                  lm_head, hidden_states, bias=embedding_bias
              )
-
+ 
 -        if not isinstance(lm_head.quant_method, UnquantizedEmbeddingMethod):
 +        if not isinstance(
 +            lm_head.quant_method, UnquantizedEmbeddingMethod | UnquantizedLinearMethod
@@ -128,12 +128,12 @@ index 1a46ebe4be..b4aca2fa33 100644
 @@ -910,9 +910,13 @@ def w8a8_triton_block_scaled_mm(
          torch.Tensor: The result of matmul.
      """
-
+ 
 -    from vllm.platforms.rocm import on_gfx1250
 +    is_gfx1250 = False
 +    if current_platform.is_rocm():
 +        from vllm.platforms.rocm import on_gfx1250
-
+ 
 -    if on_gfx1250():
 +        is_gfx1250 = on_gfx1250()
 +
@@ -3527,7 +3527,7 @@ index c0be3ea0da..fda5497571 100644
      # reasoning always enabled for Harmony
 -    del reasoning
 +    del reasoning, token_suffix
-
+ 
      if builtin_tools:
          # Fallback for built-in tools
 diff --git a/vllm/reasoning/__init__.py b/vllm/reasoning/__init__.py
@@ -5085,14 +5085,14 @@ index 1f9a651ee4..a01aa7de45 100644
  )
 @@ -78,7 +79,9 @@ SUPPORTED_STRUCTURAL_TAG_MODELS = (
  _VLLM_STRUCTURAL_TAG_REGISTRY: dict[str, StructuralTagBuilder] = {}
-
-
+ 
+ 
 -def register_vllm_structural_tag(model: str):
 +def register_vllm_structural_tag(
 +    model: str,
 +) -> Callable[[StructuralTagBuilder], StructuralTagBuilder]:
      """Register a vLLM-owned structural tag builder."""
-
+ 
      def decorator(func: StructuralTagBuilder) -> StructuralTagBuilder:
 @@ -104,6 +107,7 @@ def get_model_structural_tag(
      tools: Sequence[ChatCompletionToolsParam | ResponsesTool] | None,
@@ -5101,18 +5101,18 @@ index 1f9a651ee4..a01aa7de45 100644
 +    token_suffix: str = "",
  ) -> StructuralTag | None:
      """Build a structural tag with xgrammar's builtin model templates."""
-
+ 
 @@ -126,12 +130,19 @@ def get_model_structural_tag(
              builtin_tools,
              simplified_tool_choice,
              reasoning,
 +            token_suffix,
          )
-
+ 
      if model not in XGRAMMAR_BUILTIN_STRUCTURAL_TAG_MODELS:
          supported = sorted(SUPPORTED_STRUCTURAL_TAG_MODELS)
          raise ValueError(f"Unknown format type: {model}, supported types: {supported}")
-
+ 
 +    if token_suffix:
 +        raise ValueError(
 +            f"Structural tag model {model!r} is an xgrammar builtin with fixed "
@@ -5130,9 +5130,9 @@ index 1f9a651ee4..a01aa7de45 100644
  ) -> StructuralTag:
 -    del builtin_tools, reasoning
 +    del builtin_tools, reasoning, token_suffix
-
+ 
      tool_call_trigger = "<tool_call>"
-
+ 
 @@ -293,8 +305,9 @@ def get_minimax_structural_tag(
      builtin_tools: list[BuiltinToolParam],
      tool_choice: SimplifiedToolChoice,
@@ -5141,7 +5141,7 @@ index 1f9a651ee4..a01aa7de45 100644
  ) -> StructuralTag:
 -    del builtin_tools, reasoning
 +    del builtin_tools, reasoning, token_suffix
-
+ 
      tool_call_begin = "<minimax:tool_call>\n"
      tool_call_end = "</minimax:tool_call>"
 @@ -583,8 +596,9 @@ def get_kimi_k3_structural_tag(
@@ -5152,9 +5152,9 @@ index 1f9a651ee4..a01aa7de45 100644
  ) -> StructuralTag:
 -    del builtin_tools, reasoning
 +    del builtin_tools, reasoning, token_suffix
-
+ 
      trailer = OptionalFormat(content=ConstStringFormat(value=_K3_MESSAGE_CLOSE))
-
+ 
 @@ -605,3 +619,108 @@ def get_kimi_k3_structural_tag(
      return StructuralTag(
          format=SequenceFormat(elements=[*_k3_response_prefix(), tools_part, trailer])
@@ -5282,7 +5282,7 @@ index 87271c2588..6fe74e0310 100644
      "glm_moe_dsa": ("deepseek_sparse_attention",),
 +    "hy_v4": ("deepseek_sparse_attention",),
  }
-
+ 
  _CONFIG_ATTRS_MAPPING: dict[str, str] = {
 diff --git a/vllm/transformers_utils/configs/__init__.py b/vllm/transformers_utils/configs/__init__.py
 index c38cc4b4b8..2f34cd5c41 100644
@@ -5542,8 +5542,8 @@ index fc4f78a81a..ab6c4373d3 100644
 +++ b/vllm/v1/worker/gpu/spec_decode/speculator.py
 @@ -29,6 +29,14 @@ from vllm.v1.worker.utils import AttentionGroup
  logger = init_logger(__name__)
-
-
+ 
+ 
 +def _target_feeds_hc_residual(vllm_config: VllmConfig) -> bool:
 +    """Whether the target hands the drafter its expanded iHC residual."""
 +    from vllm.model_executor.model_loader.utils import get_model_cls
@@ -5574,5 +5574,3 @@ index fc4f78a81a..ab6c4373d3 100644
          self.vocab_size = self.draft_model_config.get_vocab_size()
          self.dtype = vllm_config.model_config.dtype
          self.use_fp64_gumbel = vllm_config.model_config.use_fp64_gumbel
---
-2.34.1
