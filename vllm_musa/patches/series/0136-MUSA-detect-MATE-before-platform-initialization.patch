@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sun, 30 Aug 2026 09:45:47 +0800
+Subject: [PATCH] MUSA: detect MATE before platform initialization
+
+---
+ vllm/utils/deep_gemm.py | 21 ++++++++++++++++-----
+ 1 file changed, 16 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
+index c9a4a2f2ff..e88defbf2a 100644
+--- a/vllm/utils/deep_gemm.py
++++ b/vllm/utils/deep_gemm.py
+@@ -30,6 +30,17 @@ _DEEPGEMM_BLACKWELL_EXCLUDED_MODEL_TYPES: set[str] = {
+ }
+
+
++def _is_musa_runtime() -> bool:
++    """Detect torch_musa without relying on the lazy vLLM platform proxy.
++
++    ``vllm.utils.deep_gemm`` can be imported before the out-of-tree MUSA
++    platform plugin replaces ``current_platform``. The torch version marker
++    is already established by torchada/torch_musa at that point and avoids
++    accidentally forwarding CUDA-only keyword arguments to MATE.
++    """
++    return hasattr(torch.version, "musa") and torch.version.musa is not None
++
++
+ def should_auto_disable_deep_gemm(model_type: str | None) -> bool:
+     """Check if DeepGemm should be auto-disabled for this model on Blackwell.
+
+@@ -69,7 +80,7 @@ class DeepGemmQuantScaleFMT(Enum):
+             and is_deep_gemm_supported()
+             and (_fp8_gemm_nt_impl is not None)
+         )
+-        if use_e8m0 and current_platform.is_musa():
++        if use_e8m0 and _is_musa_runtime():
+             logger.info_once(
+                 "DeepGEMM E8M0 disabled on MUSA: grouped FP8 UE8M0 cast is "
+                 "not supported by the MUSA DeepGEMM backend."
+@@ -135,7 +146,7 @@ def is_deep_gemm_e8m0_used() -> bool:
+         return False
+
+     if envs.VLLM_USE_DEEP_GEMM_E8M0:
+-        if current_platform.is_musa():
++        if _is_musa_runtime():
+             logger.info_once(
+                 "DeepGEMM E8M0 disabled on MUSA: grouped FP8 UE8M0 cast is "
+                 "not supported by the MUSA DeepGEMM backend."
+@@ -504,7 +515,7 @@ def m_grouped_fp8_gemm_nt_contiguous(*args, **kwargs):
+     _lazy_init()
+     if _grouped_impl is None:
+         return _missing(*args, **kwargs)
+-    if current_platform.is_musa():
++    if _is_musa_runtime():
+         kwargs.pop("disable_ue8m0_cast", None)
+         return _grouped_impl(*args, **kwargs)
+     return _grouped_impl(
+@@ -516,7 +527,7 @@ def m_grouped_fp8_fp4_gemm_nt_contiguous(*args, **kwargs):
+     _lazy_init()
+     if _grouped_fp4_impl is None:
+         return _missing(*args, **kwargs)
+-    if current_platform.is_musa():
++    if _is_musa_runtime():
+         kwargs.pop("disable_ue8m0_cast", None)
+         return _grouped_fp4_impl(*args, **kwargs)
+     return _grouped_fp4_impl(
+@@ -528,7 +539,7 @@ def fp8_m_grouped_gemm_nt_masked(*args, **kwargs):
+     _lazy_init()
+     if _grouped_masked_impl is None:
+         return _missing(*args, **kwargs)
+-    if current_platform.is_musa():
++    if _is_musa_runtime():
+         kwargs.pop("disable_ue8m0_cast", None)
+         return _grouped_masked_impl(*args, **kwargs)
+     return _grouped_masked_impl(
