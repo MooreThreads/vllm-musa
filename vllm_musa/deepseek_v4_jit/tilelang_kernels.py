@@ -771,6 +771,107 @@ def mhc_pre_big_fuse_decode_split_kernel(
 
 
 @lru_cache(maxsize=None)
+def ihc_pre_big_fuse_decode_split_kernel(
+    hidden_size: int,
+    rms_eps: float,
+    hc_eps: float,
+    magnitude: float,
+    n_splits: int = 32,
+    hc_mult: int = 4,
+    threads: int = 256,
+    hidden_block: int = 512,
+    pass_config: str = "safe",
+):
+    """Fuse Hy4 iHC split-K reduction, gates, and channel reduction."""
+    num_tokens = T.dynamic("num_tokens")
+    mix_hc = 2 * hc_mult
+    num_hidden_tiles = hidden_size // hidden_block
+    assert hc_mult == 4
+    assert n_splits > 0
+    assert threads in (128, 256)
+    assert hidden_block > 0
+    assert hidden_size % hidden_block == 0
+
+    @tilelang.jit(
+        target="musa",
+        pass_configs=_mhc_pre_big_fuse_pass_configs(tilelang, pass_config),
+    )
+    def _ihc_pre_big_fuse_decode_split_kernel():
+        @T.prim_func
+        def _kernel(
+            gemm_out_mul: T.Tensor((n_splits, num_tokens, mix_hc), T.float32),
+            gemm_out_sqrsum: T.Tensor((n_splits, num_tokens), T.float32),
+            hc_scale: T.Tensor((2,), T.float32),
+            hc_base: T.Tensor((mix_hc,), T.float32),
+            residual: T.Tensor((num_tokens, hc_mult, hidden_size), T.bfloat16),
+            post_mix: T.Tensor((num_tokens, hc_mult), T.float32),
+            layer_input: T.Tensor((num_tokens, hidden_size), T.bfloat16),
+        ):
+            with T.Kernel(
+                num_tokens,
+                num_hidden_tiles,
+                threads=threads,
+            ) as (token_id, hidden_tile_id):
+                tx = T.get_thread_binding()
+                rms_recip = T.alloc_fragment((1,), T.float32)
+                pre_mix = T.alloc_fragment((hc_mult,), T.float32)
+
+                rms_recip[0] = 0.0
+                for split_id in T.serial(n_splits):
+                    rms_recip[0] += gemm_out_sqrsum[split_id, token_id]
+                rms_recip[0] = T.rsqrt(
+                    rms_recip[0] / float(hc_mult * hidden_size) + rms_eps
+                )
+
+                for j in T.serial(hc_mult):
+                    pre_mix[j] = 0.0
+                    for split_id in T.serial(n_splits):
+                        pre_mix[j] += gemm_out_mul[split_id, token_id, j]
+                    pre_mix[j] = (
+                        T.sigmoid(pre_mix[j] * rms_recip[0] * hc_scale[0] + hc_base[j])
+                        + hc_eps
+                    )
+
+                if tx == 0 and hidden_tile_id == 0:
+                    for j in T.serial(hc_mult):
+                        post_logit = T.alloc_fragment((1,), T.float32)
+                        post_logit[0] = 0.0
+                        for split_id in T.serial(n_splits):
+                            post_logit[0] += gemm_out_mul[
+                                split_id, token_id, j + hc_mult
+                            ]
+                        post_mix[token_id, j] = (
+                            magnitude
+                            * T.sigmoid(
+                                post_logit[0] * rms_recip[0] * hc_scale[1]
+                                + hc_base[j + hc_mult]
+                            )
+                            + hc_eps
+                        )
+
+                layer = T.alloc_fragment((hidden_block,), T.float32)
+                T.clear(layer)
+                for hc_id in T.serial(hc_mult):
+                    pre = pre_mix[hc_id]
+                    for i in T.Parallel(hidden_block):
+                        h = hidden_tile_id * hidden_block + i
+                        layer[i] += pre * T.cast(
+                            residual[token_id, hc_id, h],
+                            T.float32,
+                        )
+
+                for i in T.Parallel(hidden_block):
+                    layer_input[token_id, hidden_tile_id * hidden_block + i] = T.cast(
+                        layer[i],
+                        T.bfloat16,
+                    )
+
+        return _kernel
+
+    return _ihc_pre_big_fuse_decode_split_kernel()
+
+
+@lru_cache(maxsize=None)
 def mhc_weighted_rmsnorm_kernel(
     hidden_size: int,
     threads: int = 128,
@@ -1178,3 +1279,50 @@ def mhc_post_kernel(hidden_size: int, hidden_block: int = 256, threads: int = 25
         return _kernel
 
     return _mhc_post_kernel()
+
+
+@lru_cache(maxsize=None)
+def ihc_post_kernel(
+    hidden_size: int,
+    hc_mult: int = 4,
+    hidden_block: int = 256,
+    threads: int = 256,
+):
+    """Fuse the Hy4 iHC post gate and residual add."""
+    hidden_block = math.gcd(hidden_block, hidden_size)
+    if hidden_block <= 0 or hidden_size % hidden_block != 0:
+        raise ValueError(
+            f"invalid iHC post hidden_block={hidden_block} for hidden={hidden_size}"
+        )
+    num_hidden_tiles = hidden_size // hidden_block
+
+    @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+    def _ihc_post_kernel():
+        num_tokens = T.dynamic("num_tokens")
+
+        @T.prim_func
+        def _kernel(
+            x: T.Tensor((num_tokens, hidden_size), T.bfloat16),
+            residual: T.Tensor((num_tokens, hc_mult, hidden_size), T.bfloat16),
+            post_mix: T.Tensor((num_tokens, hc_mult), T.float32),
+            out: T.Tensor((num_tokens, hc_mult, hidden_size), T.bfloat16),
+        ):
+            with T.Kernel(
+                num_tokens,
+                hc_mult * num_hidden_tiles,
+                threads=threads,
+            ) as (token_id, block_id):
+                channel_id = block_id // num_hidden_tiles
+                hidden_tile_id = block_id % num_hidden_tiles
+                for i in T.Parallel(hidden_block):
+                    h = hidden_tile_id * hidden_block + i
+                    value = T.cast(
+                        residual[token_id, channel_id, h], T.float32
+                    ) + post_mix[token_id, channel_id] * T.cast(
+                        x[token_id, h], T.float32
+                    )
+                    out[token_id, channel_id, h] = T.cast(value, T.bfloat16)
+
+        return _kernel
+
+    return _ihc_post_kernel()
