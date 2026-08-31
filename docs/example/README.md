@@ -30,10 +30,12 @@ ports. When it runs in a container, use the host network namespace and expose
 the host RoCE devices. `--network host` alone is not sufficient; the container
 also needs the verbs and `rdma_cm` character devices plus locked-memory access.
 
-The following non-privileged runtime shape was validated on S5000 with RoCE:
+The following non-privileged container shape is intended for S5000 with RoCE
+on a host whose Docker daemon provides the MUSA runtime by default. It does
+not select a runtime by name; configure the host runtime before using it.
 
 ```bash
-IMAGE=vllm-musa:latest
+IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.24.0
 # Run this block in bash; the device numbers are hexadecimal in stat output.
 read -r VERBS_MAJOR_HEX _ < \
   <(stat -c '%t %T' /dev/infiniband/uverbs0)
@@ -45,9 +47,9 @@ RDMA_CM_MINOR=$((16#${RDMA_CM_MINOR_HEX}))
 # Optional: export MC_TE_FILTERS=mlx5_<n>,mlx5_<m> to restrict HCA selection.
 docker run --rm --name vllm-musa-mooncake \
   --detach \
-  --runtime=mthreads \
   --network host \
   --shm-size 256g \
+  --env MUSA_VISIBLE_DEVICES=0,1 \
   --env MTHREADS_VISIBLE_DEVICES=0,1 \
   --env MC_FORCE_HCA=1 \
   --env MC_TE_FILTERS \
@@ -69,15 +71,13 @@ the container so it releases the GPUs and `--rm` removes it:
 docker stop vllm-musa-mooncake
 ```
 
-Use `ls /sys/class/infiniband` or `ibdev2netdev` on the leased host to obtain
-the real HCA names; do not copy a node-specific list. The `stat` expressions
+Use `ls /sys/class/infiniband` or `ibdev2netdev` on the host to obtain the
+available HCA names; do not copy a node-specific list. The `stat` expressions
 derive the verbs and `rdma_cm` device numbers for the current host, so the
-command does not assume the `10:121` minor observed on the validation node.
+command does not depend on a particular device minor.
 Unset `MC_TE_FILTERS` to let Mooncake discover all available HCAs, or export it
-before the command for the official comma-separated HCA allow-list. The
-validation benchmark used `MC_TE_FILTERS=mlx5_2,mlx5_3`; that node-specific
-value is intentionally not embedded in the launch command. `MC_FORCE_HCA=1`
-makes an RDMA validation fail instead of silently falling back to TCP.
+before the command with a comma-separated HCA allow-list. `MC_FORCE_HCA=1`
+makes an RDMA setup fail instead of silently falling back to TCP.
 
 Before starting vLLM, verify that the same HCA devices are visible inside the
 detached container:

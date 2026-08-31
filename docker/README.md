@@ -11,6 +11,7 @@ The resulting image contains:
 - the MUSA/MT Python wheels (`torch`, `torch_musa`, `mate`, `flash_attn_3`,
   `flash_mla`, `deep-gemm`, `tilelang_musa`, `apache-tvm-ffi`,
   `torch_c_dlpack_ext`),
+- `torchada` and the other common runtime dependencies from the public index,
 - `vllm-musa` and the vendored upstream vLLM, built from source,
 - `vllm-rs` and its Python tool-parser extension when `BUILD_VLLM_RS=1`,
 - `mooncake-transfer-engine-musa`,
@@ -38,7 +39,14 @@ retains `CMD ["/bin/bash"]` for tests and interactive use.
 
 ## Quick start
 
-From the repository root:
+For v0.24.0 deployments, use the release `vllm-openai` image:
+
+```bash
+export VLLM_MUSA_IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.24.0
+docker pull "${VLLM_MUSA_IMAGE}"
+```
+
+To build the same serving target from source, run from the repository root:
 
 ```bash
 bash docker/build_image.sh
@@ -50,10 +58,46 @@ With the defaults this produces:
 vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.11.0.post1_musa5.2.0
 ```
 
-The image accepts the model and engine arguments directly:
+The release image accepts the model and engine arguments directly. This block
+is self-contained; set the visible-device list explicitly through
+`MUSA_VISIBLE_DEVICES`, which is authoritative for vLLM-MUSA. The Docker host
+must provide the MUSA container runtime; this generic example relies on the
+host's runtime configuration rather than selecting a runtime by name.
 
 ```bash
-docker run --rm <MUSA GPU flags> <image> <model> --host 0.0.0.0
+export VLLM_MUSA_IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.24.0
+MODEL_PATH=/path/to/model
+VISIBLE_DEVICES=0
+docker run --rm --privileged --ipc=host --network=host \
+  --env MUSA_VISIBLE_DEVICES="${VISIBLE_DEVICES}" \
+  --env MTHREADS_VISIBLE_DEVICES="${VISIBLE_DEVICES}" \
+  -v "${MODEL_PATH}:${MODEL_PATH}:ro" \
+  "${VLLM_MUSA_IMAGE}" "${MODEL_PATH}" --host 0.0.0.0
+```
+
+If the host does not configure a MUSA-compatible default runtime, follow the
+host platform's container-runtime setup before starting the image. Keep the
+MUSA visibility setting scoped to the GPUs assigned to this container.
+Because these examples use `--ipc=host`, shared-memory capacity comes from the
+host IPC namespace; a separate `--shm-size` setting is not applied.
+Treat this as an isolated-host/test shape. The `--privileged` flag is shown for
+broad host compatibility and grants wide device access. For production,
+replace it with the platform's least-privilege MUSA device policy (and explicit
+RDMA devices when using Mooncake); the visibility variables scope vLLM's
+logical devices but do not reduce Docker privileges.
+
+To build and run a local serving image instead of using the release image:
+
+```bash
+MODEL_PATH=/path/to/model
+VISIBLE_DEVICES=0
+export VLLM_MUSA_SOURCE_IMAGE=vllm-musa:v0.24.0-local
+IMAGE_TAG="${VLLM_MUSA_SOURCE_IMAGE}" bash docker/build_image.sh
+docker run --rm --privileged --ipc=host --network=host \
+  --env MUSA_VISIBLE_DEVICES="${VISIBLE_DEVICES}" \
+  --env MTHREADS_VISIBLE_DEVICES="${VISIBLE_DEVICES}" \
+  -v "${MODEL_PATH}:${MODEL_PATH}:ro" \
+  "${VLLM_MUSA_SOURCE_IMAGE}" "${MODEL_PATH}" --host 0.0.0.0
 ```
 
 Every setting is an environment variable — override by exporting it or prefixing
@@ -80,7 +124,7 @@ IMAGE_TAG=vllm-musa:test bash docker/build_image.sh --target final
 Verify the workspace and test-runner contract with:
 
 ```bash
-docker run --rm --entrypoint /bin/bash vllm-musa:v0.24.0-dev \
+docker run --rm --entrypoint /bin/bash vllm-musa:test \
   -lc 'test "$PWD" = /vllm-workspace && python -m pytest --version'
 ```
 
@@ -189,7 +233,7 @@ On a MUSA GPU you should see `musa available: True`.
 Mooncake over RoCE also requires host networking and explicit RDMA device
 access. See the
 [container and RDMA prerequisites](../docs/example/README.md#container-and-rdma-prerequisites)
-for the validated runtime flags.
+for the documented container shape and host-runtime prerequisite.
 
 ## How it works (build stages)
 
