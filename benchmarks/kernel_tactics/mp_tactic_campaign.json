@@ -1,0 +1,249 @@
+{
+  "schema": "vllm-musa-mp-tactic-campaign.v2",
+  "purpose": "Public benchmark recipes; device and qualification provenance is supplied at run time and kept in local generated evidence.",
+  "methodology": {
+    "isolated_device_required_for_promotion": true,
+    "cache_policy": "cold-l2-per-sample",
+    "l2_flush_mb": 8000,
+    "inner_iters": 1,
+    "order": "paired alternating AB/BA",
+    "promotion_gate": {
+      "correctness_required": true,
+      "poison_output_forbidden": true,
+      "median_ratio_max": 0.98,
+      "ratio_p95_max": 1.02,
+      "winner_must_match_across_seeds": true,
+      "winner_must_pass_every_route": true
+    }
+  },
+  "cells": [
+    {
+      "id": "qwen35-folded-bf16-moe-blocks",
+      "enabled": true,
+      "priority": 1,
+      "script": "benchmarks/kernel_tactics/benchmark_fused_gemv_moe_blocks.py",
+      "base_args": [
+        "--family", "qwen35_folded_bf16",
+        "--stages", "w1", "w2",
+        "--blocks", "4x32", "8x16", "16x8", "32x4", "32x8",
+        "--inner-iters", "1",
+        "--l2-flush-mb", "8000"
+      ],
+      "modes": {
+        "quick": [
+          "--tokens", "1", "4", "16",
+          "--routes", "balanced", "hot", "unique_random",
+          "--dry-runs", "3", "--repeats", "8"
+        ],
+        "full": [
+          "--tokens", "1", "2", "4", "8", "16", "32", "64",
+          "--routes", "balanced", "hot", "unique_random",
+          "--dry-runs", "5", "--repeats", "24"
+        ]
+      },
+      "variants": [
+        {"id": "seed7", "args": ["--seed", "7"]},
+        {"id": "seed17", "args": ["--seed", "17"]},
+        {"id": "seed20260826", "args": ["--seed", "20260826"]}
+      ],
+      "production_consumer": "vllm_musa/model_executor/layers/fused_moe/fused_moe.py"
+    },
+    {
+      "id": "qwen-unfolded-bf16-moe-blocks",
+      "enabled": true,
+      "priority": 2,
+      "script": "benchmarks/kernel_tactics/benchmark_fused_gemv_moe_blocks.py",
+      "base_args": [
+        "--family", "qwen_bf16",
+        "--stages", "w1", "w2",
+        "--blocks", "4x32", "8x16", "16x8", "32x4", "32x8",
+        "--inner-iters", "1", "--l2-flush-mb", "8000"
+      ],
+      "modes": {
+        "quick": [
+          "--tokens", "1", "4", "16",
+          "--routes", "balanced", "hot", "unique_random",
+          "--dry-runs", "3", "--repeats", "8"
+        ],
+        "full": [
+          "--tokens", "1", "2", "4", "8", "16", "32", "64",
+          "--routes", "balanced", "hot", "unique_random",
+          "--dry-runs", "5", "--repeats", "24"
+        ]
+      },
+      "variants": [
+        {"id": "seed7", "args": ["--seed", "7"]},
+        {"id": "seed17", "args": ["--seed", "17"]},
+        {"id": "seed20260826", "args": ["--seed", "20260826"]}
+      ],
+      "production_consumer": "vllm_musa/model_executor/layers/fused_moe/fused_moe.py"
+    },
+    {
+      "id": "dsv4-fp8-moe-blocks",
+      "enabled": true,
+      "priority": 2,
+      "script": "benchmarks/kernel_tactics/benchmark_fused_gemv_moe_blocks.py",
+      "base_args": [
+        "--family", "dsv4_fp8",
+        "--stages", "w1", "w2",
+        "--blocks", "4x32", "8x16", "16x8", "32x4", "32x8",
+        "--inner-iters", "1", "--l2-flush-mb", "8000"
+      ],
+      "modes": {
+        "quick": [
+          "--tokens", "1", "4", "16",
+          "--routes", "balanced", "hot", "unique_random",
+          "--dry-runs", "3", "--repeats", "8"
+        ],
+        "full": [
+          "--tokens", "1", "2", "4", "8", "16", "32", "64",
+          "--routes", "balanced", "hot", "unique_random",
+          "--dry-runs", "5", "--repeats", "24"
+        ]
+      },
+      "variants": [
+        {"id": "seed7", "args": ["--seed", "7"]},
+        {"id": "seed17", "args": ["--seed", "17"]},
+        {"id": "seed20260826", "args": ["--seed", "20260826"]}
+      ],
+      "production_consumer": "vllm_musa/model_executor/layers/fused_moe/fused_moe.py"
+    },
+    {
+      "id": "dsv4-fused-add-rmsnorm-aot",
+      "enabled": true,
+      "priority": 3,
+      "script": "benchmarks/kernel_tactics/benchmark_fused_add_rmsnorm_paired_ab.py",
+      "base_args": [
+        "--hidden-size", "4096",
+        "--pairs", "0", "128",
+        "--pairs", "0", "256",
+        "--pairs", "0", "512",
+        "--pairs", "0", "1024",
+        "--inner-iters", "1", "--l2-flush-mb", "8000"
+      ],
+      "modes": {
+        "quick": [
+          "--rows", "1", "5", "16", "64", "80", "320",
+          "--dry-runs", "3", "--repeats", "8"
+        ],
+        "full": [
+          "--rows", "1", "2", "4", "5", "8", "16", "20", "32", "64", "80", "320", "2048", "4096", "4100", "8195",
+          "--dry-runs", "5", "--repeats", "24"
+        ]
+      },
+      "variants": [
+        {"id": "seed20260824", "args": ["--seed", "20260824"]}
+      ],
+      "production_consumer": "vllm_musa/model_executor/layers/layernorm.py"
+    },
+    {
+      "id": "qwen-fused-add-rmsnorm-aot",
+      "enabled": true,
+      "priority": 4,
+      "script": "benchmarks/kernel_tactics/benchmark_fused_add_rmsnorm_paired_ab.py",
+      "base_args": [
+        "--pairs", "0", "128",
+        "--pairs", "0", "256",
+        "--pairs", "0", "512",
+        "--pairs", "0", "1024",
+        "--inner-iters", "1", "--l2-flush-mb", "8000"
+      ],
+      "modes": {
+        "quick": [
+          "--rows", "1", "16", "32", "64", "128", "256",
+          "--dry-runs", "3", "--repeats", "8"
+        ],
+        "full": [
+          "--rows", "1", "2", "3", "4", "8", "12", "16", "32", "48", "64", "128", "192", "256", "320",
+          "--dry-runs", "5", "--repeats", "24"
+        ]
+      },
+      "variants": [
+        {"id": "h1024", "args": ["--hidden-size", "1024"]},
+        {"id": "h1536", "args": ["--hidden-size", "1536"]},
+        {"id": "h2048", "args": ["--hidden-size", "2048"]},
+        {"id": "h3584", "args": ["--hidden-size", "3584"]},
+        {"id": "h4096", "args": ["--hidden-size", "4096"]},
+        {"id": "h5120", "args": ["--hidden-size", "5120"]},
+        {"id": "h8192", "args": ["--hidden-size", "8192"]}
+      ],
+      "production_consumer": "vllm_musa/kernels/musa_ops.py"
+    },
+    {
+      "id": "dsv4-mhc-jit-fuse",
+      "enabled": true,
+      "priority": 2,
+      "script": "benchmarks/kernel_tactics/benchmark_dsv4_mhc_jit.py",
+      "base_args": [
+        "--hidden-size", "4096",
+        "--production-path", "fused_post_prenorm",
+        "--l2-flush-mb", "8000"
+      ],
+      "modes": {
+        "quick": [
+          "--tokens", "1", "4", "8", "16",
+          "--threads", "128", "256",
+          "--hidden-blocks", "512",
+          "--pass-configs", "safe", "burst",
+          "--warmup", "2", "--repeats", "8"
+        ],
+        "full": [
+          "--tokens", "1", "2", "4", "8", "16",
+          "--threads", "128", "256",
+          "--hidden-blocks", "512", "1024",
+          "--pass-configs", "safe", "burst", "aggressive_index32",
+          "--warmup", "3", "--repeats", "24"
+        ]
+      },
+      "variants": [
+        {"id": "seed20260827", "args": ["--seed", "20260827"]}
+      ],
+      "production_consumer": "vllm_musa/deepseek_v4_mhc.py"
+    },
+    {
+      "id": "dsv4-mhc-jit-standalone",
+      "enabled": true,
+      "priority": 3,
+      "script": "benchmarks/kernel_tactics/benchmark_dsv4_mhc_jit.py",
+      "base_args": [
+        "--hidden-size", "4096",
+        "--production-path", "standalone",
+        "--l2-flush-mb", "8000"
+      ],
+      "modes": {
+        "quick": [
+          "--tokens", "1", "32", "64", "128", "256",
+          "--threads", "128", "256",
+          "--hidden-blocks", "512", "1024",
+          "--pass-configs", "safe", "burst", "aggressive_index32",
+          "--warmup", "2", "--repeats", "8"
+        ],
+        "full": [
+          "--tokens", "1", "2", "4", "8", "16", "32", "64", "128", "256", "512",
+          "--threads", "128", "256",
+          "--hidden-blocks", "512", "1024",
+          "--pass-configs", "safe", "burst", "aggressive_index32",
+          "--warmup", "3", "--repeats", "24"
+        ]
+      },
+      "variants": [
+        {"id": "seed20260827", "args": ["--seed", "20260827"]}
+      ],
+      "production_consumer": "vllm_musa/deepseek_v4_mhc.py::mhc_pre_musa"
+    },
+    {
+      "id": "dsv4-dense-fp8-gemv",
+      "enabled": false,
+      "priority": 5,
+      "blocked_reason": "Current production op has exact shape selectors but no safe per-call benchmark block argument; the removed global environment seam must not be restored.",
+      "production_consumer": "csrc/musa/gemv.mu::SelectDeepSeekV4Fp8OProjTile"
+    },
+    {
+      "id": "qwen-gemma-jit-rmsnorm",
+      "enabled": false,
+      "priority": 5,
+      "blocked_reason": "The JIT kernel has row/hidden thread heuristics but no benchmark-only requested-thread contract yet.",
+      "production_consumer": "vllm_musa/jit_kernel/csrc/norm/rmsnorm.mu"
+    }
+  ]
+}

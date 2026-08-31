@@ -111,7 +111,8 @@ void per_token_group_quant_8bit_vec(const torch::Tensor& input,
                                     torch::Tensor& output_q,
                                     torch::Tensor& output_s, int64_t group_size,
                                     double eps, double min_8bit,
-                                    double max_8bit) {
+                                    double max_8bit,
+                                    int64_t requested_groups_per_block) {
   TORCH_CHECK(input.is_contiguous());
   TORCH_CHECK(output_q.is_contiguous());
   TORCH_CHECK(output_s.dim() == 2);
@@ -131,7 +132,18 @@ void per_token_group_quant_8bit_vec(const torch::Tensor& input,
   const int num_groups = static_cast<int>(input.numel() / group_size);
   if (num_groups == 0) return;
 
-  const int groups_per_block = GetGroupsPerBlock(num_groups);
+  int groups_per_block = GetGroupsPerBlock(num_groups);
+  if (requested_groups_per_block != 0) {
+    TORCH_CHECK(
+        requested_groups_per_block == 1 || requested_groups_per_block == 2 ||
+            requested_groups_per_block == 4 ||
+            requested_groups_per_block == 8 ||
+            requested_groups_per_block == 16,
+        "groups_per_block must be one of 0,1,2,4,8,16.");
+    TORCH_CHECK(num_groups % requested_groups_per_block == 0,
+                "num_groups must be divisible by requested groups_per_block.");
+    groups_per_block = static_cast<int>(requested_groups_per_block);
+  }
   const int num_blocks = num_groups / groups_per_block;
   const int num_threads = groups_per_block * THREADS_PER_GROUP;
 

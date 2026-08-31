@@ -525,6 +525,8 @@ def _musa_fp8_small_m_gemv_op(
         False,
         None,
         1e-6,
+        0,
+        0,
     )
     return output
 

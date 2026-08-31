@@ -61,6 +61,8 @@ def musa_fused_gemv(
     gamma: torch.Tensor = None,
     eps: float = 1e-6,
     output: torch.Tensor | None = None,
+    block_n: int = 0,
+    block_k: int = 0,
 ):
     use_int4_w4a16 = False
     out_shape = x.shape[:-1] + (
@@ -103,6 +105,8 @@ def musa_fused_gemv(
             use_rms_norm,
             gamma,
             eps,
+            block_n,
+            block_k,
         )
         return output
     # w4a16 gemv
@@ -129,6 +133,8 @@ def musa_fused_gemv(
             use_rms_norm,
             gamma,
             eps,
+            block_n,
+            block_k,
         )
         return output
     # general gemv
@@ -146,6 +152,8 @@ def musa_fused_gemv(
             use_rms_norm,
             gamma,
             eps,
+            block_n,
+            block_k,
         )
         return output
 
@@ -172,13 +180,16 @@ def musa_reshape_and_cache_flash_nhd(
     key_cache: torch.Tensor,
     value_cache: torch.Tensor,
     slot_mapping: torch.Tensor,
+    block_x: int = 0,
 ) -> None:
+    # Nonzero BLOCK_X is reserved for the paired kernel-tactic benchmark.
     return torch.ops._C_musa_ops.musa_reshape_and_cache_flash_nhd(
         key,
         value,
         key_cache,
         value_cache,
         slot_mapping,
+        block_x,
     )
 
 
@@ -209,7 +220,7 @@ def _get_musa_device_capability(device_id: int) -> tuple[int, int]:
 
 
 def _is_validated_musa_device(device: torch.device) -> bool:
-    """Return whether the tensor's device is the validated S5000 target."""
+    """Return whether the tensor's device has the supported architecture."""
     try:
         device_id = _musa_device_index(device)
         if device_id is None:

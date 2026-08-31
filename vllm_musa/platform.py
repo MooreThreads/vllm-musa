@@ -35,11 +35,9 @@ import pymtml as pynvml
 from vllm_musa.optimization_contract import (
     ModelFamily,
     OptimizationFeature,
-)
-from vllm_musa.optimization_contract import policy as contract_policy
-from vllm_musa.optimization_contract import (
     resolve_optimization_contract,
 )
+from vllm_musa.optimization_contract import policy as contract_policy
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
@@ -430,6 +428,11 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def check_and_update_config(cls, vllm_config: "VllmConfig") -> None:
+        from vllm_musa.tuning import (
+            configure_musa_engine_scheduler_profile_from_config,
+        )
+
+        configure_musa_engine_scheduler_profile_from_config(vllm_config)
         # when dflash spec-decode is active, coerce the draft-loop
         # CUDAGraph capture to block-aligned FULL sizes (see below). The dflash
         # source patch (DFlashProposer.dummy_run signature) is applied at BUILD
@@ -857,7 +860,9 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def get_device_communicator_cls(cls) -> str:
-        return "vllm.distributed.device_communicators.cuda_communicator.CudaCommunicator"  # noqa
+        return (
+            "vllm.distributed.device_communicators.cuda_communicator.CudaCommunicator"  # noqa
+        )
 
     @classmethod
     def supports_fp8(cls) -> bool:

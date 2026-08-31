@@ -1,0 +1,49 @@
+{
+  "schema": "vllm-musa-fp8-quant-production-shapes.v1",
+  "notes": [
+    "rows for routed SwiGLU are post-routing rows: model tokens multiplied by routed top-k",
+    "hidden_size is the quantized output width after SwiGLU, not the model hidden size",
+    "DeepSeek-V4 TP8 uses moe_intermediate_size=2048 / TP8 = 256",
+    "Qwen TP8 campaign W1 N=256 represents 2 * intermediate, so SwiGLU output width is 128"
+  ],
+  "sources": [
+    "benchmarks/kernel_tactics/qwen_dsv4_rmsnorm_shapes.json",
+    "tests/test_patches.py::DeepSeek-V4 moe_intermediate_size=2048",
+    "vllm_musa/model_executor/layers/quantization/utils/fp8_utils.py::M2.5 hidden=1536 gate"
+  ],
+  "families": {
+    "activation_quant": {
+      "deepseek_v4_tp8": {
+        "rows": [1, 2, 4, 5, 8, 16, 20, 32, 64, 80, 128, 256, 320],
+        "hidden_sizes": [4096]
+      },
+      "qwen_tp8": {
+        "rows": [1, 2, 4, 8, 12, 16, 32, 36, 64],
+        "hidden_sizes": [2048]
+      }
+    },
+    "silu_clamp_shared_mlp": {
+      "deepseek_v4_tp8": {
+        "rows": [1, 2, 4, 5, 8, 16, 20, 32, 64, 80, 128, 256, 320],
+        "hidden_sizes": [256],
+        "swiglu_limit": 10.0
+      }
+    },
+    "silu_routed_moe": {
+      "deepseek_v4_tp8_topk6": {
+        "rows": [6, 12, 24, 30, 48, 96, 120, 192, 384, 480, 768, 1536, 1920],
+        "hidden_sizes": [256]
+      },
+      "qwen_tp8_topk8": {
+        "rows": [8, 16, 32, 64, 96, 128, 256, 288, 512],
+        "hidden_sizes": [128]
+      }
+    },
+    "silu_dense_fallback": {
+      "m2_5_local_after_sphere_gate": {
+        "rows": [320, 512, 2048, 4096],
+        "hidden_sizes": [1536]
+      }
+    }
+  }
+}

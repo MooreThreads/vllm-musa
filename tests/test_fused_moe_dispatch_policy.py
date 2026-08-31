@@ -1,4 +1,5 @@
 import ast
+import dataclasses
 import importlib.util
 import sys
 from pathlib import Path
@@ -17,9 +18,13 @@ SPEC.loader.exec_module(POLICY)
 
 MUSA_FUSED_MOE_DISPATCH_ENV = POLICY.MUSA_FUSED_MOE_DISPATCH_ENV
 MusaFusedMoeBackend = POLICY.MusaFusedMoeBackend
+MusaFusedMoeGemvStageTactic = POLICY.MusaFusedMoeGemvStageTactic
 MusaFusedMoeShape = POLICY.MusaFusedMoeShape
 MusaFusedMoeThresholds = POLICY.MusaFusedMoeThresholds
+MusaForwardGraphBucket = POLICY.MusaForwardGraphBucket
+gemv_stage_tactic_for_shape = POLICY.gemv_stage_tactic_for_shape
 parse_dispatch_backend = POLICY.parse_dispatch_backend
+resolve_fused_moe_graph_mode = POLICY.resolve_fused_moe_graph_mode
 select_fused_moe_backend = POLICY.select_fused_moe_backend
 thresholds_for_shape = POLICY.thresholds_for_shape
 FUSED_MOE_PATH = (
@@ -95,6 +100,52 @@ def test_grouped_gemm_is_never_selected_during_capture():
     )
 
 
+def test_compile_mode_is_always_fail_closed():
+    shape = _shape(graph_mode="compile")
+
+    for requested in MusaFusedMoeBackend:
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=1,
+                can_use_gemv=True,
+                can_use_grouped_gemm=True,
+                stream_is_capturing=False,
+                requested=requested,
+                thresholds=MusaFusedMoeThresholds(
+                    gemv_max_tokens=4,
+                    grouped_gemm_min_tokens=1,
+                    source="must-not-specialize-during-compile",
+                ),
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+
+
+def test_graph_mode_resolution_prioritizes_symbolic_compile():
+    assert (
+        resolve_fused_moe_graph_mode(
+            is_compiling=True,
+            stream_is_capturing=True,
+        )
+        == "compile"
+    )
+    assert (
+        resolve_fused_moe_graph_mode(
+            is_compiling=False,
+            stream_is_capturing=True,
+        )
+        == "capture"
+    )
+    assert (
+        resolve_fused_moe_graph_mode(
+            is_compiling=False,
+            stream_is_capturing=False,
+        )
+        == "eager"
+    )
+
+
 def test_calibrated_threshold_boundaries_and_device_identity(monkeypatch):
     shape = _shape()
     thresholds = MusaFusedMoeThresholds(
@@ -161,7 +212,7 @@ def test_calibrated_dimension_prefilter(monkeypatch):
     )
 
 
-def test_s5000_calibrated_shapes_use_route_worst_boundaries():
+def test_mp_keyed_calibrated_shapes_use_route_worst_boundaries():
     qwen = _shape(
         multiprocessor_count=60,
         local_experts=256,
@@ -218,7 +269,303 @@ def test_s5000_calibrated_shapes_use_route_worst_boundaries():
     assert thresholds_for_shape(dsv2_capture).grouped_gemm_min_tokens is None
 
 
-def test_s5000_calibration_remains_exact_for_layout_and_mp_count():
+def test_qwen35_bf16_mp48_uses_exact_eight_token_boundary_and_tile():
+    shape = _shape(
+        multiprocessor_count=48,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        hidden_dtype="torch.bfloat16",
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+        block_n=0,
+        block_k=0,
+        activation="silu",
+        expert_parallel=False,
+    )
+    assert thresholds_for_shape(shape).gemv_max_tokens == 8
+    assert (
+        select_fused_moe_backend(
+            shape=shape,
+            num_tokens=8,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=False,
+        )
+        == MusaFusedMoeBackend.GEMV
+    )
+    assert (
+        select_fused_moe_backend(
+            shape=shape,
+            num_tokens=9,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=False,
+        )
+        == MusaFusedMoeBackend.UPSTREAM
+    )
+    tactic = gemv_stage_tactic_for_shape(shape=shape, num_tokens=8)
+    assert tactic is not None
+    assert tactic.w1_block == (32, 4)
+    assert tactic.w2_block == (32, 4)
+
+
+def test_qwen35_bf16_mp48_policy_mismatches_fail_closed():
+    shape = _shape(
+        multiprocessor_count=48,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        hidden_dtype="torch.bfloat16",
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+        block_n=0,
+        block_k=0,
+        activation="silu",
+        expert_parallel=False,
+    )
+    for field, value in (
+        ("device_capability", (3, 0)),
+        ("multiprocessor_count", 47),
+        ("multiprocessor_count", 49),
+        ("local_experts", 256),
+        ("w1_output_size", 512),
+        ("w2_input_size", 256),
+        ("hidden_size", 3072),
+        ("top_k", 8),
+        ("hidden_dtype", "torch.float16"),
+        ("weight_dtype", "torch.float16"),
+        ("activation", "gelu"),
+        ("expert_parallel", True),
+    ):
+        mismatch = dataclasses.replace(shape, **{field: value})
+        assert thresholds_for_shape(mismatch).source == "uncalibrated-shape"
+        assert gemv_stage_tactic_for_shape(shape=mismatch, num_tokens=1) is None
+        assert (
+            select_fused_moe_backend(
+                shape=mismatch,
+                num_tokens=1,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=False,
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+
+
+def test_qwen35_bf16_mp48_capture_buckets_fail_closed_outside_exact_bucket():
+    eager = _shape(
+        multiprocessor_count=48,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        hidden_dtype="torch.bfloat16",
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+        block_n=0,
+        block_k=0,
+        activation="silu",
+        expert_parallel=False,
+    )
+    for bucket in (1, 2, 4, 8):
+        capture = dataclasses.replace(
+            eager,
+            graph_mode="capture",
+            max_num_seqs=8,
+            graph_bucket=MusaForwardGraphBucket(
+                num_tokens=bucket,
+                num_reqs=bucket,
+                uniform=True,
+                runtime_mode="FULL",
+                has_lora=False,
+                num_active_loras=0,
+                present=True,
+            ),
+        )
+        assert thresholds_for_shape(capture).gemv_max_tokens == 8
+        tactic = gemv_stage_tactic_for_shape(shape=capture, num_tokens=bucket)
+        assert tactic is not None
+        assert tactic.w1_block == (32, 4)
+        assert tactic.w2_block == (32, 4)
+        assert f"capture-maxseq{bucket}" in tactic.source
+    uncaptured = dataclasses.replace(
+        eager,
+        graph_mode="capture",
+        max_num_seqs=16,
+        graph_bucket=MusaForwardGraphBucket(
+            num_tokens=16,
+            num_reqs=16,
+            uniform=True,
+            runtime_mode="FULL",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        ),
+    )
+    assert thresholds_for_shape(uncaptured).source == "uncalibrated-shape"
+    assert gemv_stage_tactic_for_shape(shape=uncaptured, num_tokens=16) is None
+
+
+def test_qwen35_bf16_mp48_capture_tactic_requires_exact_full_bucket():
+    capture = _shape(
+        multiprocessor_count=48,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        hidden_dtype="torch.bfloat16",
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+        block_n=0,
+        block_k=0,
+        activation="silu",
+        expert_parallel=False,
+        graph_mode="capture",
+        max_num_seqs=8,
+    )
+    assert gemv_stage_tactic_for_shape(shape=capture, num_tokens=1) is None
+
+    for field, value in (
+        ("runtime_mode", "PIECEWISE"),
+        ("uniform", False),
+        ("num_reqs", 2),
+        ("has_lora", True),
+        ("num_active_loras", 1),
+        ("present", False),
+    ):
+        bucket = MusaForwardGraphBucket(
+            num_tokens=1,
+            num_reqs=1,
+            uniform=True,
+            runtime_mode="FULL",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        )
+        malformed = dataclasses.replace(bucket, **{field: value})
+        assert (
+            gemv_stage_tactic_for_shape(
+                shape=dataclasses.replace(capture, graph_bucket=malformed),
+                num_tokens=1,
+            )
+            is None
+        )
+
+
+def test_dsv4_mp60_m2_uses_exact_eager_w1_stage_tactic():
+    shape = _shape(
+        multiprocessor_count=60,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+    )
+
+    assert gemv_stage_tactic_for_shape(shape=shape, num_tokens=2) == (
+        MusaFusedMoeGemvStageTactic(
+            w1_block=(8, 16),
+            w2_block=(16, 8),
+            source="mp60-dsv4-fp8-m2-route-policy-v1",
+        )
+    )
+
+
+def test_dsv4_stage_tactic_mismatches_fail_closed():
+    shape = _shape(
+        multiprocessor_count=60,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+    )
+
+    assert gemv_stage_tactic_for_shape(shape=shape, num_tokens=1) is None
+    assert gemv_stage_tactic_for_shape(shape=shape, num_tokens=4) is None
+    for field, value in (
+        ("device_capability", (3, 0)),
+        ("multiprocessor_count", 56),
+        ("local_experts", 255),
+        ("w1_output_size", 256),
+        ("w2_input_size", 128),
+        ("hidden_size", 2048),
+        ("top_k", 8),
+        ("block_n", 64),
+        ("block_k", 64),
+        ("activation", "gelu"),
+        ("expert_parallel", True),
+        ("hidden_dtype", "torch.float16"),
+        ("weight_dtype", "torch.bfloat16"),
+        ("scale_dtype", "torch.bfloat16"),
+        ("w1_scale_shape", (256, 32, 4)),
+        ("w2_scale_shape", (256, 2, 32)),
+        ("gemv_block", "auto"),
+        ("graph_mode", "capture"),
+    ):
+        assert (
+            gemv_stage_tactic_for_shape(
+                shape=dataclasses.replace(shape, **{field: value}),
+                num_tokens=2,
+            )
+            is None
+        )
+
+
+def test_dsv4_stage_tactic_ignores_scheduler_projection_after_backend_gate():
+    shape = _shape(
+        multiprocessor_count=60,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+    )
+    projected = dataclasses.replace(
+        shape,
+        max_num_seqs=64,
+        graph_bucket=MusaForwardGraphBucket(
+            num_tokens=2,
+            num_reqs=None,
+            uniform=False,
+            runtime_mode="NONE",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        ),
+    )
+
+    assert gemv_stage_tactic_for_shape(
+        shape=projected,
+        num_tokens=2,
+    ) == gemv_stage_tactic_for_shape(shape=shape, num_tokens=2)
+
+
+def test_mp_calibration_remains_exact_for_layout_and_mp_count():
     shape = _shape(
         multiprocessor_count=60,
         local_experts=64,
@@ -255,7 +602,7 @@ def test_pr113_folded_qwen_shape_requires_fresh_calibration():
     assert thresholds_for_shape(folded_qwen).source == "uncalibrated-shape"
 
 
-def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
+def test_qwen35_bf16_decode_gemv_uses_mp60_route_worst_crossover():
     shape = _shape(
         multiprocessor_count=60,
         local_experts=257,
@@ -271,8 +618,8 @@ def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
         w2_scale_shape=(),
     )
 
-    assert thresholds_for_shape(shape).gemv_max_tokens == 12
-    for token_count in (1, 4, 8, 12):
+    assert thresholds_for_shape(shape).gemv_max_tokens == 4
+    for token_count in (1, 4):
         assert (
             select_fused_moe_backend(
                 shape=shape,
@@ -283,18 +630,19 @@ def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
             )
             == MusaFusedMoeBackend.GEMV
         )
-    assert (
-        select_fused_moe_backend(
-            shape=shape,
-            num_tokens=16,
-            can_use_gemv=True,
-            can_use_grouped_gemm=False,
-            stream_is_capturing=False,
+    for token_count in (8, 16):
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=token_count,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=False,
+            )
+            == MusaFusedMoeBackend.UPSTREAM
         )
-        == MusaFusedMoeBackend.UPSTREAM
-    )
     capture_shape = _shape(**{**shape.__dict__, "graph_mode": "capture"})
-    assert thresholds_for_shape(capture_shape).gemv_max_tokens == 12
+    assert thresholds_for_shape(capture_shape).gemv_max_tokens == 4
 
     unfolded = _shape(
         multiprocessor_count=60,
@@ -311,6 +659,394 @@ def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():
         w2_scale_shape=(),
     )
     assert thresholds_for_shape(unfolded).gemv_max_tokens == 12
+    assert (
+        thresholds_for_shape(
+            dataclasses.replace(unfolded, max_num_seqs=16)
+        ).gemv_max_tokens
+        == 12
+    )
+
+
+def test_graph_bucket_guard_preserves_existing_mp60_runtime_modes():
+    qwen = _shape(
+        multiprocessor_count=60,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        block_n=0,
+        block_k=0,
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+    )
+    dsv4 = _shape(
+        multiprocessor_count=60,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="32x8",
+    )
+    runtime_cases = (
+        (
+            "eager",
+            MusaForwardGraphBucket(
+                num_tokens=4,
+                num_reqs=None,
+                uniform=False,
+                runtime_mode="NONE",
+                has_lora=False,
+                num_active_loras=0,
+                present=True,
+            ),
+        ),
+        (
+            "capture",
+            MusaForwardGraphBucket(
+                num_tokens=4,
+                num_reqs=None,
+                uniform=False,
+                runtime_mode="PIECEWISE",
+                has_lora=False,
+                num_active_loras=0,
+                present=True,
+            ),
+        ),
+        (
+            "capture",
+            MusaForwardGraphBucket(
+                num_tokens=4,
+                num_reqs=4,
+                uniform=True,
+                runtime_mode="FULL",
+                has_lora=False,
+                num_active_loras=0,
+                present=True,
+            ),
+        ),
+    )
+
+    for base_shape in (qwen, dsv4):
+        for graph_mode, descriptor in runtime_cases:
+            shape = dataclasses.replace(
+                base_shape,
+                graph_mode=graph_mode,
+                graph_bucket=descriptor,
+            )
+            thresholds = thresholds_for_shape(shape)
+            assert thresholds.gemv_max_tokens is not None
+            assert (
+                select_fused_moe_backend(
+                    shape=shape,
+                    num_tokens=4,
+                    can_use_gemv=True,
+                    can_use_grouped_gemm=False,
+                    stream_is_capturing=graph_mode == "capture",
+                    thresholds=thresholds,
+                )
+                == MusaFusedMoeBackend.GEMV
+            )
+
+    for descriptor in (
+        MusaForwardGraphBucket.invalid(),
+        MusaForwardGraphBucket(
+            num_tokens=1,
+            num_reqs=1,
+            uniform=True,
+            runtime_mode="NONE",
+            has_lora=True,
+            num_active_loras=1,
+            present=True,
+        ),
+        MusaForwardGraphBucket(
+            num_tokens=4,
+            num_reqs=2,
+            uniform=True,
+            runtime_mode="FULL",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        ),
+    ):
+        shape = dataclasses.replace(qwen, graph_bucket=descriptor)
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=1,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=False,
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+
+
+def test_qwen35_bf16_decode_gemv_uses_mp56_route_worst_crossover():
+    base_shape = _shape(
+        multiprocessor_count=56,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        block_n=0,
+        block_k=0,
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+    )
+    assert thresholds_for_shape(base_shape).gemv_max_tokens is None
+    assert (
+        thresholds_for_shape(
+            dataclasses.replace(base_shape, max_num_seqs=16)
+        ).gemv_max_tokens
+        is None
+    )
+    # The engine-static profile is part of the key: a larger profile must not
+    # accidentally inherit the small-batch GEMV entry during symbolic compile.
+    assert all(
+        key.max_num_seqs in (None, 1, 2, 4)
+        for key in POLICY._CALIBRATED_THRESHOLDS
+        if key.multiprocessor_count == 56
+    )
+    assert all(
+        key.graph_mode != "compile"
+        for key in POLICY._CALIBRATED_THRESHOLDS
+        if key.multiprocessor_count == 56
+    )
+    for graph_mode in ("eager", "capture"):
+        for max_num_seqs in (1, 2, 4):
+            shape = dataclasses.replace(
+                base_shape,
+                graph_mode=graph_mode,
+                max_num_seqs=max_num_seqs,
+            )
+            thresholds = thresholds_for_shape(shape)
+            assert thresholds.gemv_max_tokens == 4
+            assert "mp56" in thresholds.source
+            assert "e257" in thresholds.source
+            assert f"maxseq{max_num_seqs}" in thresholds.source
+            assert "route-policy" in thresholds.source
+            assert select_fused_moe_backend(
+                shape=shape,
+                num_tokens=4,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=graph_mode == "capture",
+            ) == (
+                MusaFusedMoeBackend.GEMV
+                if graph_mode == "eager"
+                else MusaFusedMoeBackend.UPSTREAM
+            )
+            assert (
+                select_fused_moe_backend(
+                    shape=shape,
+                    num_tokens=5,
+                    can_use_gemv=True,
+                    can_use_grouped_gemm=False,
+                    stream_is_capturing=graph_mode == "capture",
+                )
+                == MusaFusedMoeBackend.UPSTREAM
+            )
+
+
+def test_qwen_mp56_uses_only_exact_full_decode_graph_buckets():
+    base_shape = _shape(
+        multiprocessor_count=56,
+        local_experts=257,
+        w1_output_size=256,
+        w2_input_size=128,
+        hidden_size=2048,
+        top_k=9,
+        block_n=0,
+        block_k=0,
+        weight_dtype="torch.bfloat16",
+        scale_dtype="none",
+        w1_scale_shape=(),
+        w2_scale_shape=(),
+        graph_mode="capture",
+        max_num_seqs=64,
+    )
+
+    for graph_bucket in ((1, 1, True), (2, 2, True), (4, 4, True)):
+        descriptor = MusaForwardGraphBucket(
+            num_tokens=graph_bucket[0],
+            num_reqs=graph_bucket[1],
+            uniform=graph_bucket[2],
+            runtime_mode="FULL",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        )
+        thresholds = thresholds_for_shape(
+            dataclasses.replace(base_shape, graph_bucket=descriptor)
+        )
+        assert thresholds.gemv_max_tokens == 4
+        assert f"maxseq{graph_bucket[0]}" in thresholds.source
+        assert (
+            select_fused_moe_backend(
+                shape=dataclasses.replace(base_shape, graph_bucket=descriptor),
+                num_tokens=graph_bucket[0],
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=True,
+                requested=MusaFusedMoeBackend.AUTO,
+                thresholds=thresholds,
+            )
+            == MusaFusedMoeBackend.GEMV
+        )
+
+    bucket_one_shape = dataclasses.replace(
+        base_shape,
+        graph_bucket=MusaForwardGraphBucket(
+            num_tokens=1,
+            num_reqs=1,
+            uniform=True,
+            runtime_mode="FULL",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        ),
+    )
+    assert (
+        select_fused_moe_backend(
+            shape=bucket_one_shape,
+            num_tokens=2,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=True,
+            requested=MusaFusedMoeBackend.AUTO,
+            thresholds=thresholds_for_shape(bucket_one_shape),
+        )
+        == MusaFusedMoeBackend.UPSTREAM
+    )
+
+    eager_none = MusaForwardGraphBucket(
+        num_tokens=4,
+        num_reqs=None,
+        uniform=False,
+        runtime_mode="NONE",
+        has_lora=False,
+        num_active_loras=0,
+        present=True,
+    )
+    eager_shape = dataclasses.replace(
+        base_shape,
+        graph_mode="eager",
+        max_num_seqs=4,
+        graph_bucket=eager_none,
+    )
+    eager_thresholds = thresholds_for_shape(eager_shape)
+    assert eager_thresholds.gemv_max_tokens == 4
+    assert (
+        select_fused_moe_backend(
+            shape=eager_shape,
+            num_tokens=4,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=False,
+            thresholds=eager_thresholds,
+        )
+        == MusaFusedMoeBackend.GEMV
+    )
+
+    # Missing ForwardContext is tolerated only for eager direct-operator
+    # callers. It cannot specialize a graph capture.
+    assert (
+        select_fused_moe_backend(
+            shape=base_shape,
+            num_tokens=1,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=True,
+        )
+        == MusaFusedMoeBackend.UPSTREAM
+    )
+
+    for graph_bucket in (
+        (16, 16, True),
+        (4, 2, True),
+        (4, None, False),
+        (1, None, False),
+    ):
+        descriptor = MusaForwardGraphBucket(
+            num_tokens=graph_bucket[0],
+            num_reqs=graph_bucket[1],
+            uniform=graph_bucket[2],
+            runtime_mode="FULL" if graph_bucket[2] else "PIECEWISE",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        )
+        invalid_shape = dataclasses.replace(base_shape, graph_bucket=descriptor)
+        thresholds = thresholds_for_shape(invalid_shape)
+        assert thresholds.source == "uncalibrated-shape"
+        assert (
+            select_fused_moe_backend(
+                shape=invalid_shape,
+                num_tokens=graph_bucket[0],
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=True,
+                requested=MusaFusedMoeBackend.AUTO,
+                thresholds=thresholds,
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+
+    for descriptor in (
+        MusaForwardGraphBucket(
+            num_tokens=1,
+            num_reqs=1,
+            uniform=True,
+            runtime_mode="FULL",
+            has_lora=True,
+            num_active_loras=1,
+            present=True,
+        ),
+        MusaForwardGraphBucket.invalid(),
+    ):
+        shape = dataclasses.replace(base_shape, graph_bucket=descriptor)
+        assert thresholds_for_shape(shape).source == "uncalibrated-shape"
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=1,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=True,
+                requested=MusaFusedMoeBackend.AUTO,
+                thresholds=thresholds_for_shape(shape),
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+        assert (
+            select_fused_moe_backend(
+                shape=shape,
+                num_tokens=1,
+                can_use_gemv=True,
+                can_use_grouped_gemm=False,
+                stream_is_capturing=False,
+                requested=MusaFusedMoeBackend.GEMV,
+                thresholds=thresholds_for_shape(shape),
+            )
+            == MusaFusedMoeBackend.UPSTREAM
+        )
+
+    assert thresholds_for_shape(base_shape).source == "uncalibrated-shape"
+    assert (
+        thresholds_for_shape(
+            dataclasses.replace(base_shape, multiprocessor_count=48)
+        ).source
+        == "uncalibrated-shape"
+    )
 
 
 def test_force_modes_preserve_eligibility_checks():
@@ -369,6 +1105,29 @@ def test_forced_gemv_preserves_capture_calibration_boundary(monkeypatch):
     assert (
         select_fused_moe_backend(
             shape=capture_shape,
+            num_tokens=4,
+            can_use_gemv=True,
+            can_use_grouped_gemm=False,
+            stream_is_capturing=True,
+            requested=MusaFusedMoeBackend.GEMV,
+        )
+        == MusaFusedMoeBackend.UPSTREAM
+    )
+    capture_shape_with_context = dataclasses.replace(
+        capture_shape,
+        graph_bucket=MusaForwardGraphBucket(
+            num_tokens=4,
+            num_reqs=4,
+            uniform=True,
+            runtime_mode="FULL",
+            has_lora=False,
+            num_active_loras=0,
+            present=True,
+        ),
+    )
+    assert (
+        select_fused_moe_backend(
+            shape=capture_shape_with_context,
             num_tokens=4,
             can_use_gemv=True,
             can_use_grouped_gemm=False,

@@ -1,0 +1,59 @@
+{
+  "schema": "musa-qwen-dsv4-rmsnorm-shapes.v2",
+  "sources": [
+    "model configuration inventory",
+    "official Qwen Hugging Face config.json for Qwen2.5 text, VL, and Omni checkpoints"
+  ],
+  "row_shapes": {
+    "graph_ladder": [1, 2, 4, 8, 16, 32, 64],
+    "qwen_mtp1": [2, 8, 32, 128],
+    "qwen_mtp2": [3, 12, 48, 192],
+    "qwen_mtp3": [4, 16, 64, 256],
+    "deepseek_v4_mtp4": [5, 20, 80, 320],
+    "prefill_and_bounds": [2048, 4096, 4100, 8195]
+  },
+  "qwen_aot_hidden_sizes": {
+    "1024": ["Qwen3-0.6B"],
+    "1536": ["Qwen2-VL-2B-Instruct"],
+    "2048": [
+      "Qwen3-30B-A3B",
+      "Qwen3-VL-30B-A3B"
+    ],
+    "3584": [
+      "Qwen2.5-7B-Instruct",
+      "Qwen2.5-VL-7B-Instruct",
+      "Qwen2.5-Omni-7B"
+    ],
+    "4096": [
+      "Qwen3-8B",
+      "Qwen3-235B-A22B",
+      "Qwen3-VL-8B"
+    ],
+    "8192": ["Qwen2.5-VL-72B-Instruct"]
+  },
+  "qwen_split_provider_hidden_sizes": {
+    "5120": {
+      "models": ["Qwen3-32B"],
+      "aot_rows": "rows < 64",
+      "jit_rows": "rows >= 64"
+    }
+  },
+  "qwen_gemma_jit_exclusions": {
+    "2048": ["Qwen3.5-35B-A3B", "Qwen3.5-Flash", "Qwen3.6-35B-A3B"],
+    "2560": ["Qwen3.6-80B-A3B"],
+    "3072": ["Qwen3.5-122B-A10B"],
+    "4096": [
+      "Qwen3.5-9B",
+      "Qwen3.5-397B",
+      "Qwen3.5-397B-A17B",
+      "Qwen3.6-397B-A17B"
+    ],
+    "5120": ["Qwen3.5-27B", "Qwen3.6-27B"],
+    "note": "Qwen3.5 and Qwen3.6 use GemmaRMSNorm and route eligible residual calls to the JIT gemma=True kernel, not this C-extension AOT kernel."
+  },
+  "deepseek_v4_flash": {
+    "models": ["DeepSeek-V4-Flash-Base"],
+    "hidden_size": 4096,
+    "row_shapes": [1, 5, 20, 80, 320]
+  }
+}

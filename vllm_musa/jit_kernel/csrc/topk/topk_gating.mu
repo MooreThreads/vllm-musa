@@ -146,16 +146,18 @@ __launch_bounds__(kWarpsPerCta *kWarpSize, 1) void topk_softmax_warp_kernel(
   }
 }
 
-template <typename T, int NumExperts, int ValuesPerThread>
-__global__
-__launch_bounds__(kWarpsPerCta *kWarpSize, 1) void topk_sigmoid_warp_kernel(
+template <typename T, int NumExperts, int ValuesPerThread,
+          int WarpsPerCta = kWarpsPerCta>
+__global__ __launch_bounds__(
+    WarpsPerCta *kWarpSize,
+    1) void topk_sigmoid_warp_kernel(
     const T *__restrict__ gating_output, float *__restrict__ topk_weights,
     int32_t *__restrict__ topk_ids, const float *__restrict__ correction_bias,
     int num_tokens, int topk, bool renormalize, bool has_correction_bias) {
   const int tid = threadIdx.x;
   const int warp_id = tid / kWarpSize;
   const int lane = lane_id();
-  const int row = blockIdx.x * kWarpsPerCta + warp_id;
+  const int row = blockIdx.x * WarpsPerCta + warp_id;
   if (row >= num_tokens) {
     return;
   }
@@ -215,9 +217,10 @@ __launch_bounds__(kWarpsPerCta *kWarpSize, 1) void topk_sigmoid_warp_kernel(
   }
 }
 
-template <typename T, int NumExperts, int ValuesPerThread>
+template <typename T, int NumExperts, int ValuesPerThread,
+          int WarpsPerCta = kWarpsPerCta>
 __global__ __launch_bounds__(
-    kWarpsPerCta *kWarpSize,
+    WarpsPerCta *kWarpSize,
     1) void topk_sigmoid_no_bias_warp_kernel(const T
                                                  *__restrict__ gating_output,
                                              float *__restrict__ topk_weights,
@@ -227,7 +230,7 @@ __global__ __launch_bounds__(
   const int tid = threadIdx.x;
   const int warp_id = tid / kWarpSize;
   const int lane = lane_id();
-  const int row = blockIdx.x * kWarpsPerCta + warp_id;
+  const int row = blockIdx.x * WarpsPerCta + warp_id;
   if (row >= num_tokens) {
     return;
   }
@@ -281,9 +284,10 @@ __global__ __launch_bounds__(
   }
 }
 
-template <typename T, int NumExperts, int ValuesPerThread, int TopK>
+template <typename T, int NumExperts, int ValuesPerThread, int TopK,
+          int WarpsPerCta = kWarpsPerCta>
 __global__ __launch_bounds__(
-    kWarpsPerCta *kWarpSize,
+    WarpsPerCta *kWarpSize,
     1) void topk_softmax_no_bias_warp_kernel_fixed_k(const T
                                                          *__restrict__ gating_output,
                                                      float
@@ -295,7 +299,7 @@ __global__ __launch_bounds__(
   const int tid = threadIdx.x;
   const int warp_id = tid / kWarpSize;
   const int lane = lane_id();
-  const int row = blockIdx.x * kWarpsPerCta + warp_id;
+  const int row = blockIdx.x * WarpsPerCta + warp_id;
   if (row >= num_tokens) {
     return;
   }
@@ -455,15 +459,16 @@ __launch_bounds__(kWarpsPerCta *kWarpSize, 1) void topk_softmax_no_bias_warp_sha
   }
 }
 
-template <typename T, int NumExperts, int ValuesPerThread, int TopK>
+template <typename T, int NumExperts, int ValuesPerThread, int TopK,
+          int WarpsPerCta = kWarpsPerCta>
 __global__
-__launch_bounds__(kWarpsPerCta *kWarpSize, 1) void topk_softmax_no_bias_renorm_warp_kernel_fixed_k(
+__launch_bounds__(WarpsPerCta *kWarpSize, 1) void topk_softmax_no_bias_renorm_warp_kernel_fixed_k(
     const T *__restrict__ gating_output, float *__restrict__ topk_weights,
     int32_t *__restrict__ topk_ids, int num_tokens) {
   const int tid = threadIdx.x;
   const int warp_id = tid / kWarpSize;
   const int lane = lane_id();
-  const int row = blockIdx.x * kWarpsPerCta + warp_id;
+  const int row = blockIdx.x * WarpsPerCta + warp_id;
   if (row >= num_tokens) {
     return;
   }
@@ -528,9 +533,10 @@ __launch_bounds__(kWarpsPerCta *kWarpSize, 1) void topk_softmax_no_bias_renorm_w
   }
 }
 
-template <typename T, int NumExperts, int ValuesPerThread, int TopK>
+template <typename T, int NumExperts, int ValuesPerThread, int TopK,
+          int WarpsPerCta = kWarpsPerCta>
 __global__ __launch_bounds__(
-    kWarpsPerCta * kWarpSize,
+    WarpsPerCta * kWarpSize,
     1) void topk_softmax_no_bias_renorm_warp_combined_shared1_kernel_fixed_k(
     const T *__restrict__ combined_gating_output,
     float *__restrict__ topk_weights, int32_t *__restrict__ topk_ids,
@@ -541,7 +547,7 @@ __global__ __launch_bounds__(
   const int tid = threadIdx.x;
   const int warp_id = tid / kWarpSize;
   const int lane = lane_id();
-  const int row = blockIdx.x * kWarpsPerCta + warp_id;
+  const int row = blockIdx.x * WarpsPerCta + warp_id;
   if (row >= num_tokens) {
     return;
   }
@@ -1205,6 +1211,118 @@ void launch_topk(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
       << "MUSA topk kernel failed: " << musaGetErrorString(err);
 }
 
+#if defined(VLLM_MUSA_TOPK_BENCHMARK_TACTICS)
+// Benchmark-only launch seam. Production entry points continue through
+// launch_topk() with kWarpsPerCta; only the dedicated FFI functions below can
+// select a different per-call geometry. Keep all benchmark-only templates out
+// of the normal production JIT translation unit.
+template <typename T, bool IsSoftmax, int WarpsPerCta>
+void launch_topk_benchmark_tactic(ffi::TensorView topk_weights,
+                                  ffi::TensorView topk_ids,
+                                  ffi::TensorView gating_output,
+                                  bool renormalize,
+                                  ffi::TensorView correction_bias,
+                                  bool has_correction_bias,
+                                  int num_fused_shared_experts) {
+  static_assert(WarpsPerCta == 1 || WarpsPerCta == 2 || WarpsPerCta == 4 ||
+                WarpsPerCta == 8);
+  const int num_tokens = static_cast<int>(gating_output.size(0));
+  const int num_experts = static_cast<int>(gating_output.size(1));
+  const int output_topk = static_cast<int>(topk_weights.size(1));
+  if (num_tokens == 0 || output_topk == 0) {
+    return;
+  }
+
+  const T *input_ptr = static_cast<const T *>(gating_output.data_ptr());
+  const float *bias_ptr = has_correction_bias
+                              ? static_cast<const float *>(
+                                    correction_bias.data_ptr())
+                              : nullptr;
+  float *weights_ptr = static_cast<float *>(topk_weights.data_ptr());
+  int32_t *ids_ptr = static_cast<int32_t *>(topk_ids.data_ptr());
+  ffi::MUSADeviceGuard device_guard(gating_output.device().device_id);
+  musaStream_t stream = get_stream(gating_output.device());
+  const int blocks = (num_tokens + WarpsPerCta - 1) / WarpsPerCta;
+
+  if constexpr (IsSoftmax) {
+    TVM_FFI_ICHECK(renormalize)
+        << "Benchmark topk softmax tactics require renormalize=true";
+    if (num_fused_shared_experts == 1) {
+      TVM_FFI_ICHECK_EQ(num_experts, 257)
+          << "Benchmark folded Qwen topk tactics require E=257";
+      TVM_FFI_ICHECK_EQ(output_topk, 9)
+          << "Benchmark folded Qwen topk tactics require output topk=9";
+      topk_softmax_no_bias_renorm_warp_combined_shared1_kernel_fixed_k<
+          T, 256, 8, 8, WarpsPerCta>
+          <<<blocks, WarpsPerCta * kWarpSize, 0, stream>>>(
+              input_ptr, weights_ptr, ids_ptr, num_tokens);
+    } else {
+      TVM_FFI_ICHECK_EQ(num_fused_shared_experts, 0);
+      TVM_FFI_ICHECK_EQ(num_experts, 256)
+          << "Benchmark Qwen topk tactics require E=256";
+      TVM_FFI_ICHECK_EQ(output_topk, 8)
+          << "Benchmark Qwen topk tactics require topk=8";
+      topk_softmax_no_bias_renorm_warp_kernel_fixed_k<T, 256, 8, 8,
+                                                       WarpsPerCta>
+          <<<blocks, WarpsPerCta * kWarpSize, 0, stream>>>(
+              input_ptr, weights_ptr, ids_ptr, num_tokens);
+    }
+  } else {
+    TVM_FFI_ICHECK_EQ(num_fused_shared_experts, 0);
+    TVM_FFI_ICHECK_EQ(num_experts, 256)
+        << "Benchmark DeepSeek topk tactics require E=256";
+    TVM_FFI_ICHECK_EQ(output_topk, 6)
+        << "Benchmark DeepSeek topk tactics require topk=6";
+    if (has_correction_bias) {
+      topk_sigmoid_warp_kernel<T, 256, 8, WarpsPerCta>
+          <<<blocks, WarpsPerCta * kWarpSize, 0, stream>>>(
+              input_ptr, weights_ptr, ids_ptr, bias_ptr, num_tokens,
+              output_topk, renormalize, true);
+    } else {
+      topk_sigmoid_no_bias_warp_kernel<T, 256, 8, WarpsPerCta>
+          <<<blocks, WarpsPerCta * kWarpSize, 0, stream>>>(
+              input_ptr, weights_ptr, ids_ptr, num_tokens, output_topk,
+              renormalize);
+    }
+  }
+
+  const musaError_t err = musaGetLastError();
+  TVM_FFI_ICHECK_EQ(err, musaSuccess)
+      << "MUSA benchmark topk tactic failed: " << musaGetErrorString(err);
+}
+
+template <typename T, bool IsSoftmax>
+void dispatch_topk_benchmark_warps(ffi::TensorView topk_weights,
+                                   ffi::TensorView topk_ids,
+                                   ffi::TensorView gating_output,
+                                   bool renormalize,
+                                   ffi::TensorView correction_bias,
+                                   bool has_correction_bias,
+                                   int num_fused_shared_experts,
+                                   int warps_per_cta) {
+#define LAUNCH_BENCHMARK_TOPK(WARPS)                                       \
+  launch_topk_benchmark_tactic<T, IsSoftmax, WARPS>(                       \
+      topk_weights, topk_ids, gating_output, renormalize, correction_bias, \
+      has_correction_bias,                                                 \
+      num_fused_shared_experts)
+
+  if (warps_per_cta == 1) {
+    LAUNCH_BENCHMARK_TOPK(1);
+  } else if (warps_per_cta == 2) {
+    LAUNCH_BENCHMARK_TOPK(2);
+  } else if (warps_per_cta == 4) {
+    LAUNCH_BENCHMARK_TOPK(4);
+  } else if (warps_per_cta == 8) {
+    LAUNCH_BENCHMARK_TOPK(8);
+  } else {
+    TVM_FFI_THROW(ValueError)
+        << "warps_per_cta must be one of 1, 2, 4, or 8";
+  }
+
+#undef LAUNCH_BENCHMARK_TOPK
+}
+#endif
+
 void check_topk_inputs(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
                        ffi::TensorView gating_output,
                        ffi::TensorView correction_bias,
@@ -1326,6 +1444,51 @@ void dispatch_topk(ffi::TensorView topk_weights, ffi::TensorView topk_ids,
   }
 }
 
+#if defined(VLLM_MUSA_TOPK_BENCHMARK_TACTICS)
+template <bool IsSoftmax>
+void dispatch_topk_benchmark_tactic(
+    ffi::TensorView topk_weights, ffi::TensorView topk_ids,
+    ffi::TensorView gating_output, bool renormalize, float moe_softcapping,
+    ffi::TensorView correction_bias, bool has_correction_bias,
+    ffi::TensorView shared_gate_output, int num_fused_shared_experts,
+    bool has_shared_experts, int warps_per_cta) {
+  if (warps_per_cta == 0) {
+    dispatch_topk<IsSoftmax>(
+        topk_weights, topk_ids, gating_output, renormalize, moe_softcapping,
+        correction_bias, has_correction_bias, shared_gate_output,
+        num_fused_shared_experts, has_shared_experts);
+    return;
+  }
+
+  if constexpr (IsSoftmax) {
+    TVM_FFI_ICHECK(!has_correction_bias)
+        << "Softmax benchmark tactics exclude correction-bias routing";
+  }
+  TVM_FFI_ICHECK(!has_shared_experts)
+      << "Benchmark topk tactics exclude separate shared-gate routing";
+  TVM_FFI_ICHECK(moe_softcapping <= 0.0f)
+      << "Benchmark topk tactics exclude softcapping";
+
+#define DISPATCH_BENCHMARK_TOPK(DType)                                     \
+  dispatch_topk_benchmark_warps<DType, IsSoftmax>(                         \
+      topk_weights, topk_ids, gating_output, renormalize, correction_bias, \
+      has_correction_bias,                                                 \
+      num_fused_shared_experts, warps_per_cta)
+
+  if (dtype_equal(gating_output.dtype(), dl_float32)) {
+    DISPATCH_BENCHMARK_TOPK(float);
+  } else if (dtype_equal(gating_output.dtype(), dl_float16)) {
+    DISPATCH_BENCHMARK_TOPK(half);
+  } else if (dtype_equal(gating_output.dtype(), dl_bfloat16)) {
+    DISPATCH_BENCHMARK_TOPK(__mt_bfloat16);
+  } else {
+    TVM_FFI_THROW(ValueError) << "Unsupported gating_output dtype";
+  }
+
+#undef DISPATCH_BENCHMARK_TOPK
+}
+#endif
+
 void sgl_musa_topk_softmax(
     ffi::TensorView topk_weights, ffi::TensorView topk_ids,
     ffi::TensorView gating_output, bool renormalize, double moe_softcapping,
@@ -1357,5 +1520,48 @@ void sgl_musa_topk_sigmoid(ffi::TensorView topk_weights,
                        num_fused_shared_experts, has_shared_experts);
 }
 
+#if defined(VLLM_MUSA_TOPK_BENCHMARK_TACTICS)
+void sgl_musa_topk_softmax_benchmark_tactic(
+    ffi::TensorView topk_weights, ffi::TensorView topk_ids,
+    ffi::TensorView gating_output, bool renormalize, double moe_softcapping,
+    ffi::TensorView correction_bias, bool has_correction_bias,
+    ffi::TensorView shared_gate_output, int num_fused_shared_experts,
+    bool has_shared_experts, int warps_per_cta) {
+  check_topk_inputs(topk_weights, topk_ids, gating_output, correction_bias,
+                    has_correction_bias, shared_gate_output,
+                    num_fused_shared_experts, has_shared_experts);
+  dispatch_topk_benchmark_tactic<true>(
+      topk_weights, topk_ids, gating_output, renormalize,
+      static_cast<float>(moe_softcapping), correction_bias,
+      has_correction_bias, shared_gate_output, num_fused_shared_experts,
+      has_shared_experts, warps_per_cta);
+}
+
+void sgl_musa_topk_sigmoid_benchmark_tactic(
+    ffi::TensorView topk_weights, ffi::TensorView topk_ids,
+    ffi::TensorView gating_output, bool renormalize,
+    ffi::TensorView correction_bias, bool has_correction_bias,
+    ffi::TensorView shared_gate_output, int num_fused_shared_experts,
+    bool has_shared_experts, int warps_per_cta) {
+  check_topk_inputs(topk_weights, topk_ids, gating_output, correction_bias,
+                    has_correction_bias, shared_gate_output,
+                    num_fused_shared_experts, has_shared_experts);
+  dispatch_topk_benchmark_tactic<false>(
+      topk_weights, topk_ids, gating_output, renormalize, 0.0f,
+      correction_bias, has_correction_bias, shared_gate_output,
+      num_fused_shared_experts, has_shared_experts, warps_per_cta);
+}
+#endif
+
+#if defined(VLLM_MUSA_TOPK_BENCHMARK_TACTICS)
+// The benchmark builds a separate JIT module under a distinct cache name. It
+// keeps the two established FFI names but exposes the explicit tactic arity;
+// the normal production module below retains its original ABI.
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_musa_topk_softmax,
+                              sgl_musa_topk_softmax_benchmark_tactic);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_musa_topk_sigmoid,
+                              sgl_musa_topk_sigmoid_benchmark_tactic);
+#else
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_musa_topk_softmax, sgl_musa_topk_softmax);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_musa_topk_sigmoid, sgl_musa_topk_sigmoid);
+#endif

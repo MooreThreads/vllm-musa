@@ -4,16 +4,21 @@
 """Model-agnostic MUSA fused-MoE backend selection.
 
 The hot path must not benchmark, synchronize device data to the host, or key
-off a model architecture name.  Offline S5000 sweeps populate exact shape
-entries below; unknown shapes keep the established upstream backend.
+off a model architecture name. Offline qualification populates exact
+hardware/shape entries below; unknown shapes keep the established upstream
+backend. Measurement receipts remain outside the source distribution.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Final
 
+from vllm_musa.tuning import MusaForwardGraphBucket
+
 MUSA_FUSED_MOE_DISPATCH_ENV: Final = "VLLM_MUSA_FUSED_MOE_DISPATCH"
+MP48_QWEN35_CALIBRATED_DECODE_BUCKETS: Final = (1, 2, 4, 8)
+MP56_QWEN35_CALIBRATED_DECODE_BUCKETS: Final = (1, 2, 4)
 
 
 class MusaFusedMoeBackend(str, Enum):
@@ -45,6 +50,8 @@ class MusaFusedMoeShape:
     w2_scale_shape: tuple[int, ...]
     gemv_block: str
     graph_mode: str
+    max_num_seqs: int | None = None
+    graph_bucket: MusaForwardGraphBucket | None = None
 
 
 @dataclass(frozen=True)
@@ -54,8 +61,26 @@ class MusaFusedMoeThresholds:
     source: str
 
 
-# Unknown shapes stay on the established upstream path until an exact S5000
-# sweep is recorded.
+@dataclass(frozen=True)
+class MusaFusedMoeGemvStageTactic:
+    """Per-stage AOT GEMV blocks for one exact production contract."""
+
+    w1_block: tuple[int, int]
+    w2_block: tuple[int, int]
+    source: str
+
+
+def resolve_fused_moe_graph_mode(
+    *, is_compiling: bool, stream_is_capturing: bool
+) -> str:
+    """Resolve selector state with symbolic compile taking precedence."""
+    if is_compiling:
+        return "compile"
+    return "capture" if stream_is_capturing else "eager"
+
+
+# Unknown shapes stay on the established upstream path until an exact policy is
+# qualified.
 _DEFAULT_THRESHOLDS: Final = MusaFusedMoeThresholds(
     gemv_max_tokens=None,
     grouped_gemm_min_tokens=None,
@@ -63,7 +88,7 @@ _DEFAULT_THRESHOLDS: Final = MusaFusedMoeThresholds(
 )
 
 
-def _s5000_fp8_shape(
+def _supported_fp8_shape(
     *,
     local_experts: int,
     w1_output_size: int,
@@ -97,8 +122,12 @@ def _s5000_fp8_shape(
     )
 
 
-def _s5000_qwen35_bf16_decode_shape(
-    *, graph_mode: str, folded_shared_expert: bool
+def _qwen35_bf16_decode_shape(
+    *,
+    multiprocessor_count: int,
+    graph_mode: str,
+    folded_shared_expert: bool,
+    max_num_seqs: int | None = None,
 ) -> MusaFusedMoeShape:
     """TP4-local Qwen3.5/3.6 BF16 decode shape."""
 
@@ -107,7 +136,7 @@ def _s5000_qwen35_bf16_decode_shape(
 
     return MusaFusedMoeShape(
         device_capability=(3, 1),
-        multiprocessor_count=60,
+        multiprocessor_count=multiprocessor_count,
         local_experts=experts,
         w1_output_size=256,
         w2_input_size=128,
@@ -124,10 +153,11 @@ def _s5000_qwen35_bf16_decode_shape(
         w2_scale_shape=(),
         gemv_block="auto",
         graph_mode=graph_mode,
+        max_num_seqs=max_num_seqs,
     )
 
 
-def _s5000_bf16_shape(
+def _supported_bf16_shape(
     *,
     local_experts: int,
     w1_output_size: int,
@@ -136,7 +166,7 @@ def _s5000_bf16_shape(
     top_k: int,
     graph_mode: str,
 ) -> MusaFusedMoeShape:
-    """Generic S5000 BF16 decode shape for independently calibrated models."""
+    """Generic BF16 decode shape for the supported architecture."""
 
     return MusaFusedMoeShape(
         device_capability=(3, 1),
@@ -172,13 +202,11 @@ def _thresholds(
     )
 
 
-# Exact entries are keyed by the actual per-rank kernel shape. These S5000
-# entries use the worst boundary across balanced, unique-random, and hot routes
-# with three independent seeds. Capture entries additionally passed eight
-# bitwise-equal CUDAGraph replays. Unknown shapes remain on the established
+# Exact entries are keyed by the actual per-rank kernel shape. Qualification
+# receipts are retained out of tree. Unknown shapes remain on the established
 # base path, which may itself select the large-M DeepGEMM prefill backend.
 _CALIBRATED_THRESHOLDS: Final[dict[MusaFusedMoeShape, MusaFusedMoeThresholds]] = {
-    _s5000_fp8_shape(
+    _supported_fp8_shape(
         local_experts=256,
         w1_output_size=256,
         w2_input_size=128,
@@ -191,13 +219,13 @@ _CALIBRATED_THRESHOLDS: Final[dict[MusaFusedMoeShape, MusaFusedMoeThresholds]] =
     ): _thresholds(
         gemv_max_tokens=13,
         grouped_gemm_min_tokens=None,
-        source=f"s5000-mp60-20260721-e256-n256-k2048-{graph_mode}-dense-v5",
+        source=f"mp60-e256-n256-k2048-{graph_mode}-dense-v5",
     )
     for graph_mode in ("eager", "capture")
 }
 _CALIBRATED_THRESHOLDS.update(
     {
-        _s5000_fp8_shape(
+        _supported_fp8_shape(
             local_experts=256,
             w1_output_size=512,
             w2_input_size=256,
@@ -210,14 +238,64 @@ _CALIBRATED_THRESHOLDS.update(
         ): _thresholds(
             gemv_max_tokens=5,
             grouped_gemm_min_tokens=None,
-            source=f"s5000-mp60-20260721-e256-n512-k4096-{graph_mode}-block32-dense-v5",
+            source=f"mp60-e256-n512-k4096-{graph_mode}-block32-dense-v5",
         )
         for graph_mode in ("eager", "capture")
     }
 )
 _CALIBRATED_THRESHOLDS.update(
     {
-        _s5000_fp8_shape(
+        _qwen35_bf16_decode_shape(
+            multiprocessor_count=48,
+            graph_mode=graph_mode,
+            folded_shared_expert=True,
+            max_num_seqs=max_num_seqs,
+        ): _thresholds(
+            # Keep the graph-static bucket in the key so a graph compiled for
+            # M<=8 is not reused for a larger request batch.
+            gemv_max_tokens=8,
+            grouped_gemm_min_tokens=None,
+            source=(
+                f"mp48-qwen35-bf16-e257-n256-k2048-v128-"
+                f"{graph_mode}-maxseq{max_num_seqs}-route-policy-v1"
+            ),
+        )
+        for graph_mode in ("eager", "capture")
+        for max_num_seqs in (
+            (None,) if graph_mode == "eager" else MP48_QWEN35_CALIBRATED_DECODE_BUCKETS
+        )
+    }
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
+        _qwen35_bf16_decode_shape(
+            multiprocessor_count=56,
+            graph_mode=graph_mode,
+            folded_shared_expert=folded_shared_expert,
+            max_num_seqs=max_num_seqs,
+        ): _thresholds(
+            # Register the conservative route-invariant boundary only for an
+            # engine whose graph-static max_num_seqs cannot cross it. Selecting
+            # from replay-time M alone can bake the small-M arm into a graph
+            # reused by larger batches.
+            gemv_max_tokens=4,
+            grouped_gemm_min_tokens=None,
+            source=(
+                f"mp56-qwen35-bf16-e"
+                f"{257 if folded_shared_expert else 256}-n256-k2048-v128-"
+                f"{graph_mode}-maxseq{max_num_seqs}-route-policy-v2"
+            ),
+        )
+        for graph_mode in ("eager", "capture")
+        for folded_shared_expert in (True,)
+        # These engine profiles are also reused only for an exact full, uniform
+        # graph descriptor. Raw replay-time M is never a selector key.
+        for max_num_seqs in MP56_QWEN35_CALIBRATED_DECODE_BUCKETS
+    }
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
+        _supported_fp8_shape(
             local_experts=256,
             w1_output_size=512,
             w2_input_size=256,
@@ -230,14 +308,14 @@ _CALIBRATED_THRESHOLDS.update(
         ): _thresholds(
             gemv_max_tokens=5,
             grouped_gemm_min_tokens=None,
-            source=f"s5000-mp60-20260721-e256-n512-k4096-{graph_mode}-block16-dense-v5",
+            source=f"mp60-e256-n512-k4096-{graph_mode}-block16-dense-v5",
         )
         for graph_mode in ("eager", "capture")
     }
 )
 _CALIBRATED_THRESHOLDS.update(
     {
-        _s5000_fp8_shape(
+        _supported_fp8_shape(
             local_experts=64,
             w1_output_size=2816,
             w2_input_size=1408,
@@ -248,15 +326,14 @@ _CALIBRATED_THRESHOLDS.update(
             gemv_block="auto",
             graph_mode=graph_mode,
         ): _thresholds(
-            # Capture-mode A/B on S5000 shows a GEMV win at M=1, but a
-            # regression at M=2/3.  Keep the wider eager boundary and use
-            # GEMV only for the single-token decode case under capture.
+            # The capture policy uses GEMV only for the single-token decode
+            # case, while eager mode retains the wider qualified boundary.
             gemv_max_tokens=3 if graph_mode == "eager" else 1,
             # No production-safe grouped crossover is currently established
             # for this shape; retain upstream for the large-token regime.
             grouped_gemm_min_tokens=None,
             source=(
-                f"s5000-mp60-20260721-e64-n2816-k2048-{graph_mode}-"
+                f"mp60-e64-n2816-k2048-{graph_mode}-"
                 f"{'m1-' if graph_mode == 'capture' else ''}serving-gated"
             ),
         )
@@ -265,18 +342,21 @@ _CALIBRATED_THRESHOLDS.update(
 )
 _CALIBRATED_THRESHOLDS.update(
     {
-        _s5000_qwen35_bf16_decode_shape(
+        _qwen35_bf16_decode_shape(
+            multiprocessor_count=60,
             graph_mode=graph_mode,
             folded_shared_expert=folded_shared_expert,
         ): _thresholds(
-            # Exact TP4-local Qwen crossover: M=1/2/4/8/12 are faster on
-            # native GEMV, while M>=16 is not a stable production win.
-            gemv_max_tokens=12,
+            # The folded profile uses the conservative M<=4 boundary; the
+            # unfolded profile retains its independently qualified M<=12
+            # boundary.
+            gemv_max_tokens=4 if folded_shared_expert else 12,
             grouped_gemm_min_tokens=None,
             source=(
-                f"s5000-mp60-20260806-qwen35-36-bf16-e"
+                f"mp60-qwen35-36-bf16-e"
                 f"{257 if folded_shared_expert else 256}-"
-                f"n256-k2048-v128-{graph_mode}-crossover-v1"
+                f"n256-k2048-v128-{graph_mode}-"
+                f"route-policy-{'v2' if folded_shared_expert else 'v1'}"
             ),
         )
         for graph_mode in ("eager", "capture")
@@ -285,7 +365,7 @@ _CALIBRATED_THRESHOLDS.update(
 )
 _CALIBRATED_THRESHOLDS.update(
     {
-        _s5000_bf16_shape(
+        _supported_bf16_shape(
             local_experts=257,
             w1_output_size=256,
             w2_input_size=128,
@@ -295,12 +375,65 @@ _CALIBRATED_THRESHOLDS.update(
         ): _thresholds(
             gemv_max_tokens=10,
             grouped_gemm_min_tokens=None,
+            source=(f"mp60-qwen35-bf16-folded-" f"e257-n256-k3072-{graph_mode}"),
+        )
+        for graph_mode in ("eager", "capture")
+    }
+)
+
+# Keep tile selection independent from backend crossover selection. A kernel
+# may already be production-reachable while only one stage and one exact token
+# bucket benefits from a different AOT block. Unknown keys retain the caller's
+# established per-stage blocks; there is no nearest-MP or nearest-shape match.
+_CALIBRATED_GEMV_STAGE_TACTICS: Final[
+    dict[tuple[MusaFusedMoeShape, int], MusaFusedMoeGemvStageTactic]
+] = {
+    (
+        _supported_fp8_shape(
+            local_experts=256,
+            w1_output_size=512,
+            w2_input_size=256,
+            hidden_size=4096,
+            top_k=6,
+            w1_scale_shape=(256, 4, 32),
+            w2_scale_shape=(256, 32, 2),
+            gemv_block="16x8",
+            graph_mode="eager",
+        ),
+        2,
+    ): MusaFusedMoeGemvStageTactic(
+        w1_block=(8, 16),
+        w2_block=(16, 8),
+        source="mp60-dsv4-fp8-m2-route-policy-v1",
+    )
+}
+
+# Keep the MP48 32x4 stage map independent from the backend threshold: if a
+# future qualification changes the threshold, the stage tile still requires
+# its own policy entry.
+_CALIBRATED_GEMV_STAGE_TACTICS.update(
+    {
+        (
+            _qwen35_bf16_decode_shape(
+                multiprocessor_count=48,
+                graph_mode=graph_mode,
+                folded_shared_expert=True,
+                max_num_seqs=max_num_seqs,
+            ),
+            num_tokens,
+        ): MusaFusedMoeGemvStageTactic(
+            w1_block=(32, 4),
+            w2_block=(32, 4),
             source=(
-                f"s5000-mp60-20260806-qwen35-bf16-folded-"
-                f"e257-n256-k3072-{graph_mode}"
+                f"mp48-qwen35-bf16-e257-m{num_tokens}-32x4-"
+                f"{graph_mode}-maxseq{max_num_seqs}-route-policy-v1"
             ),
         )
         for graph_mode in ("eager", "capture")
+        for max_num_seqs in (
+            (None,) if graph_mode == "eager" else MP48_QWEN35_CALIBRATED_DECODE_BUCKETS
+        )
+        for num_tokens in range(1, 9)
     }
 )
 
@@ -314,6 +447,17 @@ _CALIBRATED_DIMENSIONS: Final = frozenset(
     )
     for shape in _CALIBRATED_THRESHOLDS
 )
+_PROFILED_SHAPES: Final = frozenset(
+    replace(shape, max_num_seqs=None)
+    for shape in _CALIBRATED_THRESHOLDS
+    if shape.max_num_seqs is not None
+)
+
+
+def _uses_graph_bucket_profile(shape: MusaFusedMoeShape) -> bool:
+    """Whether ``shape`` requires an exact calibrated graph descriptor."""
+    lookup_shape = replace(shape, graph_bucket=None)
+    return replace(lookup_shape, max_num_seqs=None) in _PROFILED_SHAPES
 
 
 def parse_dispatch_backend(value: str | None = None) -> MusaFusedMoeBackend:
@@ -341,7 +485,111 @@ def parse_dispatch_backend(value: str | None = None) -> MusaFusedMoeBackend:
 
 
 def thresholds_for_shape(shape: MusaFusedMoeShape) -> MusaFusedMoeThresholds:
-    return _CALIBRATED_THRESHOLDS.get(shape, _DEFAULT_THRESHOLDS)
+    lookup_shape = replace(shape, graph_bucket=None)
+    profiled_shape = replace(lookup_shape, max_num_seqs=None)
+
+    if profiled_shape in _PROFILED_SHAPES and shape.graph_bucket is not None:
+        graph_bucket = shape.graph_bucket
+        # Eager execution can use the engine-static profile because no graph is
+        # reused across runtime token counts. The pinned vLLM NONE descriptor
+        # carries the exact token count but deliberately has no request count.
+        if (
+            shape.graph_mode == "eager"
+            and graph_bucket.present
+            and graph_bucket.runtime_mode == "NONE"
+            and graph_bucket.has_lora is False
+            and graph_bucket.num_active_loras == 0
+            and graph_bucket.num_tokens is not None
+            and graph_bucket.num_tokens > 0
+            and graph_bucket.num_reqs is None
+            and graph_bucket.uniform is False
+            and (
+                shape.max_num_seqs is None
+                or graph_bucket.num_tokens <= shape.max_num_seqs
+            )
+        ):
+            return _CALIBRATED_THRESHOLDS.get(lookup_shape, _DEFAULT_THRESHOLDS)
+
+        # Graph replay is calibrated only for full, uniform, one-token decode.
+        # Speculative and piecewise descriptors retain the established backend.
+        if (
+            not graph_bucket.present
+            or graph_bucket.runtime_mode != "FULL"
+            or graph_bucket.has_lora is not False
+            or graph_bucket.num_active_loras != 0
+            or not graph_bucket.uniform
+            or graph_bucket.num_reqs is None
+            or graph_bucket.num_tokens != graph_bucket.num_reqs
+            or graph_bucket.num_reqs <= 0
+            or (
+                shape.max_num_seqs is not None
+                and graph_bucket.num_reqs > shape.max_num_seqs
+            )
+        ):
+            return _DEFAULT_THRESHOLDS
+        thresholds = _CALIBRATED_THRESHOLDS.get(
+            replace(lookup_shape, max_num_seqs=graph_bucket.num_reqs)
+        )
+        return thresholds or _DEFAULT_THRESHOLDS
+
+    thresholds = _CALIBRATED_THRESHOLDS.get(lookup_shape)
+    if thresholds is not None:
+        return thresholds
+    if lookup_shape.max_num_seqs is not None:
+        # Existing hardware/shape policies predate the scheduler-profile key.
+        # Fall back only to an explicitly calibrated generic entry; MP56 has
+        # no generic entry and requires an exact graph descriptor or profile.
+        thresholds = _CALIBRATED_THRESHOLDS.get(
+            replace(lookup_shape, max_num_seqs=None)
+        )
+        if thresholds is not None:
+            return thresholds
+    return _DEFAULT_THRESHOLDS
+
+
+def gemv_stage_tactic_for_shape(
+    *, shape: MusaFusedMoeShape, num_tokens: int
+) -> MusaFusedMoeGemvStageTactic | None:
+    """Return an exact calibrated stage tactic without probing the device.
+
+    Scheduler-profile and ForwardContext fields gate backend eligibility, but
+    do not change the already-selected GEMV kernel's block geometry. The
+    tactic catalog remains exact for hardware, tensor contract, token count,
+    and eager/capture mode.
+    """
+
+    max_num_seqs = None
+    if shape.graph_mode == "capture":
+        graph_bucket = shape.graph_bucket
+        # Capture tactics are qualified against exact FULL decode buckets.
+        # Project the validated bucket into the catalog key instead of using
+        # the engine-wide max_num_seqs value, which is identical for several
+        # captured token counts. Direct or malformed capture callers fail
+        # closed even if they happen to match the tensor dimensions.
+        if (
+            graph_bucket is None
+            or not graph_bucket.present
+            or graph_bucket.runtime_mode != "FULL"
+            or graph_bucket.has_lora is not False
+            or graph_bucket.num_active_loras != 0
+            or not graph_bucket.uniform
+            or graph_bucket.num_tokens != num_tokens
+            or graph_bucket.num_reqs != num_tokens
+            or graph_bucket.num_reqs <= 0
+            or (
+                shape.max_num_seqs is not None
+                and graph_bucket.num_reqs > shape.max_num_seqs
+            )
+        ):
+            return None
+        max_num_seqs = graph_bucket.num_reqs
+
+    lookup_shape = replace(
+        shape,
+        max_num_seqs=max_num_seqs,
+        graph_bucket=None,
+    )
+    return _CALIBRATED_GEMV_STAGE_TACTICS.get((lookup_shape, num_tokens))
 
 
 def has_calibrated_dimensions(
@@ -378,6 +626,59 @@ def select_fused_moe_backend(
     Forced modes are diagnostic controls, not correctness bypasses: if a
     requested backend is ineligible the established upstream path is used.
     """
+
+    # Backend overrides are runtime diagnostics. They must not specialize a
+    # native backend while Dynamo is still tracing symbolic inputs.
+    if shape.graph_mode == "compile":
+        return MusaFusedMoeBackend.UPSTREAM
+    if shape.graph_bucket is None and (
+        stream_is_capturing
+        or (_uses_graph_bucket_profile(shape) and shape.graph_mode == "capture")
+    ):
+        # Capture without ForwardContext has no graph-static specialization
+        # identity. Reserve the legacy missing-context fallback for eager
+        # direct-operator callers only.
+        return MusaFusedMoeBackend.UPSTREAM
+    if shape.graph_bucket is not None:
+        graph_bucket = shape.graph_bucket
+        # Invalid API/context projections and LoRA-specialized descriptors are
+        # unsafe for every calibrated native kernel.
+        if (
+            not graph_bucket.present
+            or graph_bucket.has_lora is not False
+            or graph_bucket.num_active_loras != 0
+            or graph_bucket.runtime_mode not in {"NONE", "PIECEWISE", "FULL"}
+        ):
+            return MusaFusedMoeBackend.UPSTREAM
+        # FULL descriptors are graph-static for every calibrated MP. Reject
+        # speculative/nonuniform or mismatched callers globally; only legacy
+        # NONE/PIECEWISE behavior remains an MP60 compatibility exception.
+        if graph_bucket.runtime_mode == "FULL" and (
+            graph_bucket.num_tokens != num_tokens
+            or not graph_bucket.uniform
+            or graph_bucket.num_reqs != graph_bucket.num_tokens
+        ):
+            return MusaFusedMoeBackend.UPSTREAM
+        # Only the new MP56 profile was calibrated by exact FULL decode graph
+        # buckets. Existing MP60 entries are separately keyed as eager/capture
+        # and were calibrated under vLLM's legacy NONE/PIECEWISE descriptor
+        # semantics; this PR must not silently disable those padded paths.
+        if _uses_graph_bucket_profile(shape):
+            eager_none = (
+                shape.graph_mode == "eager"
+                and graph_bucket.runtime_mode == "NONE"
+                and graph_bucket.num_tokens == num_tokens
+                and graph_bucket.num_reqs is None
+                and graph_bucket.uniform is False
+            )
+            full_decode = (
+                graph_bucket.num_tokens == num_tokens
+                and graph_bucket.runtime_mode == "FULL"
+                and graph_bucket.uniform
+                and graph_bucket.num_reqs == graph_bucket.num_tokens
+            )
+            if not eager_none and not full_decode:
+                return MusaFusedMoeBackend.UPSTREAM
 
     if requested == MusaFusedMoeBackend.GEMV:
         # Forced GEMV remains useful for eager diagnostics, but graph capture
@@ -428,10 +729,13 @@ def select_fused_moe_backend(
 __all__ = [
     "MUSA_FUSED_MOE_DISPATCH_ENV",
     "MusaFusedMoeBackend",
+    "MusaFusedMoeGemvStageTactic",
     "MusaFusedMoeShape",
     "MusaFusedMoeThresholds",
+    "gemv_stage_tactic_for_shape",
     "has_calibrated_dimensions",
     "parse_dispatch_backend",
+    "resolve_fused_moe_graph_mode",
     "select_fused_moe_backend",
     "thresholds_for_shape",
 ]

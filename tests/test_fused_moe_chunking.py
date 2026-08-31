@@ -102,6 +102,55 @@ def test_musa_fused_experts_preserves_output_shape_across_chunks(monkeypatch):
     assert torch.all(result[chunk_size:] == 23.0)
 
 
+def test_musa_fused_experts_applies_stage_specific_gemv_blocks(monkeypatch):
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    blocks = []
+
+    def fake_musa_fused_gemv_moe(
+        _input,
+        _weight,
+        output,
+        _bias,
+        _scale,
+        _topk_weights,
+        topk_ids,
+        *_args,
+        use_swigelu,
+        block_n,
+        block_k,
+    ):
+        blocks.append((use_swigelu, block_n, block_k))
+        tokens = topk_ids.shape[0]
+        if use_swigelu:
+            output[:tokens].fill_(1)
+        else:
+            output[:tokens].fill_(2)
+
+    monkeypatch.setattr(
+        fused_moe.musa_ops,
+        "musa_fused_gemv_moe",
+        fake_musa_fused_gemv_moe,
+    )
+    monkeypatch.setattr(
+        fused_moe.ops,
+        "moe_sum",
+        lambda intermediate, output: output.copy_(intermediate.sum(dim=1)),
+    )
+
+    fused_moe.fused_experts_impl(
+        hidden_states=torch.zeros(2, 4),
+        w1=torch.zeros(2, 8, 4),
+        w2=torch.zeros(2, 4, 4),
+        topk_weights=torch.ones(2, 1),
+        topk_ids=torch.zeros(2, 1, dtype=torch.int64),
+        _gemv_block=(16, 8),
+        _gemv_blocks=((8, 16), (16, 8)),
+    )
+
+    assert blocks == [(True, 8, 16), (False, 16, 8)]
+
+
 def test_musa_fused_moe_shape_inventory_is_disabled_by_default(monkeypatch, tmp_path):
     from vllm_musa.model_executor.layers.fused_moe import fused_moe
 
@@ -500,6 +549,25 @@ def test_musa_capture_probe_fails_safe(monkeypatch):
     assert fused_moe._musa_stream_is_capturing() is True
 
 
+def test_gemv_block_environment_override_preempts_stage_tactic(monkeypatch):
+    from types import SimpleNamespace
+
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    monkeypatch.setenv("VLLM_MUSA_GEMV_MOE_BLOCK", "32x4")
+    monkeypatch.setattr(
+        fused_moe,
+        "gemv_stage_tactic_for_shape",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("production tactic must not be queried")
+        ),
+    )
+    shape = SimpleNamespace(gemv_block="16x8")
+
+    assert fused_moe._requested_gemv_block(shape) == (0, 0)
+    assert fused_moe._requested_gemv_stage_tactic(shape, 2) is None
+
+
 def test_musa_dispatcher_routes_forced_backends(monkeypatch):
     from vllm_musa.model_executor.layers.fused_moe import fused_moe
 
@@ -545,22 +613,30 @@ def test_musa_dispatcher_routes_forced_backends(monkeypatch):
     assert grouped_calls[0]["inplace"] is False
 
 
-@pytest.mark.parametrize(("tokens", "expect_gemv"), [(5, True), (6, False)])
+@pytest.mark.parametrize(
+    ("tokens", "stream_is_capturing", "expect_gemv", "expected_stage_blocks"),
+    [
+        (2, False, True, ((8, 16), (16, 8))),
+        (2, True, False, None),
+        (5, False, True, None),
+        (6, False, False, None),
+    ],
+)
 def test_musa_dispatcher_auto_preserves_dsv4_fp8_gemv_threshold(
-    monkeypatch, tokens, expect_gemv
+    monkeypatch,
+    tokens,
+    stream_is_capturing,
+    expect_gemv,
+    expected_stage_blocks,
 ):
     from vllm_musa.model_executor.layers.fused_moe import fused_moe
 
     monkeypatch.delenv("VLLM_MUSA_GEMV_MOE_BLOCK", raising=False)
     kwargs = _deepgemm_gate_kwargs(torch)
     kwargs.update(
-        hidden_states=torch.empty(
-            (tokens, 4096), device="meta", dtype=torch.bfloat16
-        ),
+        hidden_states=torch.empty((tokens, 4096), device="meta", dtype=torch.bfloat16),
         topk_ids=torch.empty((tokens, 6), device="meta", dtype=torch.int32),
-        topk_weights=torch.empty(
-            (tokens, 6), device="meta", dtype=torch.float32
-        ),
+        topk_weights=torch.empty((tokens, 6), device="meta", dtype=torch.float32),
     )
     native_output = torch.empty((1,), device="meta")
     upstream_output = torch.empty((2,), device="meta")
@@ -576,7 +652,11 @@ def test_musa_dispatcher_auto_preserves_dsv4_fp8_gemv_threshold(
         "_musa_device_fingerprint",
         lambda *_args, **_kwargs: ((3, 1), 60),
     )
-    monkeypatch.setattr(fused_moe, "_musa_stream_is_capturing", lambda: True)
+    monkeypatch.setattr(
+        fused_moe,
+        "_musa_stream_is_capturing",
+        lambda: stream_is_capturing,
+    )
     monkeypatch.setattr(
         fused_moe,
         "fused_experts_impl",
@@ -595,11 +675,14 @@ def test_musa_dispatcher_auto_preserves_dsv4_fp8_gemv_threshold(
     if expect_gemv:
         assert result is native_output
         assert len(native_calls) == 1
-        assert native_calls[0][1] == {
+        expected_kwargs = {
             "inplace": False,
             "_allow_deepgemm_prefill": False,
             "_gemv_block": (16, 8),
         }
+        if expected_stage_blocks is not None:
+            expected_kwargs["_gemv_blocks"] = expected_stage_blocks
+        assert native_calls[0][1] == expected_kwargs
         assert not upstream_calls
     else:
         assert result is upstream_output
@@ -821,9 +904,7 @@ def test_musa_dispatcher_explicit_upstream_bypasses_deepgemm(monkeypatch):
 
 def _qwen36_bf16_moe_meta_inputs(tokens: int):
     return {
-        "hidden_states": torch.empty(
-            tokens, 4096, dtype=torch.bfloat16, device="meta"
-        ),
+        "hidden_states": torch.empty(tokens, 4096, dtype=torch.bfloat16, device="meta"),
         "w1": torch.empty(257, 2048, 4096, dtype=torch.bfloat16, device="meta"),
         "w2": torch.empty(257, 4096, 1024, dtype=torch.bfloat16, device="meta"),
     }

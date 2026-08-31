@@ -544,7 +544,9 @@ void check_fused_inputs(ffi::TensorView input, ffi::TensorView residual, ffi::Te
 }
 
 template <typename T, bool GEMMA>
-void launch_rmsnorm(ffi::TensorView input, ffi::TensorView weight, ffi::TensorView out, float eps) {
+void launch_rmsnorm(ffi::TensorView input, ffi::TensorView weight,
+                    ffi::TensorView out, float eps,
+                    int requested_threads) {
   const int rows = static_cast<int>(input.size(0));
   const int hidden = static_cast<int>(input.size(1));
   const int64_t input_row_stride = static_cast<int64_t>(input.stride(0));
@@ -553,7 +555,7 @@ void launch_rmsnorm(ffi::TensorView input, ffi::TensorView weight, ffi::TensorVi
   musaStream_t stream = get_stream(input.device());
 
   if ((hidden % 8) == 0 && hidden <= 32768) {
-    if (rows <= 16 && hidden == 1024) {
+    if (requested_threads == 0 && rows <= 16 && hidden == 1024) {
       constexpr int threads = 128;
       constexpr int smem_bytes = 4 * static_cast<int>(sizeof(float));
       rmsnorm_small_h_one_vec_register_kernel<T, GEMMA, 1024, 4><<<rows, threads, smem_bytes, stream>>>(
@@ -568,7 +570,7 @@ void launch_rmsnorm(ffi::TensorView input, ffi::TensorView weight, ffi::TensorVi
           eps);
       return;
     }
-    if (rows <= 16 && hidden == 2048) {
+    if (requested_threads == 0 && rows <= 16 && hidden == 2048) {
       constexpr int threads = 256;
       constexpr int smem_bytes = 8 * static_cast<int>(sizeof(float));
       rmsnorm_small_h_one_vec_register_kernel<T, GEMMA, 2048, 8><<<rows, threads, smem_bytes, stream>>>(
@@ -583,7 +585,8 @@ void launch_rmsnorm(ffi::TensorView input, ffi::TensorView weight, ffi::TensorVi
           eps);
       return;
     }
-    const int threads = rmsnorm_block_threads(rows, hidden);
+    const int threads =
+        requested_threads > 0 ? requested_threads : rmsnorm_block_threads(rows, hidden);
     if (hidden <= 8192) {
       rmsnorm_vec8_kernel<T, GEMMA, true><<<rows, threads, cached_vec8_shared_bytes(hidden, threads, 8192), stream>>>(
           static_cast<const T*>(input.data_ptr()),
@@ -625,7 +628,8 @@ void launch_rmsnorm(ffi::TensorView input, ffi::TensorView weight, ffi::TensorVi
 
 template <typename T, typename WeightT, bool GEMMA>
 void launch_fused_add_rmsnorm(ffi::TensorView input, ffi::TensorView residual,
-                              ffi::TensorView weight, float eps) {
+                              ffi::TensorView weight, float eps,
+                              int requested_threads) {
   // Match the proven plain-RMSNorm cache limit: at H8192 this uses about 33 KiB
   // of dynamic shared memory. Larger vec8 shapes re-read the stored residual
   // and need only the block-reduction workspace.
@@ -638,7 +642,8 @@ void launch_fused_add_rmsnorm(ffi::TensorView input, ffi::TensorView residual,
   musaStream_t stream = get_stream(input.device());
 
   if ((hidden % 8) == 0 && hidden <= 32768) {
-    const int threads = fused_block_threads(hidden);
+    const int threads =
+        requested_threads > 0 ? requested_threads : fused_block_threads(hidden);
     if (hidden <= kCachedHiddenLimit) {
       fused_add_rmsnorm_vec8_kernel<T, WeightT, GEMMA, true>
           <<<rows, threads,
@@ -671,20 +676,42 @@ void launch_fused_add_rmsnorm(ffi::TensorView input, ffi::TensorView residual,
   }
 }
 
-void sgl_musa_rmsnorm(ffi::TensorView input, ffi::TensorView weight, ffi::TensorView out, double eps, bool gemma) {
+void check_requested_threads(ffi::TensorView input, int64_t requested_threads) {
+  TVM_FFI_ICHECK(
+      requested_threads == 0 ||
+      (requested_threads >= 32 && requested_threads <= 1024 &&
+       requested_threads % 32 == 0))
+      << "requested RMSNorm threads must be zero or a multiple of 32 in "
+         "[32, 1024]";
+  if (requested_threads != 0) {
+    TVM_FFI_ICHECK_EQ(input.size(1) % 8, 0)
+        << "requested RMSNorm threads require the vec8 kernel";
+    TVM_FFI_ICHECK_LE(input.size(1), 32768)
+        << "requested RMSNorm threads require the vec8 kernel";
+  }
+}
+
+void sgl_musa_rmsnorm(ffi::TensorView input, ffi::TensorView weight,
+                      ffi::TensorView out, double eps, bool gemma,
+                      int64_t requested_threads) {
   check_rmsnorm_inputs(input, weight, out);
+  check_requested_threads(input, requested_threads);
   ffi::MUSADeviceGuard device_guard(input.device().device_id);
   if (dtype_equal(input.dtype(), dl_float16)) {
     if (gemma) {
-      launch_rmsnorm<half, true>(input, weight, out, static_cast<float>(eps));
+      launch_rmsnorm<half, true>(input, weight, out, static_cast<float>(eps),
+                                 requested_threads);
     } else {
-      launch_rmsnorm<half, false>(input, weight, out, static_cast<float>(eps));
+      launch_rmsnorm<half, false>(input, weight, out, static_cast<float>(eps),
+                                  requested_threads);
     }
   } else if (dtype_equal(input.dtype(), dl_bfloat16)) {
     if (gemma) {
-      launch_rmsnorm<__mt_bfloat16, true>(input, weight, out, static_cast<float>(eps));
+      launch_rmsnorm<__mt_bfloat16, true>(
+          input, weight, out, static_cast<float>(eps), requested_threads);
     } else {
-      launch_rmsnorm<__mt_bfloat16, false>(input, weight, out, static_cast<float>(eps));
+      launch_rmsnorm<__mt_bfloat16, false>(
+          input, weight, out, static_cast<float>(eps), requested_threads);
     }
   } else {
     TVM_FFI_THROW(ValueError) << "sgl_musa_rmsnorm only supports fp16/bf16";
@@ -694,40 +721,46 @@ void sgl_musa_rmsnorm(ffi::TensorView input, ffi::TensorView weight, ffi::Tensor
 }
 
 void sgl_musa_fused_add_rmsnorm(
-    ffi::TensorView input, ffi::TensorView residual, ffi::TensorView weight, double eps, bool gemma) {
+    ffi::TensorView input, ffi::TensorView residual, ffi::TensorView weight,
+    double eps, bool gemma, int64_t requested_threads) {
   check_fused_inputs(input, residual, weight);
+  check_requested_threads(input, requested_threads);
   ffi::MUSADeviceGuard device_guard(input.device().device_id);
   if (dtype_equal(input.dtype(), dl_float16)) {
     if (dtype_equal(weight.dtype(), dl_float32)) {
       if (gemma) {
         launch_fused_add_rmsnorm<half, float, true>(input, residual, weight,
-                                                    static_cast<float>(eps));
+                                                    static_cast<float>(eps),
+                                                    requested_threads);
       } else {
         launch_fused_add_rmsnorm<half, float, false>(input, residual, weight,
-                                                     static_cast<float>(eps));
+                                                     static_cast<float>(eps),
+                                                     requested_threads);
       }
     } else if (gemma) {
       launch_fused_add_rmsnorm<half, half, true>(input, residual, weight,
-                                                 static_cast<float>(eps));
+                                                 static_cast<float>(eps),
+                                                 requested_threads);
     } else {
       launch_fused_add_rmsnorm<half, half, false>(input, residual, weight,
-                                                  static_cast<float>(eps));
+                                                  static_cast<float>(eps),
+                                                  requested_threads);
     }
   } else if (dtype_equal(input.dtype(), dl_bfloat16)) {
     if (dtype_equal(weight.dtype(), dl_float32)) {
       if (gemma) {
         launch_fused_add_rmsnorm<__mt_bfloat16, float, true>(
-            input, residual, weight, static_cast<float>(eps));
+            input, residual, weight, static_cast<float>(eps), requested_threads);
       } else {
         launch_fused_add_rmsnorm<__mt_bfloat16, float, false>(
-            input, residual, weight, static_cast<float>(eps));
+            input, residual, weight, static_cast<float>(eps), requested_threads);
       }
     } else if (gemma) {
       launch_fused_add_rmsnorm<__mt_bfloat16, __mt_bfloat16, true>(
-          input, residual, weight, static_cast<float>(eps));
+          input, residual, weight, static_cast<float>(eps), requested_threads);
     } else {
       launch_fused_add_rmsnorm<__mt_bfloat16, __mt_bfloat16, false>(
-          input, residual, weight, static_cast<float>(eps));
+          input, residual, weight, static_cast<float>(eps), requested_threads);
     }
   } else {
     TVM_FFI_THROW(ValueError)

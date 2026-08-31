@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
-
 
 MODULE_PATH = (
     Path(__file__).resolve().parents[1]
@@ -11,9 +11,7 @@ MODULE_PATH = (
     / "fp8_einsum.py"
 )
 GEMV_PATH = Path(__file__).resolve().parents[1] / "csrc" / "musa" / "gemv.mu"
-CUSTOM_OPS_PATH = (
-    Path(__file__).resolve().parents[1] / "vllm_musa" / "_custom_ops.py"
-)
+CUSTOM_OPS_PATH = Path(__file__).resolve().parents[1] / "vllm_musa" / "_custom_ops.py"
 
 
 def _module_tree() -> ast.Module:
@@ -28,8 +26,7 @@ def test_o_proj_uses_fixed_deepgemm_threshold() -> None:
         for node in tree.body
         if isinstance(node, ast.Assign)
         and any(
-            isinstance(target, ast.Name)
-            and target.id == "_DEEPGEMM_MIN_TOKENS"
+            isinstance(target, ast.Name) and target.id == "_DEEPGEMM_MIN_TOKENS"
             for target in node.targets
         )
     )
@@ -84,6 +81,13 @@ def test_o_proj_gemv_uses_calibrated_capture_ladder_tiles() -> None:
     assert "hidden_size != 4096" in helper
     assert "nr_n != 1024" in helper
     assert "scale_k_group_tile != 128" in helper
+    assert "int num_mp" in helper
+    assert "num_mp == 48" in helper
+    assert "num_mp == 56" in helper
+    assert "num_mp == 60" in helper
+    assert "BlockConfig{8, 32" in helper
+    assert "BlockConfig{16, 8" in helper
+    assert "BlockConfig{16, 16" in helper
     assert "case 1:" in helper and "case 2:" in helper and "case 8:" in helper
     assert "BlockConfig{4, 32" in helper
     assert "case 4:" in helper and "case 32:" in helper and "case 64:" in helper
@@ -96,6 +100,50 @@ def test_o_proj_gemv_uses_calibrated_capture_ladder_tiles() -> None:
     assert dispatch.index("SelectDeepSeekV4Fp8OProjTile(") < dispatch.index(
         "ParseForcedBlockConfig(&forced_config)"
     )
+    assert "current_arch,\n            num_mp," in dispatch
+
+
+def test_o_proj_gemv_mp_tile_table_is_exact() -> None:
+    source = GEMV_PATH.read_text(encoding="utf-8")
+    helper = source[
+        source.index("bool SelectDeepSeekV4Fp8OProjTile(") : source.index(
+            "bool SelectDeepSeekV4Fp8SharedGateUpTile("
+        )
+    ]
+    expected = {
+        48: {1: (8, 32), 8: (16, 8), (32, 64): (32, 4)},
+        56: {8: (16, 16), 64: (32, 4)},
+        60: {8: (8, 16), 64: (32, 4)},
+    }
+    for mp, cases in expected.items():
+        next_mp = min(
+            (candidate for candidate in expected if candidate > mp), default=None
+        )
+        end = (
+            helper.index(f"    }} else if (num_mp == {next_mp}) {{")
+            if next_mp is not None
+            else helper.index("    // Preserve the original cross-MP capture ladder")
+        )
+        start_token = (
+            f"    if (num_mp == {mp}) {{"
+            if mp == 48
+            else f"    }} else if (num_mp == {mp}) {{"
+        )
+        body = helper[helper.index(start_token) : end]
+        for tokens, block in cases.items():
+            token_cases = (
+                rf"case {tokens}:"
+                if isinstance(tokens, int)
+                else "".join(rf"case {item}:\s*" for item in tokens)
+            )
+            pattern = (
+                rf"{token_cases}\s*\*config = BlockConfig\{{"
+                rf"{block[0]}, {block[1]}, 0\.f, true\}};"
+            )
+            assert re.search(pattern, body, re.DOTALL), (
+                f"MP{mp} tokens={tokens} must map to BlockConfig{block}, "
+                f"not an approximate substring"
+            )
 
 
 def test_o_proj_gemv_writes_one_group_result_directly() -> None:

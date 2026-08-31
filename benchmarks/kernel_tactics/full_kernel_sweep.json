@@ -1,0 +1,1329 @@
+{
+  "allowed_dispositions": [
+    "pending",
+    "no-tunable-seam",
+    "external-provider-excluded",
+    "non-production"
+  ],
+  "families": [
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-deepseek-v4-c4-indexer-compress-cache",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_c4_indexer_compress_cache"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/patches/series/0093-MUSA-dispatch-DeepSeek-V4-C4-indexer-compression-to-.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "non-production",
+      "id": "aot-native-deepseek-v4-combine-topk-swa-indices",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_combine_topk_swa_indices"
+      ],
+      "notes": "Registered local wrapper has no caller in the v0.28 patch series.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "non-production",
+      "id": "aot-native-deepseek-v4-compute-global-topk-indices-and-lens",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_compute_global_topk_indices_and_lens"
+      ],
+      "notes": "Registered local wrapper has no caller in the v0.28 patch series.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "non-production",
+      "id": "aot-native-deepseek-v4-dequantize-and-gather-k-cache",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_dequantize_and_gather_k_cache"
+      ],
+      "notes": "Registered local wrapper has no caller in the v0.28 patch series.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-deepseek-v4-fused-inv-rope-fp8-quant",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_fused_inv_rope_fp8_quant"
+      ],
+      "notes": "The fused inverse-rope/FP8 path has fixed launch geometry and no benchmark-safe per-call tile argument.",
+      "production_consumers": [
+        "vllm_musa/patches/series/0014-MUSA-vllm.models.deepseek_v4.attention.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "non-production",
+      "id": "aot-native-deepseek-v4-fused-q-kv-rmsnorm",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_fused_q_kv_rmsnorm"
+      ],
+      "notes": "Current DSV4 path uses qnorm/rope/KV insert instead.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-deepseek-v4-indexer-rerank-prefill",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_indexer_rerank_prefill"
+      ],
+      "notes": "Prefill rerank launch is fixed by the semantic indexer shape.",
+      "production_consumers": [
+        "vllm_musa/patches/series/0013-MUSA-vllm.model_executor.layers.sparse_attn_indexer.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-deepseek-v4-indexer-topk-decode",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_indexer_topk_decode"
+      ],
+      "notes": "Decode top-k launch is fixed by the indexer contract.",
+      "production_consumers": [
+        "vllm_musa/patches/series/0013-MUSA-vllm.model_executor.layers.sparse_attn_indexer.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-deepseek-v4-indexer-topk-prefill",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_indexer_topk_prefill"
+      ],
+      "notes": "Prefill top-k launch is fixed by the indexer contract.",
+      "production_consumers": [
+        "vllm_musa/patches/series/0013-MUSA-vllm.model_executor.layers.sparse_attn_indexer.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-deepseek-v4-mhc-pre",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_mhc_pre"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/deepseek_v4_mhc.py",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-deepseek-v4-qnorm-rope-kv-insert",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_qnorm_rope_kv_insert"
+      ],
+      "notes": "QNorm/rope/KV insertion is a fixed one-token path; changing its launch shape requires a new correctness and graph-capture design.",
+      "production_consumers": [
+        "vllm_musa/patches/series/0014-MUSA-vllm.models.deepseek_v4.attention.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "external-provider-excluded",
+      "id": "aot-native-deepseek-v4-sparse-flashmla-decode",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_sparse_flashmla_decode"
+      ],
+      "notes": "Production sparse FlashMLA is provided by MATE and excluded.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "non-production",
+      "id": "aot-native-deepseek-v4-store-sparse-kv",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_store_sparse_kv"
+      ],
+      "notes": "Current DSV4 path uses fused qnorm/rope/KV insert instead.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "non-production",
+      "id": "aot-native-deepseek-v4-topk-softplus-sqrt",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:deepseek_v4_topk_softplus_sqrt"
+      ],
+      "notes": "No v0.28 production caller was found.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_fp8_quant_groups.py",
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-fused-add-rms-norm-per-token-group-fp8-quant",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:fused_add_rms_norm_per_token_group_fp8_quant"
+      ],
+      "notes": "The production kernel is fixed to H=4096, group size 128, and kThreads=512. The catalog's former block_threads/vector_width labels were hypotheses, not a real ABI or benchmark seam.",
+      "production_consumers": [
+        "vllm_musa/model_executor/kernels/linear/scaled_mm/deep_gemm.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/qwen_dsv4_rmsnorm_shapes.json",
+        "benchmarks/kernel_tactics/qwen_dsv4_fp8_quant_shapes.json"
+      ],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-glm52-indexer-topk-decode",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:glm52_indexer_topk_decode"
+      ],
+      "notes": "GLM52 decode top-k launch is fixed by the semantic contract.",
+      "production_consumers": [
+        "vllm_musa/patches/series/0085-MUSA-vllm.v1.attention.backends.mla.indexer.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-glm52-indexer-topk-prefill",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:glm52_indexer_topk_prefill"
+      ],
+      "notes": "GLM52 prefill top-k launch is fixed by the semantic contract.",
+      "production_consumers": [
+        "vllm_musa/patches/series/0085-MUSA-vllm.v1.attention.backends.mla.indexer.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "external-provider-excluded",
+      "id": "aot-native-min-p-sampling-from-probs",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:min_p_sampling_from_probs"
+      ],
+      "notes": "",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-musa-chunked-min-p-sampling-from-probs",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:musa_chunked_min_p_sampling_from_probs"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/_custom_ops.py",
+        "vllm_musa/v1/sample/topk_topp_sampler.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_fused_add_rmsnorm_paired_ab.py",
+      "disposition": "pending",
+      "id": "aot-native-musa-fused-add-rms-norm",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:musa_fused_add_rms_norm"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/_custom_ops.py",
+        "vllm_musa/kernels/musa_ops.py",
+        "vllm_musa/model_executor/layers/layernorm.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": [
+        "block_x"
+      ]
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_dense_fp8_gemv_blocks.py",
+      "disposition": "pending",
+      "id": "aot-native-musa-fused-gemv",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:musa_fused_gemv"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/model_executor/kernels/linear/scaled_mm/deep_gemm.py",
+        "vllm_musa/deepseek_v4_jit/fp8_einsum.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": [
+        "block_n",
+        "block_k"
+      ]
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_fused_gemv_moe_blocks.py",
+      "disposition": "pending",
+      "id": "aot-native-musa-fused-gemv-moe",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:musa_fused_gemv_moe"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/model_executor/layers/fused_moe/fused_moe.py",
+        "vllm_musa/model_executor/layers/fused_moe/dispatch_policy.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": [
+        "w1_block_n",
+        "w1_block_k",
+        "w2_block_n",
+        "w2_block_k"
+      ]
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_reshape_cache_nhd_blocks.py",
+      "disposition": "pending",
+      "id": "aot-native-musa-reshape-and-cache-flash-nhd",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:musa_reshape_and_cache_flash_nhd"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/v1/attention/backends/fa_utils.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/benchmark_reshape_cache_nhd_blocks.py::NHD_SHAPES"
+      ],
+      "tunable_parameters": [
+        "block_x"
+      ]
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-musa-rubymine-top-k-renorm-probs",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:musa_rubymine_top_k_renorm_probs"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/_custom_ops.py",
+        "vllm_musa/v1/sample/topk_topp_sampler.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-musa-top-k-top-p-sampling-from-probs",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:musa_top_k_top_p_sampling_from_probs"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/_custom_ops.py",
+        "vllm_musa/v1/sample/topk_topp_sampler.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_fp8_quant_groups.py",
+      "disposition": "pending",
+      "id": "aot-native-per-token-group-quant-8bit-vec",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:per_token_group_quant_8bit_vec"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/model_executor/layers/quantization/utils/fp8_utils.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/qwen_dsv4_fp8_quant_shapes.json",
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": [
+        "groups_per_block"
+      ]
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_fp8_quant_groups.py",
+      "disposition": "pending",
+      "id": "aot-native-silu-and-mul-clamp-per-token-group-fp8-quant",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:silu_and_mul_clamp_per_token_group_fp8_quant"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/model_executor/kernels/linear/scaled_mm/deep_gemm.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/qwen_dsv4_fp8_quant_shapes.json",
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": [
+        "groups_per_block"
+      ]
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_fp8_quant_groups.py",
+      "disposition": "pending",
+      "id": "aot-native-silu-and-mul-per-token-group-fp8-quant",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:silu_and_mul_per_token_group_fp8_quant"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/model_executor/kernels/linear/scaled_mm/deep_gemm.py",
+        "vllm_musa/model_executor/layers/quantization/utils/fp8_utils.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/qwen_dsv4_fp8_quant_shapes.json",
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": [
+        "groups_per_block"
+      ]
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-sparse-indexer-fill-all",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:sparse_indexer_fill_all"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/patches/series/0013-MUSA-vllm.model_executor.layers.sparse_attn_indexer.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-sparse-indexer-topk",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:sparse_indexer_topk"
+      ],
+      "notes": "Sparse-indexer top-k geometry is fixed by the index format.",
+      "production_consumers": [
+        "vllm_musa/patches/series/0013-MUSA-vllm.model_executor.layers.sparse_attn_indexer.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "aot-native-sparse-indexer-topk-decode",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:sparse_indexer_topk_decode"
+      ],
+      "notes": "Sparse-indexer decode geometry is fixed by the index format.",
+      "production_consumers": [
+        "vllm_musa/patches/series/0013-MUSA-vllm.model_executor.layers.sparse_attn_indexer.patch",
+        "vllm_musa/_custom_ops.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "external-provider-excluded",
+      "id": "aot-native-top-k-renorm-probs",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:top_k_renorm_probs"
+      ],
+      "notes": "",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "external-provider-excluded",
+      "id": "aot-native-top-p-renorm-probs",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:top_p_renorm_probs"
+      ],
+      "notes": "",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "aot-native"
+      ],
+      "benchmark": null,
+      "disposition": "external-provider-excluded",
+      "id": "aot-native-top-p-sampling-from-probs",
+      "members": [
+        "aot-native:csrc/musa/torch_bindings.cpp:top_p_sampling_from_probs"
+      ],
+      "notes": "",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-native-ffi"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-native-custom-allreduce",
+      "members": [
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu:vllm_musa_custom_ar_launch_all_gather",
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu:vllm_musa_custom_ar_launch_graph_registered",
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu:vllm_musa_custom_ar_launch_registered",
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu:vllm_musa_custom_ar_launch_unregistered",
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu:vllm_musa_custom_ar_meta_size",
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu:vllm_musa_fused_ar_residual_rmsnorm_launch_unregistered",
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu:vllm_musa_fused_ar_residual_rmsnorm_no_raw_launch_unregistered",
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu:vllm_musa_fused_ar_rmsnorm_launch_unregistered"
+      ],
+      "notes": "Peer count and payload size select the collective path, but the vLLM-MUSA wrapper exposes no active-MP block/thread override.",
+      "production_consumers": [
+        "vllm_musa/distributed/device_communicators/custom_all_reduce.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-native",
+        "jit-native-ffi"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_jit_rmsnorm_threads.py",
+      "disposition": "pending",
+      "id": "jit-native-fused-add-rmsnorm",
+      "members": [
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/norm/rmsnorm.mu:sgl_musa_fused_add_rmsnorm",
+        "jit-native:vllm_musa/jit_kernel/csrc/norm.py:musa_csrc_fused_add_rmsnorm"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/model_executor/layers/layernorm.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/qwen_dsv4_rmsnorm_shapes.json"
+      ],
+      "tunable_parameters": [
+        "block_threads"
+      ]
+    },
+    {
+      "backend_classes": [
+        "jit-native",
+        "jit-native-ffi"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-native-fused-qk-rmsnorm-mrope",
+      "members": [
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/norm/qk_mrope.mu:sgl_musa_fused_qk_rmsnorm_mrope",
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/norm/qk_mrope.mu:sgl_musa_fused_qk_rmsnorm_mrope_cache",
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/norm/qk_mrope.mu:sgl_musa_fused_qk_rmsnorm_mrope_cache_out",
+        "jit-native:vllm_musa/jit_kernel/csrc/norm.py:musa_csrc_fused_qk_rmsnorm_mrope",
+        "jit-native:vllm_musa/jit_kernel/csrc/norm.py:musa_csrc_fused_qk_rmsnorm_mrope_cache_out"
+      ],
+      "notes": "The production FFI wrapper compiles one fixed launch contract.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/csrc/fused_qk_rmsnorm_mrope.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-native",
+        "jit-native-ffi"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-native-moe-act-and-mul",
+      "members": [
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/moe/act_and_mul.mu:sgl_musa_moe_act_and_mul",
+        "jit-native:vllm_musa/jit_kernel/csrc/moe.py:musa_fast_silu_and_mul"
+      ],
+      "notes": "The activation fusion has no per-call MP launch selector.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/csrc/moe/moe_act_and_mul.py",
+        "vllm_musa/model_executor/layers/fused_moe/fused_moe.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-native",
+        "jit-native-ffi"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-native-moe-sum",
+      "members": [
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/moe/moe_sum_reduce.mu:sgl_musa_moe_sum_reduce",
+        "jit-native:vllm_musa/jit_kernel/csrc/moe.py:musa_fast_moe_sum"
+      ],
+      "notes": "The MoE sum launch geometry is fixed by the current FFI wrapper.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/csrc/moe/moe_sum.py",
+        "vllm_musa/model_executor/layers/fused_moe/fused_moe.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-native",
+        "jit-native-ffi"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-native-per-token-group-quant",
+      "members": [
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/quant/per_token_group_quant_8bit_v2.mu:sgl_per_token_group_quant_8bit_v2",
+        "jit-native:vllm_musa/jit_kernel/csrc/quant.py:musa_csrc_per_token_group_quant_8bit"
+      ],
+      "notes": "The JIT quant wrapper exposes no groups-per-block MP seam.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/csrc/quantization/quant_per_token_group.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-native",
+        "jit-native-ffi"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_jit_rmsnorm_threads.py",
+      "disposition": "pending",
+      "id": "jit-native-rmsnorm",
+      "members": [
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/norm/rmsnorm.mu:sgl_musa_rmsnorm",
+        "jit-native:vllm_musa/jit_kernel/csrc/norm.py:musa_csrc_rmsnorm"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/model_executor/layers/layernorm.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/qwen_dsv4_rmsnorm_shapes.json"
+      ],
+      "tunable_parameters": [
+        "block_threads"
+      ]
+    },
+    {
+      "backend_classes": [
+        "jit-native",
+        "jit-native-ffi"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-native-rotary-embedding",
+      "members": [
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/rope/rotary_embedding.mu:sgl_rotary_embedding",
+        "jit-native:vllm_musa/jit_kernel/csrc/rope.py:musa_rotary_embedding"
+      ],
+      "notes": "Rotary launch geometry is fixed by the current production ABI.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/csrc/rotary_embedding.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-native",
+        "jit-native-ffi"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_jit_topk_warps.py",
+      "disposition": "pending",
+      "id": "jit-native-topk-sigmoid",
+      "members": [
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/topk/topk_gating.mu:sgl_musa_topk_sigmoid",
+        "jit-native:vllm_musa/jit_kernel/csrc/topk.py:musa_topk_sigmoid"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/model_executor/layers/fused_moe/router/grouped_topk_router.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/qwen_dsv4_fp8_quant_shapes.json",
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": [
+        "warps_per_cta"
+      ]
+    },
+    {
+      "backend_classes": [
+        "jit-native",
+        "jit-native-ffi"
+      ],
+      "benchmark": "benchmarks/kernel_tactics/benchmark_jit_topk_warps.py",
+      "disposition": "pending",
+      "id": "jit-native-topk-softmax",
+      "members": [
+        "jit-native-ffi:vllm_musa/jit_kernel/csrc/topk/topk_gating.mu:sgl_musa_topk_softmax",
+        "jit-native:vllm_musa/jit_kernel/csrc/topk.py:musa_topk_softmax"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/model_executor/layers/fused_moe/router/grouped_topk_router.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/qwen_dsv4_fp8_quant_shapes.json",
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": [
+        "warps_per_cta"
+      ]
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-causal-conv1d-decode-width4-batched-kernel",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/causal_conv1d.py:_causal_conv1d_decode_width4_batched_kernel"
+      ],
+      "notes": "Width-4 batched decode uses a fixed TileLang schedule.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/tilelang/causal_conv1d.py",
+        "vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-causal-conv1d-fwd-kernel",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/causal_conv1d.py:_causal_conv1d_fwd_kernel"
+      ],
+      "notes": "Forward causal-conv uses a fixed TileLang schedule.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/tilelang/causal_conv1d.py",
+        "vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-causal-conv1d-fwd-width4-vec-kernel",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/causal_conv1d.py:_causal_conv1d_fwd_width4_vec_kernel"
+      ],
+      "notes": "Width-4 vector forward uses a fixed TileLang schedule.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/tilelang/causal_conv1d.py",
+        "vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-causal-conv1d-prefill-width4",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/causal_conv1d.py:_causal_conv1d_prefill_width4_body_kernel",
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/causal_conv1d.py:_causal_conv1d_prefill_width4_kernel"
+      ],
+      "notes": "Width-4 prefill uses a fixed TileLang schedule.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/tilelang/causal_conv1d.py",
+        "vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-deepgemm-contig-assign-compact",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py:_bf16_assign_compact_kernel",
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py:_fp8_assign_compact_kernel"
+      ],
+      "notes": "Compact assignment uses a fixed shape-derived config.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py",
+        "vllm_musa/model_executor/kernels/linear/scaled_mm/deep_gemm.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-deepgemm-contig-clear-fill",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py:_clear_i32_kernel",
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py:_fill_i32_kernel"
+      ],
+      "notes": "Clear/fill preprocessing uses a fixed shape-derived config.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py",
+        "vllm_musa/model_executor/kernels/linear/scaled_mm/deep_gemm.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-deepgemm-contig-count-prefix",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py:_count_prefix_topk_single_block_kernel",
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py:_count_topk_block_hist_kernel",
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py:_count_topk_single_block_kernel",
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py:_prefix_counts_kernel"
+      ],
+      "notes": "Count/prefix preprocessing uses a fixed shape-derived config.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py",
+        "vllm_musa/model_executor/kernels/linear/scaled_mm/deep_gemm.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-deepgemm-contig-scan-tree",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py:_prefix_counts_scan_kernel",
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py:_prefix_counts_tree_kernel"
+      ],
+      "notes": "Tree scan preprocessing uses a fixed shape-derived config.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py",
+        "vllm_musa/model_executor/kernels/linear/scaled_mm/deep_gemm.py"
+      ],
+      "shape_sources": [
+        "benchmarks/kernel_tactics/mp_tactic_campaign.json"
+      ],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "pending",
+      "id": "jit-tilelang-dsv4-mhc-pre-big-fuse",
+      "members": [
+        "jit-tilelang:vllm_musa/deepseek_v4_jit/tilelang_kernels.py:mhc_pre_big_fuse_decode_split_kernel",
+        "jit-tilelang:vllm_musa/deepseek_v4_jit/tilelang_kernels.py:mhc_pre_big_fuse_kernel"
+      ],
+      "notes": "",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "pending",
+      "id": "jit-tilelang-dsv4-mhc-weighted-rmsnorm",
+      "members": [
+        "jit-tilelang:vllm_musa/deepseek_v4_jit/tilelang_kernels.py:mhc_weighted_rmsnorm_kernel",
+        "jit-tilelang:vllm_musa/deepseek_v4_jit/tilelang_kernels.py:mhc_weighted_rmsnorm_mudnn_like_kernel"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/tuning.py",
+        "vllm_musa/deepseek_v4_jit/tilelang_kernels.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": [
+        "threads"
+      ]
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-fused-zba-kernel",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/gdn_fused_proj.py:_fused_zba_kernel"
+      ],
+      "notes": "The GDN projection fusion has one fixed TileLang schedule.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/tilelang/gdn_fused_proj.py",
+        "vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-grouped-topk",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/grouped_topk.py:_grouped_topk_parallel_kernel",
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/grouped_topk.py:_grouped_topk_serial_kernel"
+      ],
+      "notes": "Only a semantic serial/parallel crossover exists; geometry is fixed at 32 threads.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "non-production",
+      "id": "jit-tilelang-kv-rope-pack-kernel",
+      "members": [
+        "jit-tilelang:vllm_musa/deepseek_v4_jit/tilelang_kernels.py:kv_rope_pack_kernel"
+      ],
+      "notes": "Only an orphan TileLang helper calls this factory; production uses AOT.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-mhc-fused-post-prenorm-kernel",
+      "members": [
+        "jit-tilelang:vllm_musa/deepseek_v4_jit/tilelang_kernels.py:mhc_fused_post_prenorm_kernel"
+      ],
+      "notes": "The factory accepts compile-time threads/tile/split parameters, but the production caller hardcodes them and exposes no per-call active-MP selector.",
+      "production_consumers": [
+        "vllm_musa/deepseek_v4_mhc.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "pending",
+      "id": "jit-tilelang-mhc-post-kernel",
+      "members": [
+        "jit-tilelang:vllm_musa/deepseek_v4_jit/tilelang_kernels.py:mhc_post_kernel"
+      ],
+      "notes": "",
+      "production_consumers": [
+        "vllm_musa/deepseek_v4_mhc.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "non-production",
+      "id": "jit-tilelang-mhc-pre-split-sinkhorn-kernel",
+      "members": [
+        "jit-tilelang:vllm_musa/deepseek_v4_jit/tilelang_kernels.py:mhc_pre_split_sinkhorn_kernel"
+      ],
+      "notes": "The current auto selector never selects this fallback provider.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "non-production",
+      "id": "jit-tilelang-mhc-prenorm-splitk-x-tme-cast-kernel",
+      "members": [
+        "jit-tilelang:vllm_musa/deepseek_v4_jit/tilelang_kernels.py:mhc_prenorm_splitk_x_tme_cast_kernel"
+      ],
+      "notes": "The current auto selector always selects DeepGEMM for this stage.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-musa-sparse-attention-fwd-kernel-v1",
+      "members": [
+        "jit-tilelang:vllm_musa/v1/attention/ops/sparse_mla_tilelang.py:musa_sparse_attention_fwd_kernel_v1"
+      ],
+      "notes": "Sparse MLA forward exposes no per-call MP schedule override.",
+      "production_consumers": [
+        "vllm_musa/v1/attention/ops/sparse_mla_tilelang.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "non-production",
+      "id": "jit-tilelang-qnorm-rope-kernel",
+      "members": [
+        "jit-tilelang:vllm_musa/deepseek_v4_jit/tilelang_kernels.py:qnorm_rope_kernel"
+      ],
+      "notes": "Only an orphan TileLang helper calls this factory; production uses AOT.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-tilelang"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-tilelang-rmsnorm-gated",
+      "members": [
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/layernorm_gated.py:_rms_norm_gated_kernel",
+        "jit-tilelang:vllm_musa/jit_kernel/tilelang/layernorm_gated.py:_rms_norm_gated_kernel_cta"
+      ],
+      "notes": "Gated RMSNorm uses a fixed TileLang schedule.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/tilelang/layernorm_gated.py",
+        "vllm_musa/model_executor/layers/layernorm.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-triton"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-triton-build-qwen-single-request-fa3-metadata-kernel",
+      "members": [
+        "jit-triton:vllm_musa/jit_kernel/fa3_metadata.py:_build_qwen_single_request_fa3_metadata_kernel"
+      ],
+      "notes": "",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-triton"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-triton-eagle-prepare-next-token-padded-kernel",
+      "members": [
+        "jit-triton:vllm_musa/v1/spec_decode/utils.py:eagle_prepare_next_token_padded_kernel"
+      ],
+      "notes": "Block size is the semantic next-power-of-two token capacity.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-triton"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-triton-extend-topk-with-shared-kernel",
+      "members": [
+        "jit-triton:vllm_musa/jit_kernel/extend_topk_shared.py:_extend_topk_with_shared_kernel"
+      ],
+      "notes": "Block size is fixed by the top-k semantic capacity.",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-triton"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-triton-fused-gdn-gating-kernel",
+      "members": [
+        "jit-triton:vllm_musa/jit_kernel/fused_gdn_gating.py:_fused_gdn_gating_kernel"
+      ],
+      "notes": "The Triton GDN gate has no active-MP launch selector.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/fused_gdn_gating.py",
+        "vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-triton"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-triton-gated-qk-norm-rope-token-kernel",
+      "members": [
+        "jit-triton:vllm_musa/kernels/gated_qkv.py:_gated_qk_norm_rope_token_kernel"
+      ],
+      "notes": "The token kernel uses a fixed Triton schedule per shape.",
+      "production_consumers": [
+        "vllm_musa/kernels/gated_qkv.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-triton"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-triton-post-reorder-triton-kernel",
+      "members": [
+        "jit-triton:vllm_musa/jit_kernel/post_reorder.py:post_reorder_triton_kernel"
+      ],
+      "notes": "Post-reorder uses a fixed Triton schedule per shape.",
+      "production_consumers": [
+        "vllm_musa/jit_kernel/post_reorder.py",
+        "vllm_musa/model_executor/layers/fused_moe/fused_moe.py"
+      ],
+      "shape_sources": [],
+      "tunable_parameters": []
+    },
+    {
+      "backend_classes": [
+        "jit-triton"
+      ],
+      "benchmark": null,
+      "disposition": "no-tunable-seam",
+      "id": "jit-triton-qwen2-rope-kv-cache-kernel",
+      "members": [
+        "jit-triton:vllm_musa/kernels/qwen2_rope_kv.py:_qwen2_rope_kv_cache_kernel"
+      ],
+      "notes": "",
+      "production_consumers": [],
+      "shape_sources": [],
+      "tunable_parameters": []
+    }
+  ],
+  "schema": "vllm-musa-public-kernel-catalog.v1",
+  "scope": {
+    "callable_entrypoint_count": 101,
+    "external_provider_wrappers": "excluded",
+    "owned_implementations_only": true,
+    "physical_implementation_count": 152,
+    "physical_implementation_counts": {
+      "aot-native-physical": 36,
+      "jit-native-physical": 77,
+      "jit-tilelang-physical": 32,
+      "jit-triton-physical": 7
+    },
+    "physical_kernel_note": "Callable entries and physical definitions are separate denominators; physical_coverage() maps every definition.",
+    "repository": "vllm-musa",
+    "runtime_hardware_key": "multi_processor_count"
+  }
+}

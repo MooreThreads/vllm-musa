@@ -19,7 +19,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.def(
       "musa_fused_gemv(Tensor! A, Tensor! B, Tensor! C, Tensor? A_scale, Tensor? B_scale,"
       "bool use_int4_w4a16, bool use_swigelu, bool use_rms_norm, Tensor? gamma,"
-      "float eps) -> ()");
+      "float eps, int block_n=0, int block_k=0) -> ()");
   musa_ops.impl("musa_fused_gemv", torch::kMUSA, &musa_fused_gemv);
 
   musa_ops.def(
@@ -30,21 +30,23 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
 
   musa_ops.def(
       "musa_reshape_and_cache_flash_nhd(Tensor key, Tensor value, "
-      "Tensor! key_cache, Tensor! value_cache, Tensor slot_mapping) -> ()");
+      "Tensor! key_cache, Tensor! value_cache, Tensor slot_mapping, "
+      "int block_x=0) -> ()");
   musa_ops.impl("musa_reshape_and_cache_flash_nhd", torch::kMUSA,
                 &musa_reshape_and_cache_flash_nhd);
 
   musa_ops.def(
       "silu_and_mul_per_token_group_fp8_quant(Tensor input, Tensor! output_q, "
       "Tensor! output_s, int group_size, float eps, float fp8_min, "
-      "float fp8_max) -> ()");
+      "float fp8_max, int groups_per_block=0) -> ()");
   musa_ops.impl("silu_and_mul_per_token_group_fp8_quant", torch::kMUSA,
                 &silu_and_mul_per_token_group_fp8_quant);
 
   musa_ops.def(
       "silu_and_mul_clamp_per_token_group_fp8_quant(Tensor input, "
       "Tensor! output_q, Tensor! output_s, int group_size, float eps, "
-      "float fp8_min, float fp8_max, float swiglu_limit) -> ()");
+      "float fp8_min, float fp8_max, float swiglu_limit, "
+      "int groups_per_block=0) -> ()");
   musa_ops.impl("silu_and_mul_clamp_per_token_group_fp8_quant", torch::kMUSA,
                 &silu_and_mul_clamp_per_token_group_fp8_quant);
 
@@ -58,7 +60,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.def(
       "per_token_group_quant_8bit_vec(Tensor input, Tensor! output_q, "
       "Tensor! output_s, int group_size, float eps, float min_8bit, "
-      "float max_8bit) -> ()");
+      "float max_8bit, int groups_per_block=0) -> ()");
   musa_ops.impl("per_token_group_quant_8bit_vec", torch::kMUSA,
                 &per_token_group_quant_8bit_vec);
   musa_ops.def(

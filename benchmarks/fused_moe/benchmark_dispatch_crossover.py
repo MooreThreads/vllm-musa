@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-"""Cold-cache crossover sweep for MUSA FP8 fused-MoE backends.
+"""Cold-cache crossover sweep for MUSA fused-MoE backends.
 
 All dimensions are the actual per-rank kernel dimensions. A coarse sweep only
 produces a candidate interval; rerun densely around both crossings and confirm
@@ -33,11 +33,44 @@ import torch.nn.functional as F
 
 from mate.testing.utils import bench_gpu_time_with_musa_event
 
-from vllm_musa.model_executor.layers.fused_moe import fused_moe
-from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
+SCRIPT_DIR = Path(__file__).resolve().parents[1] / "kernel_tactics"
+sys.path.insert(0, str(SCRIPT_DIR))
+from _benchmark_utils import verify_lease_device_fence  # noqa: E402
+
+from vllm_musa.model_executor.layers.fused_moe import fused_moe  # noqa: E402
+from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (  # noqa: E402
     MusaFusedMoeBackend,
     MusaFusedMoeShape,
 )
+
+try:
+    from vllm_musa.tuning import (
+        prime_musa_kernel_hardware,
+        query_musa_kernel_hardware,
+    )
+except ImportError:
+    # The benchmark is intentionally runnable against an image whose native
+    # extension predates the Python hardware-query helper.  Keep the fallback
+    # read-only and shape the object to the current selector contract.
+    from types import SimpleNamespace
+
+    def query_musa_kernel_hardware(device_index: int) -> Any:
+        properties = torch.musa.get_device_properties(device_index)
+        capability = (
+            int(getattr(properties, "major", 0)),
+            int(getattr(properties, "minor", 0)),
+        )
+        multiprocessor_count = int(properties.multi_processor_count)
+        return SimpleNamespace(
+            device_capability=capability,
+            multiprocessor_count=multiprocessor_count,
+            cache_key=f"fallback:{capability[0]}.{capability[1]}:mp{multiprocessor_count}",
+        )
+
+    def prime_musa_kernel_hardware(device_index: int) -> Any:
+        # Older images have no frozen-hardware helper.  The fallback still
+        # returns the same query result used to build the policy key.
+        return query_musa_kernel_hardware(device_index)
 
 
 @dataclass(frozen=True)
@@ -47,7 +80,7 @@ class Shape:
     hidden_size: int
     intermediate_size: int
     top_k: int
-    block_size: int
+    block_size: int | None
 
 
 @dataclass
@@ -86,6 +119,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-size", type=int, required=True)
     parser.add_argument("--intermediate-size", type=int, required=True)
     parser.add_argument("--top-k", type=int, required=True)
+    parser.add_argument(
+        "--weight-dtype",
+        choices=("fp8", "bf16"),
+        default="fp8",
+        help="Weight format to benchmark; BF16 supports gemv and upstream only.",
+    )
     parser.add_argument("--block-size", type=int, choices=(128,), default=128)
     parser.add_argument(
         "--tokens",
@@ -155,6 +194,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--regression-margin", type=float, default=0.03)
     parser.add_argument("--max-iqr-ratio", type=float, default=0.10)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--expected-physical-device", type=int, required=True)
+    parser.add_argument("--expected-device-uuid", required=True)
+    parser.add_argument("--expected-multiprocessor-count", type=int, required=True)
+    parser.add_argument(
+        "--source-revision",
+        default=None,
+        help=(
+            "Exact source SHA when the benchmark is run from an archive without "
+            "a .git directory; otherwise read .source-revision if present."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -174,7 +224,7 @@ def command_output(command: list[str]) -> str | None:
         return None
 
 
-def repo_provenance() -> dict[str, Any]:
+def repo_provenance(source_revision: str | None = None) -> dict[str, Any]:
     module_path = Path(inspect.getfile(fused_moe)).resolve()
     repo = next(
         (
@@ -185,7 +235,27 @@ def repo_provenance() -> dict[str, Any]:
         None,
     )
     if repo is None:
-        return {"module_path": str(module_path), "repo": None}
+        marker = source_revision
+        if marker is None:
+            marker_path = next(
+                (
+                    parent / ".source-revision"
+                    for parent in (module_path.parent, *module_path.parents)
+                    if (parent / ".source-revision").is_file()
+                ),
+                None,
+            )
+            if marker_path is not None:
+                marker = marker_path.read_text(encoding="utf-8").strip() or None
+        return {
+            "module_path": str(module_path),
+            "repo": None,
+            "head": marker,
+            "source_revision": marker,
+            "source_kind": "archive",
+            "status": None,
+            "dirty_patch_sha256": None,
+        }
     head = command_output(["git", "-C", str(repo), "rev-parse", "HEAD"])
     status = command_output(["git", "-C", str(repo), "status", "--short"])
     try:
@@ -230,6 +300,24 @@ def quantized_weight(shape: tuple[int, ...], seed: int) -> torch.Tensor:
             generator=generator,
         ).mul_(8.0)
         output[start:end].copy_(source.to(torch.float8_e4m3fn))
+    return output
+
+
+def bf16_weight(shape: tuple[int, ...], seed: int) -> torch.Tensor:
+    generator = torch.Generator(device="musa")
+    generator.manual_seed(seed)
+    output = torch.empty(shape, device="musa", dtype=torch.bfloat16)
+    chunk_experts = max(1, min(shape[0], 8))
+    for start in range(0, shape[0], chunk_experts):
+        end = min(start + chunk_experts, shape[0])
+        output[start:end].copy_(
+            torch.randn(
+                (end - start, *shape[1:]),
+                device="musa",
+                dtype=torch.bfloat16,
+                generator=generator,
+            )
+        )
     return output
 
 
@@ -359,10 +447,11 @@ def backend_kwargs(
     w2: torch.Tensor,
     topk_weights: torch.Tensor,
     topk_ids: torch.Tensor,
-    w1_scale: torch.Tensor,
-    w2_scale: torch.Tensor,
-    block_size: int,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    block_size: int | None,
 ) -> dict[str, Any]:
+    use_fp8 = w1.dtype == torch.float8_e4m3fn
     return {
         "hidden_states": hidden_states,
         "w1": w1,
@@ -371,7 +460,7 @@ def backend_kwargs(
         "topk_ids": topk_ids,
         "activation": "silu",
         "apply_router_weight_on_input": False,
-        "use_fp8_w8a8": True,
+        "use_fp8_w8a8": use_fp8,
         "use_int8_w8a8": False,
         "use_int8_w8a16": False,
         "use_int4_w4a16": False,
@@ -385,7 +474,7 @@ def backend_kwargs(
         "w2_zp": None,
         "a1_scale": None,
         "a2_scale": None,
-        "block_shape": [block_size, block_size],
+        "block_shape": [block_size, block_size] if use_fp8 else None,
         "w1_bias": None,
         "w2_bias": None,
     }
@@ -397,18 +486,26 @@ def build_backends(kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, bo
         for key, value in kwargs.items()
         if key not in {"apply_router_weight_on_input", "block_shape"}
     }
+    bf16_gemv_gate = {
+        key: value for key, value in kwargs.items() if key != "block_shape"
+    }
     grouped_gate = dict(kwargs)
     deepgemm_prefill_gate = {
         key: value
         for key, value in kwargs.items()
         if key not in {"topk_weights", "global_num_experts", "w1_zp", "w2_zp"}
     }
+    use_fp8 = bool(kwargs["use_fp8_w8a8"])
     capabilities = {
-        "gemv": fused_moe._can_use_musa_native_fp8_moe_gemv(**gemv_gate),
-        "grouped_gemm": fused_moe._can_use_musa_fp8_moe_grouped_gemm(**grouped_gate),
-        "deepgemm_prefill": fused_moe._can_use_moe_deepgemm_prefill(
-            **deepgemm_prefill_gate
+        "gemv": (
+            fused_moe._can_use_musa_native_fp8_moe_gemv(**gemv_gate)
+            if use_fp8
+            else fused_moe._can_use_musa_native_bf16_moe_gemv(**bf16_gemv_gate)
         ),
+        "grouped_gemm": use_fp8
+        and fused_moe._can_use_musa_fp8_moe_grouped_gemm(**grouped_gate),
+        "deepgemm_prefill": use_fp8
+        and fused_moe._can_use_moe_deepgemm_prefill(**deepgemm_prefill_gate),
         "upstream": True,
     }
 
@@ -459,6 +556,7 @@ def dispatcher_smoke(
     kwargs: dict[str, Any],
     requested_backends: list[str],
     direct_outputs: dict[str, torch.Tensor],
+    capabilities: dict[str, bool],
 ) -> dict[str, Any]:
     dispatchable_backends = [
         backend
@@ -472,7 +570,27 @@ def dispatcher_smoke(
     outputs: dict[str, torch.Tensor] = {}
     errors: dict[str, str] = {}
     identities: dict[str, Any] = {}
+    resolved_backends: dict[str, str] = {}
     call_counts = {"gemv": 0, "grouped_gemm": 0, "upstream": 0}
+
+    def expected_backend(requested: str) -> str:
+        """Return the backend the production forced-dispatch contract allows.
+
+        The BF16 Qwen matcher is deliberately limited to the decode prefix
+        (M<=12).  A forced GEMV request outside that prefix must fall back to
+        upstream; treating that intentional fallback as an identity failure
+        made every otherwise-valid crossover receipt fail qualification.
+        """
+        if requested == "upstream":
+            return "upstream"
+        if not capabilities.get(requested, False):
+            return "upstream"
+        if requested == "gemv":
+            is_bf16 = kwargs["hidden_states"].dtype == torch.bfloat16
+            is_qwen_shape = kwargs["w1"].shape[0] in (256, 257)
+            if is_bf16 and is_qwen_shape and kwargs["hidden_states"].shape[0] > 12:
+                return "upstream"
+        return requested
 
     def counted_gemv(*args: Any, **inner_kwargs: Any) -> torch.Tensor:
         call_counts["gemv"] += 1
@@ -496,6 +614,15 @@ def dispatcher_smoke(
             for name in call_counts:
                 call_counts[name] = 0
             fused_moe._MUSA_FUSED_MOE_REQUESTED_BACKEND = MusaFusedMoeBackend(backend)
+            resolved = expected_backend(backend)
+            resolved_backends[backend] = resolved
+            fallback_reason = (
+                "shape_matcher_max_tokens"
+                if backend == "gemv"
+                and resolved == "upstream"
+                and kwargs["hidden_states"].shape[0] > 12
+                else None
+            )
             try:
                 outputs[backend] = fused_moe._musa_fused_experts_impl_dispatch(
                     **kwargs
@@ -503,7 +630,9 @@ def dispatcher_smoke(
                 synchronize()
                 identities[backend] = {
                     "call_counts": dict(call_counts),
-                    "passed": call_counts[backend] == 1
+                    "expected_backend": resolved,
+                    "fallback_reason": fallback_reason,
+                    "passed": call_counts[resolved] == 1
                     and sum(call_counts.values()) == 1,
                 }
             except Exception as exc:
@@ -518,13 +647,19 @@ def dispatcher_smoke(
 
     comparisons: dict[str, Any] = {}
     for backend, output in outputs.items():
-        direct_output = direct_outputs.get(backend)
+        resolved = resolved_backends.get(backend, backend)
+        direct_output = direct_outputs.get(resolved)
         if direct_output is None:
-            comparisons[backend] = {"passed": False, "error": "direct output missing"}
+            comparisons[backend] = {
+                "passed": False,
+                "error": "direct output missing",
+                "expected_backend": resolved,
+            }
             continue
         diff = (output.float() - direct_output.float()).abs()
         comparisons[backend] = {
             "passed": bool(torch.equal(output, direct_output)),
+            "expected_backend": resolved,
             "max_abs_diff": float(diff.max().item()),
             "mean_abs_diff": float(diff.mean().item()),
             **comparison_metrics(output, direct_output),
@@ -782,7 +917,7 @@ def main() -> int:
         hidden_size=args.hidden_size,
         intermediate_size=args.intermediate_size,
         top_k=args.top_k,
-        block_size=args.block_size,
+        block_size=args.block_size if args.weight_dtype == "fp8" else None,
     )
     tokens = sorted({int(value) for value in args.tokens.split(",") if value})
     if args.sweep_kind == "dense" and tokens:
@@ -797,6 +932,11 @@ def main() -> int:
     }
     if unknown:
         raise ValueError(f"unsupported backends: {sorted(unknown)}")
+    if args.weight_dtype == "bf16" and set(requested_backends) != {
+        "gemv",
+        "upstream",
+    }:
+        raise ValueError("BF16 requires exactly gemv and upstream backends")
     if "upstream" not in requested_backends:
         raise ValueError("upstream is mandatory as the correctness reference")
     if not tokens or min(tokens) <= 0:
@@ -816,23 +956,47 @@ def main() -> int:
     if args.rounds <= 0 or args.rounds % len(requested_backends) != 0:
         raise ValueError("rounds must be a positive multiple of backend count")
 
-    w1 = quantized_weight(
+    weight_factory = quantized_weight if args.weight_dtype == "fp8" else bf16_weight
+    w1 = weight_factory(
         (shape.experts, 2 * shape.intermediate_size, shape.hidden_size), args.seed
     )
-    w2 = quantized_weight(
+    w2 = weight_factory(
         (shape.experts, shape.hidden_size, shape.intermediate_size), args.seed + 1
     )
-    w1_scale = block_scales(w1, shape.block_size, args.seed + 2)
-    w2_scale = block_scales(w2, shape.block_size, args.seed + 3)
-    capability = tuple(int(value) for value in torch.musa.get_device_capability())
-    device_name = torch.musa.get_device_name(0)
-    multiprocessor_count = int(
-        torch.musa.get_device_properties(0).multi_processor_count
-    )
-    if capability != (3, 1) or "S5000" not in device_name.upper():
+    if args.weight_dtype == "fp8":
+        assert shape.block_size is not None
+        w1_scale = block_scales(w1, shape.block_size, args.seed + 2)
+        w2_scale = block_scales(w2, shape.block_size, args.seed + 3)
+    else:
+        w1_scale = None
+        w2_scale = None
+    hardware = query_musa_kernel_hardware(0)
+    primed_hardware = prime_musa_kernel_hardware(0)
+    if (
+        primed_hardware.device_capability != hardware.device_capability
+        or primed_hardware.multiprocessor_count != hardware.multiprocessor_count
+    ):
         raise RuntimeError(
-            "this policy sweep is valid only on MTT S5000/MP31, got "
-            f"device={device_name!r} capability={capability}"
+            "frozen MUSA hardware fingerprint changed during benchmark setup: "
+            f"queried={hardware!r} primed={primed_hardware!r}"
+        )
+    lease_device_fence = verify_lease_device_fence(
+        args.expected_physical_device,
+        args.expected_device_uuid,
+        args.expected_multiprocessor_count,
+    )
+    capability = primed_hardware.device_capability
+    device_name = torch.musa.get_device_name(0)
+    multiprocessor_count = primed_hardware.multiprocessor_count
+    if multiprocessor_count != args.expected_multiprocessor_count:
+        raise RuntimeError(
+            "runtime hardware fingerprint does not match the requested MP gate: "
+            f"expected={args.expected_multiprocessor_count} actual={multiprocessor_count}"
+        )
+    if capability != (3, 1):
+        raise RuntimeError(
+            "this policy sweep requires the supported MUSA architecture, got "
+            f"capability={capability}"
         )
     policy_key = MusaFusedMoeShape(
         device_capability=capability,
@@ -847,10 +1011,10 @@ def main() -> int:
         activation="silu",
         expert_parallel=False,
         hidden_dtype=str(torch.bfloat16),
-        weight_dtype=str(torch.float8_e4m3fn),
-        scale_dtype=str(torch.float32),
-        w1_scale_shape=tuple(w1_scale.shape),
-        w2_scale_shape=tuple(w2_scale.shape),
+        weight_dtype=str(w1.dtype),
+        scale_dtype=str(w1_scale.dtype) if w1_scale is not None else "none",
+        w1_scale_shape=tuple(w1_scale.shape) if w1_scale is not None else (),
+        w2_scale_shape=tuple(w2_scale.shape) if w2_scale is not None else (),
         gemv_block=os.environ.get("VLLM_MUSA_GEMV_MOE_BLOCK", "auto"),
         graph_mode="eager",
     )
@@ -860,6 +1024,7 @@ def main() -> int:
         "argv": sys.argv,
         "shape": asdict(shape),
         "shape_dimensions_are_per_rank": True,
+        "weight_dtype": args.weight_dtype,
         "policy_key": asdict(policy_key),
         "route_mode": args.route_mode,
         "folded_shared_expert": args.folded_shared_expert,
@@ -905,18 +1070,32 @@ def main() -> int:
             "VLLM_MUSA_MOE_DEEPGEMM_PREFILL_MIN_TOKENS", "2500"
         ),
         "device_name": device_name,
+        "hardware_cache_key": primed_hardware.cache_key,
+        "primed_hardware": {
+            "device_capability": capability,
+            "multiprocessor_count": multiprocessor_count,
+        },
         "device_capability": capability,
         "multiprocessor_count": multiprocessor_count,
         "torch_musa_runtime": getattr(torch.version, "musa", None),
         "packages": package_versions(),
-        "repo": repo_provenance(),
+        "repo": repo_provenance(args.source_revision),
         "mthreads_gmi": command_output(["mthreads-gmi", "-q"]),
+        "lease_device_fence": lease_device_fence,
         "mcc_version": command_output(["mcc", "--version"]),
         "estimated_static_bytes": (
             w1.numel() * w1.element_size()
             + w2.numel() * w2.element_size()
-            + w1_scale.numel() * w1_scale.element_size()
-            + w2_scale.numel() * w2_scale.element_size()
+            + (
+                w1_scale.numel() * w1_scale.element_size()
+                if w1_scale is not None
+                else 0
+            )
+            + (
+                w2_scale.numel() * w2_scale.element_size()
+                if w2_scale is not None
+                else 0
+            )
         ),
     }
     results: list[Result] = []
@@ -965,16 +1144,23 @@ def main() -> int:
             except Exception as exc:
                 oracle_errors[backend] = f"{type(exc).__name__}: {exc}"
         try:
-            oracle = dequantized_fp32_reference(
-                hidden_states=oracle_hidden_states,
-                w1=w1,
-                w2=w2,
-                topk_weights=oracle_topk_weights,
-                topk_ids=oracle_topk_ids,
-                w1_scale=w1_scale,
-                w2_scale=w2_scale,
-                block_size=shape.block_size,
-            )
+            if args.weight_dtype == "bf16":
+                oracle = oracle_outputs["upstream"].float()
+                oracle_reference = "upstream-bf16"
+            else:
+                assert w1_scale is not None and w2_scale is not None
+                assert shape.block_size is not None
+                oracle = dequantized_fp32_reference(
+                    hidden_states=oracle_hidden_states,
+                    w1=w1,
+                    w2=w2,
+                    topk_weights=oracle_topk_weights,
+                    topk_ids=oracle_topk_ids,
+                    w1_scale=w1_scale,
+                    w2_scale=w2_scale,
+                    block_size=shape.block_size,
+                )
+                oracle_reference = "dequantized-fp32-no-activation-quantization"
             comparisons: dict[str, Any] = {}
             for backend, output in oracle_outputs.items():
                 difference = (output.float() - oracle).abs()
@@ -1003,7 +1189,7 @@ def main() -> int:
                 "selected_experts": sorted(
                     int(value) for value in oracle_topk_ids.unique().cpu().tolist()
                 ),
-                "reference": "dequantized-fp32-no-activation-quantization",
+                "reference": oracle_reference,
                 "gemv_passed": gemv_oracle_pass,
                 "comparisons": comparisons,
                 "errors": oracle_errors,
@@ -1015,7 +1201,11 @@ def main() -> int:
                 "tokens": args.oracle_probe_tokens,
                 "route_mode": "deterministic_coverage",
                 "seed": oracle_seed,
-                "reference": "dequantized-fp32-no-activation-quantization",
+                "reference": (
+                    "upstream-bf16"
+                    if args.weight_dtype == "bf16"
+                    else "dequantized-fp32-no-activation-quantization"
+                ),
                 "gemv_passed": False,
                 "errors": {
                     **oracle_errors,
@@ -1071,7 +1261,7 @@ def main() -> int:
                 errors[backend] = f"{type(exc).__name__}: {exc}"
 
         dispatcher_evidence[str(token_count)] = dispatcher_smoke(
-            kwargs, requested_backends, outputs
+            kwargs, requested_backends, outputs, capabilities
         )
         if "deepgemm_prefill" in requested_backends:
             deepgemm_implementation[str(token_count)] = deepgemm_prefill_implementation(

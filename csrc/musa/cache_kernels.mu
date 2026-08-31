@@ -55,19 +55,14 @@ __global__ void __launch_bounds__(BLOCK_X, 1)
   }
 }
 
-template <typename T>
-void dispatch_reshape_and_cache_flash_nhd(
+template <typename T, int BLOCK_X>
+void launch_reshape_and_cache_flash_nhd(
     const T* key, const T* value, T* key_cache, T* value_cache,
     const int64_t* slot_mapping, int num_tokens, int num_heads, int head_size,
     int block_size, int64_t key_stride, int64_t value_stride,
-    int64_t block_stride, int64_t page_stride, musaStream_t stream) {
-  constexpr int BLOCK_X = 512;
+    int64_t block_stride, int64_t page_stride, musaStream_t stream,
+    int forced_tokens_per_block) {
   const int vecs_per_token = (num_heads * head_size) / 8;
-
-  static const int forced_tokens_per_block = []() {
-    const char* env = std::getenv("VLLM_MUSA_RESHAPE_CACHE_TOKENS_PER_BLOCK");
-    return env == nullptr ? 0 : std::atoi(env);
-  }();
 
 #define LAUNCH(TPB)                                                        \
   reshape_and_cache_flash_nhd_kernel<T, BLOCK_X, TPB>                      \
@@ -97,12 +92,51 @@ void dispatch_reshape_and_cache_flash_nhd(
 #undef LAUNCH
 }
 
+template <typename T>
+void dispatch_reshape_and_cache_flash_nhd(
+    const T* key, const T* value, T* key_cache, T* value_cache,
+    const int64_t* slot_mapping, int num_tokens, int num_heads, int head_size,
+    int block_size, int64_t key_stride, int64_t value_stride,
+    int64_t block_stride, int64_t page_stride, musaStream_t stream,
+    int64_t requested_block_x) {
+  // Nonzero BLOCK_X values are a per-call benchmark seam. Production callers
+  // pass 0, which preserves the fixed 512-thread launch.
+  const int block_x = requested_block_x == 0 ? 512 : requested_block_x;
+  static const int forced_tokens_per_block = []() {
+    const char* env = std::getenv("VLLM_MUSA_RESHAPE_CACHE_TOKENS_PER_BLOCK");
+    return env == nullptr ? 0 : std::atoi(env);
+  }();
+
+#define DISPATCH(BLOCK_X)                                                  \
+  launch_reshape_and_cache_flash_nhd<T, BLOCK_X>(                          \
+      key, value, key_cache, value_cache, slot_mapping, num_tokens,        \
+      num_heads, head_size, block_size, key_stride, value_stride,          \
+      block_stride, page_stride, stream, forced_tokens_per_block)
+
+  if (block_x == 128) {
+    DISPATCH(128);
+  } else if (block_x == 256) {
+    DISPATCH(256);
+  } else if (block_x == 512) {
+    DISPATCH(512);
+  } else {
+    DISPATCH(1024);
+  }
+
+#undef DISPATCH
+}
+
 }  // namespace vllm_musa
 
 void musa_reshape_and_cache_flash_nhd(torch::Tensor& key, torch::Tensor& value,
                                       torch::Tensor& key_cache,
                                       torch::Tensor& value_cache,
-                                      torch::Tensor& slot_mapping) {
+                                      torch::Tensor& slot_mapping,
+                                      int64_t block_x) {
+  TORCH_CHECK(block_x == 0 || block_x == 128 || block_x == 256 ||
+                  block_x == 512 || block_x == 1024,
+              "block_x must be 0 (production default) or one of 128, 256, "
+              "512, or 1024");
   TORCH_CHECK(key.device().is_privateuseone(), "key must be a MUSA tensor");
   TORCH_CHECK(value.device().is_privateuseone(), "value must be a MUSA tensor");
   TORCH_CHECK(key_cache.device().is_privateuseone(),
@@ -182,7 +216,7 @@ void musa_reshape_and_cache_flash_nhd(torch::Tensor& key, torch::Tensor& value,
         static_cast<__half*>(value_cache.data_ptr()),
         slot_mapping.data_ptr<int64_t>(), num_tokens, num_heads, head_size,
         block_size, key_stride, value_stride, block_stride, page_stride,
-        stream);
+        stream, block_x);
   } else if (key.scalar_type() == at::ScalarType::BFloat16) {
     vllm_musa::dispatch_reshape_and_cache_flash_nhd<__mt_bfloat16>(
         static_cast<const __mt_bfloat16*>(key.data_ptr()),
@@ -191,7 +225,7 @@ void musa_reshape_and_cache_flash_nhd(torch::Tensor& key, torch::Tensor& value,
         static_cast<__mt_bfloat16*>(value_cache.data_ptr()),
         slot_mapping.data_ptr<int64_t>(), num_tokens, num_heads, head_size,
         block_size, key_stride, value_stride, block_stride, page_stride,
-        stream);
+        stream, block_x);
   } else {
     TORCH_CHECK(false, "only fp16 and bf16 are supported");
   }
