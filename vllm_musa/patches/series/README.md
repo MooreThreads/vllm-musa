@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **138 patches**. This branch includes the Qwen3.6 patches for common
+Currently **139 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -41,7 +41,8 @@ MUSA backends, keeps iHC on the ordinary PyTorch path without `hpc-ops`, and
 fails fast on pipeline partitions that begin with an uninitialized shared
 indexer layer. The MTP/PP follow-up patches add the relay interface and snapshot
 MUSA speculative token buffers before side-stream broadcasts so the next decode
-step cannot overwrite an in-flight send.
+step cannot overwrite an in-flight send. The final patch enables the stable
+FP32 router GEMM on MUSA and uses it for Hy4 single-token routing.
 The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime
