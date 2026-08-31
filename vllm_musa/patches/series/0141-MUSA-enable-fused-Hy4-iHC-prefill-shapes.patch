@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 1 Sep 2026 05:47:03 +0800
+Subject: [PATCH] MUSA: enable fused Hy4 iHC prefill shapes
+
+---
+ vllm/models/hy_v4/nvidia/hc.py | 8 +++-----
+ 1 file changed, 3 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/models/hy_v4/nvidia/hc.py b/vllm/models/hy_v4/nvidia/hc.py
+index 0e40f88d2d..de58280f8c 100644
+--- a/vllm/models/hy_v4/nvidia/hc.py
++++ b/vllm/models/hy_v4/nvidia/hc.py
+@@ -80,7 +80,6 @@ def _musa_ihc_pre(
+         or weight.device != x.device
+         or hc_scale.device != x.device
+         or hc_base.device != x.device
+-        or x.shape[0] != 1
+         or x.shape[1:] != (4, 6144)
+         or weight.shape != (8, 24576)
+         or hc_scale.shape != (2,)
+@@ -131,19 +130,18 @@ def _musa_ihc_post(
+         or x.device.type != "musa"
+         or residual.device != x.device
+         or post.device != x.device
+-        or x.shape[0] != 1
+         or x.shape[1:] != (6144,)
+         or residual.shape != (x.shape[0], 4, 6144)
+         or post.shape != (x.shape[0], 4)
+         or x.dtype != torch.bfloat16
+         or residual.dtype != torch.bfloat16
+         or post.dtype != torch.float32
+-        or not x.is_contiguous()
+-        or not residual.is_contiguous()
+-        or not post.is_contiguous()
+     ):
+         return None
+ 
++    x = x.contiguous()
++    residual = residual.contiguous()
++    post = post.contiguous()
+     out = torch.empty_like(residual)
+     ihc_post_kernel(hidden_size=6144)(x, residual, post, out)
+     return out
