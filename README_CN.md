@@ -25,7 +25,7 @@ vLLM-MUSA 是摩尔线程为 [vLLM](https://github.com/vllm-project/vllm) 提供
 - 使用固定的 MUSA 软件栈：PyTorch/torch_musa 2.11.0.post1（MUSA 5.2.0）、
   MATE 0.2.6 和 torchada 0.1.83；当前分支仍属于升级候选版本。
 - 提供 MUSA 原生注意力机制、通信、自定义算子和编译支持。
-- 针对 S5000 上 Qwen 和 DeepSeek-V4-Flash 的各个模型 checkpoint 提供配置示例。
+- 针对 S5000 上 Qwen 和 DeepSeek-V4-Flash 的各个模型检查点提供配置示例。
 
 ## 快速开始
 
@@ -38,7 +38,7 @@ export VLLM_MUSA_IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-opena
 docker pull "${VLLM_MUSA_IMAGE}"
 ```
 
-如果 registry tag 尚未发布，请按照[安装指南](docs/installation-cn.md)构建并使用本地镜像。
+如果镜像标签尚未发布，请按照[安装指南](docs/installation-cn.md)构建并使用本地镜像。
 
 - [安装与源码构建指南](docs/installation-cn.md)
 - [Docker 构建指南（英文）](docker/README.md)
@@ -85,8 +85,8 @@ OpenAI 兼容接口地址为 `http://localhost:8000/v1`。
 | v0.28.0 | 2.11.x | 仅 V1 | 升级候选 |
 
 V1 引擎会在支持的模型架构上自动选择模型运行器 V2；MUSA 同时支持两种运行器。
-当前分支跟踪 `third_party/PINS` 中固定的上游 v0.28.0 commit，并保留 MUSA
-PyTorch 2.11.x 软件栈；只有完成构建和模型 smoke 验证后，才能将其提升为正式支持版本。
+当前分支跟踪 `third_party/PINS` 中固定的上游 v0.28.0 提交，并保留 MUSA
+PyTorch 2.11.x 软件栈；只有完成构建和模型冒烟测试后，才能将其提升为正式支持版本。
 
 ## 贡献
 
