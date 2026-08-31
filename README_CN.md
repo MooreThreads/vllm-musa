@@ -67,6 +67,13 @@ bash docker/build_image.sh
 版本兼容性和构建选项参见 [docker/README.md](docker/README.md)。若要安装到已具备
 MUSA SDK 的主机上，请使用下面的源码安装。
 
+### 服务 Cookbook
+
+逐个 checkpoint 的 Qwen 和 DeepSeek-V4-Flash 服务配置收录在
+[v0.28.0-dev 服务 Cookbook](docs/cookbook/README.md) 中。能在单张 S5000 上装下的
+checkpoint 优先使用 TP1；DeepSeek-V4-Flash 使用 TP8。这些配置是开发分支的起始配置，
+上线前请针对实际镜像和业务流量重新验证。
+
 ### 软件包索引
 
 `vllm-musa` 的依赖来自**两个**索引：
@@ -74,7 +81,7 @@ MUSA SDK 的主机上，请使用下面的源码安装。
 | 索引 | URL | 提供内容 |
 |---|---|---|
 | 摩尔线程 | `https://dl.mthreads.com/repo/api/pypi/pypi/simple` | `requirements/musa_private.txt` 中约束的 MUSA wheel — `torch`、`torch_musa`、`mate`、`flash_attn_3`、`flash_mla`、`deep-gemm`、`tilelang_musa`、`triton`、`apache-tvm-ffi` 等 |
-| 公共 PyPI | `https://pypi.org/simple` 或其镜像 | `requirements/build.txt` 与 `requirements/common.txt` 中的普通第三方 wheel |
+| 公共 PyPI | `https://pypi.org/simple` 或其镜像 | `torchada` 以及 `requirements/build.txt` 与 `requirements/common.txt` 中的普通第三方 wheel |
 
 大部分 MUSA wheel 并未发布到公共 PyPI，因此用 pip 默认索引安装
 `requirements/musa.txt` 会失败并报
@@ -91,7 +98,8 @@ MUSA wheel 必须在摩尔线程索引作为**唯一** `--index-url` 的前提�
 1. 克隆仓库：
 
     ```bash
-    git clone https://github.com/MooreThreads/vllm-musa.git
+    git clone --branch v0.28.0-dev --single-branch \
+        https://github.com/MooreThreads/vllm-musa.git
     cd vllm-musa
     ```
 

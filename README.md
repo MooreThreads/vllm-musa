@@ -71,6 +71,14 @@ See [docker/README.md](docker/README.md) for version compatibility and build
 options. To install onto a host that already has the MUSA SDK, use the source
 install below.
 
+### Serving cookbook
+
+Per-checkpoint serving profiles for Qwen and DeepSeek-V4-Flash are collected in
+the [v0.28.0-dev serving cookbook](docs/cookbook/README.md). Use TP1 when a
+checkpoint fits on one S5000; DeepSeek-V4-Flash uses TP8. These are starting
+profiles for the development line, so revalidate the exact image and workload
+before production use.
+
 ### Package indexes
 
 `vllm-musa` resolves its dependencies from **two** indexes:
@@ -78,7 +86,7 @@ install below.
 | Index | URL | Provides |
 |---|---|---|
 | Moore Threads | `https://dl.mthreads.com/repo/api/pypi/pypi/simple` | the MUSA wheels pinned in `requirements/musa_private.txt` — `torch`, `torch_musa`, `mate`, `flash_attn_3`, `flash_mla`, `deep-gemm`, `tilelang_musa`, `triton`, `apache-tvm-ffi`, … |
-| Public PyPI | `https://pypi.org/simple`, or a mirror | the ordinary third-party wheels in `requirements/build.txt` and `requirements/common.txt` |
+| Public PyPI | `https://pypi.org/simple`, or a mirror | `torchada` and the ordinary third-party wheels in `requirements/build.txt` and `requirements/common.txt` |
 
 Most of the MUSA wheels are not published on public PyPI, so installing
 `requirements/musa.txt` with pip's default index fails with
@@ -97,7 +105,8 @@ there and the merged index only supplies the ordinary dependencies.
 1. Clone the repository:
 
     ```bash
-    git clone https://github.com/MooreThreads/vllm-musa.git
+    git clone --branch v0.28.0-dev --single-branch \
+        https://github.com/MooreThreads/vllm-musa.git
     cd vllm-musa
     ```
 
