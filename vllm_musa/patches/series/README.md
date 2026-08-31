@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **139 patches**. This branch includes the Qwen3.6 patches for common
+Currently **140 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -50,3 +50,7 @@ object/registration patches (which patch live objects at import) are kept
 separately in `vllm_musa/patches/`, not in this build-time series. Run
 `python3 tools/musa_sync.py verify` to replay and verify the complete manifest
 against that exact pinned commit.
+
+The MATE 0.2.6 contract follows the current base release and includes the
+`+musa` wheels, `mate-mubin`, and `flashinfer-python`; Hy4-specific patches
+remain layered after the base series.

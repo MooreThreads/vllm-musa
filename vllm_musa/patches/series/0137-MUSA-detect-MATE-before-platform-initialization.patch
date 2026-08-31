@@ -4,11 +4,11 @@ Date: Sun, 30 Aug 2026 09:45:47 +0800
 Subject: [PATCH] MUSA: detect MATE before platform initialization
 
 ---
- vllm/utils/deep_gemm.py | 21 ++++++++++++++++-----
- 1 file changed, 16 insertions(+), 5 deletions(-)
+ vllm/utils/deep_gemm.py | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
-index c9a4a2f2ff..e88defbf2a 100644
+index 98a4c9dca1..9eadb284cd 100644
 --- a/vllm/utils/deep_gemm.py
 +++ b/vllm/utils/deep_gemm.py
 @@ -30,6 +30,17 @@ _DEEPGEMM_BLACKWELL_EXCLUDED_MODEL_TYPES: set[str] = {
@@ -47,30 +47,3 @@ index c9a4a2f2ff..e88defbf2a 100644
              logger.info_once(
                  "DeepGEMM E8M0 disabled on MUSA: grouped FP8 UE8M0 cast is "
                  "not supported by the MUSA DeepGEMM backend."
-@@ -504,7 +515,7 @@ def m_grouped_fp8_gemm_nt_contiguous(*args, **kwargs):
-     _lazy_init()
-     if _grouped_impl is None:
-         return _missing(*args, **kwargs)
--    if current_platform.is_musa():
-+    if _is_musa_runtime():
-         kwargs.pop("disable_ue8m0_cast", None)
-         return _grouped_impl(*args, **kwargs)
-     return _grouped_impl(
-@@ -516,7 +527,7 @@ def m_grouped_fp8_fp4_gemm_nt_contiguous(*args, **kwargs):
-     _lazy_init()
-     if _grouped_fp4_impl is None:
-         return _missing(*args, **kwargs)
--    if current_platform.is_musa():
-+    if _is_musa_runtime():
-         kwargs.pop("disable_ue8m0_cast", None)
-         return _grouped_fp4_impl(*args, **kwargs)
-     return _grouped_fp4_impl(
-@@ -528,7 +539,7 @@ def fp8_m_grouped_gemm_nt_masked(*args, **kwargs):
-     _lazy_init()
-     if _grouped_masked_impl is None:
-         return _missing(*args, **kwargs)
--    if current_platform.is_musa():
-+    if _is_musa_runtime():
-         kwargs.pop("disable_ue8m0_cast", None)
-         return _grouped_masked_impl(*args, **kwargs)
-     return _grouped_masked_impl(

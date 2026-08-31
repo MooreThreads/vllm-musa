@@ -17,10 +17,12 @@ torch_musa==2.11.0.post1+musa5.2.0
 torchvision==0.26.0.post1+musa5.2.0
 torchaudio==2.11.0+musa5.2.0
 mate==0.2.6
-flash_attn_3==0.2.6
-flash_mla==0.2.6
-deep-gemm==0.2.6
-sageattention==0.2.6
+mate-mubin==0.2.6
+flash_attn_3==0.2.6+musa
+flash_mla==0.2.6+musa
+deep-gemm==0.2.6+musa
+flashinfer-python==0.2.6+musa
+sageattention==0.2.6+musa
 deep_ep==1.1.0+musa5.2.0torch2.11.0.post1
 tilelang_musa==0.1.12+musa.2
 # The MUSA 5.2.0 Triton backend remains pinned independently of the PyTorch

@@ -27,9 +27,8 @@ Subject: [PATCH] MUSA: enable Hy4 preview
  vllm/transformers_utils/configs/__init__.py   |    2 +
  vllm/transformers_utils/configs/hy_v4.py      |  179 +++
  .../model_arch_config_convertor.py            |    2 +
- vllm/utils/deep_gemm.py                       |    9 +
  vllm/v1/worker/gpu/spec_decode/speculator.py  |   20 +-
- 25 files changed, 5162 insertions(+), 15 deletions(-)
+ 24 files changed, 5153 insertions(+), 15 deletions(-)
  create mode 100644 vllm/models/hy_v4/__init__.py
  create mode 100644 vllm/models/hy_v4/nvidia/__init__.py
  create mode 100644 vllm/models/hy_v4/nvidia/attention.py
@@ -5502,40 +5501,6 @@ index 4b65e2584c..7ca430afaa 100644
              "kimi_k2",
              "kimi_linear",
              "longcat_flash",
-diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
-index 1ee9e43610..c9a4a2f2ff 100644
---- a/vllm/utils/deep_gemm.py
-+++ b/vllm/utils/deep_gemm.py
-@@ -504,6 +504,9 @@ def m_grouped_fp8_gemm_nt_contiguous(*args, **kwargs):
-     _lazy_init()
-     if _grouped_impl is None:
-         return _missing(*args, **kwargs)
-+    if current_platform.is_musa():
-+        kwargs.pop("disable_ue8m0_cast", None)
-+        return _grouped_impl(*args, **kwargs)
-     return _grouped_impl(
-         *args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs
-     )
-@@ -513,6 +516,9 @@ def m_grouped_fp8_fp4_gemm_nt_contiguous(*args, **kwargs):
-     _lazy_init()
-     if _grouped_fp4_impl is None:
-         return _missing(*args, **kwargs)
-+    if current_platform.is_musa():
-+        kwargs.pop("disable_ue8m0_cast", None)
-+        return _grouped_fp4_impl(*args, **kwargs)
-     return _grouped_fp4_impl(
-         *args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs
-     )
-@@ -522,6 +528,9 @@ def fp8_m_grouped_gemm_nt_masked(*args, **kwargs):
-     _lazy_init()
-     if _grouped_masked_impl is None:
-         return _missing(*args, **kwargs)
-+    if current_platform.is_musa():
-+        kwargs.pop("disable_ue8m0_cast", None)
-+        return _grouped_masked_impl(*args, **kwargs)
-     return _grouped_masked_impl(
-         *args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs
-     )
 diff --git a/vllm/v1/worker/gpu/spec_decode/speculator.py b/vllm/v1/worker/gpu/spec_decode/speculator.py
 index fc4f78a81a..ab6c4373d3 100644
 --- a/vllm/v1/worker/gpu/spec_decode/speculator.py
