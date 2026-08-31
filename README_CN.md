@@ -74,6 +74,16 @@ MUSA SDK 的主机上，请使用下面的源码安装。
 checkpoint 优先使用 TP1；DeepSeek-V4-Flash 使用 TP8。这些配置是开发分支的起始配置，
 上线前请针对实际镜像和业务流量重新验证。
 
+### 新模型支持镜像
+
+以下镜像包含近期新增的 MUSA 模型支持：
+
+| 模型 | 模型卡片 | 镜像 |
+|---|---|---|
+| Qwen3.8-Flash-Next | [Qwen/Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next` |
+| Hy4-preview | [tencent/Hy4-preview](https://huggingface.co/tencent/Hy4-preview) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview` |
+| GLM-5.3-Flash | [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash` |
+
 ### 软件包索引
 
 `vllm-musa` 的依赖来自**两个**索引：

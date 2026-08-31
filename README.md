@@ -79,6 +79,16 @@ checkpoint fits on one S5000; DeepSeek-V4-Flash uses TP8. These are starting
 profiles for the development line, so revalidate the exact image and workload
 before production use.
 
+### New model support images
+
+The following images package recent model support on MUSA:
+
+| Model | Model card | Image |
+|---|---|---|
+| Qwen3.8-Flash-Next | [Qwen/Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next` |
+| Hy4-preview | [tencent/Hy4-preview](https://huggingface.co/tencent/Hy4-preview) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview` |
+| GLM-5.3-Flash | [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash` |
+
 ### Package indexes
 
 `vllm-musa` resolves its dependencies from **two** indexes:
