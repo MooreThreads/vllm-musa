@@ -84,7 +84,7 @@ The following images package recent model support on MUSA:
 
 | vLLM-MUSA | PyTorch/MUSA | Engine | Status |
 |---|---|---|---|
-| v0.28.0 | 2.11.x | V1 only | Upgrade candidate |
+| v0.28.0-dev | 2.11.x | V1 only | Upgrade candidate |
 
 The V1 engine may automatically select Model Runner V2 for supported model
 architectures; both runners are supported on MUSA.
