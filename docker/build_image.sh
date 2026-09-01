@@ -33,7 +33,7 @@ VLLM_MUSA_COMMIT="$(git rev-parse HEAD)"
 VLLM_MUSA_REF="$(git describe --tags --exact-match 2>/dev/null || git branch --show-current)"
 VLLM_TAG="$(awk -F= '$1 == "VLLM_TAG" {print $2; exit}' third_party/PINS)"
 
-MOONCAKE_VERSION="${MOONCAKE_VERSION:-0.3.12.post1}"
+MOONCAKE_VERSION="${MOONCAKE_VERSION:-0.3.13}"
 BUILD_VLLM_RS="${BUILD_VLLM_RS:-1}"
 
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-vllm-musa}"

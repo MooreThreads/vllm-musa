@@ -184,7 +184,7 @@ def test_musa_image_stage_and_optional_component_contract():
         1
     ].split("FROM mooncake AS final", 1)[0]
     assert "MTHREADS_VISIBLE_DEVICES" not in mooncake_stage
-    assert "ARG MOONCAKE_VERSION=0.3.12.post1" in mooncake_stage
+    assert "ARG MOONCAKE_VERSION=0.3.13" in mooncake_stage
     assert '"mooncake-transfer-engine-musa==${MOONCAKE_VERSION}"' in mooncake_stage
     assert '--index-url "${PYPI_INDEX_URL}"' in mooncake_stage
     assert "--only-binary=:all:" in mooncake_stage
@@ -200,7 +200,7 @@ def test_musa_image_stage_and_optional_component_contract():
     ):
         assert source_build_token not in mooncake_stage
 
-    assert 'MOONCAKE_VERSION="${MOONCAKE_VERSION:-0.3.12.post1}"' in build_script
+    assert 'MOONCAKE_VERSION="${MOONCAKE_VERSION:-0.3.13}"' in build_script
     assert '--build-arg MOONCAKE_VERSION="${MOONCAKE_VERSION}"' in build_script
     assert "MOONCAKE_REPO" not in build_script
     assert "MOONCAKE_COMMIT" not in build_script
@@ -214,6 +214,11 @@ def test_musa_image_stage_and_optional_component_contract():
     final_stage = final_stage.split("FROM mooncake AS final", 1)[1]
     assert 'CMD ["/bin/bash"]' in final_stage
     assert "ENTRYPOINT" not in final_stage
+    assert "ARG MOONCAKE_VERSION=0.3.13" in final_stage
+    assert (
+        'com.mthreads.vllm-musa.mooncake-version="${MOONCAKE_VERSION}"'
+        in final_stage
+    )
     assert 'ENTRYPOINT ["vllm", "serve"]' in openai_stage
 
 
@@ -245,6 +250,27 @@ def test_mooncake_uses_the_pinned_upstream_connector():
     assert '"MOONCAKE_RDMA_DEVICES"' in mooncake_compat
     assert "import mooncake" not in mooncake_compat
     assert "from vllm" not in mooncake_compat
+
+
+def test_mooncake_connector_accepts_musa_kv_first_layout():
+    """The v0.28 upstream connector must not reject MUSA's physical cache."""
+    layout_patch = (
+        ROOT
+        / "vllm_musa"
+        / "patches"
+        / "series"
+        / "0134-MUSA-support-Mooncake-with-KV-first-cache.patch"
+    ).read_text()
+
+    assert (
+        "MUSA FlashAttention exposes the legacy K/V-first physical layout"
+        in layout_patch
+    )
+    assert "standardized blocks-first caches stay one" in layout_patch
+    assert "K/V-first caches are registered as two views" in layout_patch
+    assert "self._is_kv_layout_blocks_first = self.is_mamba or" in layout_patch
+    assert "def split_k_and_v" in layout_patch
+    assert "cache_list = list(cache_or_caches)" in layout_patch
 
 
 def test_mooncake_example_uses_current_proxy_and_scoped_cleanup():

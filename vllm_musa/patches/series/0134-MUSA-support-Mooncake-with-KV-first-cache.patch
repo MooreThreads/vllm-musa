@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: vLLM-MUSA <musa-dev@mthreads.com>
+Date: Thu, 27 Aug 2026 19:30:00 +0800
+Subject: [PATCH] MUSA: support Mooncake with K/V-first cache layout
+
+The MUSA FlashAttention backend retains a physical [2, num_blocks, ...]
+cache layout. Upstream vLLM 0.28's Mooncake topology check assumed the
+standardized blocks-first layout and rejected the engine before it could
+register the cache. Detect both layouts and expose the K/V-first views as
+separate Mooncake regions while leaving the standardized path unchanged.
+
+---
+ vllm/distributed/kv_transfer/kv_connector/utils.py                 | 25 ++++++++++++++++---------
+ .../kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py     |  5 +++++
+ 2 files changed, 21 insertions(+), 9 deletions(-)
+
+diff --git a/vllm/distributed/kv_transfer/kv_connector/utils.py b/vllm/distributed/kv_transfer/kv_connector/utils.py
+index b551664..0000000 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/utils.py
++++ b/vllm/distributed/kv_transfer/kv_connector/utils.py
+@@ -439,16 +439,14 @@ class TransferTopology:
+                 head_size=1,
+             )
+             logger.debug("Test kv_cache_shape: %s", kv_cache_shape)
+-            assert kv_cache_shape[0] == 1, (
+-                "KV cache layout must be blocks-first; expected mocked "
+-                f"num_blocks=1 in leading dim, got shape {kv_cache_shape}."
+-            )
+-            if not self.is_mla:
+-                assert len(kv_cache_shape) == 4, (
+-                    "Attention KV cache layout must be standardized as "
+-                    "[num_blocks, num_kv_heads, block_size, content_size], "
+-                    f"got shape {kv_cache_shape}."
+-                )
++        # MUSA FlashAttention exposes the legacy K/V-first physical layout
++        # [2, num_blocks, block_size, n_kv_heads, head_size].  Mooncake can
++        # transfer either layout: standardized blocks-first caches stay one
++        # packed region, while K/V-first caches are registered as two views.
++        self._is_kv_layout_blocks_first = self.is_mamba or (
++            len(kv_cache_shape) == 5 and kv_cache_shape[0] == 1
++        )
+ 
+         self._cross_layers_blocks = False
+         if self.tensor_shape is not None:
+@@ -508,6 +506,10 @@ class TransferTopology:
+     # ============================================================
+ 
+     @property
++    def is_kv_layout_blocks_first(self) -> bool:
++        return self._is_kv_layout_blocks_first
++
++    @property
+     def cross_layers_blocks(self) -> bool:
+         return self._cross_layers_blocks
+ 
+@@ -521,6 +523,13 @@ class TransferTopology:
+         # interleaving means a simple half-split does not separate the parts).
+         return self.is_mamba and not self._cross_layers_blocks
+ 
++    @property
++    def split_k_and_v(self) -> bool:
++        """Whether a K/V-first tensor needs separate transfer regions."""
++        return not (
++            self._cross_layers_blocks or self.is_mla or self.is_kv_layout_blocks_first
++        )
++
+     # ============================================================
+     # Common methods
+     # ============================================================
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
+index dd94ffb..0000000 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
+@@ -1665,6 +1665,7 @@ class MooncakeConnectorWorker:
+         self.registered_layer_indices = []
+         self.registered_group_indices = []
+ 
++        split_k_and_v = self.transfer_topo.split_k_and_v
+         for layer_name, cache_or_caches in kv_caches.items():
+             layer_index = extract_layer_index(layer_name)
+             layer_spec = self._layer_specs.get(layer_name)
+@@ -1677,6 +1678,10 @@ class MooncakeConnectorWorker:
+             if isinstance(layer_spec, MambaSpec):
+                 conv, _ = cache_or_caches
+                 cache_list = [conv]
++            elif split_k_and_v:
++                # MUSA FlashAttention stores K/V in the leading dimension;
++                # expose each 4-D view as one independent transfer region.
++                cache_list = list(cache_or_caches)
+             else:
+                 # K and V are packed into one blocks-first tensor per layer,
+                 # so each layer registers as a single region.
+                 cache_list = [cache_or_caches]
+
+-- 
+2.43.0

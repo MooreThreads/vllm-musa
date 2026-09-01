@@ -404,7 +404,7 @@ RUN mkdir -p /tmp/vllm-rs-artifacts && \
 # the final image enables it below.
 FROM vllm_musa_installed AS mooncake
 
-ARG MOONCAKE_VERSION=0.3.12.post1
+ARG MOONCAKE_VERSION=0.3.13
 ARG PYPI_INDEX_URL
 
 RUN python -m pip install \
@@ -417,6 +417,7 @@ RUN python -m pip install \
 FROM mooncake AS final
 
 ARG BUILD_VLLM_RS=1
+ARG MOONCAKE_VERSION=0.3.13
 
 ENV MTHREADS_VISIBLE_DEVICES=all
 
@@ -455,7 +456,8 @@ ARG VLLM_TAG
 LABEL org.opencontainers.image.source="https://github.com/MooreThreads/vllm-musa" \
       org.opencontainers.image.revision="${VLLM_MUSA_COMMIT}" \
       org.opencontainers.image.version="${VLLM_MUSA_REF}" \
-      com.mthreads.vllm.version="${VLLM_TAG}"
+      com.mthreads.vllm.version="${VLLM_TAG}" \
+      com.mthreads.vllm-musa.mooncake-version="${MOONCAKE_VERSION}"
 
 CMD ["/bin/bash"]
 

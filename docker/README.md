@@ -144,7 +144,7 @@ docker run --rm --entrypoint /bin/bash vllm-musa:test \
 | `MCCL_VERSION` | `2.4.0` | MCCL (collective communication library) version. |
 | `PYPI_INDEX_URL` | `https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple` | Public index for ordinary third-party wheels **and** the vendored vLLM's dependencies. |
 | `MUSA_PIP_INDEX_URL` | `https://dl.mthreads.com/repo/api/pypi/pypi/simple` | Moore Threads index for the MUSA/MT wheels. |
-| `MOONCAKE_VERSION` | `0.3.12.post1` | Exact `mooncake-transfer-engine-musa` version installed from `PYPI_INDEX_URL`. |
+| `MOONCAKE_VERSION` | `0.3.13` | Exact `mooncake-transfer-engine-musa` version installed from `PYPI_INDEX_URL`. |
 | `BUILD_VLLM_RS` | `1` | `1`: build and install `vllm-rs` plus `_rust_tool_parser`; `0`: omit both and skip Rust/protoc setup. |
 | `IMAGE_REPOSITORY` | `vllm-musa` | Image repository name. |
 | `IMAGE_FLAVOR` | `ubuntu22.04_py<py>_musa_runtime_<ver>_pytorch_release_<torch>` | Tag flavor; `<torch>` is derived from `requirements/musa_private.txt` and sanitized for Docker tags. |

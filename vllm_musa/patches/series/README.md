@@ -36,6 +36,9 @@ enabled on MUSA by importing TileLang before the eager JIT decorators capture
 their module globals. DeepEP shutdown now drops cached handles before native
 teardown and supports both explicit `destroy()` and legacy destructor-only
 MUSA Buffer implementations.
+The final patch also teaches the upstream Mooncake connector to expose MUSA's
+K/V-first FlashAttention cache as separate K and V transfer regions while
+retaining the standard blocks-first path.
 The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime
