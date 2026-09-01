@@ -16,6 +16,19 @@
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10-blue.svg" alt="Python 3.10"></a>
 </p>
 
+---
+
+*New model support images* 🔥
+
+- [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next`
+- [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash`
+- [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
+
+These model-specific tags are maintained independently of this branch; verify
+the exact image and model revision before production use.
+
+---
+
 ## About
 
 vLLM-MUSA is the Moore Threads backend for [vLLM](https://github.com/vllm-project/vllm),
@@ -31,15 +44,16 @@ providing an OpenAI-compatible inference and serving engine for MUSA GPUs.
 
 ### Install
 
-Use the v0.28.0 release image:
+Use the published v0.28.0 release image:
 
 ```bash
 export VLLM_MUSA_IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.28.0
 docker pull "${VLLM_MUSA_IMAGE}"
 ```
 
-If the registry tag is not published yet, build and use the local image from
-the [installation guide](docs/installation.md).
+The image is built independently of this branch. Verify its installed package
+versions against `third_party/PINS`; build the local image from the
+[installation guide](docs/installation.md) when exact branch parity is needed.
 
 - [Installation and source build](docs/installation.md)
 - [Docker build guide](docker/README.md)
@@ -70,21 +84,11 @@ use the [serving cookbook](docs/cookbook/README.md).
 - [Development](docs/development.md)
 - [MUSA developer guide](docs/mdm-developer-guide.md)
 
-## New model support images
-
-The following images package recent model support on MUSA:
-
-| Model | Model card | Image |
-|---|---|---|
-| Qwen3.8-Flash-Next | [Qwen/Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next` |
-| GLM-5.3-Flash | [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash` |
-| Hy4-preview | [tencent/Hy4-preview](https://huggingface.co/tencent/Hy4-preview) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview` |
-
 ## Supported release
 
 | vLLM-MUSA | PyTorch/MUSA | Engine | Status |
 |---|---|---|---|
-| v0.28.0-dev | 2.11.x | V1 only | Upgrade candidate |
+| v0.28.0-dev | 2.11.x | V1 engine; Runner V2 where supported | Upgrade candidate |
 
 The V1 engine may automatically select Model Runner V2 for supported model
 architectures; both runners are supported on MUSA.

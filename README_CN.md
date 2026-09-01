@@ -16,6 +16,18 @@
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10-blue.svg" alt="Python 3.10"></a>
 </p>
 
+---
+
+*新模型支持镜像* 🔥
+
+- [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next`
+- [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash`
+- [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
+
+这些模型专用标签独立于当前分支维护；投入生产前请核对确切的镜像和模型版本。
+
+---
+
 ## 项目简介
 
 vLLM-MUSA 是摩尔线程为 [vLLM](https://github.com/vllm-project/vllm) 提供的后端，
@@ -31,14 +43,15 @@ vLLM-MUSA 是摩尔线程为 [vLLM](https://github.com/vllm-project/vllm) 提供
 
 ### 安装
 
-使用 v0.28.0 正式镜像：
+使用已发布的 v0.28.0 正式镜像：
 
 ```bash
 export VLLM_MUSA_IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.28.0
 docker pull "${VLLM_MUSA_IMAGE}"
 ```
 
-如果镜像标签尚未发布，请按照[安装指南](docs/installation-cn.md)构建并使用本地镜像。
+该镜像独立于当前分支构建。请将镜像内已安装的软件包版本与 `third_party/PINS`
+核对；需要与当前分支完全一致时，请按照[安装指南](docs/installation-cn.md)构建本地镜像。
 
 - [安装与源码构建指南](docs/installation-cn.md)
 - [Docker 构建指南（英文）](docker/README.md)
@@ -68,21 +81,11 @@ OpenAI 兼容接口地址为 `http://localhost:8000/v1`。
 - [开发指南（英文）](docs/development.md)
 - [MUSA 开发者指南（英文）](docs/mdm-developer-guide.md)
 
-## 新模型支持镜像
-
-以下镜像包含近期新增的 MUSA 模型支持：
-
-| 模型 | 模型卡片 | 镜像 |
-|---|---|---|
-| Qwen3.8-Flash-Next | [Qwen/Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next` |
-| GLM-5.3-Flash | [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash` |
-| Hy4-preview | [tencent/Hy4-preview](https://huggingface.co/tencent/Hy4-preview) | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview` |
-
 ## 支持版本
 
 | vLLM-MUSA | PyTorch/MUSA | 引擎 | 状态 |
 |---|---|---|---|
-| v0.28.0-dev | 2.11.x | 仅 V1 | 升级候选 |
+| v0.28.0-dev | 2.11.x | V1 引擎；支持时使用运行器 V2 | 升级候选 |
 
 V1 引擎会在支持的模型架构上自动选择模型运行器 V2；MUSA 同时支持两种运行器。
 当前分支跟踪 `third_party/PINS` 中固定的上游 v0.28.0 提交，并保留 MUSA
