@@ -118,6 +118,40 @@ Any extra arguments are forwarded verbatim to `docker build`, so you can also pa
 bash docker/build_image.sh --no-cache --build-arg http_proxy=http://proxy:8118
 ```
 
+To build the matching vLLM-Omni MUSA image on top of the complete runtime
+target:
+
+```bash
+IMAGE_TAG=vllm-omni-musa:0.28.0 bash docker/build_image.sh --target vllm-omni
+```
+
+The Omni source is pinned by `VLLM_OMNI_REPO`, `VLLM_OMNI_REF`, and
+`VLLM_OMNI_COMMIT` (defaults to the vLLM-Omni repository, `v0.28.0`, and the
+release commit). The target extends `vllm-openai` and keeps the `vllm serve`
+entrypoint; pass the model first and then `--omni`, as required by the v0.28
+CLI:
+
+```bash
+docker run --runtime=mthreads vllm-omni-musa:0.28.0 \
+  /path/to/omni-model --omni
+```
+
+The final extension also installs the audio/video and media runtime packages
+used by Omni serving paths (`ffmpeg`, `espeak-ng`, `libsndfile1`, and the
+GL/X11 runtime needed by `opencv-python`). Python dependencies are resolved
+from the public index, while the preinstalled MUSA packages remain constrained
+and verified. Omni's resolver requires child-only compatibility pins of
+NumPy `>=1.26.4,<2` and `opencv-python==4.11.0.86`; the parent vllm-musa
+target remains unchanged at its existing NumPy/OpenCV pins. Native
+`vllm_omni` import is intentionally deferred to the runtime smoke so CPU-only
+Docker builders do not require a MUSA driver.
+The child fixes Omni's platform-aware version override to report `0.28.0+musa` while retaining the
+immutable Omni commit in a separate provenance label.
+For the default Python 3.10 image, the Omni stage also applies the narrow
+`StrEnum` compatibility fallback used by its diffusion CLI imports and pins
+the `strenum==0.4.15` backport; Python 3.11+ continues to use the standard
+library implementation.
+
 Build the shell/test target under a separate tag when arbitrary container
 commands should run without overriding an entrypoint:
 
@@ -146,6 +180,12 @@ docker run --rm --entrypoint /bin/bash vllm-musa:test \
 | `MUSA_PIP_INDEX_URL` | `https://dl.mthreads.com/repo/api/pypi/pypi/simple` | Moore Threads index for the MUSA/MT wheels. |
 | `MOONCAKE_VERSION` | `0.3.12.post1` | Exact `mooncake-transfer-engine-musa` version installed from `PYPI_INDEX_URL`. |
 | `BUILD_VLLM_RS` | `1` | `1`: build and install `vllm-rs` plus `_rust_tool_parser`; `0`: omit both and skip Rust/protoc setup. |
+| `SKIP_THIRD_PARTY` | `0` | `1`: use pre-staged pinned `third_party` source caches; `0`: clone pinned sources during the build. |
+| `VLLM_OMNI_REPO` | `https://github.com/vllm-project/vllm-omni.git` | Source repository used by the optional `vllm-omni` target. |
+| `VLLM_OMNI_REF` | `v0.28.0` | Human-readable tag/ref checked out by the optional target. |
+| `VLLM_OMNI_COMMIT` | `eb11446b7f2e30ca582f8aff3afe12e9a2e66f6c` | Immutable commit verification for the optional target. |
+| `VLLM_MUSA_COMMIT` | current Git `HEAD` | Source revision label; set explicitly when building from a Git archive without `.git`. |
+| `VLLM_MUSA_REF` | exact tag or current branch | Source ref label; set explicitly when building from a Git archive without `.git`. |
 | `IMAGE_REPOSITORY` | `vllm-musa` | Image repository name. |
 | `IMAGE_FLAVOR` | `ubuntu22.04_py<py>_musa_runtime_<ver>_pytorch_release_<torch>` | Tag flavor; `<torch>` is derived from `requirements/musa_private.txt` and sanitized for Docker tags. |
 | `IMAGE_TAG` | `${IMAGE_REPOSITORY}:${IMAGE_FLAVOR}` | Full image tag. |
@@ -256,7 +296,9 @@ for the documented container shape and host-runtime prerequisite.
    The split keeps names like `torch`/`mate`/`apache-tvm-ffi` resolving from the
    internal index only, so pip never pulls the unrelated public (CUDA) builds.
 5. **vllm_musa_installed** — copies the source, builds `vllm-musa` + vendored
-   vLLM, re-pins numpy, installs runtime dependencies, and runs import checks.
+   vLLM, re-pins numpy, installs runtime dependencies, and validates imports.
+   Driver-dependent native packages use metadata plus import-spec checks during
+   image construction; real imports remain a hardware smoke requirement.
 6. **vllm_rs_build** — optionally builds Rust artifacts (`BUILD_VLLM_RS`) without
    carrying Rust/protoc into the final image.
 7. **mooncake** — installs the pinned `mooncake-transfer-engine-musa` wheel on
@@ -265,6 +307,11 @@ for the documented container shape and host-runtime prerequisite.
    removes build caches, and retains a shell command for test/debug use.
 9. **vllm-openai** — the default serving target, with `vllm serve` as its
    entrypoint.
+10. **vllm-omni** — optional final extension target that adds the pinned
+    vLLM-Omni release and its public/MUSA-compatible requirements on top of
+    `vllm-openai`.
+11. **default** — implicit terminal alias of `vllm-openai`, preserving the
+    existing no-`--target` build behavior.
 
 The Triton `3.2.0` pin is intentional for the MUSA 5.2 stack and is maintained
 independently of the PyTorch release. Validate image imports, Inductor, and

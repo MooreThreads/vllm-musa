@@ -281,6 +281,8 @@ RUN python /tmp/vllm-musa-mate-patch/apply_mate_dynamo_bool_patch.py && \
 
 FROM vllm_musa_deps AS vllm_musa_installed
 
+ARG SKIP_THIRD_PARTY=0
+
 # setup.py's develop_dynamic_library() installs the vendored vLLM with
 # --no-deps to avoid replacing the MUSA torch stack. Route the explicit vLLM
 # runtime dependency install and the numpy re-pin below through the same public
@@ -289,7 +291,7 @@ ARG PYPI_INDEX_URL
 ENV PIP_INDEX_URL=${PYPI_INDEX_URL}
 
 COPY . /vllm-workspace
-RUN python -m pip install \
+RUN SKIP_THIRD_PARTY="${SKIP_THIRD_PARTY}" python -m pip install \
         -e . --no-build-isolation -v && \
     python -m pip install numpy==1.26
 
@@ -303,6 +305,7 @@ RUN python -m pip install \
 
 RUN printf '%s\n' \
         'import importlib' \
+        'import importlib.util' \
         'import re' \
         'from pathlib import Path' \
         'from importlib.metadata import version' \
@@ -322,6 +325,12 @@ RUN printf '%s\n' \
         '' \
         'exact_version_dists = frozenset({"torchada", "torch", "torch_musa", "torchvision", "torchaudio", "deep_ep"})' \
         'exact_version_dists |= frozenset({"mate", "mate-mubin", "flash_attn_3", "flash_mla", "deep-gemm", "flashinfer-python", "sageattention", "tilelang_musa", "apache-tvm-ffi"})' \
+        'metadata_only_dists = frozenset({' \
+        '    "torchvision", "torchaudio", "mate", "mate-mubin", "flash_attn_3",' \
+        '    "flash_mla", "deep-gemm", "flashinfer-python", "sageattention",' \
+        '    "deep_ep", "tilelang_musa", "triton", "apache-tvm-ffi",' \
+        '    "torch_c_dlpack_ext",' \
+        '})' \
         '' \
         'expected = (' \
         '    ("torchada", "torchada", requirement_prefix("torchada")),' \
@@ -348,15 +357,19 @@ RUN printf '%s\n' \
         ')' \
         '' \
         'for dist_name, module_name, prefix in expected:' \
+        '    if dist_name in metadata_only_dists:' \
+        '        if importlib.util.find_spec(module_name) is None:' \
+        '            raise RuntimeError(f"missing import spec for {module_name}")' \
+        '        check_kind = "spec"' \
+        '    else:' \
+        '        importlib.import_module(module_name)' \
+        '        check_kind = "import"' \
         '    installed = version(dist_name)' \
-        '    skip_import = (dist_name == "tilelang_musa" and installed == "0.1.12+musa.2")' \
-        '    if not skip_import: importlib.import_module(module_name)' \
         '    if dist_name in exact_version_dists and installed != prefix:' \
         '        raise RuntimeError(f"{dist_name} expected exactly {prefix}, got {installed}")' \
         '    if dist_name not in exact_version_dists and prefix and not installed.startswith(prefix):' \
         '        raise RuntimeError(f"{dist_name} expected {prefix}, got {installed}")' \
-        '    action = "skip import" if skip_import else "import"' \
-        '    print(f"PASS {action} {module_name} version={installed}")' \
+        '    print(f"PASS {check_kind} {module_name} version={installed}")' \
         '' \
         'for module_name in ("vllm", "vllm_musa"):' \
         '    module = importlib.import_module(module_name)' \
@@ -464,3 +477,104 @@ CMD ["/bin/bash"]
 FROM final AS vllm-openai
 
 ENTRYPOINT ["vllm", "serve"]
+
+FROM vllm-openai AS vllm-omni
+
+ARG VLLM_OMNI_REPO=https://github.com/vllm-project/vllm-omni.git
+ARG VLLM_OMNI_REF=v0.28.0
+ARG VLLM_OMNI_COMMIT=eb11446b7f2e30ca582f8aff3afe12e9a2e66f6c
+ARG MUSA_PIP_INDEX_URL
+ARG PYPI_INDEX_URL
+ENV VLLM_OMNI_TARGET_DEVICE=musa \
+    VLLM_WORKER_MULTIPROC_METHOD=spawn \
+    PYTHONUNBUFFERED=1 \
+    MTHREADS_VISIBLE_DEVICES= \
+    VLLM_OMNI_VERSION_OVERRIDE=0.28.0+musa
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        espeak-ng \
+        jq \
+        libgl1 \
+        libglib2.0-0 \
+        libgomp1 \
+        libsm6 \
+        libsndfile1 \
+        libxcb1 \
+        libxext6 \
+        libxrender1 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Keep Omni's ordinary dependencies on the public index. The MUSA-specific
+# entries in requirements/musa.txt are already installed by the parent image
+# and are checked below; resolving that file against a merged index can replace
+# them with unrelated public CUDA packages.
+# OpenCV 5 currently requires NumPy 2 on Python 3.10+, so keep the Omni child
+# on the NumPy 1.x ABI supported by the MUSA parent image.
+RUN git clone --depth 1 --branch "${VLLM_OMNI_REF}" "${VLLM_OMNI_REPO}" /vllm-workspace/vllm-omni && \
+    cd /vllm-workspace/vllm-omni && \
+    test "$(git rev-parse HEAD)" = "${VLLM_OMNI_COMMIT}" && \
+    printf '%s\n' "${VLLM_OMNI_COMMIT}" > /vllm-workspace/vllm-omni/VLLM_OMNI_COMMIT && \
+    python -c 'from pathlib import Path; p=Path("vllm_omni/diffusion/data.py"); old="from enum import Enum, StrEnum"; new="from enum import Enum\ntry:\n    from enum import StrEnum\nexcept ImportError:\n    from strenum import StrEnum"; source=p.read_text(); assert source.count(old) == 1; p.write_text(source.replace(old, new))' && \
+    python -m pip install --no-deps --index-url "${MUSA_PIP_INDEX_URL}" \
+        "tilelang-musa==0.1.8+musa.3" && \
+    for distribution in apache-tvm-ffi deep-gemm deep_ep flash_attn_3 flash_mla flashinfer-python mate mate-mubin sageattention tilelang_musa torch torch-c-dlpack-ext torchaudio torch_musa torchada torchvision triton vllm vllm-musa; do \
+        installed_version="$(python -c 'from importlib.metadata import version; import sys; print(version(sys.argv[1]))' "${distribution}")"; \
+        printf '%s==%s\n' "${distribution}" "${installed_version}"; \
+    done > /tmp/vllm-musa-constraints.txt && \
+    VLLM_OMNI_TARGET_DEVICE=musa python -m pip install --no-deps -e . --no-build-isolation -v && \
+    if python -m pip show opencv-python-headless >/dev/null 2>&1; then \
+        python -m pip uninstall -y opencv-python-headless; \
+    fi && \
+    python -m pip install --constraint /tmp/vllm-musa-constraints.txt \
+        --index-url "${PYPI_INDEX_URL}" \
+        -r requirements/common.txt \
+        "numpy>=1.26.4,<2" \
+        "opencv-python==4.11.0.86" \
+        "onnxruntime>=1.23.2" \
+        "strenum==0.4.15; python_version < '3.11'" && \
+    printf '%s\n' \
+        'from importlib.metadata import version' \
+        'from pathlib import Path' \
+        'from packaging.requirements import Requirement' \
+        'from packaging.version import Version' \
+        '' \
+        'checks = (("torchada", ">=0.1.52"), ("mate", ">=0.2.0"), ("flash_attn_3", ">=0.1.4"))' \
+        'for name, spec in checks:' \
+        '    installed = Version(version(name))' \
+        '    assert installed in Requirement(f"{name}{spec}").specifier, (name, installed, spec)' \
+        '    print(f"PASS preserve {name} version={installed}")' \
+        '' \
+        'for line in Path("/tmp/vllm-musa-constraints.txt").read_text().splitlines():' \
+        '    name, expected = line.split("==", 1)' \
+        '    actual = version(name)' \
+        '    assert actual == expected, (name, expected, actual)' \
+        '    print(f"PASS preserve {name} version={actual}")' \
+        '' \
+        'numpy_version = Version(version("numpy"))' \
+        'assert numpy_version >= Version("1.26.4") and numpy_version < Version("2"), numpy_version' \
+        'print(f"PASS omni numpy override version={numpy_version}")' \
+        > /tmp/vllm_omni_preserve_check.py && \
+    python /tmp/vllm_omni_preserve_check.py && \
+    python -c 'import av, cv2, soundfile; assert cv2.__version__.startswith("4.11."), cv2.__version__; print("PASS media imports av=" + av.__version__ + " cv2=" + cv2.__version__ + " soundfile=" + soundfile.__version__)' && \
+    rm -f /tmp/vllm_omni_preserve_check.py /tmp/vllm-musa-constraints.txt && \
+    rm -rf /root/.cache/pip /vllm-workspace/vllm-omni/.git
+
+RUN ffmpeg -version >/dev/null && \
+    ffprobe -version >/dev/null && \
+    python -c 'import importlib.util; from importlib.metadata import version; assert importlib.util.find_spec("vllm_omni") is not None; assert version("vllm-omni") == "0.28.0+musa", version("vllm-omni"); print("PASS spec vllm_omni version=" + version("vllm-omni"))' && \
+    python -m compileall -q /vllm-workspace/vllm-omni/vllm_omni
+
+LABEL com.mthreads.vllm-omni.repository="${VLLM_OMNI_REPO}" \
+      com.mthreads.vllm-omni.ref="${VLLM_OMNI_REF}" \
+      com.mthreads.vllm-omni.revision="${VLLM_OMNI_COMMIT}" \
+      com.mthreads.vllm-omni.python310-strenum-backport="strenum==0.4.15"
+
+ENV MTHREADS_VISIBLE_DEVICES=all
+
+ENTRYPOINT ["vllm", "serve"]
+
+# Keep Docker's implicit (no --target) build behavior on the regular image.
+FROM vllm-openai AS default

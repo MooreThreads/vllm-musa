@@ -29,12 +29,16 @@ if [[ -z "${PYTORCH_RELEASE}" ]]; then
 fi
 PYTORCH_RELEASE_TAG="$(printf '%s' "${PYTORCH_RELEASE}" | sed 's/[^A-Za-z0-9_.-]/_/g')"
 
-VLLM_MUSA_COMMIT="$(git rev-parse HEAD)"
-VLLM_MUSA_REF="$(git describe --tags --exact-match 2>/dev/null || git branch --show-current)"
+VLLM_MUSA_COMMIT="${VLLM_MUSA_COMMIT:-$(git rev-parse HEAD)}"
+VLLM_MUSA_REF="${VLLM_MUSA_REF:-$(git describe --tags --exact-match 2>/dev/null || git branch --show-current)}"
 VLLM_TAG="$(awk -F= '$1 == "VLLM_TAG" {print $2; exit}' third_party/PINS)"
 
 MOONCAKE_VERSION="${MOONCAKE_VERSION:-0.3.12.post1}"
 BUILD_VLLM_RS="${BUILD_VLLM_RS:-1}"
+SKIP_THIRD_PARTY="${SKIP_THIRD_PARTY:-0}"
+VLLM_OMNI_REPO="${VLLM_OMNI_REPO:-https://github.com/vllm-project/vllm-omni.git}"
+VLLM_OMNI_REF="${VLLM_OMNI_REF:-v0.28.0}"
+VLLM_OMNI_COMMIT="${VLLM_OMNI_COMMIT:-eb11446b7f2e30ca582f8aff3afe12e9a2e66f6c}"
 
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-vllm-musa}"
 IMAGE_FLAVOR="${IMAGE_FLAVOR:-ubuntu22.04_py${PYTHON_VERSION}_musa_runtime_${MUSA_RUNTIME_VERSION}_pytorch_release_${PYTORCH_RELEASE_TAG}}"
@@ -54,8 +58,12 @@ docker build \
     --build-arg MCCL_VERSION="${MCCL_VERSION}" \
     --build-arg MOONCAKE_VERSION="${MOONCAKE_VERSION}" \
     --build-arg BUILD_VLLM_RS="${BUILD_VLLM_RS}" \
+    --build-arg SKIP_THIRD_PARTY="${SKIP_THIRD_PARTY}" \
     --build-arg VLLM_MUSA_COMMIT="${VLLM_MUSA_COMMIT}" \
     --build-arg VLLM_MUSA_REF="${VLLM_MUSA_REF}" \
     --build-arg VLLM_TAG="${VLLM_TAG}" \
+    --build-arg VLLM_OMNI_REPO="${VLLM_OMNI_REPO}" \
+    --build-arg VLLM_OMNI_REF="${VLLM_OMNI_REF}" \
+    --build-arg VLLM_OMNI_COMMIT="${VLLM_OMNI_COMMIT}" \
     "$@" \
     .
