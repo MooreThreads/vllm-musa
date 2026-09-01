@@ -33,8 +33,8 @@ also needs the verbs and `rdma_cm` character devices plus locked-memory access.
 The following non-privileged container shape is intended for S5000 with RoCE
 on a host whose Docker daemon provides the MUSA runtime by default. It does
 not select a runtime by name; configure the host runtime before using it.
-Replace the image tag with the source-built image if the v0.28.0 release image
-has not been published yet.
+The registry image is maintained independently of this branch; use the
+source-built image when the exact branch dependency stack is required.
 
 ```bash
 IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.28.0

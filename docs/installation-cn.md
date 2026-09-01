@@ -25,15 +25,15 @@ v0.28.0-dev 依赖栈使用 PyTorch 2.11.x。驱动、工具包和 wheel 应来�
 
 ## 容器
 
-v0.28.0 推荐直接使用正式镜像：
+要运行与 v0.28.0-dev 兼容的服务，最快的方式是使用 v0.28.0 正式镜像：
 
 ```bash
 export VLLM_MUSA_IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.28.0
 docker pull "${VLLM_MUSA_IMAGE}"
 ```
 
-该 registry tag 是计划使用的正式镜像名称。如果暂未发布，请改为使用下文构建的
-本地镜像。
+该 registry tag 独立于当前分支发布，可能使用不同的依赖版本。请将镜像内已安装的
+软件包版本与分支固定版本核对；需要完全一致时，请使用下文构建的本地镜像。
 
 镜像以 `vllm serve` 为入口点；在模型路径后追加
 [服务配置示例（英文）](cookbook/README.md)中的引擎参数，并为 `docker run`

@@ -88,7 +88,7 @@ use the [serving cookbook](docs/cookbook/README.md).
 
 | vLLM-MUSA | PyTorch/MUSA | Engine | Status |
 |---|---|---|---|
-| v0.28.0-dev | 2.11.x | V1 engine; Runner V2 where supported | Upgrade candidate |
+| v0.28.0-dev | 2.11.x | V1 + V2 | Upgrade candidate |
 
 The V1 engine may automatically select Model Runner V2 for supported model
 architectures; both runners are supported on MUSA.

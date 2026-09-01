@@ -28,15 +28,17 @@ build instead of the MUSA build.
 
 ## Container
 
-The recommended installation path for v0.28.0 is the release image:
+The quickest path for v0.28.0-dev-compatible serving is the v0.28.0 release image:
 
 ```bash
 export VLLM_MUSA_IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.28.0
 docker pull "${VLLM_MUSA_IMAGE}"
 ```
 
-The registry tag is the planned release image name. If it is not published yet,
-build and use the local image described below instead.
+The registry tag is published independently of this branch and can carry a
+different dependency revision. Verify the installed package versions against
+the branch pins; build and use the local image below when exact parity is
+required.
 
 The image uses `vllm serve` as its entrypoint, so pass the model path followed
 by the engine arguments from the [serving cookbook](cookbook/README.md). Apply

@@ -11,8 +11,9 @@ an MTP-off profile for deployments that do not use speculative decoding.
 > batches. Keep chunked prefill enabled so long prefills do not block active
 > decode requests for their full duration.
 
-This MTP4 profile is a starting configuration for v0.28.0-dev. Verify semantic
-output and serving health on the target image before production use.
+This MTP4 profile carries forward the v0.24 tuning. The v0.28.0-dev branch
+still requires verification-semantics and serving-health validation on the
+target image before this candidate is promoted to a production recommendation.
 
 ## At a glance
 
@@ -24,7 +25,7 @@ output and serving health on the target image before production use.
 | KV cache | FP8 |
 | Maximum context | 6,144 tokens |
 | Maximum sequences | 64 |
-| Recommended profile | Fixed MTP4 |
+| Candidate profile | Fixed MTP4 |
 | Alternative | MTP-off |
 
 ## Prerequisites

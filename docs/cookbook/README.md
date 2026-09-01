@@ -1,6 +1,6 @@
 # vLLM-MUSA serving recipes
 
-Starting configurations for serving the listed models with vLLM-MUSA v0.28.0
+Starting configurations for serving the listed models with vLLM-MUSA v0.28.0-dev
 on S5000 GPUs. Revalidate the exact image, model checkpoint, and workload
 before treating a profile as a production recommendation.
 
@@ -19,8 +19,9 @@ release line are intentionally not carried over.
 - Run inside the v0.28.0 release image
   `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.28.0`, or an
   equivalent installation.
-- The registry tag is the planned release image name; if it is not published
-  yet, build and use the local image described in the installation guide.
+- The registry tag is published independently of this branch and may carry a
+  different dependency revision; verify package versions, or build the local
+  image described in the installation guide for exact branch parity.
 - Mount the checkpoint under `/mnt/models` or update the path in the command.
 - Keep TP1 when a model fits on one GPU; increase TP only when memory requires
   it.

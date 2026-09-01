@@ -46,8 +46,9 @@ export VLLM_MUSA_IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-opena
 docker pull "${VLLM_MUSA_IMAGE}"
 ```
 
-The registry tag is the planned release image name. If it is not published yet,
-use the source-built image below.
+The registry tag is published independently of this branch and may carry a
+different dependency revision. Verify package versions before benchmarking; use
+the source-built image below for exact branch parity.
 
 To build the same serving target from source, run from the repository root:
 
