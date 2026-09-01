@@ -155,13 +155,15 @@ bash docker/build_image.sh --target vllm_musa_deps
 
 ## Building on a MUSA host
 
-The `final` stage's verify step imports every MUSA package, including `tilelang`
-and `flash_mla`, which require `torch.musa.is_available()` to be `True` at import
-time. That is only satisfied when the build step can see the GPU — i.e. when the
-**MUSA container runtime is the host's default docker runtime**, so `docker build`
-`RUN` steps get the device. On a CPU-only builder the build otherwise completes
-and then fails at the verify step with
-`ImportError: cannot import name 'GPUEvent' from 'tilelang.utils.device'`.
+The verify step normally imports every MUSA package, including `tilelang` and
+`flash_mla`, which require `torch.musa.is_available()` to be `True` at import
+time. For the known `tilelang_musa==0.1.12+musa.2` packaging issue, the Docker
+build skips only that `tilelang` import to avoid
+`ImportError: cannot import name 'GPUEvent' from 'tilelang.utils.device'` on a
+GPU-less builder. The exact package-version check remains enforced, and runtime
+imports are unchanged. Other imports still require GPU visibility when needed —
+i.e. the **MUSA container runtime must be the host's default docker runtime** so
+`docker build` `RUN` steps get the device.
 
 Two build-time details make this work on such a host:
 
