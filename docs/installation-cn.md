@@ -34,6 +34,8 @@ docker pull "${VLLM_MUSA_IMAGE}"
 
 该 registry tag 独立于当前分支发布，可能使用不同的依赖版本。请将镜像内已安装的
 软件包版本与分支固定版本核对；需要完全一致时，请使用下文构建的本地镜像。
+在本次 backport 时，已发布标签中的 MATE/Flash 为 0.2.4、tilelang_musa 为 0.1.8，
+而当前分支分别固定为 0.2.6 和 0.1.12。
 
 镜像以 `vllm serve` 为入口点；在模型路径后追加
 [服务配置示例（英文）](cookbook/README.md)中的引擎参数，并为 `docker run`
