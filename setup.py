@@ -201,6 +201,8 @@ VLLM_STABLE_CSRC_SOURCES = [
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/quantization/activation_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/custom_all_reduce.cu"),
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/minimax_reduce_rms_kernel.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/fp32_router_gemm.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/fp32_router_gemm_entry.cu"),
 ]
 
 VLLM_MUSA_CSRC_SOURCES = [

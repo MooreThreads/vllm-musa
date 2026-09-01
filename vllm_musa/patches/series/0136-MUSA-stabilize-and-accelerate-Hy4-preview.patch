@@ -1,0 +1,826 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sun, 30 Aug 2026 09:24:46 +0800
+Subject: [PATCH] MUSA: stabilize and accelerate Hy4 preview
+
+---
+ vllm/distributed/parallel_state.py            |  66 ++++++-
+ vllm/models/hy_v4/nvidia/flashmla_sparse.py   |  20 ++
+ vllm/models/hy_v4/nvidia/hc.py                | 177 +++++++++++++++++-
+ vllm/models/hy_v4/nvidia/moe.py               |  48 ++++-
+ .../attention/backends/mla/flashmla_sparse.py |  32 +++-
+ vllm/v1/executor/multiproc_executor.py        |  55 +++---
+ vllm/v1/worker/gpu/async_utils.py             |  24 ++-
+ vllm/v1/worker/gpu_model_runner.py            |  21 ++-
+ vllm/v1/worker/gpu_worker.py                  |  29 ++-
+ 9 files changed, 398 insertions(+), 74 deletions(-)
+
+diff --git a/vllm/distributed/parallel_state.py b/vllm/distributed/parallel_state.py
+index 128db903d4..bf21878646 100644
+--- a/vllm/distributed/parallel_state.py
++++ b/vllm/distributed/parallel_state.py
+@@ -1054,6 +1054,7 @@ class GroupCoordinator:
+         assert len(tensor_keys) == len(tensor_list)
+ 
+         handles: list[Handle] = []
++        musa_p2p_ops: list[torch.distributed.P2POp] = []
+         for key, tensor in zip(tensor_keys, tensor_list):
+             if tensor.numel() == 0:
+                 continue
+@@ -1064,6 +1065,20 @@ class GroupCoordinator:
+                 tensor = tensor.reshape(all_gather_size, -1)[all_gather_rank]
+ 
+             comm_group = metadata_group if tensor.is_cpu else group
++            if (
++                not tensor.is_cpu
++                and hasattr(torch.version, "musa")
++                and torch.version.musa is not None
++            ):
++                musa_p2p_ops.append(
++                    torch.distributed.P2POp(
++                        torch.distributed.isend,
++                        tensor,
++                        self.ranks[dst],
++                        group=comm_group,
++                    )
++                )
++                continue
+             handle = torch.distributed.isend(
+                 tensor, dst=self.ranks[dst], group=comm_group
+             )
+@@ -1071,6 +1086,9 @@ class GroupCoordinator:
+                 tensor.record_stream(torch.cuda.current_stream(tensor.device))
+             handles.append(handle)
+ 
++        if musa_p2p_ops:
++            handles.extend(torch.distributed.batch_isend_irecv(musa_p2p_ops))
++
+         return handles
+ 
+     def recv_tensor_dict(
+@@ -1149,6 +1167,7 @@ class GroupCoordinator:
+         tensor_dict: dict[str, Any] = {}
+         handles: list[Handle] = []
+         postprocess: list[Callable[[], None]] = []
++        musa_p2p_ops: list[torch.distributed.P2POp] = []
+ 
+         for key, value in recv_metadata_list:
+             if isinstance(value, TensorMetadata):
+@@ -1167,10 +1186,24 @@ class GroupCoordinator:
+                         all_gather_rank
+                     ]
+                     comm_group = metadata_group if slice_tensor.is_cpu else group
+-                    handle = torch.distributed.irecv(
+-                        slice_tensor, src=self.ranks[src], group=comm_group
+-                    )
+-                    handles.append(handle)
++                    if (
++                        not slice_tensor.is_cpu
++                        and hasattr(torch.version, "musa")
++                        and torch.version.musa is not None
++                    ):
++                        musa_p2p_ops.append(
++                            torch.distributed.P2POp(
++                                torch.distributed.irecv,
++                                slice_tensor,
++                                self.ranks[src],
++                                group=comm_group,
++                            )
++                        )
++                    else:
++                        handle = torch.distributed.irecv(
++                            slice_tensor, src=self.ranks[src], group=comm_group
++                        )
++                        handles.append(handle)
+ 
+                     def _postprocess(
+                         key: str = key,
+@@ -1187,14 +1220,31 @@ class GroupCoordinator:
+                     tensor_dict[key] = slice_tensor
+                 else:
+                     comm_group = metadata_group if full_tensor.is_cpu else group
+-                    handle = torch.distributed.irecv(
+-                        full_tensor, src=self.ranks[src], group=comm_group
+-                    )
+-                    handles.append(handle)
++                    if (
++                        not full_tensor.is_cpu
++                        and hasattr(torch.version, "musa")
++                        and torch.version.musa is not None
++                    ):
++                        musa_p2p_ops.append(
++                            torch.distributed.P2POp(
++                                torch.distributed.irecv,
++                                full_tensor,
++                                self.ranks[src],
++                                group=comm_group,
++                            )
++                        )
++                    else:
++                        handle = torch.distributed.irecv(
++                            full_tensor, src=self.ranks[src], group=comm_group
++                        )
++                        handles.append(handle)
+                     tensor_dict[key] = full_tensor
+             else:
+                 tensor_dict[key] = value
+ 
++        if musa_p2p_ops:
++            handles.extend(torch.distributed.batch_isend_irecv(musa_p2p_ops))
++
+         return tensor_dict, handles, postprocess
+ 
+     def barrier(self):
+diff --git a/vllm/models/hy_v4/nvidia/flashmla_sparse.py b/vllm/models/hy_v4/nvidia/flashmla_sparse.py
+index fba8b6d88e..2fe29a6a42 100644
+--- a/vllm/models/hy_v4/nvidia/flashmla_sparse.py
++++ b/vllm/models/hy_v4/nvidia/flashmla_sparse.py
+@@ -199,6 +199,7 @@ class HYV4FlashMLASparseImpl(FlashMLASparseImpl):
+         kv_c_and_k_pe_cache: torch.Tensor,
+         topk_indices: torch.Tensor,
+         kernel_metadata: FlashMLASparseMetadata.FP8KernelMetadata,
++        topk_length: torch.Tensor | None = None,
+     ) -> tuple[torch.Tensor, torch.Tensor]:
+         # q shape: (batch, seq_len, num_heads, head_dim)
+         actual_num_heads = q.size(2)
+@@ -215,6 +216,20 @@ class HYV4FlashMLASparseImpl(FlashMLASparseImpl):
+             q_padded[:, :, :actual_num_heads, :] = q
+             q = q_padded
+ 
++        token_batch = (
++            _running_on_musa
++            and q.size(0) == 1
++            and topk_length is not None
++            and topk_length.numel() == q.size(1)
++        )
++        if token_batch:
++            # MATE's scheduled sparse decoder carries one top-k length per
++            # batch row, while vLLM represents speculative decode as
++            # [batch=1, seq=T]. Re-express it as [batch=T, seq=1] so each
++            # causal token keeps its own valid sparse length.
++            q = q.transpose(0, 1).contiguous()
++            topk_indices = topk_indices.transpose(0, 1).contiguous()
++
+         out, lse = flash_mla_with_kvcache(
+             q=q,
+             k_cache=kv_c_and_k_pe_cache.view(torch.uint8).unsqueeze(-2),
+@@ -226,6 +241,7 @@ class HYV4FlashMLASparseImpl(FlashMLASparseImpl):
+             indices=topk_indices,
+             softmax_scale=self.softmax_scale,
+             attn_sink=attn_sink,
++            topk_length=topk_length,
+         )
+ 
+         # Slice output and lse back to actual head count if we padded
+@@ -233,6 +249,10 @@ class HYV4FlashMLASparseImpl(FlashMLASparseImpl):
+             out = out[:, :, :actual_num_heads, :]
+             lse = lse[:, :actual_num_heads, :]
+ 
++        if token_batch:
++            out = out.transpose(0, 1).contiguous()
++            lse = lse.permute(2, 1, 0).contiguous()
++
+         return out, lse
+ 
+     def _bf16_flash_mla_kernel(
+diff --git a/vllm/models/hy_v4/nvidia/hc.py b/vllm/models/hy_v4/nvidia/hc.py
+index 60b06a4181..0e40f88d2d 100644
+--- a/vllm/models/hy_v4/nvidia/hc.py
++++ b/vllm/models/hy_v4/nvidia/hc.py
+@@ -19,6 +19,135 @@ from transformers import PretrainedConfig
+ 
+ from vllm.model_executor.layers.linear import ReplicatedLinear
+ 
++_running_on_musa = getattr(torch.version, "musa", None) is not None
++if _running_on_musa:
++    from mate.deep_gemm import tf32_hc_prenorm_gemm
++    from vllm_musa.deepseek_v4_jit.tilelang_kernels import (
++        ihc_post_kernel,
++        ihc_pre_big_fuse_decode_split_kernel,
++    )
++
++
++_MUSA_IHC_SPLITS = 32
++
++
++def _musa_ihc_prenorm_projection(
++    x: torch.Tensor,
++    weight: torch.Tensor,
++    output_size: int,
++    eps: float,
++) -> torch.Tensor | None:
++    """Fuse the decode iHC projection and input-square reduction on MUSA."""
++    if not _running_on_musa or x.shape[0] != 1:
++        return None
++
++    x_flat = x.flatten(1)
++    num_splits = _MUSA_IHC_SPLITS
++    num_tokens = x.shape[0]
++    d_partial = torch.empty(
++        (num_splits, num_tokens, output_size),
++        dtype=torch.float32,
++        device=x.device,
++    )
++    s_partial = torch.empty(
++        (num_splits, num_tokens), dtype=torch.float32, device=x.device
++    )
++    tf32_hc_prenorm_gemm(
++        x_flat,
++        weight,
++        d_partial,
++        s_partial,
++        num_splits=num_splits,
++    )
++    d = d_partial.sum(dim=0)
++    rms_recip = torch.rsqrt(s_partial.sum(dim=0).unsqueeze(-1) / x_flat.shape[-1] + eps)
++    return d * rms_recip
++
++
++def _musa_ihc_pre(
++    x: torch.Tensor,
++    weight: torch.Tensor,
++    hc_scale: torch.Tensor,
++    hc_base: torch.Tensor,
++    hc_eps: float,
++    magnitude: float,
++    rms_eps: float,
++) -> tuple[torch.Tensor, torch.Tensor] | None:
++    """Fuse the full single-token iHC pre path on MUSA."""
++    if (
++        not _running_on_musa
++        or x.device.type != "musa"
++        or weight.device != x.device
++        or hc_scale.device != x.device
++        or hc_base.device != x.device
++        or x.shape[0] != 1
++        or x.shape[1:] != (4, 6144)
++        or weight.shape != (8, 24576)
++        or hc_scale.shape != (2,)
++        or hc_base.shape != (8,)
++        or x.dtype != torch.bfloat16
++        or weight.dtype != torch.float32
++        or hc_scale.dtype != torch.float32
++        or hc_base.dtype != torch.float32
++        or not x.is_contiguous()
++        or not weight.is_contiguous()
++    ):
++        return None
++
++    num_tokens = x.shape[0]
++    d_partial = torch.empty(
++        (_MUSA_IHC_SPLITS, num_tokens, 8),
++        dtype=torch.float32,
++        device=x.device,
++    )
++    s_partial = torch.empty(
++        (_MUSA_IHC_SPLITS, num_tokens), dtype=torch.float32, device=x.device
++    )
++    post = torch.empty((num_tokens, 4), dtype=torch.float32, device=x.device)
++    layer_input = torch.empty((num_tokens, 6144), dtype=torch.bfloat16, device=x.device)
++    tf32_hc_prenorm_gemm(
++        x.flatten(1),
++        weight,
++        d_partial,
++        s_partial,
++        num_splits=_MUSA_IHC_SPLITS,
++    )
++    ihc_pre_big_fuse_decode_split_kernel(
++        hidden_size=6144,
++        rms_eps=rms_eps,
++        hc_eps=hc_eps,
++        magnitude=magnitude,
++        n_splits=_MUSA_IHC_SPLITS,
++    )(d_partial, s_partial, hc_scale, hc_base, x, post, layer_input)
++    return layer_input, post
++
++
++def _musa_ihc_post(
++    x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor
++) -> torch.Tensor | None:
++    """Fuse the single-token iHC post gate and residual add on MUSA."""
++    if (
++        not _running_on_musa
++        or x.device.type != "musa"
++        or residual.device != x.device
++        or post.device != x.device
++        or x.shape[0] != 1
++        or x.shape[1:] != (6144,)
++        or residual.shape != (x.shape[0], 4, 6144)
++        or post.shape != (x.shape[0], 4)
++        or x.dtype != torch.bfloat16
++        or residual.dtype != torch.bfloat16
++        or post.dtype != torch.float32
++        or not x.is_contiguous()
++        or not residual.is_contiguous()
++        or not post.is_contiguous()
++    ):
++        return None
++
++    out = torch.empty_like(residual)
++    ihc_post_kernel(hidden_size=6144)(x, residual, post, out)
++    return out
++
+ 
+ class HYV4HCPreLayer(nn.Module):
+     """iHC pre-processing layer (2D-activation adaptation).
+@@ -90,12 +219,30 @@ class HYV4HCPreLayer(nn.Module):
+         hc = self.hc_mult
+         hc_eps = self.hc_eps
+ 
+-        x_flat = x.flatten(1).float()  # [num_tokens, hc*d]
+-
+-        rsqrt = torch.rsqrt(
+-            x_flat.square().mean(-1, keepdim=True) + self.layernorm_epsilon
++        fused = _musa_ihc_pre(
++            x,
++            self.hc_fn.weight,
++            self.hc_scale,
++            self.hc_base,
++            hc_eps,
++            self.magnitude,
++            self.layernorm_epsilon,
+         )
+-        mixes = self.hc_fn(x_flat)[0] * rsqrt  # [num_tokens, 2*hc]
++        if fused is not None:
++            return fused
++
++        mixes = _musa_ihc_prenorm_projection(
++            x,
++            self.hc_fn.weight,
++            2 * hc,
++            self.layernorm_epsilon,
++        )
++        if mixes is None:
++            x_flat = x.flatten(1).float()  # [num_tokens, hc*d]
++            rsqrt = torch.rsqrt(
++                x_flat.square().mean(-1, keepdim=True) + self.layernorm_epsilon
++            )
++            mixes = self.hc_fn(x_flat)[0] * rsqrt  # [num_tokens, 2*hc]
+ 
+         pre_raw = mixes[..., :hc]
+         post_raw = mixes[..., hc : 2 * hc]
+@@ -144,6 +291,10 @@ class HYV4HCPostLayer(nn.Module):
+         Returns:
+             The updated residual channels ``[num_tokens, hc, d]``.
+         """
++        fused = _musa_ihc_post(x, residual, post)
++        if fused is not None:
++            return fused
++
+         dtype = x.dtype
+         x = x.float()
+         residual = residual.float()
+@@ -215,12 +366,18 @@ class HYV4HCHeadLayer(nn.Module):
+             The merged hidden state ``[num_tokens, d]``.
+         """
+         shape, x_dtype = x.size(), x.dtype
+-
+-        x = x.flatten(1).float()  # [num_tokens, hc*d]
+-        rsqrt = torch.rsqrt(
+-            x.square().mean(-1, keepdim=True) + self.config.rms_norm_eps
++        mixes = _musa_ihc_prenorm_projection(
++            x,
++            self.hc_head_fn.weight,
++            self.hc_mult,
++            self.config.rms_norm_eps,
+         )
+-        mixes = self.hc_head_fn(x)[0] * rsqrt  # [num_tokens, hc]
++        if mixes is None:
++            x_flat = x.flatten(1).float()  # [num_tokens, hc*d]
++            rsqrt = torch.rsqrt(
++                x_flat.square().mean(-1, keepdim=True) + self.config.rms_norm_eps
++            )
++            mixes = self.hc_head_fn(x_flat)[0] * rsqrt  # [num_tokens, hc]
+         pre = (
+             torch.sigmoid(
+                 mixes * self.hc_head_scale.float() + self.hc_head_base.float()
+diff --git a/vllm/models/hy_v4/nvidia/moe.py b/vllm/models/hy_v4/nvidia/moe.py
+index be8e49f21e..bec3ad61d6 100644
+--- a/vllm/models/hy_v4/nvidia/moe.py
++++ b/vllm/models/hy_v4/nvidia/moe.py
+@@ -19,6 +19,50 @@ from vllm.model_executor.layers.quantization import QuantizationConfig
+ 
+ logger = init_logger(__name__)
+ 
++_running_on_musa = getattr(torch.version, "musa", None) is not None
++if _running_on_musa:
++    from mate.deep_gemm import tf32_hc_prenorm_gemm
++
++
++def _musa_router_projection(
++    hidden_states: torch.Tensor, weight: torch.Tensor
++) -> torch.Tensor | None:
++    """Run the single-token FP32 router projection with split-K on MUSA."""
++    if (
++        not _running_on_musa
++        or hidden_states.device.type != "musa"
++        or weight.device != hidden_states.device
++        or hidden_states.shape[0] != 1
++        or hidden_states.shape[1:] != (6144,)
++        or weight.shape != (256, 6144)
++        or hidden_states.dtype != torch.bfloat16
++        or weight.dtype != torch.float32
++        or not hidden_states.is_contiguous()
++        or not weight.is_contiguous()
++    ):
++        return None
++
++    num_splits = 16
++    num_tokens = hidden_states.shape[0]
++    partial = torch.empty(
++        (num_splits, num_tokens, weight.shape[0]),
++        dtype=torch.float32,
++        device=hidden_states.device,
++    )
++    sqr_sum = torch.empty(
++        (num_splits, num_tokens),
++        dtype=torch.float32,
++        device=hidden_states.device,
++    )
++    tf32_hc_prenorm_gemm(
++        hidden_states,
++        weight,
++        partial,
++        sqr_sum,
++        num_splits=num_splits,
++    )
++    return partial.sum(dim=0)
++
+ 
+ class HYV4FeedForward(nn.Module):
+     """Dense SwiGLU feed-forward block.
+@@ -182,7 +226,9 @@ class HYV4MoEFused(nn.Module):
+ 
+         # router_logits: (num_tokens, n_experts); the gate stores fp32 weights
+         # and emits fp32 logits, so no explicit upcast is needed here.
+-        router_logits, _ = self.gate(hidden_states)
++        router_logits = _musa_router_projection(hidden_states, self.gate.weight)
++        if router_logits is None:
++            router_logits, _ = self.gate(hidden_states)
+ 
+         final_hidden_states = self.experts(
+             hidden_states=hidden_states, router_logits=router_logits
+diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+index e62e02779c..07b294c002 100644
+--- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
++++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+@@ -327,10 +327,17 @@ class FlashMLASparseMetadataBuilder(
+ 
+         # Use padded head count since that's what the kernel will see
+         padded_heads = self.fp8_decode_padded_heads
+-
+-        # Build metadata for all tokens as a single batch
++        # MATE sparse decode carries one top-k length per batch row. Model
++        # speculative decode represents T causal tokens as [1, T, H, D], so
++        # build one metadata row per token and reshape to [T, 1, H, D] at the
++        # kernel boundary.
++        token_batch = num_tokens if current_platform.is_musa() else 1
++        scheduler_cache_lens = self.topk_tokens_tensor[:1].repeat(token_batch)
++
++        # Build metadata for all tokens as a single batch on CUDA, or as one
++        # batch row per token on MUSA.
+         scheduler_metadata, _ = get_mla_metadata(
+-            cache_seqlens=self.topk_tokens_tensor[:1],  # Single batch
++            cache_seqlens=scheduler_cache_lens,
+             num_q_tokens_per_head_k=num_tokens * padded_heads,
+             topk=self.topk_tokens,
+             num_heads_q=padded_heads,
+@@ -340,8 +347,10 @@ class FlashMLASparseMetadataBuilder(
+ 
+         fp8_metadata = FlashMLASparseMetadata.FP8KernelMetadata(
+             scheduler_metadata=scheduler_metadata,
+-            cache_lens=self.max_model_len_tensor[:1],
+-            dummy_block_table=self.dummy_block_table[:1],
++            cache_lens=self.max_model_len_tensor[:1].repeat(token_batch),
++            dummy_block_table=self.dummy_block_table[:1]
++            .expand(token_batch, 1)
++            .contiguous(),
+         )
+ 
+         return fp8_metadata
+@@ -623,9 +632,10 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+         num_mqa_tokens = q.shape[0]
+         num_decode_tokens = fp8_metadata.num_decode_tokens
+         num_prefill_tokens = num_mqa_tokens - num_decode_tokens
+-        assert num_prefill_tokens in (0, fp8_metadata.num_prefill_tokens), (
+-            "FP8 sparse MLA expects either the decode subset or the full batch"
+-        )
++        assert num_prefill_tokens in (
++            0,
++            fp8_metadata.num_prefill_tokens,
++        ), "FP8 sparse MLA expects either the decode subset or the full batch"
+ 
+         prefill_request_ids = None
+         prefill_workspace_starts = None
+@@ -736,12 +746,13 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+         """
+         # Convert per-request indices to global slots (decode) or workspace
+         # offsets (prefill).
+-        topk_indices = triton_convert_req_index_to_global_index(
++        topk_indices, topk_length = triton_convert_req_index_to_global_index(
+             attn_metadata.req_id_per_token[: topk_indices.shape[0]],
+             attn_metadata.block_table,
+             topk_indices,
+             BLOCK_SIZE=attn_metadata.block_size,
+             NUM_TOPK_TOKENS=topk_indices.shape[1],
++            return_valid_counts=True,
+         )
+ 
+         assert attn_metadata.fp8_extra_metadata is not None
+@@ -755,6 +766,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+             kv_c_and_k_pe_cache=kv_c_and_k_pe_cache,
+             topk_indices=topk_indices.unsqueeze(0),  # (T, topk) -> (1, T, topk)
+             kernel_metadata=fp8_metadata,
++            topk_length=topk_length,
+         )
+ 
+         # Output is (1, T, H, D_v), squeeze back to (T, H, D_v)
+@@ -766,6 +778,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+         kv_c_and_k_pe_cache: torch.Tensor,
+         topk_indices: torch.Tensor,
+         kernel_metadata: FlashMLASparseMetadata.FP8KernelMetadata,
++        topk_length: torch.Tensor | None = None,
+     ) -> tuple[torch.Tensor, torch.Tensor]:
+         # q shape: (batch, seq_len, num_heads, head_dim)
+         actual_num_heads = q.size(2)
+@@ -791,6 +804,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+             is_fp8_kvcache=True,
+             indices=topk_indices,
+             softmax_scale=self.softmax_scale,
++            topk_length=topk_length,
+         )
+ 
+         # Slice output back to actual head count if we padded
+diff --git a/vllm/v1/executor/multiproc_executor.py b/vllm/v1/executor/multiproc_executor.py
+index df20a90d51..600b97eff7 100644
+--- a/vllm/v1/executor/multiproc_executor.py
++++ b/vllm/v1/executor/multiproc_executor.py
+@@ -382,9 +382,9 @@ class MultiprocExecutor(Executor):
+     ) -> Any:
+         """Returns single result if unique_reply_rank and/or an output
+         aggregator is provided, otherwise list."""
+-        assert self.rpc_broadcast_mq is not None, (
+-            "collective_rpc should not be called on follower node"
+-        )
++        assert (
++            self.rpc_broadcast_mq is not None
++        ), "collective_rpc should not be called on follower node"
+         if self.is_failed:
+             raise RuntimeError("Executor failed.")
+ 
+@@ -628,9 +628,7 @@ class WorkerProc:
+             # driver worker, exposing peer_response_handles for driver worker
+             # that include handles for all ranks
+             self.worker_response_mq, self.peer_response_handles = (
+-                get_inner_dp_world_group().create_single_reader_mq_broadcasters(
+-                    reader_rank_in_group=0
+-                )
++                get_inner_dp_world_group().create_single_reader_mq_broadcasters(reader_rank_in_group=0)
+             )
+ 
+     @instrument(span_name="Worker init")
+@@ -1027,28 +1025,33 @@ class WorkerProc:
+         """Main busy loop for Multiprocessing Workers"""
+         assert self.rpc_broadcast_mq is not None
+         while True:
+-            method, args, kwargs, output_rank = self.rpc_broadcast_mq.dequeue(
+-                indefinite=True
+-            )
+-            try:
+-                if isinstance(method, str):
+-                    func = getattr(self.worker, method)
+-                elif isinstance(method, bytes):
+-                    func = partial(cloudpickle.loads(method), self.worker)
++            self._execute_worker_rpc(self.rpc_broadcast_mq.dequeue(indefinite=True))
++
++    def _execute_worker_rpc(
++        self,
++        rpc_request: tuple[str | bytes, tuple[Any, ...], dict[str, Any], int | None],
++    ) -> None:
++        """Execute one RPC in a separate frame from the dequeue loop."""
++        method, args, kwargs, output_rank = rpc_request
++        try:
++            if isinstance(method, str):
++                func = getattr(self.worker, method)
++            elif isinstance(method, bytes):
++                func = partial(cloudpickle.loads(method), self.worker)
+ 
+-                output = func(*args, **kwargs)
++            output = func(*args, **kwargs)
+ 
+-                if output_rank is None or self.rank == output_rank:
+-                    self.handle_output(output)
+-            except Exception as e:
+-                # Notes have been introduced in python 3.11
+-                if hasattr(e, "add_note"):
+-                    e.add_note(traceback.format_exc())
+-                logger.exception("WorkerProc hit an exception.")
+-                # exception might not be serializable, so we convert it to
+-                # string, only for logging purpose.
+-                if output_rank is None or self.rank == output_rank:
+-                    self.handle_output(e)
++            if output_rank is None or self.rank == output_rank:
++                self.handle_output(output)
++        except Exception as e:
++            # Notes have been introduced in python 3.11
++            if hasattr(e, "add_note"):
++                e.add_note(traceback.format_exc())
++            logger.exception("WorkerProc hit an exception.")
++            # enqueue_output converts the exception to a FAILURE response
++            # containing its string representation before transport.
++            if output_rank is None or self.rank == output_rank:
++                self.handle_output(e)
+ 
+     @staticmethod
+     def setup_proc_title_and_log_prefix(enable_ep: bool) -> None:
+diff --git a/vllm/v1/worker/gpu/async_utils.py b/vllm/v1/worker/gpu/async_utils.py
+index 0e9f142e44..9262dedf16 100644
+--- a/vllm/v1/worker/gpu/async_utils.py
++++ b/vllm/v1/worker/gpu/async_utils.py
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ import contextlib
++import os
+ from collections.abc import Iterator
+ from dataclasses import dataclass, field
+ from typing import TYPE_CHECKING
+@@ -132,10 +133,16 @@ class AsyncOutput(AsyncModelRunnerOutput):
+         self.routed_experts = routed_experts
+         # Blocking (sleep) event to avoid busy-polling the CUDA driver lock.
+         self.copy_event = torch.cuda.Event(blocking=True)
++        self._musa_sync_copy = (
++            getattr(torch.version, "musa", None) is not None
++            and os.getenv("VLLM_MUSA_USE_SYNC_OUTPUT_COPY") == "1"
++        )
+         self._has_fault: torch.Tensor | None = None
+ 
+-        with stream(copy_stream, main_stream):
+-            copy_stream.wait_stream(main_stream)
++        output_stream = main_stream if self._musa_sync_copy else copy_stream
++        with stream(output_stream, main_stream):
++            if not self._musa_sync_copy:
++                copy_stream.wait_stream(main_stream)
+ 
+             self.sampled_token_ids = async_copy_to_np(sampler_output.sampled_token_ids)
+             self.logprobs_tensors: LogprobsTensors | None = None
+@@ -171,10 +178,19 @@ class AsyncOutput(AsyncModelRunnerOutput):
+             if check_ep_fault:
+                 has_fault = get_ep_all2all_manager().query_fault()
+                 self._has_fault = has_fault.to("cpu", non_blocking=True)
+-            self.copy_event.record(copy_stream)
++            if self._musa_sync_copy:
++                # The final blocking D2H copy fences all preceding copies on
++                # the main stream without relying on MUSA's cross-stream
++                # blocking-event path.
++                self.sampled_token_ids = sampler_output.sampled_token_ids.to(
++                    device="cpu", non_blocking=False
++                ).numpy()
++            else:
++                self.copy_event.record(copy_stream)
+ 
+     def get_output(self) -> ModelRunnerOutput:
+-        self.copy_event.synchronize()
++        if not self._musa_sync_copy:
++            self.copy_event.synchronize()
+ 
+         # NOTE(woosuk): The following code is to ensure compatibility with
+         # the existing model runner.
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index b3ad96f579..c4fd52bb41 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -637,6 +637,7 @@ class GPUModelRunner(
+         # NOTE(Jiayi): currently we put the entire draft model on
+         # the last PP rank. This is not ideal if there are many
+         # layers in the draft model.
++        self.drafter = None
+         if self.speculative_config and get_pp_group().is_last_rank:
+             self.drafter: (
+                 NgramProposer  # noqa: F823
+@@ -2726,7 +2727,11 @@ class GPUModelRunner(
+                 cm.block_table_tensor = _get_block_table(kv_cache_gid)
+                 cm.slot_mapping = slot_mappings[kv_cache_gid]
+ 
+-            if self.speculative_config and spec_decode_common_attn_metadata is None:
++            if (
++                self.drafter is not None
++                and self.speculative_config
++                and spec_decode_common_attn_metadata is None
++            ):
+                 if isinstance(
+                     self.drafter,
+                     (
+@@ -2741,11 +2746,15 @@ class GPUModelRunner(
+                 else:
+                     spec_decode_common_attn_metadata = cm
+             # Capture per-group block tables for multi-group proposers.
+-            if self.speculative_config and isinstance(self.drafter, Step3p5MTPProposer):
++            if self.drafter is not None and isinstance(
++                self.drafter, Step3p5MTPProposer
++            ):
+                 self.drafter.set_per_group_attn_metadata(
+                     kv_cache_gid, cm.block_table_tensor, cm.slot_mapping
+                 )
+-            elif self.speculative_config and isinstance(self.drafter, Gemma4Proposer):
++            elif self.drafter is not None and isinstance(
++                self.drafter, Gemma4Proposer
++            ):
+                 self.drafter.set_per_group_block_table(
+                     kv_cache_gid, cm.block_table_tensor
+                 )
+@@ -6470,7 +6479,7 @@ class GPUModelRunner(
+             else:
+                 hidden_states = outputs
+ 
+-            if self.speculative_config and (
++            if self.drafter is not None and self.speculative_config and (
+                 self.speculative_config.use_eagle()
+                 or self.speculative_config.uses_draft_model()
+                 or self.speculative_config.uses_extract_hidden_states()
+@@ -7487,7 +7496,7 @@ class GPUModelRunner(
+         self.calculate_reorder_batch_threshold()
+ 
+         # Initialize drafter attention backend
+-        if self.speculative_config and (
++        if self.drafter is not None and self.speculative_config and (
+             self.speculative_config.use_eagle()
+             or self.speculative_config.uses_draft_model()
+         ):
+@@ -7541,7 +7550,7 @@ class GPUModelRunner(
+         )
+ 
+         # Initialize drafter's cudagraph dispatcher if using spec decode.
+-        if self.speculative_config and (
++        if self.drafter is not None and self.speculative_config and (
+             self.speculative_config.use_eagle()
+             or self.speculative_config.uses_draft_model()
+             or self.speculative_config.uses_extract_hidden_states()
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+index a2ff198437..4d16486407 100644
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -110,9 +110,7 @@ def _musa_deepseek_v4_mtp_sparse_prefill_reserve_bytes(
+     model_config = vllm_config.model_config
+     scheduler_config = vllm_config.scheduler_config
+     cache_config = vllm_config.cache_config
+-    num_layers = model_config.get_num_layers(
+-        vllm_config.parallel_config
+-    )
++    num_layers = model_config.get_num_layers(vllm_config.parallel_config)
+     sparse_layers = sum(
+         1
+         for layer_idx in range(num_layers)
+@@ -132,10 +130,7 @@ def _musa_deepseek_v4_mtp_sparse_prefill_reserve_bytes(
+     m = n + window_size + max_tokens
+     head_dim = getattr(config, "kv_lora_rank", 512)
+ 
+-    per_layer_bytes = (
+-        max_tokens * combined_topk * 4
+-        + max_tokens * m * head_dim * 2
+-    )
++    per_layer_bytes = max_tokens * combined_topk * 4 + max_tokens * m * head_dim * 2
+     return int(per_layer_bytes * sparse_layers * cache_config.gpu_memory_utilization)
+ 
+ 
+@@ -329,9 +324,9 @@ class Worker(WorkerBase):
+ 
+         allocator = get_mem_allocator_instance()
+         if tag == "weights":
+-            assert allocator.get_current_usage() == 0, (
+-                "CuMem allocator can only be used for one instance per process."
+-            )
++            assert (
++                allocator.get_current_usage() == 0
++            ), "CuMem allocator can only be used for one instance per process."
+         return allocator.use_memory_pool(tag=tag)
+ 
+     @contextmanager
+@@ -1182,6 +1177,11 @@ class Worker(WorkerBase):
+             if isinstance(
+                 output, ModelRunnerOutput | AsyncModelRunnerOutput | NoneType
+             ):
++                if (
++                    current_platform.is_musa()
++                    and os.getenv("VLLM_MUSA_SYNC_EXECUTE_MODEL") == "1"
++                ):
++                    torch.musa.synchronize()
+                 return output
+ 
+         assert isinstance(output, IntermediateTensors)
+@@ -1198,6 +1198,15 @@ class Worker(WorkerBase):
+             all_gather_tensors=all_gather_tensors,
+         )
+ 
++        if (
++            current_platform.is_musa()
++            and os.getenv("VLLM_MUSA_SYNC_EXECUTE_MODEL") == "1"
++        ):
++            for handle in self._pp_send_work:
++                handle.wait()
++            self._pp_send_work = []
++            torch.musa.synchronize()
++
+         return None
+ 
+     def take_draft_token_ids(self) -> DraftTokenIds | None:

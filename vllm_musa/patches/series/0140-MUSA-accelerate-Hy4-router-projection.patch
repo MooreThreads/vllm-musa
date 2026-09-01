@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 31 Aug 2026 10:20:51 +0800
+Subject: [PATCH] MUSA: accelerate Hy4 router projection
+
+---
+ .../libtorch_stable/fp32_router_gemm_entry.cu |  6 +++++
+ vllm/models/hy_v4/nvidia/moe.py               | 26 +++----------------
+ 2 files changed, 9 insertions(+), 23 deletions(-)
+
+diff --git a/csrc/libtorch_stable/fp32_router_gemm_entry.cu b/csrc/libtorch_stable/fp32_router_gemm_entry.cu
+index 8643e33cbe..931a744320 100644
+--- a/csrc/libtorch_stable/fp32_router_gemm_entry.cu
++++ b/csrc/libtorch_stable/fp32_router_gemm_entry.cu
+@@ -134,7 +134,9 @@ void fp32_router_gemm(
+ 
+   const torch::stable::accelerator::DeviceGuard device_guard(
+       mat_a.get_device_index());
++#ifndef USE_MUSA
+   STD_TORCH_CHECK(getSMVersion() >= 90, "fp32_router_gemm: requires SM90+");
++#endif
+ 
+   auto stream = get_current_cuda_stream(mat_a.get_device_index());
+   float* out_ptr = reinterpret_cast<float*>(output.mutable_data_ptr());
+@@ -153,6 +155,10 @@ void fp32_router_gemm(
+   }
+ }
+ 
++#ifdef USE_MUSA
++STABLE_TORCH_LIBRARY_IMPL(_C, PrivateUse1, m) {
++#else
+ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, m) {
++#endif
+   m.impl("fp32_router_gemm", TORCH_BOX(&fp32_router_gemm));
+ }
+diff --git a/vllm/models/hy_v4/nvidia/moe.py b/vllm/models/hy_v4/nvidia/moe.py
+index bec3ad61d6..ea1ff22c1e 100644
+--- a/vllm/models/hy_v4/nvidia/moe.py
++++ b/vllm/models/hy_v4/nvidia/moe.py
+@@ -6,6 +6,7 @@ import torch
+ from torch import nn
+ from transformers import PretrainedConfig
+ 
++import vllm._custom_ops as ops
+ from vllm.config import get_current_vllm_config
+ from vllm.distributed import get_ep_group, get_tensor_model_parallel_world_size
+ from vllm.logger import init_logger
+@@ -20,14 +21,12 @@ from vllm.model_executor.layers.quantization import QuantizationConfig
+ logger = init_logger(__name__)
+ 
+ _running_on_musa = getattr(torch.version, "musa", None) is not None
+-if _running_on_musa:
+-    from mate.deep_gemm import tf32_hc_prenorm_gemm
+ 
+ 
+ def _musa_router_projection(
+     hidden_states: torch.Tensor, weight: torch.Tensor
+ ) -> torch.Tensor | None:
+-    """Run the single-token FP32 router projection with split-K on MUSA."""
++    """Run the single-token FP32 router projection with the MUSA fast path."""
+     if (
+         not _running_on_musa
+         or hidden_states.device.type != "musa"
+@@ -42,26 +41,7 @@ def _musa_router_projection(
+     ):
+         return None
+ 
+-    num_splits = 16
+-    num_tokens = hidden_states.shape[0]
+-    partial = torch.empty(
+-        (num_splits, num_tokens, weight.shape[0]),
+-        dtype=torch.float32,
+-        device=hidden_states.device,
+-    )
+-    sqr_sum = torch.empty(
+-        (num_splits, num_tokens),
+-        dtype=torch.float32,
+-        device=hidden_states.device,
+-    )
+-    tf32_hc_prenorm_gemm(
+-        hidden_states,
+-        weight,
+-        partial,
+-        sqr_sum,
+-        num_splits=num_splits,
+-    )
+-    return partial.sum(dim=0)
++    return ops.fp32_router_gemm(hidden_states, weight)
+ 
+ 
+ class HYV4FeedForward(nn.Module):

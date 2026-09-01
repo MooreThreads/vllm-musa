@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 1 Sep 2026 06:08:03 +0800
+Subject: [PATCH] MUSA: narrow PP graph fences on MP60
+
+---
+ vllm/v1/worker/gpu/async_utils.py |  5 ++++-
+ vllm/v1/worker/gpu_worker.py      | 14 +-------------
+ 2 files changed, 5 insertions(+), 14 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/async_utils.py b/vllm/v1/worker/gpu/async_utils.py
+index 9262dedf16..8526a8c598 100644
+--- a/vllm/v1/worker/gpu/async_utils.py
++++ b/vllm/v1/worker/gpu/async_utils.py
+@@ -144,7 +144,10 @@ class AsyncOutput(AsyncModelRunnerOutput):
+             if not self._musa_sync_copy:
+                 copy_stream.wait_stream(main_stream)
+ 
+-            self.sampled_token_ids = async_copy_to_np(sampler_output.sampled_token_ids)
++            if not self._musa_sync_copy:
++                self.sampled_token_ids = async_copy_to_np(
++                    sampler_output.sampled_token_ids
++                )
+             self.logprobs_tensors: LogprobsTensors | None = None
+             if sampler_output.logprobs_tensors is not None:
+                 self.logprobs_tensors = (
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+index 7bec117eb3..2e9c7f7eb2 100644
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -1200,7 +1200,7 @@ class Worker(WorkerBase):
+                         or os.getenv("VLLM_MUSA_SYNC_EXECUTE_MODEL") == "1"
+                     )
+                 ):
+-                    torch.musa.synchronize()
++                    torch.musa.current_stream().synchronize()
+                 return output
+ 
+         assert isinstance(output, IntermediateTensors)
+@@ -1217,18 +1217,6 @@ class Worker(WorkerBase):
+             all_gather_tensors=all_gather_tensors,
+         )
+ 
+-        if (
+-            current_platform.is_musa()
+-            and (
+-                self._musa_sync_warmup_model_calls
+-                or os.getenv("VLLM_MUSA_SYNC_EXECUTE_MODEL") == "1"
+-            )
+-        ):
+-            for handle in self._pp_send_work:
+-                handle.wait()
+-            self._pp_send_work = []
+-            torch.musa.synchronize()
+-
+         return None
+ 
+     def take_draft_token_ids(self) -> DraftTokenIds | None:

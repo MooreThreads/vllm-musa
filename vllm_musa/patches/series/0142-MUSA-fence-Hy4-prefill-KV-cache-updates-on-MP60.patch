@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 1 Sep 2026 05:48:55 +0800
+Subject: [PATCH] MUSA: fence Hy4 prefill KV cache updates on MP60
+
+---
+ vllm/models/hy_v4/nvidia/flashmla_sparse.py | 35 +++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/vllm/models/hy_v4/nvidia/flashmla_sparse.py b/vllm/models/hy_v4/nvidia/flashmla_sparse.py
+index 2fe29a6a42..0c5259113e 100644
+--- a/vllm/models/hy_v4/nvidia/flashmla_sparse.py
++++ b/vllm/models/hy_v4/nvidia/flashmla_sparse.py
+@@ -20,6 +20,7 @@ name would silently change KV cache behaviour. Only``supports_sink`` and the
+ two kernel wrappers differ from the parent.
+ """
+ 
++import os
+ from typing import TYPE_CHECKING
+ 
+ import torch
+@@ -193,6 +194,40 @@ class HYV4FlashMLASparseImpl(FlashMLASparseImpl):
+         padded_sinks[:query_heads] = sinks
+         return padded_sinks
+ 
++    def do_kv_cache_update(
++        self,
++        kv_c_normed: torch.Tensor,
++        k_pe: torch.Tensor,
++        kv_cache: torch.Tensor,
++        slot_mapping: torch.Tensor,
++        kv_cache_dtype: str,
++        k_scale: torch.Tensor,
++    ) -> None:
++        """Update the KV cache with an optional MP60 prefill stream fence.
++
++        On MUSA MP60, the cache-write custom op may otherwise overlap the next
++        graph/sparse-MLA submission under the LB0 firmware queue. Keep the
++        workaround opt-in so CUDA and existing MUSA users retain the inherited
++        asynchronous behavior.
++        """
++        sync_prefill = (
++            _running_on_musa
++            and os.getenv("VLLM_MUSA_SYNC_PREFILL_KV_CACHE_UPDATE") == "1"
++            and slot_mapping.numel() > 1
++        )
++        if sync_prefill:
++            torch.musa.current_stream().synchronize()
++        super().do_kv_cache_update(
++            kv_c_normed,
++            k_pe,
++            kv_cache,
++            slot_mapping,
++            kv_cache_dtype,
++            k_scale,
++        )
++        if sync_prefill:
++            torch.musa.current_stream().synchronize()
++
+     def _fp8_flash_mla_kernel(
+         self,
+         q: torch.Tensor,

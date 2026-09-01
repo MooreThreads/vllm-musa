@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **134 patches**. This branch includes the Qwen3.6 patches for common
+Currently **143 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -35,7 +35,14 @@ still opt into Model Runner V2 explicitly. The fused TileLang `hc_head` is
 enabled on MUSA by importing TileLang before the eager JIT decorators capture
 their module globals. DeepEP shutdown now drops cached handles before native
 teardown and supports both explicit `destroy()` and legacy destructor-only
-MUSA Buffer implementations.
+MUSA Buffer implementations. The final patch adds Hy4-preview runtime support,
+routes sparse MLA and the 32-head/128-dimension indexer through the existing
+MUSA backends, keeps iHC on the ordinary PyTorch path without `hpc-ops`, and
+fails fast on pipeline partitions that begin with an uninitialized shared
+indexer layer. The MTP/PP follow-up patches add the relay interface and snapshot
+MUSA speculative token buffers before side-stream broadcasts so the next decode
+step cannot overwrite an in-flight send. The final patch enables the stable
+FP32 router GEMM on MUSA and uses it for Hy4 single-token routing.
 The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime
@@ -43,3 +50,7 @@ object/registration patches (which patch live objects at import) are kept
 separately in `vllm_musa/patches/`, not in this build-time series. Run
 `python3 tools/musa_sync.py verify` to replay and verify the complete manifest
 against that exact pinned commit.
+
+The MATE 0.2.6 contract follows the current base release and includes the
+`+musa` wheels, `mate-mubin`, and `flashinfer-python`; Hy4-specific patches
+remain layered after the base series.
