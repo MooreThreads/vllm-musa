@@ -59,8 +59,8 @@ def test_report(ms, capsys):
     rc = ms.main(["report"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "171 divergences" in out
-    assert "'1': 109" in out and "'2': 23" in out and "'3': 1" in out
+    assert "174 divergences" in out
+    assert "'1': 112" in out and "'2': 23" in out and "'3': 1" in out
     assert "'4a': 2" in out and "'5': 28" in out and "'6': 8" in out
 
 
@@ -253,36 +253,30 @@ def test_verify_rows_applies_dependent_patches_cumulatively_without_mutating_rep
     patch_dir = project / "patches"
     patch_dir.mkdir(parents=True)
     first = patch_dir / "0001-add-beta.patch"
-    first.write_text(
-        """diff --git a/value.txt b/value.txt
+    first.write_text("""diff --git a/value.txt b/value.txt
 --- a/value.txt
 +++ b/value.txt
 @@ -1 +1,2 @@
  alpha
 +beta
-"""
-    )
+""")
     second = patch_dir / "0002-rewrite-beta.patch"
-    second.write_text(
-        """diff --git a/value.txt b/value.txt
+    second.write_text("""diff --git a/value.txt b/value.txt
 --- a/value.txt
 +++ b/value.txt
 @@ -1,2 +1,2 @@
  alpha
 -beta
 +gamma
-"""
-    )
+""")
     conflict = patch_dir / "0003-conflict.patch"
-    conflict.write_text(
-        """diff --git a/value.txt b/value.txt
+    conflict.write_text("""diff --git a/value.txt b/value.txt
 --- a/value.txt
 +++ b/value.txt
 @@ -1 +1 @@
 -not-present
 +still-not-present
-"""
-    )
+""")
 
     entries = [
         ms.manifest.DivSpec(

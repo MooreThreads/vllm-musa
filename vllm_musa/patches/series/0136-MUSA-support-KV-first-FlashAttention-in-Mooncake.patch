@@ -1,0 +1,506 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 28 Aug 2026 08:15:00 +0000
+Subject: [PATCH] MUSA: support KV-first FlashAttention in Mooncake
+
+---
+ .../test_mooncake_connector_hybrid_mamba.py   | 121 +++++++++++++++++-
+ tests/v1/worker/test_attn_utils.py            |  59 ++++++++-
+ .../kv_transfer/kv_connector/utils.py         |  94 +++++++++++---
+ .../v1/mooncake/mooncake_connector.py         |  24 ++--
+ vllm/v1/worker/gpu/attn_utils.py              |  58 ++++++---
+ 5 files changed, 305 insertions(+), 51 deletions(-)
+
+diff --git a/tests/v1/kv_connector/unit/test_mooncake_connector_hybrid_mamba.py b/tests/v1/kv_connector/unit/test_mooncake_connector_hybrid_mamba.py
+index 6811d60ee6..3ab32434ca 100644
+--- a/tests/v1/kv_connector/unit/test_mooncake_connector_hybrid_mamba.py
++++ b/tests/v1/kv_connector/unit/test_mooncake_connector_hybrid_mamba.py
+@@ -15,6 +15,7 @@ import pytest
+ import torch
+
+ from vllm.config import set_current_vllm_config
++from vllm.distributed.kv_transfer.kv_connector.utils import TransferTopology
+ from vllm.distributed.kv_transfer.kv_connector.v1.mooncake.mooncake_connector import (
+     KVConnectorRole,
+     MooncakeConnector,
+@@ -41,6 +42,117 @@ def noop_shutdown():
+     pass
+
+
++class KVFirstAttentionBackend:
++    @staticmethod
++    def get_kv_cache_shape(
++        num_blocks: int,
++        block_size: int,
++        num_kv_heads: int,
++        head_size: int,
++        cache_dtype_str: str = "auto",
++    ) -> tuple[int, ...]:
++        return (2, num_blocks, block_size, num_kv_heads, head_size)
++
++
++class NoKVCacheAttentionBackend:
++    @staticmethod
++    def get_kv_cache_shape(
++        num_blocks: int,
++        block_size: int,
++        num_kv_heads: int,
++        head_size: int,
++        cache_dtype_str: str = "auto",
++    ) -> tuple[int, ...]:
++        raise NotImplementedError
++
++
++def make_kv_first_topology(*, is_mamba: bool) -> TransferTopology:
++    return TransferTopology(
++        tp_rank=0,
++        tp_size=1,
++        block_size=16,
++        engine_id="local-engine",
++        is_mla=False,
++        is_mamba=is_mamba,
++        total_num_kv_heads=1,
++        attn_backends=[KVFirstAttentionBackend],
++    )
++
++
++def test_hybrid_topology_skips_backend_without_kv_cache_shape():
++    topology = TransferTopology(
++        tp_rank=0,
++        tp_size=1,
++        block_size=16,
++        engine_id="local-engine",
++        is_mla=False,
++        is_mamba=True,
++        total_num_kv_heads=1,
++        attn_backends=[NoKVCacheAttentionBackend, KVFirstAttentionBackend],
++    )
++
++    assert topology.virtually_split_kv_in_blocks
++
++
++def test_kv_first_flash_attention_dense_regions():
++    topology = make_kv_first_topology(is_mamba=False)
++    layer_spec = FullAttentionSpec(
++        block_size=16,
++        num_kv_heads=1,
++        head_size=4,
++        dtype=torch.float16,
++    )
++    cache = torch.empty((2, 3, 16, 1, 4), dtype=torch.float16)
++
++    regions = topology.get_transfer_cache_regions(cache, layer_spec)
++
++    assert len(regions) == 2
++    assert [tuple(region.shape) for region in regions] == [
++        (3, 16, 1, 4),
++        (3, 16, 1, 4),
++    ]
++    assert [region.data_ptr() for region in regions] == [
++        cache[0].data_ptr(),
++        cache[1].data_ptr(),
++    ]
++
++
++def test_kv_first_flash_attention_hybrid_region_is_blocks_first():
++    topology = make_kv_first_topology(is_mamba=True)
++    layer_spec = FullAttentionSpec(
++        block_size=16,
++        num_kv_heads=1,
++        head_size=4,
++        dtype=torch.float16,
++    )
++    page_aligned_cache = torch.empty((3, 2, 16, 1, 4), dtype=torch.float16)
++    kernel_view = page_aligned_cache.transpose(0, 1)
++
++    regions = topology.get_transfer_cache_regions(kernel_view, layer_spec)
++
++    assert len(regions) == 1
++    assert tuple(regions[0].shape) == tuple(page_aligned_cache.shape)
++    assert tuple(regions[0].stride()) == tuple(page_aligned_cache.stride())
++    assert regions[0].data_ptr() == page_aligned_cache.data_ptr()
++    assert topology.virtually_split_kv_in_blocks
++
++
++def test_kv_first_hybrid_accepts_v028_mamba_page_tensor():
++    topology = make_kv_first_topology(is_mamba=True)
++    layer_spec = MambaSpec(
++        block_size=16,
++        shapes=((6, 3), (1, 2, 2)),
++        dtypes=(torch.float16, torch.float16),
++        mamba_type=MambaAttentionBackendEnum.GDN_ATTN,
++    )
++    page_cache = torch.empty((3, 1, 1, 64), dtype=torch.uint8)
++
++    regions = topology.get_transfer_cache_regions(page_cache, layer_spec)
++
++    assert len(regions) == 1
++    assert regions[0] is page_cache
++
++
+ def make_hybrid_gdn_kv_cache_config(block_size: int) -> KVCacheConfig:
+     gdn_spec = MambaSpec(
+         block_size=block_size,
+@@ -138,7 +250,12 @@ def test_register_kv_caches_emits_fa_and_gdn_regions(monkeypatch):
+         )
+         worker = connector.connector_worker
+
+-        fa_cache = torch.empty((2, 2, 11), dtype=torch.float16)
++        fa_storage = torch.empty(64, dtype=torch.float16)
++        fa_cache = torch.as_strided(
++            fa_storage,
++            size=(2, 2, 11),
++            stride=(11, 32, 1),
++        )
+         gdn_conv_state = torch.empty((2, 22), dtype=torch.float16)
+         gdn_ssm_state = torch.empty((2, 4), dtype=torch.float16)
+
+@@ -159,6 +276,8 @@ def test_register_kv_caches_emits_fa_and_gdn_regions(monkeypatch):
+             fa_cache.data_ptr(),
+             gdn_conv_state.data_ptr(),
+         ]
++        assert worker.block_len_per_layer[0] == 64
++        assert worker.kv_block_len_per_layer[0] == 22
+
+         worker.shutdown()
+         worker.shutdown = noop_shutdown
+diff --git a/tests/v1/worker/test_attn_utils.py b/tests/v1/worker/test_attn_utils.py
+index b446c5a377..79852f0ef7 100644
+--- a/tests/v1/worker/test_attn_utils.py
++++ b/tests/v1/worker/test_attn_utils.py
+@@ -271,26 +271,40 @@ class FakeKVFirstBackend:
+         return 1
+
+
+-def _kv_first_setup(shared_by: list[str]):
++class FakeHNDKVFirstBackend(FakeKVFirstBackend):
++    @staticmethod
++    def get_kv_cache_stride_order(
++        include_num_layers_dimension: bool = False,
++    ) -> tuple[int, ...]:
++        assert not include_num_layers_dimension
++        return (0, 1, 3, 2, 4)
++
++
++def _kv_first_setup(
++    shared_by: list[str],
++    page_size_padded: int | None = None,
++    backend: type[FakeKVFirstBackend] = FakeKVFirstBackend,
++):
+     num_blocks = 3
+     attn_spec = FullAttentionSpec(
+         block_size=16,
+         num_kv_heads=1,
+         head_size=2,
+         dtype=torch.float32,
++        page_size_padded=page_size_padded,
+     )
+     mamba_spec = MambaSpec(
+         block_size=16,
+-        shapes=((64,),),
++        shapes=((attn_spec.page_size_bytes // 4,),),
+         dtypes=(torch.float32,),
+     )
+-    assert attn_spec.page_size_bytes == mamba_spec.page_size_bytes == 256
++    assert attn_spec.page_size_bytes == mamba_spec.page_size_bytes
+
+     raw_tensor = torch.zeros(attn_spec.page_size_bytes * num_blocks, dtype=torch.int8)
+     raw_tensors = {name: raw_tensor for name in shared_by}
+     attn_groups = [
+         AttentionGroup(
+-            backend=FakeKVFirstBackend,
++            backend=backend,
+             layer_names=["attn"],
+             kv_cache_spec=attn_spec,
+             kv_cache_group_id=0,
+@@ -342,3 +356,40 @@ def test_reshape_kv_first_kv_cache_keeps_layout_without_mamba():
+     # Nothing else indexes this allocation by page, so K and V stay split into
+     # one contiguous half each.
+     assert kv_cache[1, 0].storage_offset() == num_blocks * 16 * 1 * 2
++
++
++def test_reshape_padded_kv_first_cache_pages_blocks_with_mamba():
++    num_blocks, kv_cache = _kv_first_setup(
++        ["attn", "mamba"],
++        page_size_padded=384,
++    )
++
++    assert kv_cache.shape == (2, num_blocks, 16, 1, 2)
++    page_stride = 96
++    kv_half = 16 * 1 * 2
++    assert kv_cache.stride(1) == page_stride
++    for block in range(num_blocks):
++        assert kv_cache[0, block].storage_offset() == block * page_stride
++        assert (
++            kv_cache[1, block].storage_offset() == block * page_stride + kv_half
++        )
++
++
++def test_reshape_padded_hnd_kv_first_cache_without_mamba_marker():
++    num_blocks, kv_cache = _kv_first_setup(
++        ["attn"],
++        page_size_padded=384,
++        backend=FakeHNDKVFirstBackend,
++    )
++
++    assert kv_cache.shape == (2, num_blocks, 16, 1, 2)
++    page_stride = 96
++    kv_half = 16 * 1 * 2
++    assert kv_cache.stride(1) == page_stride
++    assert kv_cache.stride(2) == 2
++    assert kv_cache.stride(3) == 32
++    for block in range(num_blocks):
++        assert kv_cache[0, block].storage_offset() == block * page_stride
++        assert (
++            kv_cache[1, block].storage_offset() == block * page_stride + kv_half
++        )
+diff --git a/vllm/distributed/kv_transfer/kv_connector/utils.py b/vllm/distributed/kv_transfer/kv_connector/utils.py
+index 7b068adf8b..44dd61ab7f 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/utils.py
++++ b/vllm/distributed/kv_transfer/kv_connector/utils.py
+@@ -22,10 +22,12 @@ from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
+ from vllm.platforms import current_platform
+ from vllm.utils.torch_utils import async_tensor_h2d
+ from vllm.v1.attention.backend import AttentionBackend
++from vllm.v1.kv_cache_interface import MambaSpec
+ from vllm.v1.outputs import KVConnectorOutput, ModelRunnerOutput
+
+ if TYPE_CHECKING:
+     from vllm.distributed.kv_transfer.kv_connector.base import KVConnectorBase
++    from vllm.v1.kv_cache_interface import KVCacheSpec
+
+ logger = init_logger(__name__)
+
+@@ -427,28 +429,49 @@ class TransferTopology:
+
+         self._engines: dict[tuple[EngineId, int], EngineTransferInfo] = {}
+
+-        # Figure out whether the first dimension of the cache is K/V
+-        # or num_blocks.
+-        attn_backend = self.attn_backends[0]
+-        if not self.is_mamba:
+-            _MOCK_BLOCK_SIZE = 16
+-            kv_cache_shape: tuple[int, ...] = attn_backend.get_kv_cache_shape(
+-                num_blocks=1,
+-                block_size=_MOCK_BLOCK_SIZE,
+-                num_kv_heads=1,
+-                head_size=1,
+-            )
+-            logger.debug("Test kv_cache_shape: %s", kv_cache_shape)
+-            assert kv_cache_shape[0] == 1, (
+-                "KV cache layout must be blocks-first; expected mocked "
+-                f"num_blocks=1 in leading dim, got shape {kv_cache_shape}."
++        # Detect the backend's logical cache layout. vLLM standard backends
++        # publish blocks first, while MUSA FlashAttention keeps K/V first.
++        _MOCK_BLOCK_SIZE = 16
++        for attn_backend in self.attn_backends:
++            try:
++                kv_cache_shape: tuple[int, ...] = attn_backend.get_kv_cache_shape(
++                    num_blocks=1,
++                    block_size=_MOCK_BLOCK_SIZE,
++                    num_kv_heads=1,
++                    head_size=1,
++                )
++            except NotImplementedError:
++                continue
++            break
++        else:
++            raise NotImplementedError("No attention backend provides a KV cache shape")
++        logger.debug("Test kv_cache_shape: %s", kv_cache_shape)
++
++        self._is_kv_layout_blocks_first = kv_cache_shape[0] == 1
++        self._is_kv_layout_kv_first = (
++            len(kv_cache_shape) >= 2
++            and kv_cache_shape[0] == 2
++            and kv_cache_shape[1] == 1
++        )
++        if not self.is_mla:
++            assert (
++                self._is_kv_layout_blocks_first or self._is_kv_layout_kv_first
++            ), (
++                "Attention KV cache layout must be blocks-first or K/V-first; "
++                f"got shape {kv_cache_shape}."
+             )
+-            if not self.is_mla:
++            if self._is_kv_layout_blocks_first:
+                 assert len(kv_cache_shape) == 4, (
+                     "Attention KV cache layout must be standardized as "
+                     "[num_blocks, num_kv_heads, block_size, content_size], "
+                     f"got shape {kv_cache_shape}."
+                 )
++            else:
++                assert len(kv_cache_shape) == 5, (
++                    "K/V-first attention KV cache layout must be "
++                    "[2, num_blocks, block_size, num_kv_heads, head_size], "
++                    f"got shape {kv_cache_shape}."
++                )
+
+         self._cross_layers_blocks = False
+         if self.tensor_shape is not None:
+@@ -521,6 +544,45 @@ class TransferTopology:
+         # interleaving means a simple half-split does not separate the parts).
+         return self.is_mamba and not self._cross_layers_blocks
+
++    def get_transfer_cache_regions(
++        self,
++        cache: Any,
++        layer_spec: "KVCacheSpec",
++    ) -> list[torch.Tensor]:
++        """Return block-indexable regions for connector registration.
++
++        Standard vLLM attention caches are already blocks-first. MUSA
++        FlashAttention exposes a K/V-first logical view and needs either two
++        dense K/V regions or one page-aligned hybrid region.
++        """
++        if isinstance(layer_spec, MambaSpec):
++            # v0.28 allocates one whole page tensor for Mamba/GDN. Keep the
++            # tuple fallback for connectors/tests using the older cache form.
++            if isinstance(cache, torch.Tensor):
++                return [cache]
++
++            conv, _ = cache
++            return [conv]
++
++        if not self._is_kv_layout_kv_first:
++            return [cache]
++
++        assert isinstance(cache, torch.Tensor)
++        assert cache.shape[0] == 2, (
++            "K/V-first attention cache must have a leading dimension of 2."
++        )
++
++        if self.is_mamba:
++            # Hybrid allocation makes pages physically blocks-first and
++            # returns a logical [2, num_blocks, ...] view. Swap the view back
++            # so stride(0) indexes complete K/V pages for Mooncake.
++            return [cache.transpose(0, 1)]
++
++        # Dense K/V-first allocation stores all K blocks followed by all V
++        # blocks. Register the halves separately so each region is indexed by
++        # block id.
++        return [cache[0], cache[1]]
++
+     # ============================================================
+     # Common methods
+     # ============================================================
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
+index dd94ffb2f9..60705098ca 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
+@@ -1085,7 +1085,9 @@ class MooncakeConnectorWorker:
+
+     def shutdown(self):
+         """Cleanup background threads on destruction."""
+-        self.async_zmq_ctx.term()
++        async_zmq_ctx = getattr(self, "async_zmq_ctx", None)
++        if async_zmq_ctx is not None:
++            async_zmq_ctx.term()
+         if not self.is_kv_consumer:
+             self._sender_executor.shutdown(wait=False)
+             if self.sender_loop.is_running():
+@@ -1674,13 +1676,10 @@ class MooncakeConnectorWorker:
+                     layer_name,
+                 )
+                 continue
+-            if isinstance(layer_spec, MambaSpec):
+-                conv, _ = cache_or_caches
+-                cache_list = [conv]
+-            else:
+-                # K and V are packed into one blocks-first tensor per layer,
+-                # so each layer registers as a single region.
+-                cache_list = [cache_or_caches]
++            cache_list = self.transfer_topo.get_transfer_cache_regions(
++                cache_or_caches,
++                layer_spec,
++            )
+
+             logger.debug(
+                 "registering layer %s with %d cache tensor(s)",
+@@ -1699,7 +1698,14 @@ class MooncakeConnectorWorker:
+                 elif self.transfer_topo.virtually_split_kv_in_blocks and not isinstance(
+                     layer_spec, MambaSpec
+                 ):
+-                    kv_block_len = block_len // 2
++                    # A padded hybrid page is [K, V, padding]. Transfer only
++                    # the actual K/V content; block_len remains the physical
++                    # page stride used to locate the next block.
++                    kv_block_len = cache[0].numel() * cache.element_size() // 2
++                    assert 2 * kv_block_len <= block_len, (
++                        "Mooncake K/V content exceeds the physical block stride: "
++                        f"kv_block_len={kv_block_len}, block_len={block_len}."
++                    )
+                 else:
+                     kv_block_len = block_len
+                 self.block_len_per_layer.append(block_len)
+diff --git a/vllm/v1/worker/gpu/attn_utils.py b/vllm/v1/worker/gpu/attn_utils.py
+index 05fa471b98..06f4c0fdbf 100644
+--- a/vllm/v1/worker/gpu/attn_utils.py
++++ b/vllm/v1/worker/gpu/attn_utils.py
+@@ -294,30 +294,46 @@ def _reshape_attention_kv_cache(
+         )
+     elif kv_cache_spec.page_size_padded is not None:
+         # Use a strided view to skip the padding between physical pages.
+-        #
+-        # Only num-blocks-first layouts are supported (the block dimension is
+-        # dim 0 of the unpermuted shape). kv-first layouts such as ROCm's
+-        # ``(2, num_blocks, ...)`` are intentionally not supported here. For a
+-        # num-blocks-first layout the only stride that must change is the block
+-        # stride: every other (contiguous) stride already steps within the
+-        # unpadded region of a page, so no further adjustment is needed.
+-        assert kv_cache_shape[0] == num_blocks, (
+-            "Padded KV pages require a num-blocks-first KV cache layout (got "
+-            f"shape {kv_cache_shape} with num_blocks={num_blocks}); "
+-            "kv-first layouts are not supported."
+-        )
+         dtype_size = get_dtype_size(kv_cache_spec.dtype)
+         page_stride = kv_cache_spec.page_size_bytes // dtype_size
+
+-        num_blocks_dim = inv_order[0]
+-        strides = list(torch.empty(permuted_kv_cache_shape, device="meta").stride())
+-        strides[num_blocks_dim] = page_stride
+-
+-        kv_cache = torch.as_strided(
+-            kv_raw_tensor.view(dtype),
+-            size=permuted_kv_cache_shape,
+-            stride=tuple(strides),
+-        )
++        if kv_cache_shape[0] == num_blocks:
++            # Blocks-first: only the block stride changes. Every other
++            # contiguous stride already steps within the unpadded page.
++            num_blocks_dim = inv_order[0]
++            strides = list(
++                torch.empty(permuted_kv_cache_shape, device="meta").stride()
++            )
++            strides[num_blocks_dim] = page_stride
++            kv_cache = torch.as_strided(
++                kv_raw_tensor.view(dtype),
++                size=permuted_kv_cache_shape,
++                stride=tuple(strides),
++            )
++        else:
++            # A padded KV-first attention page is physically page-addressed by
++            # the hybrid allocator. Lay each block out as [K, V, padding],
++            # while preserving the backend-facing [K/V, blocks, ...] view.
++            assert (
++                kv_cache_shape[1] == num_blocks
++                and kv_cache_stride_order[:2] == (0, 1)
++            ), (
++                "Padded KV-first pages require a [2, num_blocks, ...] layout, got "
++                f"shape {kv_cache_shape}, stride order {kv_cache_stride_order}, "
++                f"and num_blocks={num_blocks}."
++            )
++            block_first_shape = (
++                num_blocks,
++                kv_cache_shape[0],
++                *permuted_kv_cache_shape[2:],
++            )
++            strides = list(torch.empty(block_first_shape, device="meta").stride())
++            strides[0] = page_stride
++            kv_cache = torch.as_strided(
++                kv_raw_tensor.view(dtype),
++                size=block_first_shape,
++                stride=tuple(strides),
++            ).transpose(0, 1)
+     elif page_aligned_blocks:
+         # A KV-first layout such as ROCm's ``(2, num_blocks, ...)`` puts block
+         # ``b``'s K and V in two far-apart halves of the allocation, so block
