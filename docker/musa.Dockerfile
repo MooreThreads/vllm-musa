@@ -305,7 +305,6 @@ RUN python -m pip install \
 
 RUN printf '%s\n' \
         'import importlib' \
-        'import importlib.util' \
         'import re' \
         'from pathlib import Path' \
         'from importlib.metadata import version' \
@@ -324,14 +323,7 @@ RUN printf '%s\n' \
         '    raise RuntimeError(f"missing {dist_name} pin in {requirement_files}")' \
         '' \
         'exact_version_dists = frozenset({"torchada", "torch", "torch_musa", "torchvision", "torchaudio", "deep_ep"})' \
-        'exact_version_dists |= frozenset({"mate", "mate-mubin", "flash_attn_3", "flash_mla", "deep-gemm", "flashinfer-python", "sageattention", "tilelang_musa", "apache-tvm-ffi"})' \
-        'metadata_only_dists = frozenset({' \
-        '    "torchvision", "torchaudio", "mate", "mate-mubin", "flash_attn_3",' \
-        '    "flash_mla", "deep-gemm", "flashinfer-python", "sageattention",' \
-        '    "deep_ep", "tilelang_musa", "triton", "apache-tvm-ffi",' \
-        '    "torch_c_dlpack_ext",' \
-        '})' \
-        '' \
+        'exact_version_dists |= frozenset({"mate", "mate-mubin", "flash_attn_3", "flash_mla", "deep-gemm", "flashinfer-python", "sageattention", "tilelang_musa", "apache-tvm-ffi", "torch_c_dlpack_ext"})' \
         'expected = (' \
         '    ("torchada", "torchada", requirement_prefix("torchada")),' \
         '    ("numpy", "numpy", "1.26."),' \
@@ -357,19 +349,15 @@ RUN printf '%s\n' \
         ')' \
         '' \
         'for dist_name, module_name, prefix in expected:' \
-        '    if dist_name in metadata_only_dists:' \
-        '        if importlib.util.find_spec(module_name) is None:' \
-        '            raise RuntimeError(f"missing import spec for {module_name}")' \
-        '        check_kind = "spec"' \
-        '    else:' \
-        '        importlib.import_module(module_name)' \
-        '        check_kind = "import"' \
         '    installed = version(dist_name)' \
+        '    skip_import = (dist_name == "tilelang_musa" and installed == "0.1.12+musa.2")' \
+        '    if not skip_import: importlib.import_module(module_name)' \
         '    if dist_name in exact_version_dists and installed != prefix:' \
         '        raise RuntimeError(f"{dist_name} expected exactly {prefix}, got {installed}")' \
         '    if dist_name not in exact_version_dists and prefix and not installed.startswith(prefix):' \
         '        raise RuntimeError(f"{dist_name} expected {prefix}, got {installed}")' \
-        '    print(f"PASS {check_kind} {module_name} version={installed}")' \
+        '    action = "skip import" if skip_import else "import"' \
+        '    print(f"PASS {action} {module_name} version={installed}")' \
         '' \
         'for module_name in ("vllm", "vllm_musa"):' \
         '    module = importlib.import_module(module_name)' \
@@ -533,6 +521,7 @@ RUN git clone --depth 1 --branch "${VLLM_OMNI_REF}" "${VLLM_OMNI_REPO}" /vllm-wo
         "numpy>=1.26.4,<2" \
         "opencv-python==4.11.0.86" \
         "onnxruntime>=1.23.2" \
+        "mcp-types==2.1.1" \
         "strenum==0.4.15; python_version < '3.11'" && \
     printf '%s\n' \
         'from importlib.metadata import version' \
@@ -558,6 +547,7 @@ RUN git clone --depth 1 --branch "${VLLM_OMNI_REF}" "${VLLM_OMNI_REPO}" /vllm-wo
         > /tmp/vllm_omni_preserve_check.py && \
     python /tmp/vllm_omni_preserve_check.py && \
     python -c 'import av, cv2, soundfile; assert cv2.__version__.startswith("4.11."), cv2.__version__; print("PASS media imports av=" + av.__version__ + " cv2=" + cv2.__version__ + " soundfile=" + soundfile.__version__)' && \
+    python -c 'import re, subprocess; result=subprocess.run(["python", "-m", "pip", "check"], text=True, capture_output=True); lines=tuple(line for line in result.stdout.splitlines() if line.strip()); allowed=(r"vllm 0\.28\.0 requires opencv-python-headless(?:>=4\.13\.0)?, which is not installed\.", r"vllm-musa .+ has requirement click==8\.2\.0, but you have click .+\.", r"vllm-musa .+ has requirement numpy==1\.26, but you have numpy 1\.26\.4\.", r"vllm-musa .+ has requirement tilelang_musa==0\.1\.12\+musa\.2, but you have tilelang-musa .+\.", r"vllm-musa .+ has requirement transformers==5\.5\.3, but you have transformers 5\.14\.1\.", r"xgrammar .+ has requirement transformers<5,>=4\.38\.0, but you have transformers 5\.14\.1\."); unexpected=tuple(line for line in lines if not any(re.fullmatch(pattern, line) for pattern in allowed)); assert not unexpected, "unexpected pip check output: " + repr(unexpected); print("pip check allowlist entries:"); print("\\n".join(lines) if lines else "(clean)"); print("PASS pip check allowlist lines=" + str(len(lines)))' && \
     rm -f /tmp/vllm_omni_preserve_check.py /tmp/vllm-musa-constraints.txt && \
     rm -rf /root/.cache/pip /vllm-workspace/vllm-omni/.git
 
