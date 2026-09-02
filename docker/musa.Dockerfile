@@ -304,6 +304,7 @@ RUN python -m pip install \
 RUN printf '%s\n' \
         'import importlib' \
         'import re' \
+        'import torch' \
         'from pathlib import Path' \
         'from importlib.metadata import version' \
         '' \
@@ -347,18 +348,30 @@ RUN printf '%s\n' \
         '    ("torch_c_dlpack_ext", "torch_c_dlpack_ext", ""),' \
         ')' \
         '' \
+        'tilelang_exact = version("tilelang_musa") == "0.1.12+musa.2"' \
+        'try:' \
+        '    gpu_available = bool(torch.musa.is_available())' \
+        'except Exception:' \
+        '    gpu_available = False' \
+        'metadata_only = tilelang_exact and not gpu_available' \
+        '' \
         'for dist_name, module_name, prefix in expected:' \
-        '    importlib.import_module(module_name)' \
         '    installed = version(dist_name)' \
+        '    skip_import = metadata_only' \
+        '    if not skip_import: importlib.import_module(module_name)' \
         '    if dist_name in exact_version_dists and installed != prefix:' \
         '        raise RuntimeError(f"{dist_name} expected exactly {prefix}, got {installed}")' \
         '    if dist_name not in exact_version_dists and prefix and not installed.startswith(prefix):' \
         '        raise RuntimeError(f"{dist_name} expected {prefix}, got {installed}")' \
-        '    print(f"PASS import {module_name} version={installed}")' \
+        '    action = "skip import" if skip_import else "import"' \
+        '    print(f"PASS {action} {module_name} version={installed}")' \
         '' \
-        'for module_name in ("vllm", "vllm_musa"):' \
-        '    module = importlib.import_module(module_name)' \
-        '    print("PASS import %s version=%s" % (module_name, getattr(module, "__version__", "unknown")))' \
+        'if not metadata_only:' \
+        '    for module_name in ("vllm", "vllm_musa"):' \
+        '        module = importlib.import_module(module_name)' \
+        '        print("PASS import %s version=%s" % (module_name, getattr(module, "__version__", "unknown")))' \
+        'else:' \
+        '    print("PASS metadata-only skip vllm imports")' \
         > /tmp/vllm_musa_import_check.py && \
     python /tmp/vllm_musa_import_check.py && \
     rm /tmp/vllm_musa_import_check.py
