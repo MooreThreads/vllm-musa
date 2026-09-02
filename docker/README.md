@@ -264,8 +264,9 @@ context before invoking the build.
 
 The `vllm_musa_installed` verify step imports the regular Python stack and checks
 the exact MUSA wheel pins. The known GPU-less-build corner of
-`tilelang_musa==0.1.12+musa.2` is handled by a narrow metadata-only check in the
-parent stage, so the regular image can be constructed without a visible GPU.
+`tilelang_musa==0.1.12+musa.2` is handled by a narrow metadata-only check for
+TileLang and its transitive `flash_mla` import in the parent stage, so the
+regular image can be constructed without a visible GPU.
 The optional Omni stage checks its media tools, package metadata, and Python
 bytecode at build time; native Omni imports and model requests still require a
 MUSA runtime and are validated by the leased-hardware smoke.
