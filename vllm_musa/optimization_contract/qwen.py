@@ -350,6 +350,9 @@ def resolve_qwen_contract(
     if _qwen35_moe_prefill_preferred(model, execution):
         preferred.add(OptimizationFeature.QWEN35_MOE_BF16_PREFILL)
     if model.family is ModelFamily.QWEN35_36:
+        # The FP8 fold is safe once the quant method observes a route that has
+        # already been extended by the fused routed+shared gate. The quant
+        # apply hook is idempotent for that combined top-k shape.
         if model.has_routed_experts is True:
             preferred.add(OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD)
         if model.dtype == "bfloat16":

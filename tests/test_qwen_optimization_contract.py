@@ -155,6 +155,29 @@ def test_qwen35_and_qwen36_share_the_current_hf_schema(checkpoint: str) -> None:
     assert contract.prefers(OptimizationFeature.QWEN35_INTERLEAVED_MROPE_QK)
 
 
+def test_qwen35_fp8_prefers_shared_expert_fold() -> None:
+    contract = resolve_optimization_contract(
+        _config(
+            architecture="Qwen3_5MoeForConditionalGeneration",
+            model_type="qwen3_5_moe",
+            quantization="fp8",
+            hidden_size=2048,
+            num_experts=256,
+            num_experts_per_tok=8,
+            moe_intermediate_size=512,
+            linear_num_key_heads=16,
+            linear_num_value_heads=32,
+            linear_key_head_dim=128,
+            linear_value_head_dim=128,
+            linear_conv_kernel_dim=4,
+            tp=4,
+        )
+    )
+
+    assert contract.model.quantization == "fp8"
+    assert contract.prefers(OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD)
+
+
 def test_future_distinct_qwen36_schema_fails_closed() -> None:
     contract = resolve_optimization_contract(
         _config(

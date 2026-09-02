@@ -102,3 +102,14 @@ def test_qwen35_fold_stashes_owning_router() -> None:
     ).read_text()
 
     assert "+            routed._musa_shared_router = self.experts.router" in patch
+
+
+def test_fp8_fold_does_not_duplicate_combined_shared_route() -> None:
+    source = (
+        REPO_ROOT / "vllm_musa/model_executor/layers/quantization/fp8.py"
+    ).read_text()
+
+    assert "routed_topk = int(" in source
+    assert 'getattr(layer.moe_config, "experts_per_token"' in source
+    assert "if topk_ids.shape[1] == routed_topk:" in source
+    assert "topk_ids.shape[1] == routed_topk + 1" in source

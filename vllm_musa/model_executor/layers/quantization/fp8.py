@@ -230,9 +230,20 @@ def apply(
         assert (
             shared_experts is None and shared_experts_input is None
         ), "folded shared expert expects shared_experts=None"
-        topk_weights, topk_ids = _extend_routing_with_shared_expert(
-            layer, x, topk_weights, topk_ids
+        # The Qwen3.5 runner may fuse the routed and shared gate weights
+        # before routing. In that case the MUSA top-k kernel already returns
+        # the extra shared column; appending it again would create a duplicate
+        # shared route (top-k=10) and corrupt the folded FP8 result.
+        routed_topk = int(
+            getattr(layer.moe_config, "experts_per_token", topk_ids.shape[1])
         )
+        if topk_ids.shape[1] == routed_topk:
+            topk_weights, topk_ids = _extend_routing_with_shared_expert(
+                layer, x, topk_weights, topk_ids
+            )
+        else:
+            assert topk_ids.shape[1] == routed_topk + 1
+            assert topk_weights.shape[1] == routed_topk + 1
     global_num_experts = (
         layer._musa_shared_expert_id + 1 if folded_shared else layer.global_num_experts
     )
