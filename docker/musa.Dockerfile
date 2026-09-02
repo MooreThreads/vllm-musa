@@ -321,7 +321,7 @@ RUN printf '%s\n' \
         '    raise RuntimeError(f"missing {dist_name} pin in {requirement_files}")' \
         '' \
         'exact_version_dists = frozenset({"torchada", "torch", "torch_musa", "torchvision", "torchaudio", "deep_ep"})' \
-        'exact_version_dists |= frozenset({"mate", "mate-mubin", "flash_attn_3", "flash_mla", "deep-gemm", "flashinfer-python", "sageattention", "tilelang_musa", "apache-tvm-ffi"})' \
+        'exact_version_dists |= frozenset({"mate", "mate-mubin", "flash_attn_3", "flash_mla", "deep-gemm", "flashinfer-python", "sageattention", "tilelang_musa", "apache-tvm-ffi", "torch_c_dlpack_ext"})' \
         '' \
         'expected = (' \
         '    ("torchada", "torchada", requirement_prefix("torchada")),' \
@@ -344,12 +344,12 @@ RUN printf '%s\n' \
         '    ("pycountry", "pycountry", ""),' \
         '    ("pytest", "pytest", ""),' \
         '    ("apache-tvm-ffi", "tvm_ffi", requirement_prefix("apache-tvm-ffi")),' \
-        '    ("torch_c_dlpack_ext", "torch_c_dlpack_ext", ""),' \
+        '    ("torch_c_dlpack_ext", "torch_c_dlpack_ext", requirement_prefix("torch-c-dlpack-ext")),' \
         ')' \
         '' \
         'for dist_name, module_name, prefix in expected:' \
         '    installed = version(dist_name)' \
-        '    skip_import = (dist_name == "tilelang_musa" and installed == "0.1.12+musa.2")' \
+        '    skip_import = (dist_name in {"flash_mla", "tilelang_musa"} and version("tilelang_musa") == "0.1.12+musa.2")' \
         '    if not skip_import: importlib.import_module(module_name)' \
         '    if dist_name in exact_version_dists and installed != prefix:' \
         '        raise RuntimeError(f"{dist_name} expected exactly {prefix}, got {installed}")' \
