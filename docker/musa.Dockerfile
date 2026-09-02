@@ -345,7 +345,7 @@ RUN printf '%s\n' \
         '    ("pycountry", "pycountry", ""),' \
         '    ("pytest", "pytest", ""),' \
         '    ("apache-tvm-ffi", "tvm_ffi", requirement_prefix("apache-tvm-ffi")),' \
-        '    ("torch_c_dlpack_ext", "torch_c_dlpack_ext", ""),' \
+        '    ("torch_c_dlpack_ext", "torch_c_dlpack_ext", requirement_prefix("torch-c-dlpack-ext")),' \
         ')' \
         '' \
         'for dist_name, module_name, prefix in expected:' \
