@@ -36,6 +36,9 @@ enabled on MUSA by importing TileLang before the eager JIT decorators capture
 their module globals. DeepEP shutdown now drops cached handles before native
 teardown and supports both explicit `destroy()` and legacy destructor-only
 MUSA Buffer implementations.
+The final patch backports Qwen3.8-Flash-Next and adapts its QSA Triton,
+FlashAttention KV layout, persistent top-k selection, and packed recurrent
+state views for MUSA.
 The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime
