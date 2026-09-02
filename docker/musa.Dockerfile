@@ -485,11 +485,9 @@ ARG VLLM_OMNI_REF=v0.28.0
 ARG VLLM_OMNI_COMMIT=eb11446b7f2e30ca582f8aff3afe12e9a2e66f6c
 ARG MUSA_PIP_INDEX_URL
 ARG PYPI_INDEX_URL
-ENV VLLM_OMNI_TARGET_DEVICE=musa \
-    VLLM_WORKER_MULTIPROC_METHOD=spawn \
+ENV VLLM_WORKER_MULTIPROC_METHOD=spawn \
     PYTHONUNBUFFERED=1 \
-    MTHREADS_VISIBLE_DEVICES= \
-    VLLM_OMNI_VERSION_OVERRIDE=0.28.0+musa
+    MTHREADS_VISIBLE_DEVICES=
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -524,7 +522,8 @@ RUN git clone --depth 1 --branch "${VLLM_OMNI_REF}" "${VLLM_OMNI_REPO}" /vllm-wo
         installed_version="$(python -c 'from importlib.metadata import version; import sys; print(version(sys.argv[1]))' "${distribution}")"; \
         printf '%s==%s\n' "${distribution}" "${installed_version}"; \
     done > /tmp/vllm-musa-constraints.txt && \
-    VLLM_OMNI_TARGET_DEVICE=musa python -m pip install --no-deps -e . --no-build-isolation -v && \
+    VLLM_OMNI_TARGET_DEVICE=musa VLLM_OMNI_VERSION_OVERRIDE=0.28.0+musa \
+        python -m pip install --no-deps -e . --no-build-isolation -v && \
     if python -m pip show opencv-python-headless >/dev/null 2>&1; then \
         python -m pip uninstall -y opencv-python-headless; \
     fi && \
