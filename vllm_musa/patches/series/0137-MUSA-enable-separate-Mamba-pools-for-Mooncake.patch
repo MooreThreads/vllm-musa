@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 3 Sep 2026 05:30:00 +0800
+Subject: [PATCH] MUSA: enable separate Mamba pools for Mooncake PD
+
+Mooncake PD carries the Qwen3.5 hybrid attention cache through the KV
+connector. The generic shared physical-page fallback aliases each Mamba layer
+and the attention page layout, which corrupts recurrent state under concurrent
+prefill/decode. Reuse the existing MUSA dedicated Mamba BlockPools for the
+Mooncake connector only; other connectors retain the shared-pool contract.
+
+---
+ tests/v1/core/test_kv_cache_utils.py | 21 +++++++++++++++++++++
+ vllm/v1/core/kv_cache_utils.py      | 14 ++++++++++++--
+ 2 files changed, 39 insertions(+), 4 deletions(-)
+
+diff --git a/tests/v1/core/test_kv_cache_utils.py b/tests/v1/core/test_kv_cache_utils.py
+--- a/tests/v1/core/test_kv_cache_utils.py
++++ b/tests/v1/core/test_kv_cache_utils.py
+@@ -2890,3 +2890,24 @@ def test_resolve_block_hashes_rejects_mismatched_view():
+     mismatched = BlockHashListWithBlockSize(raw, 2, 8)
+     with pytest.raises(AssertionError):
+         resolve_block_hashes(mismatched, 2, 4)
++
++
++def test_musa_separate_pool_eligibility_is_mooncake_scoped(monkeypatch):
++    monkeypatch.setattr(
++        kv_cache_utils, "musa_mamba_separate_pool_enabled", lambda: True
++    )
++    groups = [
++        KVCacheGroupSpec(["mamba"], new_mamba_spec()),
++        KVCacheGroupSpec(["attn"], new_kv_cache_spec()),
++    ]
++    config = SimpleNamespace(
++        kv_transfer_config=SimpleNamespace(kv_connector="MooncakeConnector")
++    )
++
++    assert kv_cache_utils._musa_separate_pool_eligible(config, groups)
++
++    config.kv_transfer_config.kv_connector = "NixlConnector"
++    assert not kv_cache_utils._musa_separate_pool_eligible(config, groups)
++
++    config.kv_transfer_config = None
++    assert kv_cache_utils._musa_separate_pool_eligible(config, groups)
+
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1413,7 +1413,13 @@ def _musa_separate_pool_eligible(vllm_config, kv_cache_groups) -> bool:
+-    # KV connectors can defer frees through the coordinator's shared-pool API;
+-    # keep the upstream shared-pool layout until that API carries pool ownership.
++    # Non-Mooncake connectors can defer frees through the coordinator's
++    # shared-pool API; keep the shared-pool layout for their free lifecycle.
++    # Mooncake uses the dedicated Mamba BlockPool ownership path below.
++    kv_transfer_config = vllm_config.kv_transfer_config
++    mooncake_connector = (
++        kv_transfer_config is not None
++        and kv_transfer_config.kv_connector == "MooncakeConnector"
++    )
+     return (
+         musa_mamba_separate_pool_enabled()
+-        and vllm_config.kv_transfer_config is None
++        and (kv_transfer_config is None or mooncake_connector)
+         and _musa_has_mamba_and_attention(kv_cache_groups)
+     )
+@@ -1968,6 +1973,9 @@ def get_kv_cache_groups(
+     if (
+         musa_mamba_separate_pool_enabled()
+-        and vllm_config.kv_transfer_config is None
++        and (
++            vllm_config.kv_transfer_config is None
++            or vllm_config.kv_transfer_config.kv_connector == "MooncakeConnector"
++        )
+         and not hidden_specs
+         and any(isinstance(spec, MambaSpec) for spec in filtered_spec.values())
+         and any(not isinstance(spec, MambaSpec) for spec in filtered_spec.values())
