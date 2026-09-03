@@ -17,6 +17,9 @@ KERNEL = ROOT / (
 ENVIRON = ROOT / "vllm_musa/utils/environ.py"
 FUSED_OPS = ROOT / "vllm_musa/fused_allreduce_rmsnorm_ops.py"
 FUSION_PASS = ROOT / "vllm_musa/_inductor/musa_allreduce_rms_fusion.py"
+PROVIDER = ROOT / "vllm_musa/kernels/musa_ops.py"
+PLATFORM = ROOT / "vllm_musa/platform.py"
+LAYERNORM = ROOT / "vllm_musa/model_executor/layers/layernorm.py"
 PASS_MANAGER_PATCH = ROOT / (
     "vllm_musa/patches/series/"
     "0003-MUSA-vllm.compilation.passes.pass_manager.patch"
@@ -237,24 +240,43 @@ def _cpp_braced_block(source: str, marker: str, start: int = 0) -> tuple[str, in
     raise AssertionError(f"unterminated C++ block after: {marker}")
 
 
-def test_fused_path_has_no_process_environment_gate() -> None:
-    sources = (ENVIRON.read_text(), COMM.read_text(), FUSION_PASS.read_text())
-    assert all("VLLM_MUSA_FUSED_AR_RMSNORM" not in source for source in sources)
-    assert all(
-        "VLLM_MUSA_FUSED_AR_RMSNORM_GRAPH_REGISTERED_INPUT" not in source
-        for source in sources
+def test_fused_path_uses_standard_pass_config_only() -> None:
+    environ_source = ENVIRON.read_text()
+    comm_source = COMM.read_text()
+    provider_source = PROVIDER.read_text()
+    runtime_sources = (
+        PLATFORM.read_text(),
+        FUSION_PASS.read_text(),
+        comm_source,
+        LAYERNORM.read_text(),
     )
+    removed_gate = "VLLM_MUSA_FUSED_AR_RMSNORM"
+
+    assert removed_gate not in environ_source
+    assert removed_gate not in provider_source
+    assert all(removed_gate not in source for source in runtime_sources)
+    assert 'getattr(pass_config, "fuse_allreduce_rms", None) is None' in runtime_sources[0]
+    assert 'getattr(self.pass_config, "fuse_allreduce_rms", None) is not True' in runtime_sources[1]
+    assert "_car_rmsnorm_pass_enabled_for_current_model" in comm_source
 
 
 def test_fusion_uses_standard_pass_and_runtime_capability_gates() -> None:
     comm_source = COMM.read_text()
     fusion_source = FUSION_PASS.read_text()
+    provider_source = PROVIDER.read_text()
+    platform_source = PLATFORM.read_text()
     pass_manager_source = PASS_MANAGER_PATCH.read_text()
 
     assert "self.pass_config.fuse_allreduce_rms" in pass_manager_source
     assert "if self.disabled:" in comm_source
     assert "if self.tp_size <= 1:" in fusion_source
     assert "_graph_registered_input_eligible" in comm_source
+    assert "can_enable_fused_allreduce_rmsnorm(" in platform_source
+    assert "FUSED_ALLREDUCE_RMSNORM_TARGET_HIDDEN_SIZE" not in platform_source
+    assert "FUSED_ALLREDUCE_RMSNORM_TP4_HIDDEN_SIZE" not in platform_source
+    for source in (comm_source, fusion_source, provider_source):
+        assert "can_use_fused_allreduce_rmsnorm(" in source
+        assert "vllm_musa.optimization_contract.car_rmsnorm" in source
 
 
 def test_python_registered_path_uses_shared_graph_lifecycle() -> None:
@@ -308,6 +330,42 @@ def test_python_registered_path_uses_shared_graph_lifecycle() -> None:
     assert "self._graph_registered_input_eligible(tensor)" in eligibility_source
     assert "self._IS_CAPTURING" in eligibility_source
     assert "self._is_current_stream_capturing()" in eligibility_source
+
+    init_source = _python_function_source(comm_source, "__init__", comm_class)
+    assert "self._graph_registered_input_enabled" in init_source
+    assert "self._fused_allreduce_rmsnorm_enabled" in init_source
+    assert "if self._graph_registered_input_enabled:" in init_source
+    assert "self._generic_graph_registered_input_enabled" in init_source
+    assert (
+        "can_use_registered_graph_input_for_generic_car("
+        in init_source
+    )
+    assert "fused_registered_input_enabled=%s" in init_source
+    assert "generic_registered_input_enabled=%s" in init_source
+    consensus = init_source.index("self._validate_graph_staging_plan_consensus()")
+    allocation = init_source.index("_make_shared_buffer(")
+    assert consensus < allocation
+
+    fingerprint_source = _python_function_source(
+        comm_source, "_graph_staging_plan_fingerprint", comm_class
+    )
+    assert "self._graph_registered_input_enabled" in fingerprint_source
+    assert "self._generic_graph_registered_input_enabled" in fingerprint_source
+    assert "_fused_allreduce_rmsnorm_enabled" in fingerprint_source
+
+    generic_source = _python_function_source(
+        comm_source, "_custom_all_reduce_impl", comm_class
+    )
+    assert "self._can_use_registered_graph_input_for_generic_ar(" in generic_source
+
+    for function_name in (
+        "_fused_allreduce_rmsnorm_impl",
+        "_fused_allreduce_residual_rmsnorm_impl",
+        "_fused_allreduce_residual_rmsnorm_no_raw_impl",
+    ):
+        fused_source = _python_function_source(comm_source, function_name, comm_class)
+        assert "self._use_registered_graph_input(input)" in fused_source
+        assert "_can_use_registered_graph_input_for_generic_ar" not in fused_source
 
     graph_ar_source = _python_function_source(
         comm_source, "_graph_custom_all_reduce_impl", comm_class
@@ -428,6 +486,35 @@ def test_manual_rewrite_is_scoped_to_comm_and_full_variance() -> None:
         "MusaAllReduceRMSNormFusionPass",
     )
     assert rewrite_source.count("self._manual_residual_inputs_supported(") == 2
+
+
+def test_qwen_fused_add_provider_shape_is_registered() -> None:
+    source = FUSION_PASS.read_text()
+    assert '"musa_csrc_fused_add_rmsnorm.default" in target' in source
+    assert '"musa_fused_add_rms_norm.default" in target' in source
+    assert '"musa_csrc_rmsnorm.default" in target' in source
+    register_source = _python_function_source(
+        source,
+        "register",
+        "MusaAllReduceResidualRMSNormPattern",
+    )
+    assert "def fused_add_pattern(" in register_source
+    assert "vllm.ir.ops.fused_add_rms_norm(" in register_source
+    assert "first_two_returns(fused_add_pattern)" in register_source
+    assert "fused_add_pattern,\n            replacement," in register_source
+    assert "fused_add_inputs = self.get_fused_add_inputs()" in register_source
+
+
+def test_gemma_residual_path_materializes_effective_weight_for_car() -> None:
+    source = LAYERNORM.read_text()
+    assert "def _car_rmsnorm_ir_fusion_enabled(config=None)" in source
+    assert "pass_config.fuse_allreduce_rms" not in source
+    assert 'pass_value = getattr(pass_config, "fuse_allreduce_rms", None)' in source
+    assert "can_enable_fused_allreduce_rmsnorm(" in source
+    gemma_source = _python_function_source(source, "forward_oot", "MusaGemmaRMSNorm")
+    assert "getattr(self, \"_car_rmsnorm_ir_enabled\", False)" in gemma_source
+    assert "_car_rmsnorm_ir_fusion_enabled()" in gemma_source
+    assert "return self.forward_native(x, residual)" in gemma_source
 
 
 def test_manual_add_rewrite_accepts_only_tensor_overload_with_unit_alpha() -> None:

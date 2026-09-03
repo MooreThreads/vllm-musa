@@ -573,6 +573,17 @@ def test_graph_staging_multi_capture_preserves_disjoint_arena_state(
     assert impl._graph_staging_capture_sealed
 
 
+def test_graph_staging_recapture_fails_closed_while_captured_graphs_may_live() -> None:
+    impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
+    impl._IS_CAPTURING = False
+    impl._use_graph_staging_arena = True
+    impl._graph_staging_capture_sealed = True
+
+    with pytest.raises(RuntimeError, match="captured graphs may still reference"):
+        with impl.capture():
+            pass
+
+
 def _capture_consensus_impl() -> object:
     impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
     impl.rank = 0
@@ -605,6 +616,149 @@ def test_graph_staging_plan_mismatch_fails_before_buffer_allocation(
 
     with pytest.raises(RuntimeError, match="contract differs across ranks"):
         impl._validate_graph_staging_plan_consensus()
+
+
+def test_graph_registered_input_policy_mismatch_fails_before_buffer_allocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
+    impl.rank = 0
+    impl.world_size = 2
+    impl.group = object()
+    impl._dsv4_mtp_graph_guard = False
+    impl._use_graph_registered_inputs = True
+    impl._graph_registered_input_enabled = True
+    impl._generic_graph_registered_input_enabled = False
+    impl._use_graph_staging_arena = False
+    impl._use_graph_collective_fallback = False
+    impl._graph_staging_plan = None
+    local_fingerprint = impl._graph_staging_plan_fingerprint()
+    peer_fingerprint = list(local_fingerprint)
+    peer_fingerprint[3] = True
+    peer_fingerprint = tuple(peer_fingerprint)
+
+    monkeypatch.setattr(custom_ar.dist, "get_process_group_ranks", lambda group: [4, 9])
+
+    def broadcast(payload, src, group, device):
+        if src == 9:
+            payload[0] = peer_fingerprint
+
+    monkeypatch.setattr(custom_ar.dist, "broadcast_object_list", broadcast)
+
+    with pytest.raises(RuntimeError, match="contract differs across ranks"):
+        impl._validate_graph_staging_plan_consensus()
+
+
+@pytest.mark.parametrize(
+    (
+        "tp_size",
+        "hidden_size",
+        "quant_config_present",
+        "quant_config",
+        "model_family",
+        "expected_generic",
+    ),
+    [
+        (4, 2048, True, None, "qwen3.5_3.6", False),
+        (4, 2048, True, object(), "qwen3.5_3.6", True),
+        (2, 5120, True, None, "qwen3.5_3.6", True),
+        (4, None, False, None, None, True),
+    ],
+)
+def test_current_config_metadata_wires_registered_input_policy_into_init(
+    monkeypatch: pytest.MonkeyPatch,
+    tp_size: int,
+    hidden_size: int | None,
+    quant_config_present: bool,
+    quant_config: object | None,
+    model_family: str | None,
+    expected_generic: bool,
+) -> None:
+    import vllm.config as vllm_config_module
+
+    if hidden_size is None:
+        model_config = SimpleNamespace()
+    else:
+        model_config = SimpleNamespace(get_hidden_size=lambda: hidden_size)
+    config_fields = {"model_config": model_config}
+    if quant_config_present:
+        config_fields["quant_config"] = quant_config
+    vllm_config = SimpleNamespace(
+        **config_fields,
+        compilation_config=SimpleNamespace(
+            pass_config=SimpleNamespace(fuse_allreduce_rms=True)
+        ),
+    )
+
+    monkeypatch.setattr(
+        vllm_config_module,
+        "get_current_vllm_config_or_none",
+        lambda: vllm_config,
+    )
+    monkeypatch.setattr(
+        custom_ar,
+        "infer_car_rmsnorm_model_family",
+        lambda config: model_family,
+    )
+    monkeypatch.setattr(
+        custom_ar, "_use_graph_registered_inputs_for_current_model", lambda: True
+    )
+    monkeypatch.setattr(
+        custom_ar, "_dsv4_mtp_graph_guard_for_current_model", lambda: False
+    )
+    monkeypatch.setattr(
+        custom_ar, "_graph_staging_plan_for_current_model", lambda: None
+    )
+    monkeypatch.setattr(custom_ar.dist, "get_rank", lambda group: 0)
+    monkeypatch.setattr(custom_ar.dist, "get_world_size", lambda group: tp_size)
+    monkeypatch.setattr(
+        custom_ar.dist,
+        "get_process_group_ranks",
+        lambda group: list(range(tp_size)),
+    )
+    expected_fingerprint = (
+        False,
+        True,
+        True,
+        expected_generic,
+        False,
+        False,
+        None,
+        True,
+    )
+
+    def broadcast(payload, src, group, device):
+        if payload[0] is None:
+            payload[0] = expected_fingerprint
+
+    monkeypatch.setattr(custom_ar.dist, "broadcast_object_list", broadcast)
+    monkeypatch.setattr(custom_ar.jit_ar, "meta_size", lambda world_size: 16)
+    monkeypatch.setattr(custom_ar.jit_ar, "ensure_compiled", lambda world_size: None)
+    monkeypatch.setattr(
+        custom_ar,
+        "_make_shared_buffer",
+        lambda size, group: SimpleNamespace(
+            pointers=list(range(1, tp_size + 1)), opened_ipc_ptrs=[]
+        ),
+    )
+    monkeypatch.setattr(custom_ar, "_register_comm", lambda impl: 1)
+    monkeypatch.setattr(custom_ar, "_free_own_shared_buffer", lambda *args, **kwargs: None)
+    real_empty = torch.empty
+    monkeypatch.setattr(
+        custom_ar.torch,
+        "zeros",
+        lambda *args, **kwargs: real_empty((1, 8), dtype=torch.int64),
+    )
+    impl = custom_ar._MusaJitCustomAllreduceImpl(object(), "cpu", max_size=1024)
+
+    assert impl._car_hidden_size == hidden_size
+    assert impl._car_quantized is (
+        quant_config is not None if quant_config_present else None
+    )
+    assert impl._graph_registered_input_enabled is True
+    assert impl._generic_graph_registered_input_enabled is expected_generic
+    assert impl._graph_staging_plan_fingerprint() == expected_fingerprint
+    impl.close()
 
 
 def test_empty_graph_staging_ledger_still_reaches_rank_consensus(

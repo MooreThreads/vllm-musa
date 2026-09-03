@@ -29,6 +29,10 @@ from torch import Tensor
 from vllm import ir
 from vllm.platforms import current_platform
 
+from vllm_musa.optimization_contract.car_rmsnorm import (
+    can_use_fused_allreduce_rmsnorm,
+    infer_car_rmsnorm_model_family,
+)
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 # vllm._C must be loaded before torch.ops._C.rms_norm is resolvable.
@@ -45,6 +49,104 @@ def _has_C_rms_norm() -> bool:
 
 
 MUSA_RMS_NORM_SUPPORTED = current_platform.is_musa() and _has_C_rms_norm()
+
+
+def _fused_add_rmsnorm_compile_range() -> object | None:
+    """Return the active vLLM compile range, or ``None`` for eager dispatch."""
+    try:
+        from vllm.compilation.passes.inductor_pass import get_pass_context
+
+        return get_pass_context().compile_range
+    except (AssertionError, AttributeError, ImportError, RuntimeError):
+        return None
+
+
+def _fused_add_rmsnorm_tp_size() -> int | None:
+    """Read TP at dispatch time without initializing distributed state."""
+    try:
+        from vllm.distributed.parallel_state import (
+            get_tensor_model_parallel_world_size,
+        )
+
+        tp_size = int(get_tensor_model_parallel_world_size())
+    except (AssertionError, ImportError, RuntimeError, TypeError, ValueError):
+        return None
+    return tp_size if tp_size > 0 else None
+
+
+def _fused_add_rmsnorm_contract_metadata() -> tuple[str | None, bool | None] | None:
+    """Return config-backed CAR metadata, or ``None`` outside a vLLM owner.
+
+    The IR provider is also used by standalone unit tests and eager callers
+    which have no current ``VllmConfig``.  In that context the legacy broad
+    provider capability remains authoritative; the compile pass and platform
+    still enforce the contract for real serving graphs.  Once a config is
+    bound, missing quantization/family metadata is represented as ``None`` so
+    the shared contract fails closed for target hidden sizes.
+    """
+    try:
+        from vllm.config import get_current_vllm_config_or_none
+
+        config = get_current_vllm_config_or_none()
+    except (AssertionError, ImportError, RuntimeError):
+        return None
+    if config is None:
+        return None
+    family = infer_car_rmsnorm_model_family(config)
+    marker = object()
+    quant_config = getattr(config, "quant_config", marker)
+    quantized = None if quant_config is marker else quant_config is not None
+    return family, quantized
+
+
+def _can_use_fused_add_rmsnorm_under_contract(
+    x: Tensor,
+    weight: Tensor | None,
+    *,
+    raw_needed: bool | None = None,
+    registered: bool | None = None,
+) -> bool:
+    """Apply the shared gate before choosing JIT or C-extension.
+
+    This ordering is essential: if the low-row JIT rejection runs first, the
+    broad C-extension predicate would otherwise become the selected provider.
+    """
+    if weight is None:
+        return False
+    try:
+        hidden_size = x.shape[1] if x.dim() == 2 else None
+    except (AttributeError, IndexError, RuntimeError, TypeError):
+        return False
+    if not isinstance(hidden_size, int) or isinstance(hidden_size, bool):
+        # A symbolic hidden dimension cannot be proven to be outside a target
+        # signature; fail closed during compilation.
+        return False
+    compile_range = _fused_add_rmsnorm_compile_range()
+    rows = None
+    if compile_range is None:
+        try:
+            candidate = x.shape[0] if x.dim() == 2 else None
+            if isinstance(candidate, int) and not isinstance(candidate, bool):
+                rows = int(candidate)
+        except (AttributeError, IndexError, RuntimeError, TypeError):
+            rows = None
+    metadata = _fused_add_rmsnorm_contract_metadata()
+    if metadata is None:
+        # No active VllmConfig means this is not a serving compile decision;
+        # preserve the existing standalone/provider capability behavior.
+        return True
+    model_family, quantized = metadata
+    return can_use_fused_allreduce_rmsnorm(
+        tp_size=_fused_add_rmsnorm_tp_size(),
+        hidden_size=int(hidden_size),
+        dtype=getattr(x, "dtype", None),
+        rows=rows,
+        compile_range=compile_range,
+        raw_needed=raw_needed,
+        registered=registered,
+        model_family=model_family,
+        quantized=quantized,
+    )
 
 
 def _rms_norm_supports_args(
@@ -182,6 +284,10 @@ def _select_musa_fused_add_rms_norm_impl(
     the kernel chosen for that entire range; it must not branch on a symbolic
     example tensor's row-count hint.
     """
+    # Check the shared contract before either provider.  A low-row TP2 reject
+    # must not fall through from JIT to the broad C-extension implementation.
+    if not _can_use_fused_add_rmsnorm_under_contract(x, weight):
+        return None
     if _jit_fused_add_rms_norm_supports_args(
         x, x_residual, weight, epsilon, variance_size
     ):

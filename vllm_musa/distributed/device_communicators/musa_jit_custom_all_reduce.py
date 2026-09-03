@@ -17,12 +17,18 @@ from vllm_musa.optimization_contract import (
     OptimizationFeature,
     resolve_optimization_contract,
 )
+from vllm_musa.optimization_contract.car_rmsnorm import (
+    can_use_fused_allreduce_rmsnorm,
+    can_use_registered_graph_input_for_generic_car,
+    infer_car_rmsnorm_model_family,
+)
 from vllm_musa.optimization_contract.policy import (
     DeepSeekV4MtpCarGraphStagingPlan,
     deepseek_v4_mtp_car_graph_guard_enabled,
     deepseek_v4_mtp_car_graph_staging_plan,
     deepseek_v4_mtp_graph_registered_inputs_enabled,
 )
+from vllm_musa.utils.environ import envs as musa_envs
 
 logger = init_logger(__name__)
 _INT32_MAX = (1 << 31) - 1
@@ -94,6 +100,56 @@ def _dsv4_mtp_graph_guard_for_current_model() -> bool:
     except (ImportError, RuntimeError):
         return False
     return deepseek_v4_mtp_car_graph_guard_enabled(vllm_config)
+
+
+def _car_rmsnorm_metadata_for_current_model() -> tuple[
+    str | None, bool | None, int | None
+]:
+    """Resolve CAR-RMSNorm policy metadata at communicator construction.
+
+    The communicator is also instantiated without a complete ``VllmConfig``.
+    Missing metadata retains the generic transport default; fused operator
+    selection remains fail-closed in the compile contract.
+    """
+    try:
+        from vllm.config import get_current_vllm_config_or_none
+
+        vllm_config = get_current_vllm_config_or_none()
+    except (AssertionError, ImportError, RuntimeError):
+        return None, None, None
+    if vllm_config is None:
+        return None, None, None
+    family = infer_car_rmsnorm_model_family(vllm_config)
+    marker = object()
+    quant_config = getattr(vllm_config, "quant_config", marker)
+    quantized = None if quant_config is marker else quant_config is not None
+    model_config = getattr(vllm_config, "model_config", None)
+    get_hidden_size = getattr(model_config, "get_hidden_size", None)
+    try:
+        hidden_size = int(get_hidden_size()) if callable(get_hidden_size) else None
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        hidden_size = None
+    return family, quantized, hidden_size
+
+
+def _car_rmsnorm_pass_enabled_for_current_model() -> bool:
+    """Return the effective vLLM pass setting for direct CAR calls.
+
+    The platform applies the contract default before workers construct this
+    communicator.  A missing config or an unset pass value therefore remains
+    fail-closed here; only an explicit ``True`` permits the fused entrypoints.
+    """
+    try:
+        from vllm.config import get_current_vllm_config_or_none
+
+        vllm_config = get_current_vllm_config_or_none()
+    except (AssertionError, ImportError, RuntimeError):
+        return False
+    if vllm_config is None:
+        return False
+    compilation_config = getattr(vllm_config, "compilation_config", None)
+    pass_config = getattr(compilation_config, "pass_config", None)
+    return getattr(pass_config, "fuse_allreduce_rms", None) is True
 
 
 class cudaIpcMemHandle_t(ctypes.Structure):
@@ -452,6 +508,14 @@ class _MusaJitCustomAllreduceImpl:
         self.group = group
         self.max_size = max_size
         self._IS_CAPTURING = False
+        self._fused_allreduce_rmsnorm_enabled = (
+            _car_rmsnorm_pass_enabled_for_current_model()
+        )
+        (
+            self._car_model_family,
+            self._car_quantized,
+            self._car_hidden_size,
+        ) = _car_rmsnorm_metadata_for_current_model()
         self._use_graph_registered_inputs = (
             _use_graph_registered_inputs_for_current_model()
         )
@@ -496,7 +560,10 @@ class _MusaJitCustomAllreduceImpl:
         self._graph_peer_bases: dict[tuple[int, bytes], int] = {}
         self._graph_opened_ptrs: list[int] = []
         self._next_graph_slot = 0
-        self._graph_registered_input_enabled = self._use_graph_registered_inputs
+        self._graph_registered_input_enabled = (
+            self._use_graph_registered_inputs
+        )
+        self._generic_graph_registered_input_enabled = False
         self._graph_staging_data_offset = self._graph_staging_data_start
         self._graph_staging_meta_offset = self._graph_staging_meta_start
         self._graph_staging_ledger: list[
@@ -515,6 +582,15 @@ class _MusaJitCustomAllreduceImpl:
 
         self.rank = dist.get_rank(group=group)
         self.world_size = dist.get_world_size(group=group)
+        self._generic_graph_registered_input_enabled = (
+            self._graph_registered_input_enabled
+            and can_use_registered_graph_input_for_generic_car(
+                tp_size=self.world_size,
+                hidden_size=self._car_hidden_size,
+                model_family=self._car_model_family,
+                quantized=self._car_quantized,
+            )
+        )
         if self.world_size not in self._SUPPORTED_WORLD_SIZES:
             logger.warning(
                 "MUSA JIT custom allreduce disabled due to unsupported world "
@@ -569,7 +645,14 @@ class _MusaJitCustomAllreduceImpl:
         self.signal_ptrs_cpu = torch.tensor(self.meta_ptrs, dtype=torch.int64)
         buffer_ptrs = self.buffer_ptrs + [0] * (8 - self.world_size)
         self.buffer_rank_data = torch.tensor(buffer_ptrs, dtype=torch.int64)
-        if self._use_graph_registered_inputs:
+        logger.info_once(
+            "MUSA CAR-RMSNorm graph registered-input policy: "
+            "fused_registered_input_enabled=%s, "
+            "generic_registered_input_enabled=%s.",
+            self._graph_registered_input_enabled,
+            self._generic_graph_registered_input_enabled,
+        )
+        if self._graph_registered_input_enabled:
             graph_slots = _MAX_GRAPH_RANK_DATA_BYTES // (
                 _MAX_RANKS * torch.tensor([], dtype=torch.int64).element_size()
             )
@@ -579,9 +662,8 @@ class _MusaJitCustomAllreduceImpl:
                 device=self.device,
             )
             logger.info_once(
-                "MUSA fused CAR-RMSNorm graph registered-input path is enabled "
-                "(capacity=%d, max_input_bytes=%d). Eager execution and larger "
-                "graph inputs use the staging path.",
+                "Allocated MUSA graph registered-input rank data "
+                "(capacity=%d, max_input_bytes=%d).",
                 graph_slots,
                 self._GRAPH_REGISTERED_INPUT_MAX_BYTES,
             )
@@ -665,6 +747,13 @@ class _MusaJitCustomAllreduceImpl:
     def capture(self):
         if self._IS_CAPTURING:
             raise RuntimeError("Nested MUSA custom-allreduce capture is unsupported")
+        if getattr(self, "_use_graph_staging_arena", False) and getattr(
+            self, "_graph_staging_capture_sealed", False
+        ):
+            raise RuntimeError(
+                "MUSA custom AR graph staging arena cannot be reused while "
+                "captured graphs may still reference its slots"
+            )
         self._pending_graph_inputs = []
         # v0.28 captures each graph size in a separate graph_capture context.
         # Keep the arena cursor, ledger, and tensor references cumulative so
@@ -740,9 +829,12 @@ class _MusaJitCustomAllreduceImpl:
         return (
             self._dsv4_mtp_graph_guard,
             self._use_graph_registered_inputs,
+            self._graph_registered_input_enabled,
+            self._generic_graph_registered_input_enabled,
             self._use_graph_staging_arena,
             self._use_graph_collective_fallback,
             plan_fingerprint,
+            getattr(self, "_fused_allreduce_rmsnorm_enabled", False),
         )
 
     def _validate_graph_staging_plan_consensus(self) -> None:
@@ -1137,6 +1229,14 @@ class _MusaJitCustomAllreduceImpl:
             and not self._is_piecewise_cudagraph_capture()
         )
 
+    def _can_use_registered_graph_input_for_generic_ar(
+        self, tensor: torch.Tensor
+    ) -> bool:
+        return (
+            self._generic_graph_registered_input_enabled
+            and self._use_registered_graph_input(tensor)
+        )
+
     def should_custom_ar(self, inp: torch.Tensor) -> bool:
         if self.disabled:
             return False
@@ -1230,6 +1330,8 @@ class _MusaJitCustomAllreduceImpl:
     ) -> str | None:
         if self.disabled:
             return "communicator is disabled"
+        if not getattr(self, "_fused_allreduce_rmsnorm_enabled", False):
+            return "CAR-RMSNorm disabled by compilation pass config"
         if (
             self._IS_CAPTURING
             and (self._use_graph_collective_fallback or self._use_graph_staging_arena)
@@ -1268,6 +1370,24 @@ class _MusaJitCustomAllreduceImpl:
             return (
                 "input exceeds the eager partition of the graph staging arena: "
                 f"bytes={inp_size} reserve={self._graph_staging_eager_reserve_bytes}"
+            )
+        try:
+            rows = int(inp.shape[0])
+        except (IndexError, TypeError, ValueError, RuntimeError):
+            rows = None
+        if not can_use_fused_allreduce_rmsnorm(
+            tp_size=self.world_size,
+            hidden_size=int(hidden_size),
+            dtype=inp.dtype,
+            rows=rows,
+            raw_needed=None,
+            registered=None,
+            model_family=self._car_model_family,
+            quantized=self._car_quantized,
+        ):
+            return (
+                "CAR-RMSNorm optimization contract selects native path: "
+                f"tp={self.world_size} hidden={hidden_size} rows={inp.shape[0]}"
             )
         return None
 
@@ -1351,7 +1471,9 @@ class _MusaJitCustomAllreduceImpl:
         assert self.buffer_rank_data is not None
         assert self.signal_ptrs_cpu is not None
         self._require_custom_ar_graph_path()
-        if self._IS_CAPTURING and self._use_registered_graph_input(input):
+        if self._IS_CAPTURING and self._can_use_registered_graph_input_for_generic_ar(
+            input
+        ):
             return self._graph_custom_all_reduce_impl(input)
         out = torch.empty_like(input)
         shot = jit_ar.preferred_shot(

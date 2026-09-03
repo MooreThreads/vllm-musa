@@ -1,9 +1,7 @@
-"""Decision-parity tests for the removed default-on process gates.
+"""Decision-parity tests for default-on MUSA features.
 
-These tests deliberately set each legacy variable to unset/0/1 around the
-same provider decision.  The variables are no longer read by production code;
-the loop makes that invariant executable while the assertions exercise the
-actual capability and semantic guards that remain responsible for fallback.
+CAR-RMSNorm uses vLLM's standard pass config as its only feature switch. The
+registered-input transport and remaining feature decisions are environment-invariant.
 """
 
 from __future__ import annotations
@@ -16,8 +14,6 @@ import torch
 
 LEGACY_ENV_NAMES = (
     "VLLM_MUSA_FUSED_ADD_RMSNORM",
-    "VLLM_MUSA_FUSED_AR_RMSNORM",
-    "VLLM_MUSA_FUSED_AR_RMSNORM_GRAPH_REGISTERED_INPUT",
     "VLLM_MUSA_ENABLE_JIT_TOPK",
     "VLLM_MUSA_SEEDED_MULTINOMIAL",
     "VLLM_MUSA_RESHAPE_CACHE_FLASH",
@@ -31,6 +27,199 @@ def _with_legacy_env(monkeypatch: pytest.MonkeyPatch, value: str | None) -> None
             monkeypatch.delenv(name, raising=False)
         else:
             monkeypatch.setenv(name, value)
+
+
+def _ar_platform_config(
+    *,
+    optimization_level: int = 2,
+    tp_size: int = 2,
+    hidden_size: int = 5120,
+    pp_size: int = 1,
+    pass_value: bool | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        optimization_level=optimization_level,
+        model_config=SimpleNamespace(
+            dtype=torch.bfloat16,
+            get_hidden_size=lambda: hidden_size,
+            enforce_eager=False,
+            hf_config=SimpleNamespace(architectures=[]),
+        ),
+        parallel_config=SimpleNamespace(
+            tensor_parallel_size=tp_size,
+            pipeline_parallel_size=pp_size,
+        ),
+        compilation_config=SimpleNamespace(
+            custom_ops=[],
+            pass_config=SimpleNamespace(fuse_allreduce_rms=pass_value),
+            inductor_compile_config={},
+            compile_ranges_endpoints=[],
+        ),
+        scheduler_config=SimpleNamespace(max_num_batched_tokens=8192),
+    )
+
+
+def _patch_car_model_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    from vllm_musa.optimization_contract.car_rmsnorm import (
+        FUSED_ALLREDUCE_RMSNORM_MODEL_FAMILY,
+    )
+    from vllm_musa import platform as musa_platform
+
+    monkeypatch.setattr(
+        musa_platform,
+        "infer_car_rmsnorm_model_family",
+        lambda _config: FUSED_ALLREDUCE_RMSNORM_MODEL_FAMILY,
+    )
+
+
+@pytest.mark.parametrize(
+    ("tp_size", "hidden_size"),
+    [(2, 5120), (4, 2048)],
+)
+@pytest.mark.parametrize("optimization_level", [2, 3])
+def test_ar_pass_defaults_on_for_supported_signatures(
+    monkeypatch,
+    tp_size: int,
+    hidden_size: int,
+    optimization_level: int,
+) -> None:
+    from vllm_musa.platform import MUSAPlatformBase
+
+    _patch_car_model_family(monkeypatch)
+    config = _ar_platform_config(
+        optimization_level=optimization_level,
+        tp_size=tp_size,
+        hidden_size=hidden_size,
+    )
+
+    MUSAPlatformBase.apply_config_platform_defaults(config)
+
+    assert config.compilation_config.pass_config.fuse_allreduce_rms is True
+
+
+def test_ar_explicit_false_blocks_default_pass_injection(monkeypatch) -> None:
+    from vllm_musa.platform import MUSAPlatformBase
+
+    _patch_car_model_family(monkeypatch)
+    config = _ar_platform_config(pass_value=False)
+
+    MUSAPlatformBase.apply_config_platform_defaults(config)
+
+    assert config.compilation_config.pass_config.fuse_allreduce_rms is False
+
+
+def test_ar_explicit_false_skips_compile_range_partition(monkeypatch) -> None:
+    from vllm_musa.platform import _configure_fused_allreduce_rmsnorm_compile_range
+
+    _patch_car_model_family(monkeypatch)
+    config = _ar_platform_config(pass_value=False)
+
+    changed = _configure_fused_allreduce_rmsnorm_compile_range(
+        config,
+        native_custom_ops=False,
+    )
+
+    assert changed is False
+    assert config.compilation_config.compile_ranges_endpoints == []
+
+
+@pytest.mark.parametrize(
+    ("optimization_level", "tp_size", "hidden_size", "pp_size"),
+    [
+        (0, 2, 5120, 1),
+        (1, 2, 5120, 1),
+        (2, 1, 5120, 1),
+        (2, 6, 2048, 1),
+        (2, 2, 4096, 1),
+        (2, 2, 5120, 2),
+    ],
+)
+def test_ar_pass_default_is_fail_closed_outside_supported_scope(
+    monkeypatch,
+    optimization_level: int,
+    tp_size: int,
+    hidden_size: int,
+    pp_size: int,
+) -> None:
+    from vllm_musa.platform import MUSAPlatformBase
+
+    _patch_car_model_family(monkeypatch)
+    config = _ar_platform_config(
+        optimization_level=optimization_level,
+        tp_size=tp_size,
+        hidden_size=hidden_size,
+        pp_size=pp_size,
+    )
+
+    MUSAPlatformBase.apply_config_platform_defaults(config)
+
+    assert config.compilation_config.pass_config.fuse_allreduce_rms is None
+
+
+@pytest.mark.parametrize("pass_value", [False, True])
+def test_ar_pass_explicit_standard_config_is_preserved(
+    monkeypatch, pass_value: bool
+) -> None:
+    from vllm_musa.platform import MUSAPlatformBase
+
+    _patch_car_model_family(monkeypatch)
+    config = _ar_platform_config(pass_value=pass_value)
+
+    MUSAPlatformBase.apply_config_platform_defaults(config)
+
+    assert config.compilation_config.pass_config.fuse_allreduce_rms is pass_value
+
+
+@pytest.mark.parametrize(
+    ("pass_value", "optimization_level", "tp_size", "hidden_size", "expected"),
+    [
+        (True, 0, 1, 4096, True),
+        (False, 3, 2, 5120, False),
+        (None, 2, 2, 5120, True),
+        (None, 3, 4, 2048, True),
+        (None, 1, 2, 5120, False),
+        (None, 2, 2, 4096, False),
+    ],
+)
+def test_gemma_ir_path_predicts_the_same_default_as_platform(
+    monkeypatch,
+    pass_value: bool | None,
+    optimization_level: int,
+    tp_size: int,
+    hidden_size: int,
+    expected: bool,
+) -> None:
+    from vllm_musa.model_executor.layers import layernorm
+    from vllm_musa.optimization_contract.car_rmsnorm import (
+        FUSED_ALLREDUCE_RMSNORM_MODEL_FAMILY,
+    )
+
+    config = _ar_platform_config(
+        optimization_level=optimization_level,
+        tp_size=tp_size,
+        hidden_size=hidden_size,
+        pass_value=pass_value,
+    )
+    monkeypatch.setattr(layernorm, "get_current_vllm_config_or_none", lambda: config)
+    monkeypatch.setattr(
+        layernorm,
+        "infer_car_rmsnorm_model_family",
+        lambda _config: FUSED_ALLREDUCE_RMSNORM_MODEL_FAMILY,
+    )
+
+    assert layernorm._car_rmsnorm_ir_fusion_enabled() is expected
+
+
+def test_gemma_ir_path_honors_explicit_pass_false(monkeypatch) -> None:
+    from vllm_musa.model_executor.layers import layernorm
+
+    monkeypatch.setattr(
+        layernorm,
+        "get_current_vllm_config_or_none",
+        lambda: _ar_platform_config(pass_value=False),
+    )
+
+    assert not layernorm._car_rmsnorm_ir_fusion_enabled()
 
 
 class _FakeDevice:
@@ -384,8 +573,7 @@ def test_ar_unavailable_comm_is_fail_closed_and_pass_config_is_preserved(
         assert not comm.should_fused_allreduce_rmsnorm(input_tensor, weight)
         assert comm.fused_allreduce_rmsnorm(input_tensor, weight, 1e-5) is None
 
-    # The pass manager remains the only pass-level off switch; no process gate
-    # is allowed to bypass the standard vLLM pass configuration.
+    # The pass manager remains the standard upper-level switch.
     source = (
         __import__("pathlib").Path(__file__).parents[1]
         / "vllm_musa/patches/series/0003-MUSA-vllm.compilation.passes.pass_manager.patch"
@@ -396,7 +584,7 @@ def test_ar_unavailable_comm_is_fail_closed_and_pass_config_is_preserved(
     )
 
 
-def test_ar_available_comm_dispatch_is_env_invariant(monkeypatch):
+def test_ar_available_comm_dispatch_is_unrelated_env_invariant(monkeypatch):
     from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (
         MusaJitCustomAllreduce,
     )
@@ -414,11 +602,42 @@ def test_ar_available_comm_dispatch_is_env_invariant(monkeypatch):
         assert comm.fused_allreduce_rmsnorm(object(), object(), 1e-5) is sentinel
 
 
-@pytest.mark.parametrize("registered", [False, True])
-def test_ar_registered_and_staging_launches_are_env_invariant(
-    monkeypatch,
-    registered,
-):
+def test_ar_explicit_pass_false_disables_fused_communicator():
+    import vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce as ar
+
+    impl = ar._MusaJitCustomAllreduceImpl.__new__(ar._MusaJitCustomAllreduceImpl)
+    impl.disabled = False
+    impl._fused_allreduce_rmsnorm_enabled = False
+    comm = ar.MusaJitCustomAllreduce.__new__(ar.MusaJitCustomAllreduce)
+    comm._jit_comm = impl
+    input_tensor = object()
+    weight = object()
+
+    assert not comm.disabled
+    assert not comm.should_fused_allreduce_rmsnorm(input_tensor, weight)
+    assert comm.fused_allreduce_rmsnorm(input_tensor, weight, 1e-5) is None
+    reason = impl._reject_fused_allreduce_rmsnorm_reason(input_tensor, weight)
+    assert reason is not None
+    assert "compilation pass config" in reason
+
+
+@pytest.mark.parametrize(
+    "pass_value, expected", [(True, True), (False, False), (None, False)]
+)
+def test_ar_communicator_reads_pass_config_once(
+    monkeypatch, pass_value: bool | None, expected: bool
+) -> None:
+    import vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce as ar
+
+    config = _ar_platform_config(pass_value=pass_value)
+    monkeypatch.setattr(
+        "vllm.config.get_current_vllm_config_or_none", lambda: config
+    )
+
+    assert ar._car_rmsnorm_pass_enabled_for_current_model() is expected
+
+
+def test_ar_fused_registered_transport_uses_configured_transport(monkeypatch):
     import vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce as ar
 
     impl = ar._MusaJitCustomAllreduceImpl.__new__(ar._MusaJitCustomAllreduceImpl)
@@ -431,7 +650,11 @@ def test_ar_registered_and_staging_launches_are_env_invariant(
     impl.max_size = 4096
     impl.meta_ptrs = [101, 102]
     impl.buffer_ptrs = [201, 202]
-    impl._use_registered_graph_input = lambda _input: registered
+    impl._use_graph_registered_inputs = True
+    impl._IS_CAPTURING = True
+    impl._is_current_stream_capturing = lambda: True
+    impl._use_graph_collective_fallback = False
+    impl._use_graph_staging_arena = False
     impl._graph_rank_data_for_input = lambda _input: registered_rank_data
 
     launches = []
@@ -449,14 +672,83 @@ def test_ar_registered_and_staging_launches_are_env_invariant(
     input_tensor = torch.ones((1, 8), dtype=torch.bfloat16)
     weight = torch.ones((8,), dtype=torch.bfloat16)
 
-    for value in LEGACY_ENV_VALUES:
-        _with_legacy_env(monkeypatch, value)
-        launches.clear()
-        norm_out, reduced = impl._fused_allreduce_rmsnorm_impl(
-            input_tensor, weight, 1e-5
+    impl._graph_registered_input_enabled = impl._use_graph_registered_inputs
+
+    norm_out, reduced = impl._fused_allreduce_rmsnorm_impl(
+        input_tensor, weight, 1e-5
+    )
+    assert norm_out.shape == input_tensor.shape
+    assert reduced.shape == input_tensor.shape
+    assert launches == [("registered", registered_rank_data)]
+
+
+@pytest.mark.parametrize(
+    ("tp_size", "hidden_size", "quantized", "expected_name"),
+    [
+        (4, 2048, False, "staging"),
+        (4, 2048, True, "registered"),
+        (2, 5120, False, "registered"),
+        (2, 5120, True, "registered"),
+    ],
+)
+def test_ar_generic_registered_transport_uses_contract_policy(
+    monkeypatch,
+    tp_size,
+    hidden_size,
+    quantized,
+    expected_name,
+):
+    import vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce as ar
+    from vllm_musa.optimization_contract.car_rmsnorm import (
+        FUSED_ALLREDUCE_RMSNORM_MODEL_FAMILY,
+        can_use_registered_graph_input_for_generic_car,
+    )
+
+    impl = ar._MusaJitCustomAllreduceImpl.__new__(ar._MusaJitCustomAllreduceImpl)
+    staging_rank_data = object()
+    registered_rank_data = object()
+    impl.buffer_rank_data = staging_rank_data
+    impl.signal_ptrs_cpu = object()
+    impl.world_size = tp_size
+    impl.rank = 0
+    impl.max_size = 64 * 1024
+    impl.meta_ptrs = list(range(101, 101 + tp_size))
+    impl.buffer_ptrs = list(range(201, 201 + tp_size))
+    impl._graph_registered_input_enabled = True
+    impl._generic_graph_registered_input_enabled = (
+        can_use_registered_graph_input_for_generic_car(
+            tp_size=tp_size,
+            hidden_size=hidden_size,
+            model_family=FUSED_ALLREDUCE_RMSNORM_MODEL_FAMILY,
+            quantized=quantized,
         )
-        assert norm_out.shape == input_tensor.shape
-        assert reduced.shape == input_tensor.shape
-        expected_name = "registered" if registered else "staging"
-        expected_rank_data = registered_rank_data if registered else staging_rank_data
-        assert launches == [(expected_name, expected_rank_data)]
+    )
+    impl._use_graph_registered_inputs = True
+    impl._IS_CAPTURING = True
+    impl._is_current_stream_capturing = lambda: True
+    impl._use_graph_staging_arena = False
+    impl._require_custom_ar_graph_path = lambda: None
+    impl._graph_rank_data_for_input = lambda _input: registered_rank_data
+
+    launches = []
+    monkeypatch.setattr(ar.jit_ar, "preferred_shot", lambda *_args: 1)
+    monkeypatch.setattr(
+        ar.jit_ar,
+        "launch_graph_registered",
+        lambda *args: launches.append(("registered", args[0])),
+    )
+    monkeypatch.setattr(
+        ar.jit_ar,
+        "launch_unregistered",
+        lambda *args: launches.append(("staging", args[0])),
+    )
+
+    output = impl._custom_all_reduce_impl(
+        torch.ones((1, hidden_size), dtype=torch.bfloat16)
+    )
+
+    assert output.shape == (1, hidden_size)
+    expected_rank_data = (
+        registered_rank_data if expected_name == "registered" else staging_rank_data
+    )
+    assert launches == [(expected_name, expected_rank_data)]
