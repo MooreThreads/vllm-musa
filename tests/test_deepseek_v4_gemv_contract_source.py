@@ -17,8 +17,11 @@ def test_contract_selected_gemv_block_reaches_custom_op_schema() -> None:
     assert "block_k: int = 0" in custom_ops
     assert "block_n,\n        block_k," in custom_ops
     assert "_requested_gemv_block(shape)" in fused_moe
-    assert "block_n=gemv_block_n" in fused_moe
-    assert "block_k=gemv_block_k" in fused_moe
+    assert "_requested_gemv_stage_tactic(" in fused_moe
+    assert "block_n=w1_block_n" in fused_moe
+    assert "block_k=w1_block_k" in fused_moe
+    assert "block_n=w2_block_n" in fused_moe
+    assert "block_k=w2_block_k" in fused_moe
 
 
 def test_requested_tile_preserves_dsv4_and_environment_precedence() -> None:
@@ -48,3 +51,15 @@ def test_contract_selector_does_not_forward_explicit_environment_override() -> N
     assert "os.environ.get(_GEMV_MOE_BLOCK_ENV) is not None" in helper
     assert 'shape.gemv_block != "16x8"' in helper
     assert "return 0, 0" in helper
+
+
+def test_fused_moe_reads_only_worker_primed_hardware() -> None:
+    fused_moe = _source("vllm_musa/model_executor/layers/fused_moe/fused_moe.py")
+
+    helper = fused_moe[
+        fused_moe.index("def _musa_device_fingerprint(") : fused_moe.index(
+            "def _tensor_meta("
+        )
+    ]
+    assert "get_primed_musa_kernel_hardware(device_index)" in helper
+    assert "query_cached_musa_kernel_hardware" not in helper

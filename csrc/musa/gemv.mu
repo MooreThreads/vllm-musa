@@ -540,6 +540,15 @@ bool IsForcedBlockConfigValid(const BlockConfig& config, int nr_n, int hidden_si
            (hidden_size % (config.block_k * vlen) == 0);
 }
 
+bool IsDenseGemvBlockConfigSupported(const BlockConfig& config) {
+    return (config.block_n == 4 && config.block_k == 32) ||
+           (config.block_n == 8 && (config.block_k == 16 || config.block_k == 32)) ||
+           (config.block_n == 16 && (config.block_k == 8 || config.block_k == 16)) ||
+           (config.block_n == 32 &&
+            (config.block_k == 1 || config.block_k == 4 || config.block_k == 8)) ||
+           (config.block_n == 128 && config.block_k == 1);
+}
+
 bool ShouldUseQwenFp8Moe32x4(
     int current_arch,
     bool is_fp8,
@@ -618,6 +627,7 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
 
 bool SelectDeepSeekV4Fp8OProjTile(
     int current_arch,
+    int num_mp,
     bool is_fp8,
     bool use_swigelu,
     bool use_rms_norm,
@@ -635,12 +645,57 @@ bool SelectDeepSeekV4Fp8OProjTile(
         return false;
     }
 
-    // DeepSeek-V4 TP8 O-proj is [M,4096] x [1024,4096]^T.  The platform's
-    // VLLM_MUSA_GEMV_MOE_BLOCK=16x8 default belongs to routed MoE, but the
-    // non-MoE GEMV historically consumed it too.  Cold-L2 calibration on an
-    // S5000 mp60 shows that the production graph-capture ladder needs more N
-    // tiles at small M and different K reductions as M grows.  Match only the
-    // exact O-proj contract; unsupported/eager sizes retain the generic path.
+    // Qualified exact active-MP policy for the DSV4 TP8 O-proj shape. Unknown
+    // MP/shape combinations intentionally fall through to the original
+    // capture ladder below; measurement receipts remain out of tree.
+    if (num_mp == 48) {
+        switch (bseqlen) {
+            case 1:
+                *config = BlockConfig{8, 32, 0.f, true};
+                return IsForcedBlockConfigValid(
+                    *config, nr_n, hidden_size, vlen);
+            case 8:
+                *config = BlockConfig{16, 8, 0.f, true};
+                return IsForcedBlockConfigValid(
+                    *config, nr_n, hidden_size, vlen);
+            case 32:
+            case 64:
+                *config = BlockConfig{32, 4, 0.f, true};
+                return IsForcedBlockConfigValid(
+                    *config, nr_n, hidden_size, vlen);
+            default:
+                break;
+        }
+    } else if (num_mp == 56) {
+        switch (bseqlen) {
+            case 8:
+                *config = BlockConfig{16, 16, 0.f, true};
+                return IsForcedBlockConfigValid(
+                    *config, nr_n, hidden_size, vlen);
+            case 64:
+                *config = BlockConfig{32, 4, 0.f, true};
+                return IsForcedBlockConfigValid(
+                    *config, nr_n, hidden_size, vlen);
+            default:
+                break;
+        }
+    } else if (num_mp == 60) {
+        switch (bseqlen) {
+            case 8:
+                *config = BlockConfig{8, 16, 0.f, true};
+                return IsForcedBlockConfigValid(
+                    *config, nr_n, hidden_size, vlen);
+            case 64:
+                *config = BlockConfig{32, 4, 0.f, true};
+                return IsForcedBlockConfigValid(
+                    *config, nr_n, hidden_size, vlen);
+            default:
+                break;
+        }
+    }
+
+    // Preserve the original cross-MP capture ladder for every exact miss,
+    // including every unknown active-MP value.
     switch (bseqlen) {
         case 1:
         case 2:
@@ -697,7 +752,9 @@ void musa_fused_gemv(
     bool use_swigelu,
     bool use_rms_norm,
     const c10::optional<torch::Tensor> &gamma,
-    double eps) {
+    double eps,
+    int64_t requested_block_n,
+    int64_t requested_block_k) {
 
     TORCH_CHECK(A.dim() == 2, "A must be dim 2.")
     TORCH_CHECK(B.dim() == 2, "B must be dim 2.")
@@ -801,10 +858,33 @@ void musa_fused_gemv(
         fallback_config = BlockConfig{128, 1, -1.0f, false};
     }
     BlockConfig forced_config{0, 0, 0.f, false};
+    BlockConfig requested_config{
+        static_cast<int>(requested_block_n),
+        static_cast<int>(requested_block_k),
+        0.f,
+        false};
     BlockConfig deepseek_v4_linear_config{0, 0, 0.f, false};
     BlockConfig* best_config = &fallback_config;
-    if (SelectDeepSeekV4Fp8OProjTile(
+    TORCH_CHECK(
+        (requested_block_n == 0 && requested_block_k == 0) ||
+            (requested_block_n > 0 && requested_block_k > 0),
+        "dense GEMV block_n and block_k must both be zero or positive, got ",
+        requested_block_n, "x", requested_block_k);
+    if (requested_block_n > 0) {
+        TORCH_CHECK(
+            IsDenseGemvBlockConfigSupported(requested_config),
+            "unsupported dense GEMV requested block ", requested_block_n, "x",
+            requested_block_k);
+        TORCH_CHECK(
+            IsForcedBlockConfigValid(requested_config, nr_n, hidden_size, vlen),
+            "dense GEMV requested block ", requested_block_n, "x",
+            requested_block_k, " is invalid for nr_n=", nr_n,
+            ", hidden_size=", hidden_size, ", vlen=", vlen);
+        requested_config.valid = true;
+        best_config = &requested_config;
+    } else if (SelectDeepSeekV4Fp8OProjTile(
             current_arch,
+            num_mp,
             is_fp8,
             use_swigelu,
             use_rms_norm,

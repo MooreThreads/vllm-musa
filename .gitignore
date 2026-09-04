@@ -215,3 +215,7 @@ __marimo__/
 third_party/*
 !third_party/PINS
 vllm/
+
+# Local MUSA benchmark evidence (host/device identity, receipts, and timings).
+# Keep qualification bundles ticket-linked and out of the public source tree.
+generated/

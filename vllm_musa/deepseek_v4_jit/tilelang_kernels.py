@@ -2,7 +2,7 @@
 """TileLang kernels for DeepSeek-V4 MUSA JIT helpers."""
 
 import math
-from functools import lru_cache
+from functools import cache
 
 import tilelang
 import tilelang.language as T
@@ -91,7 +91,7 @@ def _mhc_tme_ws_pass_configs(tilelang_module):
     return pass_configs or None
 
 
-@lru_cache(maxsize=None)
+@cache
 def mhc_pre_split_sinkhorn_kernel(hc_mult: int, sinkhorn_repeat: int):
     hc_mult3 = hc_mult * (2 + hc_mult)
 
@@ -166,7 +166,7 @@ def mhc_pre_split_sinkhorn_kernel(hc_mult: int, sinkhorn_repeat: int):
     return _mhc_pre_split_sinkhorn_kernel()
 
 
-@lru_cache(maxsize=None)
+@cache
 def mhc_prenorm_splitk_x_tme_cast_kernel(
     mhc_mult3: int,
     hc_hidden_size: int,
@@ -235,8 +235,7 @@ def mhc_prenorm_splitk_x_tme_cast_kernel(
                         T.copy(
                             x[
                                 px * token_block : (px + 1) * token_block,
-                                k_base
-                                + pz * hidden_block : k_base
+                                k_base + pz * hidden_block : k_base
                                 + (pz + 1) * hidden_block,
                             ],
                             x_bf16_shared,
@@ -246,8 +245,7 @@ def mhc_prenorm_splitk_x_tme_cast_kernel(
                         T.copy(
                             fn[
                                 0:32,
-                                k_base
-                                + pz * hidden_block : k_base
+                                k_base + pz * hidden_block : k_base
                                 + (pz + 1) * hidden_block,
                             ],
                             fn_shared,
@@ -304,7 +302,7 @@ def mhc_prenorm_splitk_x_tme_cast_kernel(
     return _mhc_prenorm_splitk_x_tme_cast_kernel()
 
 
-@lru_cache(maxsize=None)
+@cache
 def mhc_fused_post_prenorm_kernel(
     hidden_size: int,
     n_out: int = 24,
@@ -400,9 +398,7 @@ def mhc_fused_post_prenorm_kernel(
                     hidden_idx = hidden_start + hidden_iter * threads + thread_id
 
                     for row in T.unroll(hc_mult):
-                        new_residual[row] = (
-                            post_local[row] * x_in[token_id, hidden_idx]
-                        )
+                        new_residual[row] = post_local[row] * x_in[token_id, hidden_idx]
                         for source_row in T.unroll(hc_mult):
                             new_residual[row] += (
                                 comb_local[source_row, row]
@@ -427,8 +423,7 @@ def mhc_fused_post_prenorm_kernel(
                         weight_row = out_tile_id * tile_n + out_idx
                         for row in T.unroll(hc_mult):
                             accum[out_idx] += (
-                                weight[weight_row, row, hidden_idx]
-                                * new_residual[row]
+                                weight[weight_row, row, hidden_idx] * new_residual[row]
                             )
 
                 for out_idx in T.unroll(tile_n):
@@ -464,7 +459,7 @@ def mhc_fused_post_prenorm_kernel(
     return _mhc_fused_post_prenorm_kernel()
 
 
-@lru_cache(maxsize=None)
+@cache
 def mhc_pre_big_fuse_kernel(
     hidden_size: int,
     rms_eps: float,
@@ -611,7 +606,7 @@ def mhc_pre_big_fuse_kernel(
     return _mhc_pre_big_fuse_kernel()
 
 
-@lru_cache(maxsize=None)
+@cache
 def mhc_pre_big_fuse_decode_split_kernel(
     hidden_size: int,
     rms_eps: float,
@@ -770,7 +765,7 @@ def mhc_pre_big_fuse_decode_split_kernel(
     return _mhc_pre_big_fuse_decode_split_kernel()
 
 
-@lru_cache(maxsize=None)
+@cache
 def mhc_weighted_rmsnorm_kernel(
     hidden_size: int,
     threads: int = 128,
@@ -835,7 +830,7 @@ def mhc_weighted_rmsnorm_kernel(
     return _mhc_weighted_rmsnorm_kernel()
 
 
-@lru_cache(maxsize=None)
+@cache
 def mhc_weighted_rmsnorm_mudnn_like_kernel(
     hidden_size: int,
     threads: int = 128,
@@ -846,7 +841,7 @@ def mhc_weighted_rmsnorm_mudnn_like_kernel(
     chunks = hidden_size // (threads * elements_per_thread)
     assert hidden_size > 0
     assert hidden_size % (threads * elements_per_thread) == 0
-    assert threads == 128
+    assert threads in (64, 128, 256)
 
     @tilelang.jit(target="musa", pass_configs={})
     def _mhc_weighted_rmsnorm_mudnn_like_kernel():
@@ -867,13 +862,18 @@ def mhc_weighted_rmsnorm_mudnn_like_kernel(
                 sumsq[0] = 0.0
                 for chunk in T.serial(chunks):
                     base = (
-                        chunk * threads * elements_per_thread
-                        + tx * elements_per_thread
+                        chunk * threads * elements_per_thread + tx * elements_per_thread
                     )
                     for elem in T.serial(elements_per_thread):
                         value = T.cast(x[row_id, base + elem], T.float32)
                         sumsq[0] += value * value
 
+                if threads >= 256:
+                    if tx >= 128:
+                        shared[tx] = sumsq[0]
+                    T.sync_threads()
+                    if tx < 128:
+                        sumsq[0] += shared[tx + 128]
                 if threads >= 128:
                     if tx >= 64:
                         shared[tx] = sumsq[0]
@@ -911,8 +911,7 @@ def mhc_weighted_rmsnorm_mudnn_like_kernel(
 
                 for chunk in T.serial(chunks):
                     base = (
-                        chunk * threads * elements_per_thread
-                        + tx * elements_per_thread
+                        chunk * threads * elements_per_thread + tx * elements_per_thread
                     )
                     for elem in T.serial(elements_per_thread):
                         value = T.cast(x[row_id, base + elem], T.float32)
@@ -1108,7 +1107,7 @@ def kv_rope_pack_kernel():
     return _kv_rope_pack_kernel
 
 
-@lru_cache(maxsize=None)
+@cache
 def mhc_post_kernel(hidden_size: int, hidden_block: int = 256, threads: int = 256):
     hidden_block = math.gcd(hidden_block, hidden_size)
     if hidden_block <= 0 or hidden_size % hidden_block != 0:

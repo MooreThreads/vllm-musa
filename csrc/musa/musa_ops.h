@@ -31,7 +31,9 @@ void musa_fused_gemv(
     bool use_swigelu,
     bool use_rms_norm,
     const c10::optional<torch::Tensor> &gamma,
-    double eps);
+    double eps,
+    int64_t block_n,
+    int64_t block_k);
 
 void musa_fused_add_rms_norm(
     torch::Tensor &input,
@@ -45,19 +47,20 @@ void musa_reshape_and_cache_flash_nhd(
     torch::Tensor &value,
     torch::Tensor &key_cache,
     torch::Tensor &value_cache,
-    torch::Tensor &slot_mapping);
+    torch::Tensor &slot_mapping,
+    int64_t block_x);
 
 void silu_and_mul_per_token_group_fp8_quant(
     const torch::Tensor& input,
     torch::Tensor& output_q, torch::Tensor& output_s,
     int64_t group_size, double eps, double fp8_min,
-    double fp8_max);
+    double fp8_max, int64_t groups_per_block);
 
 void silu_and_mul_clamp_per_token_group_fp8_quant(
     const torch::Tensor& input,
     torch::Tensor& output_q, torch::Tensor& output_s,
     int64_t group_size, double eps, double fp8_min,
-    double fp8_max, double swiglu_limit);
+    double fp8_max, double swiglu_limit, int64_t groups_per_block);
 
 void fused_add_rms_norm_per_token_group_fp8_quant(
     const torch::Tensor& input, const torch::Tensor& residual,
@@ -68,7 +71,7 @@ void per_token_group_quant_8bit_vec(
     const torch::Tensor& input,
     torch::Tensor& output_q, torch::Tensor& output_s,
     int64_t group_size, double eps, double min_8bit,
-    double max_8bit);
+    double max_8bit, int64_t groups_per_block);
 
 void musa_top_k_top_p_sampling_from_probs(
     at::Tensor probs,

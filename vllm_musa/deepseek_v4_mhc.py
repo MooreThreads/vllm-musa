@@ -4,7 +4,17 @@
 
 from __future__ import annotations
 
+import logging
+
 import torch
+
+from vllm_musa.tuning import (
+    get_primed_musa_kernel_hardware,
+    select_mhc_weighted_rmsnorm_tactic,
+)
+
+logger = logging.getLogger(__name__)
+_LOGGED_WEIGHTED_RMSNORM_TACTICS: set[str] = set()
 
 
 def mhc_pre_musa(
@@ -158,7 +168,31 @@ def _try_mhc_weighted_rms_norm_musa(
             if hidden_size == 4096
             else mhc_weighted_rmsnorm_kernel
         )
-        kernel_factory(hidden_size, threads=threads)(
+        device_index = x.device.index if x.device.index is not None else 0
+        hardware = get_primed_musa_kernel_hardware(device_index)
+        tactic = None
+        if not torch.compiler.is_compiling():
+            tactic = select_mhc_weighted_rmsnorm_tactic(
+                hardware=hardware,
+                rows=x_2d.shape[0],
+                hidden_size=hidden_size,
+                input_dtype=str(x.dtype),
+                weight_dtype=str(norm_weight.dtype),
+                contiguous=(x_2d.is_contiguous() and norm_weight.is_contiguous()),
+            )
+        selected_threads = threads if tactic is None else tactic.threads
+        if tactic is not None and tactic.source not in _LOGGED_WEIGHTED_RMSNORM_TACTICS:
+            logger.info(
+                "MUSA DSV4 weighted-RMSNorm JIT tactic hit source=%s "
+                "for M=%d H=%d mp=%d threads=%d",
+                tactic.source,
+                x_2d.shape[0],
+                hidden_size,
+                hardware.multiprocessor_count,
+                selected_threads,
+            )
+            _LOGGED_WEIGHTED_RMSNORM_TACTICS.add(tactic.source)
+        kernel_factory(hidden_size, threads=selected_threads)(
             x_2d,
             norm_weight,
             out_2d,

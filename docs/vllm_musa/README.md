@@ -2,6 +2,13 @@
 
 Python package that plugs into vLLM's platform and general plugin system to enable inference on Moore Threads MUSA GPUs (MTGPU).
 
+The checked-in `benchmarks/kernel_tactics/full_kernel_sweep.json` is a
+source-only AOT/JIT inventory. It intentionally contains no host identity,
+driver/runtime receipt, timing sample, or qualification result. Campaign
+recipes live beside the benchmark harness; reports and raw measurements are
+ticket-linked local artifacts under `generated/` and are not part of the
+published source tree.
+
 ## Package Entry Points
 
 | Entry Point | Function | Purpose |
@@ -52,15 +59,15 @@ Custom `forward_oot` implementations registered for MUSA dispatch:
 
 #### FP8 MoE backend dispatch
 
-On S5000, block-128 E4M3 MoE layers use a shape-keyed `auto` policy. Only
-offline-calibrated per-rank shapes select native GEMV for small token batches.
-For large eligible prefill invocations, `auto` preserves the default-on
-contiguous DeepGEMM path; intermediate and unsupported shapes use
-the established upstream fused-MoE implementation. The experimental grouped
-backend added by this dispatcher remains disabled unless both its operator and
-serving gates produce a validated threshold. The policy is also keyed by graph
-mode and active MP count, so thresholds are not reused across incompatible
-devices.
+Block-128 E4M3 MoE layers use a shape-keyed `auto` policy. Exact runtime
+hardware/shape/graph keys may select native GEMV for small token batches. For
+large eligible prefill invocations, `auto` preserves the default-on contiguous
+DeepGEMM path; intermediate and unsupported shapes use the established
+upstream fused-MoE implementation. The experimental grouped backend remains
+disabled unless its operator and serving gates produce a validated threshold.
+The policy is keyed by the runtime MP count and graph mode, so thresholds are
+not reused across incompatible devices. Qualification receipts stay outside
+the source distribution.
 
 `VLLM_MUSA_FUSED_MOE_DISPATCH` is a diagnostic force/rollback control with the
 values `auto` (default), `upstream`, `gemv`, or `grouped_gemm`. Forced modes do

@@ -133,7 +133,8 @@ template <bool APPLY_CLAMP>
 void silu_and_mul_per_token_group_fp8_quant_impl(
     const torch::Tensor& input, torch::Tensor& output_q,
     torch::Tensor& output_s, int64_t group_size, double eps, double fp8_min,
-    double fp8_max, double swiglu_limit) {
+    double fp8_max, double swiglu_limit,
+    int64_t requested_groups_per_block) {
   TORCH_CHECK(input.is_contiguous());
   TORCH_CHECK(output_q.is_contiguous());
   TORCH_CHECK(output_s.is_contiguous());
@@ -159,7 +160,16 @@ void silu_and_mul_per_token_group_fp8_quant_impl(
 
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   constexpr int THREADS_PER_GROUP = 16;
-  const int groups_per_block = GetGroupsPerBlock(num_groups);
+  int groups_per_block = GetGroupsPerBlock(num_groups);
+  if (requested_groups_per_block != 0) {
+    TORCH_CHECK(
+        requested_groups_per_block == 1 || requested_groups_per_block == 2 ||
+            requested_groups_per_block == 4 ||
+            requested_groups_per_block == 8 ||
+            requested_groups_per_block == 16,
+        "groups_per_block must be one of 0,1,2,4,8,16.");
+    groups_per_block = static_cast<int>(requested_groups_per_block);
+  }
   const int num_blocks = (num_groups + groups_per_block - 1) / groups_per_block;
   const int num_threads = groups_per_block * THREADS_PER_GROUP;
   auto dst_type = output_q.scalar_type();
@@ -196,18 +206,19 @@ void silu_and_mul_per_token_group_fp8_quant_impl(
 void silu_and_mul_per_token_group_fp8_quant(
     const torch::Tensor& input, torch::Tensor& output_q,
     torch::Tensor& output_s, int64_t group_size, double eps, double fp8_min,
-    double fp8_max) {
+    double fp8_max, int64_t groups_per_block) {
   silu_and_mul_per_token_group_fp8_quant_impl<false>(
-      input, output_q, output_s, group_size, eps, fp8_min, fp8_max, 0.0);
+      input, output_q, output_s, group_size, eps, fp8_min, fp8_max, 0.0,
+      groups_per_block);
 }
 
 void silu_and_mul_clamp_per_token_group_fp8_quant(
     const torch::Tensor& input, torch::Tensor& output_q,
     torch::Tensor& output_s, int64_t group_size, double eps, double fp8_min,
-    double fp8_max, double swiglu_limit) {
+    double fp8_max, double swiglu_limit, int64_t groups_per_block) {
   TORCH_CHECK(std::isfinite(swiglu_limit) && swiglu_limit > 0.0,
               "swiglu_limit must be finite and positive.");
   silu_and_mul_per_token_group_fp8_quant_impl<true>(
       input, output_q, output_s, group_size, eps, fp8_min, fp8_max,
-      swiglu_limit);
+      swiglu_limit, groups_per_block);
 }

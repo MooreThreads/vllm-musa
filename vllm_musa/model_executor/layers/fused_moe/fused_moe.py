@@ -4,7 +4,6 @@
 import json
 import os
 import time
-from functools import cache
 
 import torch
 from vllm import _custom_ops as ops
@@ -30,9 +29,12 @@ from vllm_musa import _custom_ops as musa_ops
 from vllm_musa.jit_kernel.csrc.moe import maybe_fast_moe_sum
 from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     MusaFusedMoeBackend,
+    MusaFusedMoeGemvStageTactic,
     MusaFusedMoeShape,
+    gemv_stage_tactic_for_shape,
     has_calibrated_dimensions,
     parse_dispatch_backend,
+    resolve_fused_moe_graph_mode,
     select_fused_moe_backend,
     thresholds_for_shape,
 )
@@ -40,8 +42,17 @@ from vllm_musa.optimization_contract import (
     matches_qwen35_moe_bf16_decode_gemv_layer,
     matches_qwen35_moe_bf16_prefill_layer,
 )
+from vllm_musa.tuning import (
+    get_primed_musa_kernel_hardware,
+    query_musa_engine_max_num_seqs,
+    query_musa_forward_graph_bucket,
+)
 
 logger = init_logger(__name__)
+
+
+def _current_max_num_seqs() -> int | None:
+    return query_musa_engine_max_num_seqs()
 
 
 def disable_inplace() -> bool:
@@ -99,12 +110,11 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _requested_gemv_block(shape: MusaFusedMoeShape | None) -> tuple[int, int]:
-    """Return a graph-static tile request for a contract-selected GEMV shape.
+    """Return the established graph-static block for a selected GEMV shape.
 
     The explicit environment override remains owned by the C++ op. Passing
     zeroes here lets that override (and the one-token DeepSeek-V4 split-tile
-    rule) retain their existing precedence.  Only a selector produced by the
-    Python policy, with no explicit environment override, is forwarded.
+    rule) retain their existing precedence.
     """
 
     if shape is None or os.environ.get(_GEMV_MOE_BLOCK_ENV) is not None:
@@ -114,6 +124,16 @@ def _requested_gemv_block(shape: MusaFusedMoeShape | None) -> tuple[int, int]:
     if shape.gemv_block != "16x8":
         return 0, 0
     return 16, 8
+
+
+def _requested_gemv_stage_tactic(
+    shape: MusaFusedMoeShape | None,
+    num_tokens: int,
+) -> MusaFusedMoeGemvStageTactic | None:
+    """Return an exact stage tactic while preserving diagnostic precedence."""
+    if shape is None or os.environ.get(_GEMV_MOE_BLOCK_ENV) is not None:
+        return None
+    return gemv_stage_tactic_for_shape(shape=shape, num_tokens=num_tokens)
 
 
 def _tensors_share_device(
@@ -143,23 +163,11 @@ def _musa_moe_routes_are_supported(
     )
 
 
-@cache
 def _musa_device_fingerprint(
     device_index: int,
 ) -> tuple[tuple[int, int], int]:
-    try:
-        capability = current_platform.get_device_capability(device_index)
-        device_capability = (
-            (int(capability[0]), int(capability[1]))
-            if capability is not None
-            else (-1, -1)
-        )
-        multiprocessor_count = int(
-            torch.musa.get_device_properties(device_index).multi_processor_count
-        )
-        return device_capability, multiprocessor_count
-    except Exception:
-        return (-1, -1), -1
+    hardware = get_primed_musa_kernel_hardware(device_index)
+    return hardware.device_capability, hardware.multiprocessor_count
 
 
 def _tensor_meta(tensor: torch.Tensor | None) -> dict[str, object] | None:
@@ -943,6 +951,7 @@ def _moe_deepgemm_bf16_prefill_impl(
         get_mk_alignment_for_contiguous_layout,
         mk_alignment_scope,
     )
+
     from vllm_musa.jit_kernel.post_reorder import post_reorder_triton_kernel
     from vllm_musa.jit_kernel.tilelang.deep_gemm_contig_preprocess import (
         can_use_bf16_tilelang,
@@ -1552,6 +1561,7 @@ def _musa_fused_moe_shape(
             and block_k == 128
         )
         gemv_block = "16x8" if is_deepseek_v4_flash_tp8_shape else "auto"
+    is_compiling = torch.compiler.is_compiling()
     return MusaFusedMoeShape(
         device_capability=device_capability,
         multiprocessor_count=multiprocessor_count,
@@ -1570,7 +1580,16 @@ def _musa_fused_moe_shape(
         w1_scale_shape=tuple(w1_scale.shape) if w1_scale is not None else (),
         w2_scale_shape=tuple(w2_scale.shape) if w2_scale is not None else (),
         gemv_block=gemv_block,
-        graph_mode="capture" if stream_is_capturing else "eager",
+        # Do not select a small-batch GEMV arm while Dynamo is tracing the
+        # symbolic graph. The trace may be reused for a larger capture shape;
+        # concrete capture/eager execution may use an exact vLLM graph
+        # descriptor or the conservative engine-static fallback profile.
+        graph_mode=resolve_fused_moe_graph_mode(
+            is_compiling=is_compiling,
+            stream_is_capturing=stream_is_capturing,
+        ),
+        max_num_seqs=_current_max_num_seqs(),
+        graph_bucket=None if is_compiling else query_musa_forward_graph_bucket(),
     )
 
 
@@ -1648,6 +1667,7 @@ def fused_experts_impl(
     inplace: bool = False,
     _allow_deepgemm_prefill: bool = True,
     _gemv_block: tuple[int, int] = (0, 0),
+    _gemv_blocks: tuple[tuple[int, int], tuple[int, int]] | None = None,
 ) -> torch.Tensor:
     # Check constraints.
     if use_int4_w4a16:
@@ -1807,7 +1827,8 @@ def fused_experts_impl(
         "Triton MoE JSON config lookup.",
         scope="global",
     )
-    gemv_block_n, gemv_block_k = _gemv_block
+    gemv_blocks = (_gemv_block, _gemv_block) if _gemv_blocks is None else _gemv_blocks
+    (w1_block_n, w1_block_k), (w2_block_n, w2_block_k) = gemv_blocks
     CHUNK_SIZE = 16384
     M = min(num_tokens, CHUNK_SIZE)
     for chunk in range((num_tokens // CHUNK_SIZE) + 1):
@@ -1842,8 +1863,8 @@ def fused_experts_impl(
             topk_ids.shape[1],
             use_int4_w4a16,
             use_swigelu=True,
-            block_n=gemv_block_n,
-            block_k=gemv_block_k,
+            block_n=w1_block_n,
+            block_k=w1_block_k,
         )
         musa_ops.musa_fused_gemv_moe(
             curr_intermediate_cache2,
@@ -1857,8 +1878,8 @@ def fused_experts_impl(
             1,
             use_int4_w4a16,
             use_swigelu=False,
-            block_n=gemv_block_n,
-            block_k=gemv_block_k,
+            block_n=w2_block_n,
+            block_k=w2_block_k,
         )
         # ========================== END ====================
         moe_sum_input = curr_intermediate_cache3.view(*curr_intermediate_cache3.size())
@@ -1907,6 +1928,7 @@ def _musa_fused_experts_impl_dispatch(
     policy = None
     shape = None
     requested_gemv_block = (0, 0)
+    gemv_stage_tactic = None
 
     # Keep the expensive contract matcher off unrelated MoE calls.  The
     # tensor geometry is the runtime half of the Qwen3.5/3.6 model contract;
@@ -2006,8 +2028,8 @@ def _musa_fused_experts_impl_dispatch(
                 device_index = 0
         device_capability, multiprocessor_count = _musa_device_fingerprint(device_index)
 
-        # The policy is calibrated only for S5000/MP31. Other MUSA
-        # architectures retain the established upstream implementation.
+        # The policy is qualified only for the supported architecture. Other
+        # MUSA architectures retain the established upstream implementation.
         if device_capability == (3, 1):
             # The calibrated GEMV sweeps use router weights after the expert
             # projection.  Fail closed for the alternate input-weighting
@@ -2097,6 +2119,21 @@ def _musa_fused_experts_impl_dispatch(
                 )
                 if backend == MusaFusedMoeBackend.GEMV:
                     requested_gemv_block = _requested_gemv_block(shape)
+                    gemv_stage_tactic = _requested_gemv_stage_tactic(
+                        shape,
+                        hidden_states.shape[0],
+                    )
+                    if gemv_stage_tactic is not None:
+                        logger.info_once(
+                            "MUSA fused-MoE GEMV stage tactic hit source=%s "
+                            "for M=%d mp=%d blocks=(w1=%s,w2=%s).",
+                            gemv_stage_tactic.source,
+                            hidden_states.shape[0],
+                            shape.multiprocessor_count,
+                            gemv_stage_tactic.w1_block,
+                            gemv_stage_tactic.w2_block,
+                            scope="local",
+                        )
 
     # Native GEMV records inside ``fused_experts_impl`` after expanding any
     # per-tensor scales.  Record every other dispatcher outcome here so the
@@ -2129,16 +2166,27 @@ def _musa_fused_experts_impl_dispatch(
         assert shape is not None
         logger.info_once(
             "MUSA fused-MoE dispatcher selected backend=%s policy=%s for "
-            "shape=(E=%d,N=%d,K=%d,topk=%d,graph=%s,mp=%d,gemv_block=%s).",
+            "shape=(E=%d,N=%d,K=%d,topk=%d,M=%d,graph=%s,mp=%d,maxseq=%s,"
+            "graph_bucket=%s,gemv_block=%s,gemv_stage_blocks=%s,"
+            "gemv_stage_tactic=%s).",
             backend.value,
             policy.source,
             shape.local_experts,
             shape.w1_output_size,
             shape.hidden_size,
             shape.top_k,
+            hidden_states.shape[0],
             shape.graph_mode,
             shape.multiprocessor_count,
+            shape.max_num_seqs,
+            shape.graph_bucket,
             shape.gemv_block,
+            (
+                (gemv_stage_tactic.w1_block, gemv_stage_tactic.w2_block)
+                if gemv_stage_tactic is not None
+                else (requested_gemv_block, requested_gemv_block)
+            ),
+            None if gemv_stage_tactic is None else gemv_stage_tactic.source,
         )
 
     if backend == MusaFusedMoeBackend.GROUPED_GEMM:
@@ -2178,6 +2226,11 @@ def _musa_fused_experts_impl_dispatch(
         }
         if requested_gemv_block != (0, 0):
             gemv_kwargs["_gemv_block"] = requested_gemv_block
+        if gemv_stage_tactic is not None:
+            gemv_kwargs["_gemv_blocks"] = (
+                gemv_stage_tactic.w1_block,
+                gemv_stage_tactic.w2_block,
+            )
         return fused_experts_impl(
             hidden_states,
             w1,

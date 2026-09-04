@@ -7,6 +7,10 @@ from vllm.utils.torch_utils import direct_register_custom_op
 
 from vllm_musa.jit_kernel.csrc.jit import load_musa_jit
 from vllm_musa.jit_kernel.utils import cache_once
+from vllm_musa.tuning import (
+    get_primed_musa_kernel_hardware,
+    select_jit_rmsnorm_tactic,
+)
 
 
 @cache_once
@@ -48,11 +52,19 @@ def rmsnorm(
     eps: float = 1e-6,
     out: torch.Tensor | None = None,
     enable_pdl: bool | None = None,
+    block_threads: int = 0,
 ) -> torch.Tensor:
     _ = enable_pdl
     if out is None:
         out = torch.empty_like(input)
-    torch.ops.vllm.musa_csrc_rmsnorm(input, weight, out, float(eps), False)
+    torch.ops.vllm.musa_csrc_rmsnorm(
+        input,
+        weight,
+        out,
+        float(eps),
+        False,
+        int(block_threads),
+    )
     return out
 
 
@@ -62,11 +74,19 @@ def gemma_rmsnorm(
     eps: float = 1e-6,
     out: torch.Tensor | None = None,
     enable_pdl: bool | None = None,
+    block_threads: int = 0,
 ) -> torch.Tensor:
     _ = enable_pdl
     if out is None:
         out = torch.empty_like(input)
-    torch.ops.vllm.musa_csrc_rmsnorm(input, weight, out, float(eps), True)
+    torch.ops.vllm.musa_csrc_rmsnorm(
+        input,
+        weight,
+        out,
+        float(eps),
+        True,
+        int(block_threads),
+    )
     return out
 
 
@@ -77,6 +97,7 @@ def fused_add_rmsnorm(
     eps: float = 1e-6,
     *,
     gemma: bool = False,
+    block_threads: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """In-place fused residual add and RMSNorm using the JIT MUSA kernel.
 
@@ -89,9 +110,39 @@ def fused_add_rmsnorm(
     with Gemma's ``+1`` already applied and therefore uses ``gemma=False``.
     """
     torch.ops.vllm.musa_csrc_fused_add_rmsnorm(
-        input, residual, weight, float(eps), bool(gemma)
+        input,
+        residual,
+        weight,
+        float(eps),
+        bool(gemma),
+        int(block_threads),
     )
     return input, residual
+
+
+def _production_block_threads(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    *,
+    mode: str,
+    contiguous: bool,
+    requested: int,
+) -> int:
+    if requested != 0:
+        return requested
+    hidden_size = input.shape[-1]
+    rows = input.numel() // hidden_size
+    device_index = input.device.index if input.device.index is not None else 0
+    tactic = select_jit_rmsnorm_tactic(
+        hardware=get_primed_musa_kernel_hardware(device_index),
+        mode=mode,
+        rows=rows,
+        hidden_size=hidden_size,
+        input_dtype=str(input.dtype),
+        weight_dtype=str(weight.dtype),
+        contiguous=contiguous,
+    )
+    return tactic.block_threads if tactic is not None else 0
 
 
 def _rmsnorm_custom(
@@ -100,8 +151,25 @@ def _rmsnorm_custom(
     out: torch.Tensor,
     eps: float,
     gemma: bool,
+    block_threads: int,
 ) -> None:
-    _norm_module().sgl_musa_rmsnorm(input, weight, out, float(eps), bool(gemma))
+    block_threads = _production_block_threads(
+        input,
+        weight,
+        mode="gemma" if gemma else "plain",
+        contiguous=(
+            input.is_contiguous() and weight.is_contiguous() and out.is_contiguous()
+        ),
+        requested=block_threads,
+    )
+    _norm_module().sgl_musa_rmsnorm(
+        input,
+        weight,
+        out,
+        float(eps),
+        bool(gemma),
+        int(block_threads),
+    )
 
 
 def _rmsnorm_custom_fake(
@@ -110,6 +178,7 @@ def _rmsnorm_custom_fake(
     out: torch.Tensor,
     eps: float,
     gemma: bool,
+    block_threads: int,
 ) -> None:
     return
 
@@ -128,9 +197,26 @@ def _fused_add_rmsnorm_custom(
     weight: torch.Tensor,
     eps: float,
     gemma: bool,
+    block_threads: int,
 ) -> None:
+    block_threads = _production_block_threads(
+        input,
+        weight,
+        mode="fused_gemma" if gemma else "fused",
+        contiguous=(
+            input.is_contiguous()
+            and residual.is_contiguous()
+            and weight.is_contiguous()
+        ),
+        requested=block_threads,
+    )
     _norm_module().sgl_musa_fused_add_rmsnorm(
-        input, residual, weight, float(eps), bool(gemma)
+        input,
+        residual,
+        weight,
+        float(eps),
+        bool(gemma),
+        int(block_threads),
     )
 
 
@@ -140,6 +226,7 @@ def _fused_add_rmsnorm_custom_fake(
     weight: torch.Tensor,
     eps: float,
     gemma: bool,
+    block_threads: int,
 ) -> None:
     return
 
