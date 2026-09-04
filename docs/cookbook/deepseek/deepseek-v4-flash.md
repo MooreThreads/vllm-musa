@@ -8,8 +8,7 @@ an MTP-off profile for deployments that do not use speculative decoding.
 
 > [!TIP]
 > Start with **MTP4** when decode latency is the priority, especially at small
-> batches. Keep chunked prefill enabled so long prefills do not block active
-> decode requests for their full duration.
+> batches.
 
 ## At a glance
 
@@ -19,7 +18,7 @@ an MTP-off profile for deployments that do not use speculative decoding.
 | Tensor parallelism | TP8 |
 | Attention backend | FlashMLA |
 | KV cache | FP8 |
-| Maximum context | 6,144 tokens |
+| Maximum context | 8,192 tokens |
 | Maximum sequences | 64 |
 | Recommended profile | Fixed MTP4 |
 | Alternative | MTP-off |
@@ -28,7 +27,7 @@ an MTP-off profile for deployments that do not use speculative decoding.
 
 - vLLM-MUSA v0.24.0.
 - Eight S5000 GPUs available to the server process.
-- The checkpoint mounted at `/mnt/models/DeepSeek-V4-Flash-Base`, or an
+- The checkpoint mounted at `/models/DeepSeek-V4-Flash-Base`, or an
   equivalent path substituted in the command.
 
 ## Launching the server
@@ -41,25 +40,30 @@ This profile uses a fixed four-token MTP draft.
 export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export SAFETENSORS_FAST_GPU=1
+export PYTHONUNBUFFERED=1
 export VLLM_USE_DEEP_GEMM=1
 export VLLM_USE_DEEP_GEMM_E8M0=0
 export VLLM_DEEP_GEMM_WARMUP=skip
 export VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0
+export VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE=aggressive_long_prefill
+export VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL=1
+export VLLM_MUSA_FUSED_AR_RMSNORM=0
 
-vllm serve /mnt/models/DeepSeek-V4-Flash-Base \
+CUDAGRAPH_CAPTURE_SIZES="$(seq -s, 5 5 320)"
+
+vllm serve /models/DeepSeek-V4-Flash-Base \
   --trust-remote-code \
   --tensor-parallel-size 8 \
-  --served-model-name deepseek-v4-flash-base \
-  --max-model-len 6144 \
+  --served-model-name DeepSeek-V4-Flash-Base \
+  --max-model-len 8192 \
   --max-num-seqs 64 \
-  --max-num-batched-tokens 8195 \
-  --gpu-memory-utilization 0.95 \
+  --max-num-batched-tokens 8192 \
+  --gpu-memory-utilization 0.92 \
   --kv-cache-dtype fp8 \
   --no-enable-prefix-caching \
-  --enable-chunked-prefill \
   --attention-backend FLASHMLA \
   --speculative-config '{"method":"mtp","num_speculative_tokens":4}' \
-  --compilation-config '{"mode":"NONE","cudagraph_mode":"FULL_DECODE_ONLY","max_cudagraph_capture_size":320,"cudagraph_capture_sizes":[5,10,20,40,80,160,320],"cudagraph_copy_inputs":false}' \
+  --compilation-config "{\"mode\":\"NONE\",\"cudagraph_mode\":\"FULL_DECODE_ONLY\",\"cudagraph_capture_sizes\":[${CUDAGRAPH_CAPTURE_SIZES}]}" \
   --async-scheduling
 ```
 
@@ -102,7 +106,7 @@ from openai import OpenAI
 
 client = OpenAI(api_key="EMPTY", base_url="http://localhost:8000/v1")
 response = client.chat.completions.create(
-    model="deepseek-v4-flash-base",
+    model="DeepSeek-V4-Flash-Base",
     messages=[{"role": "user", "content": "Hello"}],
     temperature=0,
 )
@@ -112,9 +116,7 @@ print(response.choices[0].message.content)
 ## Configuration notes
 
 - Keep TP8 for this checkpoint.
-- Keep chunked prefill enabled. Disabling it can reduce isolated prefill
-  latency, but long prefills may then cause severe decode inter-token stalls.
-- `max-num-batched-tokens=8195` preserves the intended 4K-input workload
+- `max-num-batched-tokens=8192` preserves the intended 4K-input workload
   envelope.
 - `async-scheduling` keeps the scheduler off the critical path. If combining
   this profile with pipeline parallelism or structured outputs, revalidate the
