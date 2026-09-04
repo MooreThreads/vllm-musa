@@ -64,10 +64,6 @@ index e21e566f7..77b78e6e2 100644
                      self.use_fp4_cache,
 +                    self.use_musa_materialized_prefill,
                  )
-@@ -1826,2 +1841,3 @@ class SparseAttnIndexer(CustomOp):
-             current_platform.is_musa()
-+            and self.use_musa_native_indexer
-             and _musa_sparse_indexer_is_current_stream_capturing()
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
 index 34842fc34..b2d29e197 100644
 --- a/vllm/models/deepseek_v4/attention.py
