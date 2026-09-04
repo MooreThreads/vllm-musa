@@ -17,6 +17,7 @@ FP8 MoE recipe with two-token MTP speculative decoding.
 | Tensor parallelism | TP4 |
 | Speculative decoding | MTP2 |
 | Maximum context | 8,192 tokens |
+| Maximum sequences | 64 |
 
 ## Launching the server
 

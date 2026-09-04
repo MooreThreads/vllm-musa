@@ -17,6 +17,7 @@ BF16 MoE recipe for four S5000 GPUs.
 | Tensor parallelism | TP4 |
 | Speculative decoding | MTP3 |
 | Maximum context | 8,192 tokens |
+| Maximum sequences | 192 |
 
 ## Launching the server
 

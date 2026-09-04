@@ -25,7 +25,7 @@ export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export SAFETENSORS_FAST_GPU=1
 
-vllm serve /mnt/models/Qwen3-8B-FP8 \
+vllm serve /models/Qwen3-8B-FP8 \
   --trust-remote-code \
   --tensor-parallel-size 1 \
   --served-model-name qwen3-8b-fp8 \
@@ -48,6 +48,6 @@ vllm serve /mnt/models/Qwen3-8B-FP8 \
 
 - Chunked prefill and asynchronous scheduling are enabled.
 - Prefix caching is disabled.
-- Replace `/mnt/models/Qwen3-8B-FP8` if the checkpoint is mounted elsewhere.
+- Replace `/models/Qwen3-8B-FP8` if the checkpoint is mounted elsewhere.
 
 Return to the [Qwen recipe index](README.md).
