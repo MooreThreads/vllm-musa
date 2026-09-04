@@ -16,25 +16,23 @@ decode interference when your traffic shape or concurrency target differs.
 - Run inside the v0.24.0 release image
   `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.24.0`, or an
   equivalent installation.
-- Mount the checkpoint under `/mnt/models` or update the path in the command.
-- Keep TP1 when a model fits on one GPU; increase TP only when memory requires
-  it.
+- Mount the checkpoint under `/models` or update the path in the command.
+- Use the tensor-parallelism size documented in each recipe; increase TP only
+  when memory requires it.
 
 ## Qwen
 
-The listed Qwen checkpoints fit on one S5000 and use TP1.
-
-| Model | Precision | Speculative decoding | Recipe |
-|---|---|---|---|
-| Qwen3-8B | FP8 | Off | [Open recipe](qwen/qwen3-8b-fp8.md) |
-| Qwen3.5-27B | BF16 | Off | [Open recipe](qwen/qwen3.5-27b-bf16.md) |
-| Qwen3.5-27B | FP8 | MTP1 | [Open recipe](qwen/qwen3.5-27b-fp8.md) |
-| Qwen3.5-35B-A3B | BF16 | Off | [Open recipe](qwen/qwen3.5-35b-a3b-bf16.md) |
-| Qwen3.5-35B-A3B | FP8 | MTP3 | [Open recipe](qwen/qwen3.5-35b-a3b-fp8.md) |
-| Qwen3.6-27B | BF16 | Off | [Open recipe](qwen/qwen3.6-27b-bf16.md) |
-| Qwen3.6-27B | FP8 | MTP1 | [Open recipe](qwen/qwen3.6-27b-fp8.md) |
-| Qwen3.6-35B-A3B | BF16 | Off | [Open recipe](qwen/qwen3.6-35b-a3b-bf16.md) |
-| Qwen3.6-35B-A3B | FP8 | MTP3 | [Open recipe](qwen/qwen3.6-35b-a3b-fp8.md) |
+| Model | Precision | Hardware | Speculative decoding | Recipe |
+|---|---|---|---|---|
+| Qwen3-8B | FP8 | 1x S5000, TP1 | Off | [Open recipe](qwen/qwen3-8b-fp8.md) |
+| Qwen3.5-27B | BF16 | 2x S5000, TP2 | MTP1 | [Open recipe](qwen/qwen3.5-27b-bf16.md) |
+| Qwen3.5-27B | FP8 | 2x S5000, TP2 | Off | [Open recipe](qwen/qwen3.5-27b-fp8.md) |
+| Qwen3.5-35B-A3B | BF16 | 4x S5000, TP4 | MTP3 | [Open recipe](qwen/qwen3.5-35b-a3b-bf16.md) |
+| Qwen3.5-35B-A3B | FP8 | 4x S5000, TP4 | MTP3 | [Open recipe](qwen/qwen3.5-35b-a3b-fp8.md) |
+| Qwen3.6-27B | BF16 | 2x S5000, TP2 | MTP3 | [Open recipe](qwen/qwen3.6-27b-bf16.md) |
+| Qwen3.6-27B | FP8 | 2x S5000, TP2 | MTP3 | [Open recipe](qwen/qwen3.6-27b-fp8.md) |
+| Qwen3.6-35B-A3B | BF16 | 4x S5000, TP4 | MTP2 | [Open recipe](qwen/qwen3.6-35b-a3b-bf16.md) |
+| Qwen3.6-35B-A3B | FP8 | 4x S5000, TP4 | MTP2 | [Open recipe](qwen/qwen3.6-35b-a3b-fp8.md) |
 
 ## DeepSeek
 

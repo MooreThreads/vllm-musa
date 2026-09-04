@@ -2,20 +2,20 @@
 
 ## Overview
 
-BF16 dense-model recipe for a single S5000 GPU.
+BF16 dense-model recipe for two S5000 GPUs.
 
 > [!TIP]
-> Use TP1 and keep speculative decoding disabled for this checkpoint.
+> Use TP2 and enable MTP1 speculative decoding for this checkpoint.
 
 ## At a glance
 
 | Setting | Value |
 |---|---|
-| Hardware | 1x S5000 |
+| Hardware | 2x S5000 |
 | Precision | BF16 |
-| Tensor parallelism | TP1 |
-| Speculative decoding | Off |
-| Maximum context | 5,192 tokens |
+| Tensor parallelism | TP2 |
+| Speculative decoding | MTP1 |
+| Maximum context | 7,168 tokens |
 | Maximum sequences | 64 |
 
 ## Launching the server
@@ -23,31 +23,25 @@ BF16 dense-model recipe for a single S5000 GPU.
 ```bash
 export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
+export VLLM_DISABLE_COMPILE_CACHE=1
 export SAFETENSORS_FAST_GPU=1
 
-vllm serve /mnt/models/Qwen3.5-27B-BF16 \
+vllm serve /models/Qwen3.5-27B \
   --trust-remote-code \
-  --tensor-parallel-size 1 \
-  --served-model-name qwen35-27b-bf16 \
-  --max-model-len 5192 \
+  --tensor-parallel-size 2 \
+  --served-model-name Qwen3.5-27B \
+  --max-model-len 7168 \
   --max-num-seqs 64 \
-  --max-num-batched-tokens 2048 \
-  --max-num-partial-prefills 1 \
-  --max-long-partial-prefills 1 \
-  --long-prefill-token-threshold 4096 \
-  --gpu-memory-utilization 0.90 \
   --no-enable-prefix-caching \
-  --enable-chunked-prefill \
-  --generation-config vllm \
-  --async-scheduling \
+  --no-enable-chunked-prefill \
   --attention-config '{"backend":"FLASH_ATTN"}' \
-  --compilation-config '{"compile_sizes":[1,4,16,64],"cudagraph_capture_sizes":[1,4,16,64],"cudagraph_mode":"FULL_AND_PIECEWISE"}'
+  --compilation-config '{"mode":"NONE","cudagraph_mode":"FULL_DECODE_ONLY","cudagraph_capture_sizes":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,64]}' \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":1}'
 ```
 
 ## Configuration notes
 
-- The 2,048-token scheduler budget favors predictable prefill admission.
-- Chunked prefill and asynchronous scheduling are enabled.
-- Replace `/mnt/models/Qwen3.5-27B-BF16` if needed.
+- Chunked prefill and asynchronous scheduling are disabled.
+- Replace `/models/Qwen3.5-27B` if needed.
 
 Return to the [Qwen recipe index](README.md).

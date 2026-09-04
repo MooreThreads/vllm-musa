@@ -2,53 +2,52 @@
 
 ## Overview
 
-FP8 dense-model recipe with one-token MTP speculative decoding.
+FP8 dense-model recipe with three-token MTP speculative decoding.
 
 > [!TIP]
-> Use this TP1 profile when serving the FP8 checkpoint.
+> Use this TP2 profile when serving the FP8 checkpoint.
 
 ## At a glance
 
 | Setting | Value |
 |---|---|
-| Hardware | 1x S5000 |
+| Hardware | 2x S5000 |
 | Precision | FP8 |
-| Tensor parallelism | TP1 |
-| Speculative decoding | MTP1 |
-| Maximum context | 5,192 tokens |
-| Maximum sequences | 64 |
+| Tensor parallelism | TP2 |
+| Speculative decoding | MTP3 |
+| Maximum context | 8,192 tokens |
+| Maximum sequences | 128 |
 
 ## Launching the server
 
 ```bash
 export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
+export PYTHONUNBUFFERED=1
 export SAFETENSORS_FAST_GPU=1
 
-vllm serve /mnt/models/Qwen3.6-27B-FP8 \
+CAPTURE_SIZES="$(seq -s, 4 4 512)"
+
+vllm serve /models/Qwen3.6-27B-FP8 \
   --trust-remote-code \
-  --tensor-parallel-size 1 \
-  --served-model-name qwen36-27b-fp8 \
-  --max-model-len 5192 \
-  --max-num-seqs 64 \
+  --tensor-parallel-size 2 \
+  --served-model-name Qwen3.6-27B-FP8 \
+  --max-model-len 8192 \
+  --max-num-seqs 128 \
   --max-num-batched-tokens 8192 \
-  --max-num-partial-prefills 1 \
-  --max-long-partial-prefills 1 \
-  --long-prefill-token-threshold 4096 \
-  --gpu-memory-utilization 0.90 \
+  --gpu-memory-utilization 0.80 \
+  --mamba-ssm-cache-dtype float32 \
   --no-enable-prefix-caching \
-  --enable-chunked-prefill \
-  --generation-config vllm \
-  --async-scheduling \
+  --no-enable-chunked-prefill \
   --attention-config '{"backend":"FLASH_ATTN"}' \
-  --compilation-config '{"cudagraph_capture_sizes":[2,8,32,128],"cudagraph_mode":"FULL_AND_PIECEWISE"}' \
-  --speculative-config '{"attention_backend":"FLASH_ATTN","method":"mtp","num_speculative_tokens":1}'
+  --compilation-config "{\"mode\":\"NONE\",\"cudagraph_mode\":\"FULL_DECODE_ONLY\",\"cudagraph_capture_sizes\":[${CAPTURE_SIZES}]}" \
+  --speculative-config '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
 ```
 
 ## Configuration notes
 
-- MTP1 uses the FlashAttention backend for draft attention.
-- Graph capture sizes account for the additional draft token.
-- Replace `/mnt/models/Qwen3.6-27B-FP8` if needed.
+- MTP3 uses the FlashAttention backend for draft attention.
+- Graph capture sizes account for the additional draft tokens.
+- Replace `/models/Qwen3.6-27B-FP8` if needed.
 
 Return to the [Qwen recipe index](README.md).
