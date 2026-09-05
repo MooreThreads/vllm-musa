@@ -1,0 +1,13 @@
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 852716198..393c63afc 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -689,6 +689,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         is_mtp_multi = _musa_dsv4_mtp_multi_request_graph()
+         ln_events = self.mtp_multi_ln_events if is_mtp_multi else self.ln_events
+         aux_streams = self.aux_stream_list
++        if is_mtp_multi:
++            aux_streams = None
+         if aux_streams is not None:
+             assert len(aux_streams) >= 3
+             aux_streams = aux_streams[:3]

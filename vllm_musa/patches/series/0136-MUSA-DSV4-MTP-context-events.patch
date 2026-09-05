@@ -1,0 +1,73 @@
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index b13849c5d..852716198 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -96,13 +96,21 @@ _MUSA_DEEPSEEK_V4_SCORE_FP32_DEEPGEMM_MAX_TOKENS = 16
+ def _musa_dsv4_mtp_multi_request_graph() -> bool:
+     """Whether the active graph is a multi-request MTP verification graph."""
+     batch_descriptor = get_forward_context().batch_descriptor
+-    return bool(
++    if (
+         batch_descriptor is not None
+         and batch_descriptor.uniform
+         and batch_descriptor.num_reqs is not None
+-        and batch_descriptor.num_reqs > 1
+-        and batch_descriptor.num_tokens > batch_descriptor.num_reqs
+-    )
++    ):
++        return (
++            batch_descriptor.num_reqs > 1
++            and batch_descriptor.num_tokens > batch_descriptor.num_reqs
++        )
++    try:
++        config = get_current_vllm_config()
++    except AssertionError:
++        return False
++    speculative_config = getattr(config, "speculative_config", None)
++    return speculative_config is not None and speculative_config.method == "mtp"
+ 
+ 
+ def _musa_deepseek_v4_serialize_long_prefill(num_tokens: int) -> bool:
+@@ -574,7 +582,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         indexer = self.indexer
+         compressor = self.compressor
+         aux_streams = self.aux_stream_list
+-        
++        is_mtp_multi = _musa_dsv4_mtp_multi_request_graph()
++        ln_events = self.mtp_multi_ln_events if is_mtp_multi else self.ln_events
+         if _musa_deepseek_v4_serialize_long_prefill(hidden_states.size(0)):
+             aux_streams = None
+         if _musa_dsv4_mtp_multi_request_graph():
+@@ -606,8 +615,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                         ),
+                         lambda: compressor(kv_score, positions, self.rotary_emb),
+                     ],
+-                    self.ln_events[0],
+-                    [self.ln_events[1], self.ln_events[2]],
++                    ln_events[0],
++                    [ln_events[1], ln_events[2]],
+                     [aux_streams[0], aux_streams[1]]
+                     if aux_streams is not None
+                     else None,
+@@ -628,8 +637,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                         ),
+                         lambda: compressor(kv_score, positions, self.rotary_emb),
+                     ],
+-                    self.ln_events[0],
+-                    [self.ln_events[1], self.ln_events[2]],
++                    ln_events[0],
++                    [ln_events[1], ln_events[2]],
+                     [aux_streams[0], aux_streams[1]]
+                     if aux_streams is not None
+                     else None,
+@@ -641,8 +650,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             q, _ = maybe_execute_in_parallel(
+                 project_query_and_cache_kv,
+                 lambda: compressor(kv_score, positions, self.rotary_emb),
+-                self.ln_events[0],
+-                self.ln_events[1],
++                ln_events[0],
++                ln_events[1],
+                 aux_stream,
+             )
+         else:
