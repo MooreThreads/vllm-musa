@@ -1,0 +1,296 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Joey-gvwal <joey_gvwal@yeah.net>
+Date: Tue, 1 Sep 2026 21:45:50 +0800
+Subject: [PATCH] MUSA: adapt DeepSeek V4 MTP verification for v0.28
+
+---
+ .../layers/sparse_attn_indexer.py             | 189 +++++++++++++++++-
+ vllm/models/deepseek_v4/attention.py          |  23 ++-
+ 2 files changed, 208 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 5f41c86..efdd156 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -207,6 +207,35 @@ def _musa_sparse_indexer_graph_exact_decode_enabled() -> bool:
+     return os.getenv("VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0") == "1"
+
+
++def _musa_sparse_indexer_mtp_requires_learned() -> bool:
++    """MTP verification must use the learned indexer semantics."""
++    batch_descriptor = get_forward_context().batch_descriptor
++    if (
++        batch_descriptor is not None
++        and batch_descriptor.uniform
++        and batch_descriptor.num_reqs is not None
++        and batch_descriptor.num_reqs > 0
++    ):
++        # The target verification graph has multiple tokens per request,
++        # whereas ordinary decode and the MTP drafter have one. Derive this
++        # from the graph descriptor because capture runs without a current
++        # VllmConfig installed in the worker context.
++        return batch_descriptor.num_tokens > batch_descriptor.num_reqs
++
++    # KV-cache profiling invokes a dummy forward before the worker installs
++    # the request config. Outside a uniform graph, retain the conservative
++    # config-based MTP fallback.
++    try:
++        config = get_current_vllm_config()
++    except AssertionError:
++        return False
++    speculative_config = getattr(config, "speculative_config", None)
++    if speculative_config is None or speculative_config.method != "mtp":
++        return False
++    # Unknown/mixed MTP graph: use the exact learned semantics conservatively.
++    return True
++
++
+ def _musa_sparse_indexer_native_decode_enabled() -> bool:
+     # The native DeepSeek-V4 indexer implementation is the validated MUSA
+     # path. Keep it shape-gated at the call sites, but do not make production
+@@ -893,6 +922,146 @@ def _musa_indexer_cache_rows(kv_cache: torch.Tensor) -> torch.Tensor:
+     )
+
+
++def _musa_try_fill_mtp_topk_bf16(
++    q_quant: torch.Tensor,
++    kv_cache: torch.Tensor,
++    weights: torch.Tensor,
++    decode_metadata,
++    topk_indices: torch.Tensor,
++    topk_tokens: int,
++    max_model_len: int,
++) -> bool:
++    """Run the learned MTP indexer with a graph-safe BF16 GEMM path.
++
++    The native decode kernel is intentionally not used for MTP verification:
++    its fixed-width path does not represent the request-to-token expansion.
++    This implementation follows sglang's paged formulation while preserving
++    vLLM's storage-stride view of the FP8 cache.  In particular, selecting a
++    complete physical page from ``_musa_indexer_cache_rows`` keeps the K bytes
++    and their page-tail scales in their original layout.
++    """
++    if (
++        not _musa_sparse_indexer_mtp_requires_learned()
++        or q_quant.dtype != torch.float8_e4m3fn
++        or q_quant.ndim != 3
++        or q_quant.shape[1] != 64
++        or q_quant.shape[2] != 128
++        or kv_cache.dtype != torch.uint8
++    ):
++        return False
++
++    seq_lens = decode_metadata.seq_lens.reshape(-1)
++    rows = min(
++        int(q_quant.shape[0]),
++        int(seq_lens.numel()),
++        int(topk_indices.shape[0]),
++    )
++    if rows <= 0:
++        return False
++
++    batch_descriptor = get_forward_context().batch_descriptor
++    batch_size = int(getattr(batch_descriptor, "num_reqs", 0) or 0)
++    if batch_size <= 0 or rows % batch_size != 0:
++        return False
++    next_n = rows // batch_size
++
++    raw_block_table = decode_metadata.block_table
++    if raw_block_table.shape[0] == batch_size:
++        request_block_table = raw_block_table
++    elif raw_block_table.shape[0] == rows:
++        request_block_table = raw_block_table[::next_n]
++    else:
++        return False
++    if request_block_table.shape[1] <= 0:
++        return False
++
++    page_size = int(kv_cache.shape[1])
++    max_pages = min(
++        int(request_block_table.shape[1]),
++        (int(max_model_len) + page_size - 1) // page_size,
++    )
++    if max_pages <= 0:
++        return False
++
++    cache_rows = _musa_indexer_cache_rows(kv_cache)
++    total_dim = int(cache_rows.shape[1])
++    k_bytes = page_size * 128
++    scale_bytes = page_size * 4
++    if total_dim < k_bytes + scale_bytes:
++        return False
++
++    page_ids = request_block_table[:, :max_pages].clamp(min=0).to(torch.long)
++    gathered = cache_rows.index_select(0, page_ids.reshape(-1)).view(
++        batch_size,
++        max_pages,
++        total_dim,
++    )
++
++    k = (
++        gathered[..., :k_bytes]
++        .contiguous()
++        .view(torch.float8_e4m3fn)
++        .to(torch.bfloat16)
++        .reshape(batch_size, max_pages * page_size, 128)
++    )
++    scales = (
++        gathered[..., k_bytes : k_bytes + scale_bytes]
++        .contiguous()
++        .view(torch.float32)
++        .to(torch.bfloat16)
++        .reshape(batch_size, max_pages * page_size)
++    )
++    k = k * scales.unsqueeze(-1)
++    q = (
++        q_quant[:rows]
++        .contiguous()
++        .view(torch.float8_e4m3fn)
++        .to(torch.bfloat16)
++        .reshape(batch_size, next_n * 64, 128)
++    )
++    per_head = torch.bmm(q, k.transpose(1, 2)).reshape(
++        rows,
++        64,
++        max_pages * page_size,
++    )
++    per_head.relu_()
++    logits = torch.bmm(
++        weights[:rows].to(torch.bfloat16).contiguous().unsqueeze(1),
++        per_head,
++    ).squeeze(1)
++
++    positions = torch.arange(
++        max_pages * page_size,
++        device=q_quant.device,
++    )
++    logits = logits.masked_fill(
++        positions.unsqueeze(0) >= seq_lens[:rows].unsqueeze(-1),
++        float("-inf"),
++    )
++    if logits.shape[1] < max_model_len:
++        logits = torch.nn.functional.pad(
++            logits,
++            (0, max_model_len - logits.shape[1]),
++            value=float("-inf"),
++        )
++    else:
++        logits = logits[:, :max_model_len]
++
++    topk = min(int(topk_tokens), int(topk_indices.shape[1]))
++    if topk <= 0:
++        return True
++    indices = torch.topk(logits, topk, dim=-1, sorted=True).indices
++    valid_counts = seq_lens[:rows].clamp(min=0, max=topk).unsqueeze(-1)
++    rank = torch.arange(topk, device=q_quant.device).unsqueeze(0)
++    indices = torch.where(
++        rank < valid_counts,
++        indices,
++        torch.full_like(indices, -1),
++    )
++    topk_indices[:rows, :topk].copy_(indices.to(topk_indices.dtype))
++    return True
++
++
+ def _musa_dequant_indexer_fp8_cache_row(
+     kv_cache: torch.Tensor,
+     block_id: int,
+@@ -1173,7 +1342,17 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+     topk_indices_buffer[: hidden_states.shape[0]] = -1
+
+     if metadata.num_decodes > 0 and metadata.decode is not None:
+-        if not _musa_try_fill_decode_topk_from_indexer_cache_native(
++        if _musa_try_fill_mtp_topk_bf16(
++            q_quant[: metadata.num_decode_tokens],
++            kv_cache,
++            weights[: metadata.num_decode_tokens],
++            metadata.decode,
++            topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
++            topk_tokens,
++            max_model_len,
++        ):
++            pass
++        elif not _musa_try_fill_decode_topk_from_indexer_cache_native(
+             q_quant[: metadata.num_decode_tokens],
+             kv_cache,
+             weights[: metadata.num_decode_tokens],
+@@ -1234,7 +1413,11 @@ def _musa_fill_exact_sparse_indexer_indices(
+             and q_quant.shape[1] == 32
+             and _musa_sparse_indexer_glm52_materialized_enabled()
+         )
+-        if is_glm52_graph_path or _musa_sparse_indexer_graph_exact_decode_enabled():
++        if (
++            is_glm52_graph_path
++            or _musa_sparse_indexer_graph_exact_decode_enabled()
++            or _musa_sparse_indexer_mtp_requires_learned()
++        ):
+             return _musa_fill_exact_sparse_indexer_indices_capture(
+                 hidden_states,
+                 k_cache_prefix,
+@@ -2137,6 +2320,8 @@ class SparseAttnIndexer(CustomOp):
+
+     def uses_musa_recent_indices(self) -> bool:
+         """Whether this capture uses the MUSA recent-window approximation."""
++        if _musa_sparse_indexer_mtp_requires_learned():
++            return False
+         return (
+             current_platform.is_musa()
+             and self.use_musa_native_indexer
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 09f2eed..365e470 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -119,6 +119,18 @@ def _musa_deepseek_v4_use_score_fp32_deepgemm(
+     )
+
+
++def _musa_dsv4_mtp_multi_request_graph() -> bool:
++    """Whether the active graph is a multi-request MTP verification graph."""
++    batch_descriptor = get_forward_context().batch_descriptor
++    return bool(
++        batch_descriptor is not None
++        and batch_descriptor.uniform
++        and batch_descriptor.num_reqs is not None
++        and batch_descriptor.num_reqs > 1
++        and batch_descriptor.num_tokens > batch_descriptor.num_reqs
++    )
++
++
+ def _musa_deepseek_v4_linear_out_dtype(
+     a: torch.Tensor,
+     weight: torch.Tensor,
+@@ -411,6 +423,9 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         # [1] doubles as post-GEMM event1. Reuse is safe: GEMM fully joins
+         # before post-GEMM starts.
+         self.ln_events = [torch.cuda.Event() for _ in range(4)]
++        # The MTP target and its single-token drafter are captured as distinct
++        # graphs. Do not share event generations across their graph replays.
++        self.mtp_multi_ln_events = [torch.cuda.Event() for _ in range(4)]
+
+         assert cache_config is not None, "DeepseekV4 attention requires cache_config"
+         # ---- Attention / KV-cache setup ----
+@@ -559,6 +574,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         indexer = self.indexer
+         compressor = self.compressor
+         aux_streams = self.aux_stream_list
++        if _musa_dsv4_mtp_multi_request_graph():
++            aux_streams = None
+         if _musa_deepseek_v4_serialize_long_prefill(hidden_states.size(0)):
+             aux_streams = None
+
+@@ -701,11 +718,13 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             aux_fns[1] = None if skip_indexer_weights else indexer_weights_proj
+             aux_fns[2] = indexer_compressor_kv_score
+
++        is_mtp_multi = _musa_dsv4_mtp_multi_request_graph()
++        ln_events = self.mtp_multi_ln_events if is_mtp_multi else self.ln_events
+         qr_kv, (kv_score, indexer_weights, indexer_kv_score) = execute_in_parallel(
+             lambda: self._fused_wqa_wkv_gemm(hidden_states),
+             aux_fns,
+-            self.ln_events[0],
+-            self.ln_events[1:4],
++            ln_events[0],
++            ln_events[1:4],
+             aux_streams,
+             enable=(
+                 hidden_states.shape[0]
