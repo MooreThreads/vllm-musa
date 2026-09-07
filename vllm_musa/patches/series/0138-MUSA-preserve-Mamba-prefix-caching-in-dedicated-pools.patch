@@ -1,0 +1,539 @@
+From bfedd84bd763808ee3c0a7727c1d4292ebbc299d Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 3 Sep 2026 12:05:24 +0800
+Subject: [PATCH] MUSA: complete Mamba prefix-cache pool ownership
+
+---
+ tests/v1/core/test_prefix_caching.py         |  60 +++++++++
+ vllm/v1/core/block_pool.py                   |  23 ++--
+ vllm/v1/core/kv_cache_coordinator.py         | 125 ++++++++++++++++++-
+ vllm/v1/core/kv_cache_manager.py             |  82 +++++++++---
+ vllm/v1/core/kv_cache_utils.py               |  22 ++--
+ vllm/v1/core/sched/scheduler.py              |   4 +-
+ vllm/v1/core/single_type_kv_cache_manager.py |   6 +
+ 7 files changed, 284 insertions(+), 38 deletions(-)
+
+diff --git a/tests/v1/core/test_prefix_caching.py b/tests/v1/core/test_prefix_caching.py
+index 13ed7c7b9..4a7febf7b 100644
+--- a/tests/v1/core/test_prefix_caching.py
++++ b/tests/v1/core/test_prefix_caching.py
+@@ -4120,6 +4120,66 @@ def test_mamba_reachable_block_mask_pins_shared_prefix():
+     assert retained(0, None) == {14}
+ 
+ 
++def test_musa_mamba_pool_preserves_prefix_cache_ownership(monkeypatch):
++    """Dedicated MUSA Mamba pools must retain cache policy and ownership.
++
++    The MUSA layout gives recurrent-state groups a smaller, independent
++    block-id namespace.  This CPU-only regression exercises the coordinator
++    plumbing without requiring a MUSA device: caching must stay enabled on the
++    dedicated pool, and flattened scheduler frees/evictions must be routed by
++    block ownership rather than by the overlapping integer block IDs.
++    """
++    monkeypatch.setattr(
++        "vllm.v1.core.kv_cache_coordinator.musa_mamba_separate_pool_enabled",
++        lambda: True,
++    )
++    block_size = 16
++    kv_cache_config = KVCacheConfig(
++        num_blocks=8,
++        musa_mamba_num_blocks=2,
++        kv_cache_tensors=[],
++        kv_cache_groups=[
++            KVCacheGroupSpec(
++                ["attn"],
++                FullAttentionSpec(
++                    block_size=block_size,
++                    num_kv_heads=1,
++                    head_size=1,
++                    dtype=torch.float32,
++                ),
++            ),
++            KVCacheGroupSpec(
++                ["mamba"],
++                MambaSpec(
++                    block_size=block_size,
++                    shapes=(1, 1),
++                    dtypes=(torch.float32,),
++                ),
++            ),
++        ],
++    )
++    manager = make_kv_cache_manager(
++        kv_cache_config,
++        max_model_len=128,
++        enable_caching=True,
++        hash_block_size=block_size,
++    )
++    coordinator = manager.coordinator
++    mamba_pool = coordinator.musa_mamba_block_pools[1]
++    assert mamba_pool.enable_caching is True
++    assert coordinator.single_type_managers[1].block_pool is mamba_pool
++
++    attn_block = coordinator.block_pool.get_new_blocks(1)[0]
++    mamba_block = mamba_pool.get_new_blocks(1)[0]
++    coordinator.free_blocks([mamba_block, attn_block])
++    assert mamba_block.ref_cnt == 0
++    assert attn_block.ref_cnt == 0
++
++    # The namespaces overlap at block ID 1; eviction must not assert on the
++    # smaller Mamba pool when the attention pool reports a larger ID.
++    coordinator.evict_blocks({attn_block.block_id, 7})
++
++
+ def test_mamba_shared_prefix_survives_zero_retention(monkeypatch):
+     """Manager-level check of the full wiring: a pinned shared-prefix boundary
+     (``Request.shared_prefix_boundary``, set by the scheduler on Marconi-style
+diff --git a/vllm/v1/core/block_pool.py b/vllm/v1/core/block_pool.py
+index a8a6c1ca9..e57eda400 100644
+--- a/vllm/v1/core/block_pool.py
++++ b/vllm/v1/core/block_pool.py
+@@ -282,14 +282,23 @@ class BlockPool:
+                 block_hash, kv_cache_group_id
+             )
+             if blk.block_hash is not None:
+-                # The only valid case where a "new full block" already has a
+-                # hash is partial->full promotion of the same cache block.
+-                assert (
++                # Usually a newly cached block only carries a shorter partial
++                # hash (partial->full promotion).  Mamba's dedicated pools
++                # can also reuse a block carrying a longer partial alias
++                # from a previous request.  The block has just been allocated
++                # for this request, so discard stale aliases before inserting
++                # the hash for the new contents instead of asserting.
++                if (
+                     blk.block_hash_num_tokens is not None
+-                    and blk.block_hash_num_tokens < num_hash_tokens
+-                )
+-                removed_hashes = self._remove_cached_block_hashes(blk)
+-                self._emit_block_removed_events(removed_hashes)
++                    and blk.block_hash_num_tokens >= num_hash_tokens
++                ):
++                    removed_hashes = self._remove_cached_block_hashes(blk)
++                    self._emit_block_removed_events(removed_hashes)
++                else:
++                    assert blk.block_hash_num_tokens is not None
++                    assert blk.block_hash_num_tokens < num_hash_tokens
++                    removed_hashes = self._remove_cached_block_hashes(blk)
++                    self._emit_block_removed_events(removed_hashes)
+             self._insert_block_hash(
+                 block_hash_with_group_id,
+                 blk,
+diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
+index bf9c8d5ac..efc3a2bf2 100644
+--- a/vllm/v1/core/kv_cache_coordinator.py
++++ b/vllm/v1/core/kv_cache_coordinator.py
+@@ -1,7 +1,7 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ from abc import ABC, abstractmethod
+-from collections.abc import Sequence
++from collections.abc import Iterable, Sequence
+ from typing import NamedTuple
+ 
+ from vllm import envs
+@@ -104,8 +104,11 @@ class KVCacheCoordinator(ABC):
+             metrics_collector=metrics_collector,
+         )
+ 
+-        # Dedicated non-caching pools keep Mamba block IDs within the smaller
+-        # state allocations recorded by the MUSA KV-cache config.
++        # Dedicated Mamba pools keep block IDs within the smaller state
++        # allocations recorded by the MUSA KV-cache config.  They must inherit
++        # the coordinator's caching policy: disabling caching here silently
++        # turns off Mamba prefix-cache lookup/store on MUSA even when
++        # --enable-prefix-caching is set.
+         self.musa_mamba_block_pools: dict[int, BlockPool] = {}
+         musa_mamba_num_blocks = kv_cache_config.musa_mamba_num_blocks
+         if musa_mamba_separate_pool_enabled() and musa_mamba_num_blocks:
+@@ -113,12 +116,23 @@ class KVCacheCoordinator(ABC):
+                 if isinstance(group.kv_cache_spec, MambaSpec):
+                     self.musa_mamba_block_pools[group_id] = BlockPool(
+                         num_gpu_blocks=musa_mamba_num_blocks,
+-                        enable_caching=False,
++                        enable_caching=enable_caching,
+                         hash_block_size=hash_block_size,
+                         enable_kv_cache_events=False,
+                         metrics_collector=None,
+                     )
+ 
++        # A MUSA hybrid layout has more than one block-id namespace.  Keep an
++        # object-identity map so scheduler paths that receive a flattened list
++        # of blocks (preemption, delayed frees, partial-tail pins, and CoW
++        # retention) can return each block to its owning pool.  Block IDs alone
++        # are not sufficient because every dedicated pool starts at zero.
++        self._block_pool_by_object: dict[int, BlockPool] = {
++            id(block): pool
++            for pool in (self.block_pool, *self.musa_mamba_block_pools.values())
++            for block in pool.blocks
++        }
++
+         # KV cache group indices that get the EAGLE last-block drop.
+         self.eagle_group_ids: set[int] = {
+             i for i, g in enumerate(kv_cache_config.kv_cache_groups) if g.is_eagle_group
+@@ -239,6 +253,109 @@ class KVCacheCoordinator(ABC):
+                 )
+         return num_blocks_to_allocate
+ 
++    def get_num_blocks_to_allocate_by_pool(
++        self,
++        request_id: str,
++        num_tokens: int,
++        new_computed_blocks: tuple[Sequence[KVCacheBlock], ...],
++        num_encoder_tokens: int,
++        total_computed_tokens: int,
++        num_local_computed_tokens: int,
++        num_tokens_main_model: int,
++        apply_admission_cap: bool = False,
++    ) -> tuple[tuple[BlockPool, int], ...]:
++        """Return allocation requirements grouped by owning block pool.
++
++        The upstream coordinator has one ``BlockPool``, so its aggregate
++        admission count is sufficient.  MUSA hybrid models may place Mamba
++        groups in independent pools; omitting those groups from the aggregate
++        count avoids constraining attention admission, but used to let the
++        later Mamba allocation fail inside ``BlockPool.get_new_blocks``.  Keep
++        the legacy aggregate API unchanged and expose the per-pool counts for
++        the scheduler's admission gate.
++        """
++        requirements: dict[int, tuple[BlockPool, int]] = {}
++        for i, manager in enumerate(self.single_type_managers):
++            if isinstance(manager, CrossAttentionManager):
++                required = manager.get_num_blocks_to_allocate(
++                    request_id,
++                    num_encoder_tokens,
++                    [],
++                    0,
++                    0,
++                    num_encoder_tokens,
++                    apply_admission_cap=apply_admission_cap,
++                )
++            else:
++                required = manager.get_num_blocks_to_allocate(
++                    request_id,
++                    num_tokens,
++                    new_computed_blocks[i],
++                    total_computed_tokens,
++                    num_local_computed_tokens,
++                    num_tokens_main_model,
++                    apply_admission_cap=apply_admission_cap,
++                )
++            pool = manager.block_pool
++            pool_id = id(pool)
++            previous = requirements.get(pool_id)
++            if previous is None:
++                requirements[pool_id] = (pool, required)
++            else:
++                requirements[pool_id] = (pool, previous[1] + required)
++        return tuple(requirements.values())
++
++    def _pool_for_block(self, block: KVCacheBlock) -> BlockPool:
++        pool = self._block_pool_by_object.get(id(block))
++        if pool is None:
++            raise ValueError("KV cache block does not belong to this coordinator")
++        return pool
++
++    def free_blocks(self, ordered_blocks: Iterable[KVCacheBlock]) -> None:
++        """Free blocks back to their owning pool.
++
++        The scheduler intentionally flattens blocks across KV-cache groups
++        before deferring or freeing them.  That is safe for the upstream
++        single-pool layout, but MUSA hybrid models use independent Mamba and
++        attention pools whose block IDs overlap.  Partition by block identity
++        while preserving the caller's eviction order within each pool.
++        """
++        blocks_by_pool: dict[int, tuple[BlockPool, list[KVCacheBlock]]] = {}
++        for block in ordered_blocks:
++            pool = self._pool_for_block(block)
++            entry = blocks_by_pool.get(id(pool))
++            if entry is None:
++                entry = (pool, [])
++                blocks_by_pool[id(pool)] = entry
++            entry[1].append(block)
++        for pool, blocks in blocks_by_pool.values():
++            pool.free_blocks(blocks)
++
++    def touch_block(self, block: KVCacheBlock) -> None:
++        """Pin a block in its owning pool."""
++        self._pool_for_block(block).touch((block,))
++
++    def evict_blocks(self, block_ids: set[int]) -> None:
++        """Evict matching IDs from every pool's independent namespace."""
++        for pool in (self.block_pool, *self.musa_mamba_block_pools.values()):
++            # Connector eviction reports do not carry a KV-group ID.  Ignore
++            # IDs outside a pool's namespace; dedicated Mamba pools are often
++            # much smaller than the attention pool.
++            pool.evict_blocks(
++                {
++                    block_id
++                    for block_id in block_ids
++                    if 0 <= block_id < len(pool.blocks)
++                }
++            )
++
++    def reset_prefix_cache(self) -> bool:
++        """Reset all prefix-cache pools, including dedicated Mamba pools."""
++        success = True
++        for pool in (self.block_pool, *self.musa_mamba_block_pools.values()):
++            success = pool.reset_prefix_cache() and success
++        return success
++
+     def allocate_new_computed_blocks(
+         self,
+         request_id: str,
+diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
+index 44097c3da..c64f40e15 100644
+--- a/vllm/v1/core/kv_cache_manager.py
++++ b/vllm/v1/core/kv_cache_manager.py
+@@ -2,7 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
+ import itertools
+-from collections.abc import Sequence
++from collections.abc import Iterable, Sequence
+ from dataclasses import dataclass
+ from typing import Literal, overload
+ 
+@@ -344,6 +344,51 @@ class KVCacheManager:
+         # Per-group lookups do not detect an uncached shared prefix (boundary 0).
+         return blocks, num_local, 0, min(per_group_hits) < num_local
+ 
++    def _has_enough_free_blocks(
++        self,
++        request_id: str,
++        num_tokens: int,
++        new_computed_blocks: tuple[Sequence[KVCacheBlock], ...],
++        num_encoder_tokens: int,
++        total_computed_tokens: int,
++        num_local_computed_tokens: int,
++        num_tokens_main_model: int,
++        apply_admission_cap: bool,
++        watermark_blocks: int,
++        reserved_blocks: int,
++    ) -> bool:
++        """Check admission capacity for every coordinator-owned pool.
++
++        ``KVCacheCoordinator.get_num_blocks_to_allocate`` intentionally
++        excludes dedicated Mamba pools from the attention-pool aggregate.  A
++        separate check is therefore required before allocation so a full
++        Mamba pool returns ``None`` (scheduler backpressure) instead of
++        raising from ``BlockPool.get_new_blocks``.
++        """
++        for pool, required_blocks in (
++            self.coordinator.get_num_blocks_to_allocate_by_pool(
++                request_id=request_id,
++                num_tokens=num_tokens,
++                new_computed_blocks=new_computed_blocks,
++                num_encoder_tokens=num_encoder_tokens,
++                total_computed_tokens=total_computed_tokens,
++                num_local_computed_tokens=num_local_computed_tokens,
++                num_tokens_main_model=num_tokens_main_model,
++                apply_admission_cap=apply_admission_cap,
++            )
++        ):
++            # Reserved blocks and the watermark protect requests in the main
++            # attention pool.  Dedicated Mamba pools have their own capacity
++            # check and must not consume that shared reservation.
++            extra = (
++                reserved_blocks + watermark_blocks
++                if pool is self.block_pool
++                else 0
++            )
++            if required_blocks + extra > pool.get_num_free_blocks():
++                return False
++        return True
++
+     def allocate_slots(
+         self,
+         request: Request,
+@@ -476,7 +521,7 @@ class KVCacheManager:
+             # First check and fail if the full request sequence won't fit.
+             full_num_tokens = min(request.num_tokens, self.max_model_len)
+ 
+-            num_blocks_to_allocate = self.coordinator.get_num_blocks_to_allocate(
++            if not self._has_enough_free_blocks(
+                 request_id=request.request_id,
+                 num_tokens=full_num_tokens,
+                 new_computed_blocks=new_computed_block_list,
+@@ -485,9 +530,9 @@ class KVCacheManager:
+                 num_local_computed_tokens=num_local_computed_tokens,
+                 num_tokens_main_model=full_num_tokens,
+                 apply_admission_cap=True,
+-            )
+-            required_blocks = num_blocks_to_allocate + watermark_blocks
+-            if required_blocks > self.block_pool.get_num_free_blocks():
++                watermark_blocks=watermark_blocks,
++                reserved_blocks=0,
++            ):
+                 return None
+ 
+         num_tokens_main_model = total_computed_tokens + num_new_tokens
+@@ -510,7 +555,9 @@ class KVCacheManager:
+             num_prompt_tokens=request.num_prompt_tokens,
+         )
+ 
+-        num_blocks_to_allocate = self.coordinator.get_num_blocks_to_allocate(
++        # Keep `reserved_blocks` free for other in-flight sequences, and an
++        # additional watermark of headroom for waiting/preempted admissions.
++        if not self._has_enough_free_blocks(
+             request_id=request.request_id,
+             num_tokens=num_tokens_need_slot,
+             new_computed_blocks=new_computed_block_list,
+@@ -519,13 +566,10 @@ class KVCacheManager:
+             + num_external_computed_tokens,
+             num_local_computed_tokens=num_local_computed_tokens,
+             num_tokens_main_model=num_tokens_main_model,
+-        )
+-
+-        # Keep `reserved_blocks` free for other in-flight sequences, and an
+-        # additional watermark of headroom for waiting/preempted admissions.
+-        available_blocks = self.block_pool.get_num_free_blocks() - reserved_blocks
+-        required_blocks = num_blocks_to_allocate + watermark_blocks
+-        if required_blocks > available_blocks:
++            apply_admission_cap=False,
++            watermark_blocks=watermark_blocks,
++            reserved_blocks=reserved_blocks,
++        ):
+             # Cannot allocate new blocks
+             return None
+ 
+@@ -577,7 +621,7 @@ class KVCacheManager:
+         """
+         pins = self._partial_tail_pins.pop(request.request_id, None)
+         if pins:
+-            self.block_pool.free_blocks(pins)
++            self.free_blocks(pins)
+         self.coordinator.free(request.request_id)
+ 
+     def remove_skipped_blocks(
+@@ -619,13 +663,17 @@ class KVCacheManager:
+             blocks = pins + blocks
+         return blocks
+ 
++    def free_blocks(self, ordered_blocks: Iterable[KVCacheBlock]) -> None:
++        """Return flattened blocks to their owning KV-cache pools."""
++        self.coordinator.free_blocks(ordered_blocks)
++
+     def evict_blocks(self, block_ids: set[int]) -> None:
+         """evict blocks from the prefix cache by their block IDs.
+ 
+         Args:
+             block_ids: Set of block IDs to evict from cache.
+         """
+-        self.block_pool.evict_blocks(block_ids)
++        self.coordinator.evict_blocks(block_ids)
+ 
+     def reset_prefix_cache(self) -> bool:
+         """Reset prefix cache. This function may be used in RLHF
+@@ -636,7 +684,7 @@ class KVCacheManager:
+             bool: True if the prefix cache is successfully reset,
+             False otherwise.
+         """
+-        if not self.block_pool.reset_prefix_cache():
++        if not self.coordinator.reset_prefix_cache():
+             return False
+         if self.log_stats:
+             assert self.prefix_cache_stats is not None
+@@ -875,7 +923,7 @@ class KVCacheManager:
+                 block,
+                 boundary_tokens,
+             ) in mgr.take_pending_partial_tail_offloads():
+-                self.block_pool.touch((block,))
++                self.coordinator.touch_block(block)
+                 self._partial_tail_pins.setdefault(req_id, []).append(block)
+                 offloads.setdefault(req_id, []).append(
+                     (group_id, block.block_id, boundary_tokens)
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index ea87e17bd..b358d669f 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1440,12 +1440,9 @@ def _musa_separated_mamba_attn_tensors(vllm_config, kv_cache_groups, available_m
+     ]
+     mamba_page = get_uniform_page_size([g.kv_cache_spec for g in mamba_groups])
+     max_num_seqs = vllm_config.scheduler_config.max_num_seqs
+-    # Each Mamba group gets its own non-binding BlockPool/address space.
+-    # Therefore block IDs are local to a group and do not reserve another
+-    # copy of every request for sibling groups. Use the same per-request
+-    # bound as MambaManager (including align/all/speculative modes), then add
+-    # only BlockPool's null block. The previous fixed +8 slack wasted state
+-    # memory and reduced the attention pool without an admission invariant.
++    # Size the dedicated pool from the resident Mamba state footprint. Align
++    # mode is made sparse in MambaManager.cache_blocks below, so only boundary
++    # snapshots occupy this pool; retain one extra batch for turnover.
+     mamba_blocks_per_request = max(
+         cdiv(
+             group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
+@@ -1453,7 +1450,14 @@ def _musa_separated_mamba_attn_tensors(vllm_config, kv_cache_groups, available_m
+         )
+         for group in mamba_groups
+     )
+-    mamba_num_blocks = max_num_seqs * mamba_blocks_per_request + 1
++    # Keep two active batches plus a cache batch for turnover.  A completed
++    # request can retain its replay-boundary state until the LRU queue evicts
++    # it; during that interval a new batch still needs one working block per
++    # sequence.  The lower bound also covers the default 16-request warmup
++    # used by serving benchmarks when max_num_seqs is configured smaller.
++    mamba_num_blocks = (
++        max(4 * max_num_seqs, 32) * mamba_blocks_per_request + 1
++    )
+     mamba_layers = [ln for g in mamba_groups for ln in g.layer_names]
+     mamba_bytes = mamba_page * mamba_num_blocks * len(mamba_layers)
+     attn_group_size = max(len(g.layer_names) for g in attn_groups)
+@@ -2144,12 +2148,14 @@ def _max_memory_usage_bytes_from_groups(
+         mamba_page = get_uniform_page_size(
+             [group.kv_cache_spec for group in mamba_groups]
+         )
++        # Match _musa_separated_mamba_attn_tensors: resident state sizing plus
++        # two active batches and a cache batch for turnover.
+         mamba_blocks_per_request = max(
+             cdiv(group.kv_cache_spec.max_memory_usage_bytes(vllm_config), mamba_page)
+             for group in mamba_groups
+         )
+         mamba_num_blocks = (
+-            vllm_config.scheduler_config.max_num_seqs
++            max(4 * vllm_config.scheduler_config.max_num_seqs, 32)
+             * mamba_blocks_per_request
+             + 1
+         )
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index e4a213286..f4aa2d26f 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -2448,7 +2448,7 @@ class Scheduler(SchedulerInterface):
+         pool while the step that runs the copy may still be in flight.
+         """
+         if not self.defer_block_free or fence_seq <= self.processed_step_seq:
+-            self.kv_cache_manager.block_pool.free_blocks(blocks)
++            self.kv_cache_manager.free_blocks(blocks)
+             return
+         self.deferred_frees.append((fence_seq, blocks[::-1]))
+ 
+@@ -2465,7 +2465,7 @@ class Scheduler(SchedulerInterface):
+                 break
+             _, blocks = self.deferred_frees.popleft()
+             # Free in reverse order so that the tail blocks are evicted first.
+-            self.kv_cache_manager.block_pool.free_blocks(reversed(blocks))
++            self.kv_cache_manager.free_blocks(reversed(blocks))
+ 
+     def get_num_unfinished_requests(self) -> int:
+         if self._pause_state == PauseState.PAUSED_ALL:
+diff --git a/vllm/v1/core/single_type_kv_cache_manager.py b/vllm/v1/core/single_type_kv_cache_manager.py
+index 75acb7f49..a402d327a 100644
+--- a/vllm/v1/core/single_type_kv_cache_manager.py
++++ b/vllm/v1/core/single_type_kv_cache_manager.py
+@@ -1694,6 +1694,12 @@ class MambaManager(SingleTypeKVCacheManager):
+         num_tokens: int,
+         retention_interval: int | None = None,
+     ) -> None:
++        # Align-mode Mamba only needs boundary state snapshots for future
++        # prefix hits.  Dense caching would materialize the whole prompt's
++        # block table in the dedicated pool (e.g. every block of a 20k
++        # request), defeating the bounded resident-state design.
++        if self.mamba_cache_mode == "align" and retention_interval is None:
++            retention_interval = 0
+         num_cached_blocks_before = self.num_cached_block.get(request.request_id, 0)
+         super().cache_blocks(request, num_tokens, retention_interval=retention_interval)
+         num_cached_blocks_after = self.num_cached_block.get(request.request_id, 0)
+-- 
+2.34.1
+

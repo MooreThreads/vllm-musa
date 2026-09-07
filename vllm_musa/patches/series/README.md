@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **136 patches**. This branch includes the Qwen3.6 patches for common
+Currently **138 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -40,7 +40,10 @@ Mooncake now also accepts MUSA FlashAttention's K/V-first cache layout, using
 separate dense K/V regions or a padded-page-aware blocks-first hybrid FA/GDN
 view as appropriate without changing the kernel-facing cache format. Hybrid
 topology setup skips GDN-style backends without a KV-cache shape when probing
-the physical FlashAttention layout.
+the physical FlashAttention layout. The upstream Mooncake Mamba-pool patch
+keeps the dedicated-pool eligibility scoped to MooncakeConnector, and the
+following MUSA adaptation preserves Mamba pool ownership through prefix-cache
+lookup/store, pin, CoW/deferred-free, reset, and eviction paths.
 The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime
