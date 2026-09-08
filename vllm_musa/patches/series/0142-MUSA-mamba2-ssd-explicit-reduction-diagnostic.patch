@@ -1,0 +1,24 @@
+--- a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
++++ b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
+@@ -316,7 +316,10 @@
+             )
+             prev_states = prev_states.to(C_ptr.dtype.element_ty)
+
+-        acc = tl.dot(C, prev_states) * scale_m[:, None]
++        acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
++        for k in range(BLOCK_SIZE_DSTATE):
++            acc += C[:, k][:, None] * prev_states[k, :][None, :]
++        acc *= scale_m[:, None]
+
+     else:
+         prev_states_ptrs = (
+@@ -343,7 +346,8 @@
+                     other=0.0,
+                 )
+                 prev_states = prev_states.to(C_ptr.dtype.element_ty)
+-            acc += tl.dot(C, prev_states)
++            for k in range(BLOCK_SIZE_K):
++                acc += C[:, k][:, None] * prev_states[k, :][None, :]
+             C_ptrs += BLOCK_SIZE_K
+             prev_states_ptrs += BLOCK_SIZE_K
+         acc *= scale_m[:, None]
