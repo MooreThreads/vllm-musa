@@ -200,6 +200,16 @@ def _fused_add_rms_norm_supports_args(
     epsilon: float,
     variance_size: int | None = None,
 ) -> bool:
+    # IR dispatch probes capability while Dynamo is tracing. The compile-range
+    # context is intentionally unavailable in that phase, so querying it would
+    # raise a data-dependent assertion and abort the whole compiled graph.
+    # Let the native IR lowering handle the symbolic path; eager dispatch still
+    # selects the MUSA fused provider below this guard.
+    try:
+        if torch.compiler.is_compiling():
+            return False
+    except Exception:
+        return False
     return (
         _select_musa_fused_add_rms_norm_impl(
             x, x_residual, weight, epsilon, variance_size
