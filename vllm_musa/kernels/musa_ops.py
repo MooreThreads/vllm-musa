@@ -238,9 +238,25 @@ def fused_add_rms_norm(
     """MUSA in-place provider for ``vllm.ir.ops.fused_add_rms_norm``."""
     assert variance_size is None
     assert weight is not None
-    selected = _select_musa_fused_add_rms_norm_impl(
-        x, x_residual, weight, epsilon, variance_size
-    )
+    try:
+        compiling = torch.compiler.is_compiling()
+    except Exception:
+        compiling = False
+    if compiling:
+        # Avoid re-entering the JIT selector while the IR provider is being
+        # traced: that selector requires a compile-range context which is not
+        # installed during Dynamo tracing.
+        selected = (
+            "c_ext"
+            if _c_ext_fused_add_rms_norm_supports_args(
+                x, x_residual, weight, epsilon, variance_size
+            )
+            else None
+        )
+    else:
+        selected = _select_musa_fused_add_rms_norm_impl(
+            x, x_residual, weight, epsilon, variance_size
+        )
     if selected == "jit":
         from vllm_musa.jit_kernel.csrc.norm import fused_add_rmsnorm
 
