@@ -201,17 +201,13 @@ def _fused_add_rms_norm_supports_args(
     variance_size: int | None = None,
 ) -> bool:
     # IR dispatch probes capability while Dynamo is tracing. The compile-range
-    # context is intentionally unavailable in that phase, so querying the JIT
-    # provider would raise a data-dependent assertion and abort the graph.
+    # context is intentionally unavailable in that phase, so querying it would
+    # raise a data-dependent assertion and abort the whole compiled graph.
+    # Let the native IR lowering handle the symbolic path; eager dispatch still
+    # selects the MUSA fused provider below this guard.
     try:
         if torch.compiler.is_compiling():
-            # The JIT provider needs vLLM's compile-range pass context, which is
-            # unavailable while Dynamo is tracing. Probe the concrete MUSA C
-            # extension directly; it has no dependency on that context and can
-            # still keep the fused path in compiled graphs.
-            return _c_ext_fused_add_rms_norm_supports_args(
-                x, x_residual, weight, epsilon, variance_size
-            )
+            return False
     except Exception:
         return False
     return (
@@ -238,25 +234,9 @@ def fused_add_rms_norm(
     """MUSA in-place provider for ``vllm.ir.ops.fused_add_rms_norm``."""
     assert variance_size is None
     assert weight is not None
-    try:
-        compiling = torch.compiler.is_compiling()
-    except Exception:
-        compiling = False
-    if compiling:
-        # Avoid re-entering the JIT selector while the IR provider is being
-        # traced: that selector requires a compile-range context which is not
-        # installed during Dynamo tracing.
-        selected = (
-            "c_ext"
-            if _c_ext_fused_add_rms_norm_supports_args(
-                x, x_residual, weight, epsilon, variance_size
-            )
-            else None
-        )
-    else:
-        selected = _select_musa_fused_add_rms_norm_impl(
-            x, x_residual, weight, epsilon, variance_size
-        )
+    selected = _select_musa_fused_add_rms_norm_impl(
+        x, x_residual, weight, epsilon, variance_size
+    )
     if selected == "jit":
         from vllm_musa.jit_kernel.csrc.norm import fused_add_rmsnorm
 
