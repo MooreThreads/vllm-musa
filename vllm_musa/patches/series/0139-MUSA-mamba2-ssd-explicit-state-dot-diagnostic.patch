@@ -1,0 +1,11 @@
+--- a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
++++ b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
+@@ -316,7 +316,7 @@
+             )
+             prev_states = prev_states.to(C_ptr.dtype.element_ty)
+
+-        acc = tl.dot(C, prev_states) * scale_m[:, None]
++        acc = tl.sum(C[:, :, None] * prev_states[None, :, :], axis=1) * scale_m[:, None]
+
+     else:
+         prev_states_ptrs = (
