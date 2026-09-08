@@ -201,10 +201,8 @@ def _fused_add_rms_norm_supports_args(
     variance_size: int | None = None,
 ) -> bool:
     # IR dispatch probes capability while Dynamo is tracing. The compile-range
-    # context is intentionally unavailable in that phase, so querying it would
-    # raise a data-dependent assertion and abort the whole compiled graph.
-    # Let the native IR lowering handle the symbolic path; eager dispatch still
-    # selects the MUSA fused provider below this guard.
+    # context is intentionally unavailable in that phase, so querying the JIT
+    # provider would raise a data-dependent assertion and abort the graph.
     try:
         if torch.compiler.is_compiling():
             # The JIT provider needs vLLM's compile-range pass context, which is
