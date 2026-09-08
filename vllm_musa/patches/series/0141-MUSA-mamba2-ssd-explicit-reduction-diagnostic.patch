@@ -1,0 +1,44 @@
+--- a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
++++ b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
+@@ -316,7 +316,10 @@
+             )
+             prev_states = prev_states.to(C_ptr.dtype.element_ty)
+
+-        acc = tl.dot(C, prev_states) * scale_m[:, None]
++        acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
++        for k in range(BLOCK_SIZE_DSTATE):
++            acc += C[:, k][:, None] * prev_states[k, :][None, :]
++        acc *= scale_m[:, None]
+
+     else:
+         prev_states_ptrs = (
+@@ -343,7 +346,8 @@
+                     other=0.0,
+                 )
+                 prev_states = prev_states.to(C_ptr.dtype.element_ty)
+-            acc += tl.dot(C, prev_states)
++            for k in range(BLOCK_SIZE_K):
++                acc += C[:, k][:, None] * prev_states[k, :][None, :]
+             C_ptrs += BLOCK_SIZE_K
+             prev_states_ptrs += BLOCK_SIZE_K
+         acc *= scale_m[:, None]
+@@ -483,6 +487,10 @@
+         else (0, 0, 0, 0)
+     )
+
++    # MUSA Triton requires optional pointer arguments to retain a concrete
++    # pointer type even when the constexpr branch is disabled.
++    initstates_ptr = initial_states if initial_states is not None else states
++
+     _chunk_scan_fwd_kernel[grid](
+         cb_ptr=cb,
+         x_ptr=x,
+@@ -494,7 +502,7 @@
+         C_ptr=C,
+         states_ptr=states,
+         D_ptr=D,
+-        initstates_ptr=initial_states,
++        initstates_ptr=initstates_ptr,
+         cu_chunk_seqlens_ptr=cu_chunk_seqlens,
+         chunk_size=chunk_size,
+         hdim=headdim,
