@@ -207,7 +207,13 @@ def _fused_add_rms_norm_supports_args(
     # selects the MUSA fused provider below this guard.
     try:
         if torch.compiler.is_compiling():
-            return False
+            # The JIT provider needs vLLM's compile-range pass context, which is
+            # unavailable while Dynamo is tracing. Probe the concrete MUSA C
+            # extension directly; it has no dependency on that context and can
+            # still keep the fused path in compiled graphs.
+            return _c_ext_fused_add_rms_norm_supports_args(
+                x, x_residual, weight, epsilon, variance_size
+            )
     except Exception:
         return False
     return (
