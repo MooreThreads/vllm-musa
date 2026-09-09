@@ -1,0 +1,28 @@
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -4082,6 +4082,12 @@
+                 < self.input_batch.num_prompt_tokens_cpu_tensor[:num_reqs]
+             ).any()
+         )
++        has_mixed_prefill = (
++            force_uniform_decode is None
++            and has_prefill
++            and num_reqs > 1
++            and len(np.unique(num_scheduled_tokens_np[:num_reqs])) > 1
++        )
+         uniform_decode = self._is_uniform_decode(
+             max_num_scheduled_tokens=max_num_scheduled_tokens,
+             uniform_decode_query_len=self.uniform_decode_query_len,
+@@ -4112,7 +4118,11 @@
+                 has_lora=has_lora,
+                 uniform_decode=uniform_decode,
+                 num_active_loras=num_active_loras,
+-                valid_modes={CUDAGraphMode.NONE} if force_eager else valid_modes,
++                valid_modes=(
++                    {CUDAGraphMode.NONE}
++                    if force_eager or (current_platform.is_musa() and has_mixed_prefill)
++                    else valid_modes
++                ),
+                 invalid_modes={CUDAGraphMode.FULL} if disable_full else None,
+             )
+ 
