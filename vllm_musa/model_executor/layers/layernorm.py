@@ -11,6 +11,10 @@ from vllm_musa.optimization_contract import (
     OptimizationFeature,
     bind_optimization_contract,
 )
+from vllm_musa.optimization_contract.car_rmsnorm import (
+    can_enable_fused_allreduce_rmsnorm,
+    infer_car_rmsnorm_model_family,
+)
 from vllm_musa.utils.environ import envs
 
 
@@ -31,6 +35,33 @@ def _can_use_musa_jit_rmsnorm(
         and weight.dtype == x.dtype
         and x.is_contiguous()
         and weight.is_contiguous()
+    )
+
+
+def _car_rmsnorm_ir_fusion_enabled(config=None) -> bool:
+    """Keep effective Gemma weights visible to the enabled CAR fusion pass."""
+    if config is None:
+        config = get_current_vllm_config_or_none()
+    if config is None:
+        return False
+    compilation_config = getattr(config, "compilation_config", None)
+    pass_config = getattr(compilation_config, "pass_config", None)
+    pass_value = getattr(pass_config, "fuse_allreduce_rms", None)
+    if pass_value is not None:
+        return pass_value is True
+    if int(getattr(config, "optimization_level", 0) or 0) < 2:
+        return False
+
+    model_config = getattr(config, "model_config", None)
+    parallel_config = getattr(config, "parallel_config", None)
+    get_hidden_size = getattr(model_config, "get_hidden_size", None)
+    hidden_size = get_hidden_size() if callable(get_hidden_size) else None
+    return can_enable_fused_allreduce_rmsnorm(
+        tp_size=getattr(parallel_config, "tensor_parallel_size", None),
+        pp_size=getattr(parallel_config, "pipeline_parallel_size", None),
+        dtype=getattr(model_config, "dtype", None),
+        hidden_size=hidden_size,
+        model_family=infer_car_rmsnorm_model_family(config),
     )
 
 
@@ -102,6 +133,12 @@ class MusaRMSNorm(RMSNorm):
 
 @GemmaRMSNorm.register_oot
 class MusaGemmaRMSNorm(GemmaRMSNorm):
+    def __init__(self, hidden_size: int, eps: float = 1e-6) -> None:
+        super().__init__(hidden_size, eps)
+        config = get_current_vllm_config_or_none()
+        bind_optimization_contract(self, config)
+        self._car_rmsnorm_ir_enabled = _car_rmsnorm_ir_fusion_enabled(config)
+
     def forward_oot(
         self,
         x: torch.Tensor,
@@ -114,6 +151,13 @@ class MusaGemmaRMSNorm(GemmaRMSNorm):
             return self.forward_native(x, residual)
 
         if residual is not None:
+            if getattr(self, "_car_rmsnorm_ir_enabled", False) or (
+                _car_rmsnorm_ir_fusion_enabled()
+            ):
+                # GemmaRMSNorm.forward_native materializes weight.float() + 1
+                # before entering fused_add_rms_norm. The CAR kernel consumes
+                # that effective scale and must not see the raw Gemma weight.
+                return self.forward_native(x, residual)
             weight = self.weight.data
             if (
                 _can_use_musa_jit_rmsnorm(x, weight)
