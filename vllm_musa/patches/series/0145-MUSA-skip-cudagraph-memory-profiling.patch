@@ -1,28 +1,24 @@
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 9087f87854..37e17172d0 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -4,6 +4,7 @@
- import functools
+@@ -5,4 +5,5 @@
  import gc
  import itertools
 +import os
  import threading
  import time
- from collections import defaultdict
-@@ -6778,6 +6779,22 @@ class GPUModelRunner(
-
+@@ -6779,4 +6780,20 @@
      @torch.inference_mode()
      def profile_cudagraph_memory(self) -> int:
-+        # MUSA graph-memory profiling runs the model inside a temporary graph
-+        # pool.  Mamba/SSD Triton paths synchronize during that probe, which
-+        # deadlocks on MUSA before the real PCG/FULL capture starts. Reserve a
-+        # conservative configurable amount instead; the actual graph capture
-+        # below remains enabled and validates the allocation.
++        # Temporary graph-memory profiling can stall on MUSA even when the
++        # final PCG/FULL capture succeeds. Use a configurable reservation until
++        # the temporary profiling path is supported; real capture stays enabled.
 +        if current_platform.is_musa():
 +            reserved_bytes = int(
 +                os.getenv("VLLM_MUSA_CUDAGRAPH_MEMORY_BYTES", str(1 << 30))
 +            )
++            if reserved_bytes < 0:
++                raise ValueError("VLLM_MUSA_CUDAGRAPH_MEMORY_BYTES must be >= 0")
 +            logger.warning_once(
 +                "Skipping MUSA CUDA graph memory profiling; reserving %.2f GiB "
 +                "(override with VLLM_MUSA_CUDAGRAPH_MEMORY_BYTES)",
