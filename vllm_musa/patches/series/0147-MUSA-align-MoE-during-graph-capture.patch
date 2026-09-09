@@ -1,0 +1,16 @@
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -1601,8 +1601,11 @@
+     # SPARSITY_FACTOR is a heuristic margin ensuring tokens_in_chunk * top_k
+     # activates only a small fraction of total experts
+     # Skips moe_align_block_size and activates the `sorted_token_ids is None`
+     # path of the fused_moe_kernel kernel
++    # MUSA Triton 3.2 has an illegal-access edge case in the
++    # sorted_token_ids=None kernel path. Use the native alignment op until the
++    # upstream kernel is fixed; this keeps eager and graph routes identical.
+     naive_block_assignment = (
+-        expert_map is None
++        not current_platform.is_musa()
++        and expert_map is None
+         and num_tokens * top_k_num * 4 <= global_num_experts
+         and not (
