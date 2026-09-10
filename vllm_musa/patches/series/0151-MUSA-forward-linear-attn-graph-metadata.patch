@@ -1,0 +1,73 @@
+--- a/vllm/v1/attention/backends/linear_attn.py
++++ b/vllm/v1/attention/backends/linear_attn.py
+@@ -113,6 +113,7 @@
+ 
+ 
+ class BailingLinearAttentionMetadataBuilder(LinearAttentionMetadataBuilder):
++    supports_dynamic_cudagraph_metadata = True
+     supports_spec_decode_metadata = True
+     supports_update_block_table: bool = False
+ 
+@@ -166,18 +167,25 @@
+     def build_for_cudagraph_capture(
+         self,
+         common_attn_metadata: CommonAttentionMetadata,
++        *,
++        num_accepted_tokens: torch.Tensor | None = None,
++        num_decode_draft_tokens_cpu: torch.Tensor | None = None,
+     ) -> BailingLinearAttentionMetadata:
+         num_accepted_tokens = None
+-        if self.use_spec_decode:
++        if self.use_spec_decode and num_accepted_tokens is None:
+             assert common_attn_metadata.max_query_len <= 1 + self.num_spec_tokens, (
+                 "Bailing linear attention only supports speculative decoding "
+                 "with query length <= 1 + number of speculative tokens."
+             )
+-            num_accepted_tokens = torch.diff(common_attn_metadata.query_start_loc)
++            if num_accepted_tokens is None:
++                num_accepted_tokens = torch.diff(common_attn_metadata.query_start_loc)
++            if num_decode_draft_tokens_cpu is None:
++                num_decode_draft_tokens_cpu = (num_accepted_tokens - 1).cpu()
+         return self.build(
+             common_prefix_len=0,
+             common_attn_metadata=common_attn_metadata,
+             num_accepted_tokens=num_accepted_tokens,
++            num_decode_draft_tokens_cpu=num_decode_draft_tokens_cpu,
+         )
+ 
+     def build(  # type: ignore[override]
+--- a/vllm/v1/attention/backends/gdn_attn.py
++++ b/vllm/v1/attention/backends/gdn_attn.py
+@@ -83,6 +83,7 @@
+ 
+ 
+ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]):
++    supports_dynamic_cudagraph_metadata = True
+     kv_cache_spec: MambaSpec
+     _cudagraph_support = AttentionCGSupport.UNIFORM_BATCH
+ 
+@@ -543,7 +544,11 @@
+         return attn_metadata
+ 
+     def build_for_cudagraph_capture(
+-        self, common_attn_metadata: CommonAttentionMetadata
++        self,
++        common_attn_metadata: CommonAttentionMetadata,
++        *,
++        num_accepted_tokens: torch.Tensor | None = None,
++        num_decode_draft_tokens_cpu: torch.Tensor | None = None,
+     ):
+         """
+         This method builds the metadata for full cudagraph capture.
+@@ -562,7 +567,9 @@
+             f"cudagraph capture sizes ({self.decode_cudagraph_max_bs})."
+         )
+ 
+-        num_accepted_tokens = torch.diff(m.query_start_loc)
+-        num_decode_draft_tokens_cpu = (num_accepted_tokens - 1).cpu()
++        if num_accepted_tokens is None:
++            num_accepted_tokens = torch.diff(m.query_start_loc)
++        if num_decode_draft_tokens_cpu is None:
++            num_decode_draft_tokens_cpu = (num_accepted_tokens - 1).cpu()
+ 
+         return self.build(0, m, num_accepted_tokens, num_decode_draft_tokens_cpu)
