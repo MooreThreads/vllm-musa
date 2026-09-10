@@ -1,6 +1,6 @@
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -2678,8 +2678,11 @@
+@@ -2591,8 +2591,11 @@
                      )
  
              if for_cudagraph_capture:
