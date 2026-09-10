@@ -20,7 +20,7 @@
          torch.Tensor | None,
          CUDAGraphStat | None,
      ]:
-+        has_prefill = bool(
++        has_prefill = self.model_config.is_hybrid and bool(
 +            (
 +                self.input_batch.num_computed_tokens_cpu_tensor[:num_reqs]
 +                < self.input_batch.num_prompt_tokens_cpu_tensor[:num_reqs]

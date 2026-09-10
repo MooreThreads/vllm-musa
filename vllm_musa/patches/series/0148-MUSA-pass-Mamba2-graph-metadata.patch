@@ -1,18 +1,29 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: musa <musa@local>
-Date: Wed, 9 Sep 2026 22:25:42 +0800
-Subject: [PATCH] MUSA: pass Mamba2 graph metadata buffers
-
----
- vllm/v1/attention/backends/mamba_attn.py | 12 +++++++-----
- vllm/v1/worker/gpu_model_runner.py       | 17 ++++++++++++++---
- 2 files changed, 21 insertions(+), 8 deletions(-)
-
-diff --git a/vllm/v1/attention/backends/mamba_attn.py b/vllm/v1/attention/backends/mamba_attn.py
-index 6b7ac71ae8..deec4a316c 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -2678,8 +2678,11 @@
+                     )
+ 
+             if for_cudagraph_capture:
++                capture_kwargs = {}
++                if getattr(builder, "supports_dynamic_cudagraph_metadata", False):
++                    capture_kwargs = extra_attn_metadata_args
+                 attn_metadata_i = builder.build_for_cudagraph_capture(
+-                    common_attn_metadata
++                    common_attn_metadata, **capture_kwargs
+                 )
+             elif (
+                 cache_key in cached_attn_metadata
 --- a/vllm/v1/attention/backends/mamba_attn.py
 +++ b/vllm/v1/attention/backends/mamba_attn.py
-@@ -202,7 +202,11 @@ class BaseMambaAttentionMetadataBuilder(AttentionMetadataBuilder[M], abc.ABC):
+@@ -83,6 +83,7 @@
+ 
+ 
+ class BaseMambaAttentionMetadataBuilder(AttentionMetadataBuilder[M], abc.ABC):
++    supports_dynamic_cudagraph_metadata = True
+     kv_cache_spec: MambaSpec
+     metadata_cls: type[M]
+     reorder_batch_threshold: int = 1
+@@ -202,7 +203,11 @@
              self.supports_update_block_table = False
  
      def build_for_cudagraph_capture(
@@ -25,7 +36,7 @@ index 6b7ac71ae8..deec4a316c 100644
      ) -> M:
          """
          This method builds the metadata for full cudagraph capture.
-@@ -220,12 +224,10 @@ class BaseMambaAttentionMetadataBuilder(AttentionMetadataBuilder[M], abc.ABC):
+@@ -220,12 +225,10 @@
  
          assert m.max_query_len == 1 + self.num_spec_tokens  # decode-only
  
@@ -40,31 +51,3 @@ index 6b7ac71ae8..deec4a316c 100644
              self.use_spec_decode
              and self.vllm_config.cache_config.mamba_cache_mode == "all"
          ):
-diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 9087f87854..c0fb0361d9 100644
---- a/vllm/v1/worker/gpu_model_runner.py
-+++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -2591,9 +2591,20 @@ class GPUModelRunner(
-                     )
- 
-             if for_cudagraph_capture:
--                attn_metadata_i = builder.build_for_cudagraph_capture(
--                    common_attn_metadata
--                )
-+                if isinstance(builder, Mamba2AttentionMetadataBuilder):
-+                    attn_metadata_i = builder.build_for_cudagraph_capture(
-+                        common_attn_metadata,
-+                        num_accepted_tokens=extra_attn_metadata_args.get(
-+                            "num_accepted_tokens"
-+                        ),
-+                        prev_last_scheduled_idx=extra_attn_metadata_args.get(
-+                            "prev_last_scheduled_idx"
-+                        ),
-+                    )
-+                else:
-+                    attn_metadata_i = builder.build_for_cudagraph_capture(
-+                        common_attn_metadata
-+                    )
-             elif (
-                 cache_key in cached_attn_metadata
-                 and builder.supports_update_block_table

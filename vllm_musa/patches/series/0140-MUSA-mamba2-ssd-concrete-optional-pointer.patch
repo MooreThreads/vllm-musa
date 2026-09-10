@@ -7,7 +7,7 @@
 +    # MUSA Triton 3.2.x requires optional pointer arguments to retain a
 +    # concrete pointer type even when the constexpr branch is disabled.
 +    initstates_ptr = initial_states
-+    if _is_musa_triton_32() and initial_states is None:
++    if is_musa_triton_32() and initial_states is None:
 +        initstates_ptr = states
 +
      _chunk_scan_fwd_kernel[grid](

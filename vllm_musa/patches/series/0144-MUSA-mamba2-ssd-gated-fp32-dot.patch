@@ -35,11 +35,11 @@
          acc *= scale_m[:, None]
 @@ -500,6 +508,9 @@
      initstates_ptr = initial_states
-     if _is_musa_triton_32() and initial_states is None:
+     if is_musa_triton_32() and initial_states is None:
          initstates_ptr = states
 +
 +    # Keep the BF16 dot lowering scoped to the affected MUSA Triton stack.
-+    is_musa = _is_musa_triton_32()
++    is_musa = is_musa_triton_32()
  
      _chunk_scan_fwd_kernel[grid](
          cb_ptr=cb,
