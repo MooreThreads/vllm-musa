@@ -1,12 +1,6 @@
 --- a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
 +++ b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
-@@ -300,11 +300,14 @@
-             & (offs_k_dstate[None, :] < dstate),
-             other=0.0,
-         )
-+        if IS_MUSA:
-+            C = C.to(tl.float32)
- 
+@@ -304,7 +304,8 @@
          if not HAS_INITSTATES and (seq_idx != seq_idx_prev):
              # if no init states AND starting a new sequence, we need zeros
              prev_states = tl.zeros(
@@ -16,9 +10,7 @@
              )
          else:
              # otherwise read the previous state
-@@ -339,9 +342,12 @@
-                 & (offs_k_dstate[None, :] < dstate - k),
-                 other=0.0,
+@@ -341,7 +342,8 @@
              )
 +            if IS_MUSA:
 +                C = C.to(tl.float32)
