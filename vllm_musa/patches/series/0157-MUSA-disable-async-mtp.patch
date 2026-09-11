@@ -1,6 +1,6 @@
 --- a/vllm/config/vllm.py
 +++ b/vllm/config/vllm.py
-@@ -1153,6 +1153,16 @@
+@@ -1153,6 +1153,18 @@
          )
  
          if self.scheduler_config.async_scheduling:
@@ -8,10 +8,12 @@
 +                current_platform.is_musa()
 +                and self.speculative_config is not None
 +                and self.speculative_config.method == "mtp"
++                and self.speculative_config.num_speculative_tokens >= 2
 +            ):
 +                logger.warning_once(
-+                    "Async scheduling is disabled for MTP on MUSA because "
-+                    "multi-token verification bookkeeping is not yet safe."
++                    "Async scheduling is disabled for MTP with 2 or more "
++                    "speculative tokens on MUSA because verification "
++                    "bookkeeping is not yet safe."
 +                )
 +                self.scheduler_config.async_scheduling = False
              # Async scheduling explicitly enabled, hard fail any incompatibilities.
