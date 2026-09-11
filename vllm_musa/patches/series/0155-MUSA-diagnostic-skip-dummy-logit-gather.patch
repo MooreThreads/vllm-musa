@@ -1,0 +1,16 @@
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -6553,6 +6553,13 @@
+         if not skip_eplb:
+             self.eplb_step(is_dummy=True, is_profile=is_profile)
+ 
++        if current_platform.is_musa() and os.getenv(
++            "VLLM_MUSA_SKIP_DUMMY_LOGIT_GATHER", "0"
++        ) == "1":
++            # Dummy outputs are consumed only to warm/profile the model. Avoid
++            # pageable NumPy->MUSA H2D while isolating graph-capture failures.
++            return hidden_states, hidden_states[:num_reqs]
++
+         logit_indices = np.cumsum(num_scheduled_tokens) - 1
+         logit_indices_device = torch.from_numpy(logit_indices).to(
+             self.device, non_blocking=True
