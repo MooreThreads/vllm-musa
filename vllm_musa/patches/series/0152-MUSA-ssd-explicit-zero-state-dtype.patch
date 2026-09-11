@@ -16,7 +16,18 @@
              )
          else:
              # otherwise read the previous state
-@@ -339,9 +342,12 @@
+@@ -318,7 +321,9 @@
+                 mask=(offs_k_dstate[:, None] < dstate) & (offs_n[None, :] < hdim),
+                 other=0.0,
+             )
+-            prev_states = prev_states.to(C_ptr.dtype.element_ty)
++            prev_states = prev_states.to(
++                tl.float32 if IS_MUSA else C_ptr.dtype.element_ty
++            )
+ 
+         if IS_MUSA:
+             acc = tl.dot(C.to(tl.float32), prev_states.to(tl.float32))
+@@ -339,9 +344,12 @@
                  & (offs_k_dstate[None, :] < dstate - k),
                  other=0.0,
              )
@@ -30,3 +41,14 @@
                  )
              else:
                  prev_states = tl.load(
+@@ -350,7 +358,9 @@
+                     & (offs_n[None, :] < hdim),
+                     other=0.0,
+                 )
+-                prev_states = prev_states.to(C_ptr.dtype.element_ty)
++                prev_states = prev_states.to(
++                tl.float32 if IS_MUSA else C_ptr.dtype.element_ty
++            )
+             if IS_MUSA:
+                 acc += tl.dot(C.to(tl.float32), prev_states.to(tl.float32))
+             else:
