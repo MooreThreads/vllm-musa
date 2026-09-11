@@ -9,7 +9,6 @@
 +    initstates_ptr = initial_states
 +    if is_musa_triton_32() and initial_states is None:
 +        initstates_ptr = states
-+        initial_states_strides = states.stride()
 +
      _chunk_scan_fwd_kernel[grid](
          cb_ptr=cb,
