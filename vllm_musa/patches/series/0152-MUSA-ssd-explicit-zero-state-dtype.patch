@@ -6,7 +6,7 @@
              prev_states = tl.zeros(
 -                (BLOCK_SIZE_DSTATE, BLOCK_SIZE_N), dtype=C_ptr.dtype.element_ty
 +                (BLOCK_SIZE_DSTATE, BLOCK_SIZE_N),
-+                dtype=tl.float32 if IS_MUSA else C_ptr.dtype.element_ty,
++                dtype=tl.float32 if IS_MUSA else C_ptr.dtype.element_ty
              )
          else:
              # otherwise read the previous state
@@ -27,7 +27,7 @@
                  prev_states = tl.zeros(
 -                    (BLOCK_SIZE_K, BLOCK_SIZE_N), dtype=C_ptr.dtype.element_ty
 +                    (BLOCK_SIZE_K, BLOCK_SIZE_N),
-+                    dtype=tl.float32 if IS_MUSA else C_ptr.dtype.element_ty,
++                    dtype=tl.float32 if IS_MUSA else C_ptr.dtype.element_ty
                  )
              else:
                  prev_states = tl.load(
