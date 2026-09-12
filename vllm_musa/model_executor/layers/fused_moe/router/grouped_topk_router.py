@@ -279,8 +279,7 @@ def _grouped_topk_general(
         and (
             gating_output.shape[1] // num_expert_group <= 32
             or (
-                num_expert_group == 1
-                and gating_output.shape[1] in {128, 160, 256, 384}
+                num_expert_group == 1 and gating_output.shape[1] in {160, 256, 384}
             )  # XXX (MUSA): will support more cases in the future
         )
         and (
