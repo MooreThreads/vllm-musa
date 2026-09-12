@@ -62,7 +62,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.impl("per_token_group_quant_8bit_vec", torch::kMUSA,
                 &per_token_group_quant_8bit_vec);
   musa_ops.def(
-      "musa_top_k_top_p_sampling_from_probs(Tensor probs, Tensor! output, Tensor? maybe_indices, Tensor? "
+      "musa_top_k_top_p_sampling_from_probs(Tensor probs, Tensor(a!) output, Tensor? maybe_indices, Tensor? "
       "maybe_top_k_arr, "
       "float top_k_val, Tensor? maybe_top_p_arr, float top_p_val, bool deterministic, Generator? gen) -> ()");
   musa_ops.impl("musa_top_k_top_p_sampling_from_probs", torch::kMUSA, &musa_top_k_top_p_sampling_from_probs);
