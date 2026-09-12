@@ -1,0 +1,17 @@
+diff --git a/vllm/model_executor/layers/mamba/mamba_mixer2.py b/vllm/model_executor/layers/mamba/mamba_mixer2.py
+index 0000000000..0000000000 100644
+--- a/vllm/model_executor/layers/mamba/mamba_mixer2.py
++++ b/vllm/model_executor/layers/mamba/mamba_mixer2.py
+@@ -674,6 +674,7 @@ class Mamba2Mixer(nn.Module):
+                     dt_softplus=True,
+                     dt_limit=(0.0, float("inf")),
+                     state_dtype=ssm_state_dtype,
++                    backend=self.mamba_config.backend.value,
+                 )
+@@ -882,6 +883,7 @@ class Mamba2Mixer(nn.Module):
+                 dt_softplus=True,
+                 dt_limit=(0.0, float("inf")),
+                 out=preallocated_ssm_out_p.view(num_prefill_tokens, -1, self.head_dim),
++                backend=self.mamba_config.backend.value,
+                 state_dtype=ssm_state.dtype,
+             )
