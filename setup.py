@@ -132,7 +132,10 @@ _VLLM_REPO = _RepoInfo(
 
 _FLASHINFER_REPO = _RepoInfo(
     name="flashinfer",
-    git_repository="https://github.com/flashinfer-ai/flashinfer.git",
+    # The MUSA Mamba2/SSD provider is carried on the companion FlashInfer
+    # branch until its upstream PR lands. Keep the source URL explicit so the
+    # pinned commit is reproducible in clean build environments.
+    git_repository="https://github.com/yeahdongcn/flashinfer.git",
     git_tag=_PINS["FLASHINFER_COMMIT"],
     git_shallow=False,
 )
