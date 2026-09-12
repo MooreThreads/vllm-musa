@@ -95,10 +95,6 @@ def can_use_musa_sampler(
 ) -> bool:
     if not current_platform.is_musa() or not is_musa_tensor(logits):
         return False
-    # torch_musa post2's native top-k/top-p kernel is not graph-safe yet.
-    # Keep the validated PyTorch sampler path until that runtime fix lands.
-    if torch.__version__.startswith("2.11.0.post2"):
-        return False
     if generators:
         return False
     return logprobs_mode not in ("processed_logits", "processed_logprobs")
