@@ -1,33 +1,35 @@
 diff --git a/vllm/model_executor/layers/mamba/ops/ssd_combined.py b/vllm/model_executor/layers/mamba/ops/ssd_combined.py
-index 8c645574b9..8e9fc499a3 100644
+index 8c645574b9..fdca6f3edb 100644
 --- a/vllm/model_executor/layers/mamba/ops/ssd_combined.py
 +++ b/vllm/model_executor/layers/mamba/ops/ssd_combined.py
-@@ -7,6 +7,7 @@
+@@ -6,6 +6,7 @@
+ 
  # ruff: noqa: E501
  
 +import os
  import torch
  from einops import rearrange
  from packaging import version
-
-@@ -177,6 +178,7 @@ def mamba_chunk_scan_combined_varlen(
+@@ -174,6 +175,7 @@ def mamba_chunk_scan_combined_varlen(
+     dt_limit=(0.0, float("inf")),
      return_intermediate_states=False,
      state_dtype=None,
 +    backend=None,
  ):
-@@ -202,6 +203,35 @@ def mamba_chunk_scan_combined_varlen(
+     """
+     Argument:
+@@ -202,6 +204,40 @@ def mamba_chunk_scan_combined_varlen(
      assert cu_seqlens is not None, "cu_seqlens must be provided assuming varlen input"
      assert seq_idx is not None
  
 +    if (
 +        x.device.type == "musa"
 +        and (backend is None or backend == "flashinfer")
-+        and os.getenv("VLLM_MUSA_FLASHINFER_SSD", "0") == "1"
++        and os.getenv("VLLM_MUSA_FLASHINFER_SSD", "1") == "1"
 +    ):
-+        # The current MUSA FlashInfer SSD implementation is a correctness
-+        # reference path. Keep it opt-in until the fused varlen kernel lands;
-+        # the normal FlashInfer backend still uses the fast MUSA Triton SSD
-+        # path while FlashInfer owns decode SSU.
++        # FlashInfer supplies native MUSA Triton SSD stages for the Mamba2
++        # packed prefill contract. The environment flag remains a rollback
++        # switch to the existing vLLM MUSA SSD provider.
 +        from flashinfer.mamba.ssd_combined import (
 +            ssd_combined_fwd_varlen as flashinfer_ssd_combined_fwd_varlen,
 +        )
