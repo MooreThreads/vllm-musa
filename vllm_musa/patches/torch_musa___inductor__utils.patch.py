@@ -4,6 +4,8 @@
 import functools
 import importlib.util
 
+import torch
+
 from vllm.logger import init_logger
 
 logger = init_logger(__name__)
@@ -11,6 +13,19 @@ PATCHES: list = []
 
 
 def apply() -> None:
+    if hasattr(torch, "musa") and getattr(torch.version, "musa", None) is not None:
+        original_memory_info = torch.accelerator.get_memory_info
+
+        def musa_memory_info(device=None):
+            try:
+                return original_memory_info(device)
+            except NotImplementedError:
+                return torch.musa.mem_get_info(device)
+
+        if not getattr(torch.accelerator, "_musa_memory_info_compat", False):
+            torch.accelerator.get_memory_info = musa_memory_info
+            torch.accelerator._musa_memory_info_compat = True
+
     try:
         from torch_musa._inductor import utils as musa_utils
     except Exception as e:
