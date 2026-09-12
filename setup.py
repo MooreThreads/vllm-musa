@@ -132,7 +132,9 @@ _VLLM_REPO = _RepoInfo(
 
 _FLASHINFER_REPO = _RepoInfo(
     name="flashinfer",
-    git_repository="https://github.com/flashinfer-ai/flashinfer.git",
+    # The fork revision carries both the native extension sources and the
+    # Python Mamba2/SSD provider used by --mamba-backend flashinfer.
+    git_repository="https://github.com/yeahdongcn/flashinfer.git",
     git_tag=_PINS["FLASHINFER_COMMIT"],
     git_shallow=False,
 )
