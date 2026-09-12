@@ -11,4 +11,6 @@ VLLM_COMMIT=2cf0a6915ce544dc493a0990f2ea38d81601128a
 # FlashInfer is intentionally DECOUPLED from upstream vLLM's choice. This is the
 # validated sampling/norm source revision; bump it consciously, not in lockstep
 # with VLLM_TAG/VLLM_COMMIT.
-FLASHINFER_COMMIT=1813df53d3ef7f6c4e0a9b47ffb34895aa52546a
+FLASHINFER_COMMIT=bc29697ba20b7e6bdb728ded98f04788e16ee021
+# Python Mamba/SSD provider, independent of the native sampling/norm sources.
+FLASHINFER_MAMBA_COMMIT=1813df53d3ef7f6c4e0a9b47ffb34895aa52546a
