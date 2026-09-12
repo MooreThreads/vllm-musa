@@ -169,6 +169,14 @@ def _compute_routing(
         # Check if num_experts is greater than num_expert_group
         # and is divisible by num_expert_group
         num_experts = router_logits.shape[-1]
+        if (
+            self.num_expert_group == 1
+            and self.topk_group == 1
+            and self.num_fused_shared_experts == 0
+        ):
+            # A single selected group is ordinary top-k. Reuse the fused router
+            # instead of materializing group masks and compiling a gather.
+            return False
         if num_experts <= self.num_expert_group:
             return False
         return num_experts % self.num_expert_group == 0
