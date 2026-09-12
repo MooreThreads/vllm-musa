@@ -11,4 +11,4 @@ VLLM_COMMIT=2cf0a6915ce544dc493a0990f2ea38d81601128a
 # FlashInfer is intentionally DECOUPLED from upstream vLLM's choice. This is the
 # validated sampling/norm source revision; bump it consciously, not in lockstep
 # with VLLM_TAG/VLLM_COMMIT.
-FLASHINFER_COMMIT=6f37c06f1933853f2bf8e0df93bf7307ab7c7f63
+FLASHINFER_COMMIT=6f37c061d2414dbf42dff024eadb309e6f4d2a91
