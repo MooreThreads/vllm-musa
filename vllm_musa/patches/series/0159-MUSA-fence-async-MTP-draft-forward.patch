@@ -10,7 +10,7 @@
 +                current_platform.is_musa()
 +                and self.vllm_config.scheduler_config.async_scheduling
 +            ):
-+                torch.musa.synchronize()
++                torch.musa.current_stream().synchronize()
              draft_token_ids, draft_probs = self._sample_draft_tokens(
                  last_hidden_states[:batch_size], sampling_metadata
              )
