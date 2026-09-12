@@ -1,0 +1,40 @@
+diff --git a/vllm/model_executor/layers/mamba/ops/ssd_combined.py b/vllm/model_executor/layers/mamba/ops/ssd_combined.py
+index 8c645574b9..8e9fc499a3 100644
+--- a/vllm/model_executor/layers/mamba/ops/ssd_combined.py
++++ b/vllm/model_executor/layers/mamba/ops/ssd_combined.py
+@@ -202,6 +202,35 @@ def mamba_chunk_scan_combined_varlen(
+     assert cu_seqlens is not None, "cu_seqlens must be provided assuming varlen input"
+     assert seq_idx is not None
+ 
++    if x.device.type == "musa":
++        # FlashInfer owns the MUSA SSD provider. Keep the vLLM packed metadata
++        # contract unchanged and bypass CUDA-only Triton sub-kernels.
++        from flashinfer.mamba.ssd_combined import (
++            ssd_combined_fwd_varlen as flashinfer_ssd_combined_fwd_varlen,
++        )
++
++        return flashinfer_ssd_combined_fwd_varlen(
++            x=x,
++            dt=dt,
++            A=A,
++            B=B,
++            C=C,
++            chunk_size=chunk_size,
++            cu_seqlens=cu_seqlens,
++            cu_chunk_seqlens=cu_chunk_seqlens,
++            last_chunk_indices=last_chunk_indices,
++            seq_idx=seq_idx,
++            out=out,
++            D=D,
++            z=z,
++            dt_bias=dt_bias,
++            initial_states=initial_states,
++            dt_softplus=dt_softplus,
++            dt_limit=dt_limit,
++            return_intermediate_states=return_intermediate_states,
++            state_dtype=state_dtype,
++        )
++
+     varlen_states = _mamba_chunk_scan_combined_fwd(
+         x,
+         dt,
