@@ -174,6 +174,15 @@ _CAT6: list[DivSpec] = [
         intent="filter missing torch._inductor.config keys in vLLM compile contexts",
     ),
     DivSpec(
+        id="torch_musa___inductor__utils",
+        category="6",
+        path="vllm_musa/patches/torch_musa___inductor__utils.patch.py",
+        upstream_path=None,
+        apply_phase="runtime",
+        required=False,
+        intent="use Triton 3.6 public MUSA benchmarker API with torch_musa Inductor",
+    ),
+    DivSpec(
         id="torch___inductor__aot_cache_safelist",
         category="6",
         path="vllm_musa/patches/torch___inductor__aot_cache_safelist.patch.py",

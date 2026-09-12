@@ -1,0 +1,17 @@
+--- a/vllm/utils/mem_utils.py
++++ b/vllm/utils/mem_utils.py
+@@ -144,7 +144,13 @@
+         self.torch_peak = stats.get("allocated_bytes.all.peak", 0)
+         self.torch_allocated = stats.get("allocated_bytes.all.current", 0)
+ 
+-        self.free_memory, self.total_memory = torch.accelerator.get_memory_info(device)
++        try:
++            self.free_memory, self.total_memory = torch.accelerator.get_memory_info(device)
++        except NotImplementedError:
++            if current_platform.is_musa():
++                self.free_memory, self.total_memory = torch.musa.mem_get_info(device)
++            else:
++                raise
+         if current_platform.is_integrated_gpu(device.index):
+             # On UMA (Unified Memory Architecture) platforms where CPU and
+             # GPU share physical memory (e.g. GH200, DGX Spark, Jetson Orin),
