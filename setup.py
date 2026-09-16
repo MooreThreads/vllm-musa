@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import importlib.util
 import os
 import platform
 import shutil
@@ -132,7 +133,12 @@ _VLLM_REPO = _RepoInfo(
 
 _FLASHINFER_REPO = _RepoInfo(
     name="flashinfer",
-    git_repository="https://github.com/flashinfer-ai/flashinfer.git",
+    # The pinned fork revision carries the MUSA native provider and the
+    # Python Mamba2/SSD closure used by --mamba-backend flashinfer. Keep the
+    # URL in PINS so switching back to an upstream release is one-line.
+    git_repository=_PINS.get(
+        "FLASHINFER_REPOSITORY", "https://github.com/flashinfer-ai/flashinfer.git"
+    ),
     git_tag=_PINS["FLASHINFER_COMMIT"],
     git_shallow=False,
 )
@@ -503,6 +509,68 @@ class _CustomBuildExt(BuildExtension):
         for name, status in ba.apply_patch_series(repo, series, strict=True):
             print(f"MUSA build patch: {status:16} {name}")
 
+    @staticmethod
+    def _install_flashinfer_mamba(repo_path):
+        """Overlay the pinned pure-Python Mamba provider onto the MUSA wheel."""
+        source_root = Path(repo_path) / "flashinfer"
+        source = source_root / "mamba"
+        if not source.is_dir():
+            raise RuntimeError(
+                f"Pinned FlashInfer checkout has no Mamba provider: {source}"
+            )
+        spec = importlib.util.find_spec("flashinfer")
+        locations = (
+            list(spec.submodule_search_locations)
+            if spec is not None and spec.submodule_search_locations is not None
+            else []
+        )
+        if not locations:
+            raise RuntimeError(
+                "flashinfer-python must be installed before building vLLM-MUSA; "
+                "the native package root is required for the Mamba provider"
+            )
+        target_root = Path(locations[0]).resolve()
+        source_root = source_root.resolve()
+        if target_root == source_root:
+            raise RuntimeError(
+                "Pinned FlashInfer source and installed package are the same "
+                "path; refusing to overwrite the checkout"
+            )
+
+        # Preserve native wheel modules while replacing the provider closure.
+        dependency_packages = ("autotuner", "fused_moe", "jit", "trace", "triton")
+        for package in dependency_packages:
+            package_source = source_root / package
+            if package_source.is_dir():
+                package_target = target_root / package
+                if package_target.resolve() == package_source.resolve():
+                    continue
+                if package_target.exists():
+                    shutil.rmtree(package_target)
+                shutil.copytree(package_source, package_target)
+        for module_source in source_root.glob("*.py"):
+            module_target = target_root / module_source.name
+            if not module_target.exists() and module_source.name != "__init__.py":
+                shutil.copy2(module_source, module_target)
+
+        target = target_root / "mamba"
+        if target.resolve() == source.resolve():
+            raise RuntimeError(
+                "Pinned FlashInfer Mamba source and installed package are the "
+                "same path; refusing to overwrite the checkout"
+            )
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(source, target)
+        (target / "MUSA_PROVIDER_COMMIT").write_text(
+            f"{_FLASHINFER_REPO.git_tag}\n"
+        )
+        print(
+            f"Installed FlashInfer Mamba provider {_FLASHINFER_REPO.git_tag} into "
+            f"{target}",
+            flush=True,
+        )
+
     def run(self):
         if os.environ.get("SKIP_THIRD_PARTY", "0") == "1":
             print("Skipping third-party repositories cloning (SKIP_THIRD_PARTY=1)")
@@ -521,6 +589,9 @@ class _CustomBuildExt(BuildExtension):
                 _FLASHINFER_REPO.git_shallow,
             )
             print("Third-party repositories ready.")
+
+        if os.environ.get("SKIP_THIRD_PARTY", "0") != "1":
+            self._install_flashinfer_mamba(_FLASHINFER_REPO.source_dir)
 
         # patch the clone BEFORE installing, so the installed vLLM is pre-patched.
         self._apply_musa_patch_series(_VLLM_REPO.source_dir)
