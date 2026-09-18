@@ -348,9 +348,9 @@ RUN printf '%s\n' \
         ')' \
         '' \
         'for dist_name, module_name, prefix in expected:' \
-        '    installed = version(dist_name)' \
         '    skip_import = (dist_name in {"flashinfer-python", "flash_mla", "tilelang_musa"} and version("tilelang_musa") == "0.1.12+musa.2")' \
         '    if not skip_import: importlib.import_module(module_name)' \
+        '    installed = version(dist_name)' \
         '    if dist_name in exact_version_dists and installed != prefix:' \
         '        raise RuntimeError(f"{dist_name} expected exactly {prefix}, got {installed}")' \
         '    if dist_name not in exact_version_dists and prefix and not installed.startswith(prefix):' \
