@@ -36,7 +36,7 @@ providing an OpenAI-compatible inference and serving engine for MUSA GPUs.
 
 - v0.28.0-dev development line with the vLLM V1 engine.
 - Uses the pinned MUSA stack: PyTorch/torch_musa 2.11.0.post1 (MUSA 5.2.0),
-  MATE 0.2.6, and torchada 0.1.83; this branch remains an upgrade candidate.
+  MATE 0.2.6, and torchada 0.1.88; this branch remains an upgrade candidate.
 - MUSA-native attention, communication, custom ops, and compilation support.
 - Per-checkpoint recipes for Qwen and DeepSeek-V4-Flash on S5000.
 
