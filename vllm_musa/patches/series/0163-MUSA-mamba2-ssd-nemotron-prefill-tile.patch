@@ -1,0 +1,63 @@
+--- a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
++++ b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
+@@ -17,6 +17,26 @@
+ from vllm.triton_utils.musa import is_musa_triton_32
+
+
++def _musa_ssd_early_config_prune(configs, named_args, **kwargs):
++    """Select the wider tile only for the verified Nemotron SSD shape."""
++    if not is_musa_triton_32():
++        return configs
++    args = {**named_args, **kwargs}
++    is_nemotron_shape = (
++        args.get("chunk_size") == 128
++        and args.get("hdim") == 64
++        and args.get("dstate") == 128
++        and args.get("nheads_ngroups_ratio") == 8
++    )
++    tile = 32 if is_nemotron_shape else 16
++    return [
++        config
++        for config in configs
++        if config.kwargs["BLOCK_SIZE_M"] == tile
++        and config.kwargs["BLOCK_SIZE_N"] == tile
++    ]
++
++
+ def _ssd_autotune_configs():
+     # MUSA Triton 3.2.x cannot compile the
+     # broad upstream autotune search. Use a conservative tile only for that
+@@ -28,7 +48,12 @@
+                 {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32},
+                 num_stages=1,
+                 num_warps=2,
+-            )
++            ),
++            triton.Config(
++                {"BLOCK_SIZE_M": 32, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 32},
++                num_stages=1,
++                num_warps=2,
++            ),
+         ]
+     return [
+
+@@ -161,9 +186,18 @@
+     ]
+
+
++def _ssd_autotune_kwargs():
++    if is_musa_triton_32():
++        return {
++            "key": ["chunk_size", "hdim", "dstate", "nheads_ngroups_ratio", "IS_CAUSAL"],
++            "prune_configs_by": {"early_config_prune": _musa_ssd_early_config_prune},
++        }
++    return {"key": ["chunk_size", "hdim", "dstate", "IS_CAUSAL"]}
++
++
+ @triton.autotune(
+     configs=_ssd_autotune_configs(),
+-    key=["chunk_size", "hdim", "dstate", "IS_CAUSAL"],
++    **_ssd_autotune_kwargs(),
+ )
+ @triton.jit
+ def _chunk_scan_fwd_kernel(
