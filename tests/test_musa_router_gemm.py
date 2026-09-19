@@ -30,6 +30,9 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from vllm_musa.model_executor.layers.fused_moe.router import (  # noqa: E402
+    musa_router_gemm as rg,
+)
 from vllm_musa.model_executor.layers.fused_moe.router.musa_router_gemm import (  # noqa: E402
     router_gate_enabled,
     router_gate_fp32,
@@ -90,6 +93,21 @@ def test_guard_declines_unsupported_dtypes_and_layouts() -> None:
     # The one supported combination is accepted, which keeps every "is None" above
     # meaningful.
     assert router_gate_fp32(x, w) is not None
+
+
+@requires_musa
+def test_served_calls_are_counted_so_a_dead_kernel_is_visible() -> None:
+    """A kernel that never runs and a kernel that runs bitwise-identically look the
+    same from the output side; only the counter (and the one-shot log) tell them apart."""
+    before = rg.activation_count()
+    x = torch.randn((7, HIDDEN), dtype=torch.bfloat16, device="musa")
+    w = torch.randn((EXPERTS, HIDDEN), dtype=torch.float32, device="musa")
+    assert rg.router_gate_fp32(x, w) is not None
+    assert rg.activation_count() == before + 1
+    # A declined shape must not be counted as served.
+    declined = torch.randn((7, 2048), dtype=torch.float32, device="musa")
+    assert rg.router_gate_fp32(declined, w[:, :2048].contiguous()) is None
+    assert rg.activation_count() == before + 1
 
 
 @requires_musa

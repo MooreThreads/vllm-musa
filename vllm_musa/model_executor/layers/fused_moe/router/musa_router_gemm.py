@@ -80,6 +80,7 @@ import os
 import torch
 import triton
 import triton.language as tl
+from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.utils.torch_utils import direct_register_custom_op
 
@@ -87,6 +88,8 @@ __all__ = ["router_gate_enabled", "router_gate_fp32"]
 
 # The gate this module is tuned for: Nemotron-3.5-Lightning (hidden 2688, 128 routed
 # experts).  Other shapes are declined so their models keep their own tier chain.
+logger = init_logger(__name__)
+
 _HIDDEN, _EXPERTS = 2688, 128
 _SUPPORTED_WEIGHT_SHAPE = (_EXPERTS, _HIDDEN)
 
@@ -105,6 +108,13 @@ _CFG_MAX_TOKENS = 128
 # capture present the operands, and the op's fake impl serves it.
 _ON_MUSA = current_platform.device_type == "musa"
 _ACCEPTED_DEVICES = ("musa", "meta")
+
+# Serving-side activation counter.  A kernel that never runs is indistinguishable from
+# a kernel that runs and matches bitwise - same output, same acceptance, no speedup -
+# and both a compiled-graph fold (see "Trace safety") and a reused compile cache (see
+# `activation_count` below) produce exactly that.  One log line at the first served call
+# makes the difference observable without a profiler.
+_ACTIVATIONS = 0
 
 
 def router_gate_enabled() -> bool:
@@ -227,3 +237,16 @@ def router_gate_fp32(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor | No
     if not x.is_contiguous() or not weight.is_contiguous():
         return None
     return torch.ops.vllm.musa_router_gate_fp32.default(x, weight)
+
+
+def _note_activation(x: torch.Tensor, weight: torch.Tensor) -> None:
+    global _ACTIVATIONS
+    _ACTIVATIONS += 1
+    if _ACTIVATIONS == 1:
+        logger.info_once(
+            "MUSA parallel FP32 router-gate GEMM is serving (M=%d, K=%d, E=%d); "
+            "set VLLM_MUSA_ROUTER_GATE_FP32=0 to fall back to the vendor GEMM.",
+            int(x.shape[0]),
+            int(x.shape[-1]),
+            int(weight.shape[0]),
+        )
