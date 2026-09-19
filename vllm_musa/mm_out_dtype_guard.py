@@ -7,13 +7,23 @@ kwarg is bitwise exact.  Upstream vLLM declares the kwarg as CUDA/ROCm-only and
 falls back to a cast on other platforms, so silent zeros are a MUSA-specific
 deviation from the documented contract.
 
-Any future MUSA enablement that wants the bf16-in/fp32-out GEMM must call
+Any future MUSA enablement that wants the bf16-in/fp32-out GEMM should call
 :func:`require_mm_out_dtype_semantics` first - the router-gate tier in
 ``fused_moe/router/gate_linear.py``, the DeepSeek-V4 compressor/indexer
 ``kv_score``, or any new lm_head fp32 accumulation path.  The check is a
 one-off microsecond-scale probe on a tiny tensor, so it cannot be the reason a
 path is slow, and it raises ``RuntimeError`` instead of letting a platform
 enablement land on zero logits.
+
+**This function is an opt-in convenience check, not an automatic enforcement.**
+Nothing in the shipped MUSA path calls it, and the MUSA call sites of the kwarg
+are unreachable by construction today (the router-gate tiers sit behind
+``can_use_specialized_kernels = current_platform.is_cuda() and (hopper or
+blackwell)``; the DeepSeek-V4 ``kv_score`` sites are bypassed by patch
+``0014``).  What actually stops a silent future enablement is the CI-visible
+``tests/test_musa_out_dtype_mm.py``: its ``xfail(strict=True)`` cases fail as
+soon as the semantics change, and they are the reminder to delete the xfail
+markers and the ``0014`` workaround.
 
 Call it at enablement time (model or op construction), not from inside a
 CUDA-graph capture: it allocates scratch tensors.
@@ -91,7 +101,7 @@ def require_mm_out_dtype_semantics(what: str) -> None:
     raise RuntimeError(
         f"Cannot enable {what}: torch.mm(..., out_dtype=torch.float32) does not "
         "implement its documented semantics on this device - it is accepted and "
-        "returns an all-zero tensor (MUSA-100042). Compute in the input dtype and "
-        "cast, or cast the operands to fp32 explicitly. Ticket: "
-        "tickets/wip/MUSA-100042-musa-mm-out-dtype-returns-zeros.md"
+        "returns an all-zero tensor (MUSA-100042: MUSA torch.mm(out_dtype=) "
+        "returns an all-zero tensor). Compute in the input dtype and cast, or "
+        "cast the operands to fp32 explicitly."
     )

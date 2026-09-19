@@ -9,14 +9,18 @@ logits.
 What these markers are for:
 
 * the ``xfail(strict=True)`` cases below are the executable statement of the
-  contract. ``strict=True`` is deliberate: the day the vendor fix lands they turn
-  into failures, which is the reminder to **delete these markers and the
-  ``0014-MUSA-vllm.models.deepseek_v4.attention.patch`` workaround** in the same
-  change.
-* ``vllm_musa.mm_out_dtype_guard`` is the fail-fast entry point for a future
-  enablement: any PR that wants the bf16-in/fp32-out GEMM on MUSA (router gate,
-  DeepSeek-V4 ``kv_score``, an fp32 lm_head accumulation path) must call
-  ``require_mm_out_dtype_semantics(...)`` at enablement time, which raises today.
+  contract, **and they are the enforcement**: they are what makes a silent
+  behaviour change visible in CI. ``strict=True`` is deliberate - the day the
+  vendor fix lands they turn into failures, which is the reminder to delete
+  these markers and the ``0014-MUSA-vllm.models.deepseek_v4.attention.patch``
+  workaround in the same change.
+* ``vllm_musa.mm_out_dtype_guard`` is an **opt-in** convenience check for a
+  future enablement, not an automatic guard: nothing in the shipped MUSA path
+  calls it, and today's call sites are unreachable by construction. A PR that
+  wants the bf16-in/fp32-out GEMM on MUSA (router gate, DeepSeek-V4
+  ``kv_score``, an fp32 lm_head accumulation path) should call
+  ``require_mm_out_dtype_semantics(...)`` at enablement time, which raises
+  today.
 * the last case pins the invariant that MUSA cannot satisfy the ``is_cuda()``-based
   specialized-tier gates of ``fused_moe/router/gate_linear.py``; if someone makes
   the MUSA platform claim CUDA capability, that tier starts running and these
