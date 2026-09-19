@@ -122,6 +122,19 @@ def router_gate_enabled() -> bool:
     return os.environ.get("VLLM_MUSA_ROUTER_GATE_FP32", "1") != "0"
 
 
+def activation_count() -> int:
+    """How many times this process has served a router gate with this kernel.
+
+    ``torch.compile`` keys its cache on the code, not on this guard's env-dependent
+    decision, so a server can replay a graph compiled with the gate off and never run
+    the kernel - same output, same acceptance, no speedup.  ``0`` on a gate-enabled run
+    therefore means "the compiler replayed a fallback graph", not "the kernel was
+    harmless".  Assert this (or watch for the one-shot log) in any A/B that claims the
+    win; a trace assertion is the other half of the same check.
+    """
+    return _ACTIVATIONS
+
+
 def _pick_cfg(m: int) -> tuple[int, int, int, int, int]:
     return _CFG_SMALL if m <= _CFG_MAX_TOKENS else _CFG_LARGE
 
@@ -198,6 +211,7 @@ def _launch(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
 
 
 def _router_gate_fp32_impl(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    _note_activation(x, weight)
     return _launch(x, weight)
 
 
