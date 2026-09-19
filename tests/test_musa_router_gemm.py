@@ -2,16 +2,20 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-MUSA project
 """Contracts for the MUSA parallel FP32 router gate.
 
-Two things are asserted here:
+Three things are asserted here:
 
-* the admissibility guard is a *pure predicate* - it answers ``None`` for anything
-  it does not own (wrong device, shape or dtype) so the caller's own tier chain is
-  untouched, and it honours ``VLLM_MUSA_ROUTER_GATE_FP32=0``;
+* the admissibility guard is a *pure predicate* - it answers ``None`` for anything it
+  does not own (wrong device, dtype, shape or layout) so every other model's tier
+  chain is untouched, it honours ``VLLM_MUSA_ROUTER_GATE_FP32=0``, and it *does*
+  accept the one gate shape this kernel is tuned for (so an over-strict guard cannot
+  make the other tests pass vacuously);
 * on MUSA the kernel is **bitwise identical** to the FP32 reference the router used
-  before (``x.float() @ weight.T``), for both BF16 and FP32 activations and for
-  both a BF16-valued weight (what a BF16 checkpoint produces) and a full-precision
-  one.  Bitwise parity is the reason this kernel can ship without an accuracy
-  discussion: the router's top-k cannot change.
+  before (``x.float() @ weight.T``), for both BF16 and FP32 activations and for both
+  a BF16-valued weight (what a BF16 checkpoint produces) and a full-precision one.
+  Bitwise parity is the reason this kernel can ship without an accuracy discussion:
+  the router's top-k cannot change;
+* the foreign gate shapes really used by other MoE models in this repo are declined,
+  which is the regression argument for wiring the kernel into shared router code.
 """
 
 from __future__ import annotations
@@ -28,6 +32,10 @@ from vllm_musa.model_executor.layers.fused_moe.router.musa_router_gemm import ( 
 HIDDEN, EXPERTS = 2688, 128
 M_VALUES = (1, 7, 115, 512)
 
+# (experts, hidden) of gates this kernel must NOT touch, with the model family that
+# uses them: Qwen3-30B-A3B, Qwen3.5-122B-A10B, DeepSeek-V3, and a small-expert gate.
+FOREIGN_GATE_SHAPES = ((128, 2048), (256, 4096), (256, 7168), (64, 2048))
+
 
 requires_musa = pytest.mark.skipif(
     not hasattr(torch, "musa") or not torch.musa.is_available(),
@@ -35,28 +43,45 @@ requires_musa = pytest.mark.skipif(
 )
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_guard_declines_foreign_tensors(dtype: torch.dtype) -> None:
-    x = torch.zeros((4, HIDDEN), dtype=dtype)
+def test_guard_declines_non_musa_tensors() -> None:
+    """CPU tensors belong to another platform's tier chain, whatever their shape."""
+    x = torch.zeros((4, HIDDEN), dtype=torch.bfloat16)
     w = torch.zeros((EXPERTS, HIDDEN), dtype=torch.float32)
-    # CPU tensors belong to another platform's tier chain.
     assert router_gate_fp32(x, w) is None
-    if hasattr(torch, "musa") and torch.musa.is_available():
-        x_m = x.to("musa")
-        # Wrong expert count / wrong hidden size / non-fp32 weight.
-        assert router_gate_fp32(x_m, w.to("musa")[:64]) is None
-        assert router_gate_fp32(x_m[:, :64], w.to("musa")) is None
-        assert router_gate_fp32(
-            x_m, w.to("musa").to(torch.bfloat16)
-        ) is None
-        # Narrowed dtypes are not exact, so they are not owned either.
-        assert router_gate_fp32(x_m.to(torch.float16), w.to("musa")) is None
 
 
 def test_guard_respects_env_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
     assert router_gate_enabled()
     monkeypatch.setenv("VLLM_MUSA_ROUTER_GATE_FP32", "0")
     assert not router_gate_enabled()
+
+
+@requires_musa
+@pytest.mark.parametrize(("experts", "hidden"), FOREIGN_GATE_SHAPES)
+def test_guard_declines_foreign_gate_shapes(experts: int, hidden: int) -> None:
+    x = torch.zeros((4, hidden), device="musa", dtype=torch.bfloat16)
+    w = torch.zeros((experts, hidden), device="musa", dtype=torch.float32)
+    assert router_gate_fp32(x, w) is None
+
+
+@requires_musa
+def test_guard_declines_unsupported_dtypes_and_layouts() -> None:
+    x = torch.zeros((4, HIDDEN), device="musa", dtype=torch.bfloat16)
+    w = torch.zeros((EXPERTS, HIDDEN), device="musa", dtype=torch.float32)
+    # A BF16 or FP16 gate weight belongs to a different tier.
+    assert router_gate_fp32(x, w.to(torch.bfloat16)) is None
+    assert router_gate_fp32(x, w.to(torch.float16)) is None
+    # Narrowed activations are declined; FP32 and BF16 are the supported inputs.
+    assert router_gate_fp32(x.to(torch.float16), w) is None
+    # Mismatched hidden size and an empty batch are declined.
+    assert router_gate_fp32(x[:, :1024].contiguous(), w) is None
+    assert router_gate_fp32(x[:0], w) is None
+    # Non-contiguous operands are declined rather than silently reinterpreted.
+    wide = torch.zeros((EXPERTS, 2 * HIDDEN), device="musa", dtype=torch.float32)
+    assert router_gate_fp32(x, wide[:, ::2]) is None
+    # The one supported combination is accepted, which keeps every "is None" above
+    # meaningful.
+    assert router_gate_fp32(x, w) is not None
 
 
 @requires_musa
@@ -67,8 +92,8 @@ def test_kernel_is_bitwise_equal_to_fp32_reference(
     m: int, x_dtype: torch.dtype, weight_dtype: torch.dtype
 ) -> None:
     torch.manual_seed(100037 + m)
-    # A BF16 checkpoint stores gate weights that are exactly BF16-valued, so that
-    # case is exercised by casting; plain randn covers the general FP32 case.
+    # A BF16 checkpoint stores gate weights that are exactly BF16-valued, so that case
+    # is exercised by casting; plain randn covers the general FP32 case.
     w = torch.randn((EXPERTS, HIDDEN), device="musa", dtype=torch.float32)
     if weight_dtype == torch.bfloat16:
         w = w.to(torch.bfloat16).to(torch.float32)
