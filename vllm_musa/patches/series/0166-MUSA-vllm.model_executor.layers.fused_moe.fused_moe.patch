@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 20 Sep 2026 08:30:00 +0800
+Subject: [PATCH] MUSA: vllm.model_executor.layers.fused_moe.fused_moe
+
+---
+ vllm/model_executor/layers/fused_moe/fused_moe.py | 15 ++++++++++++++
+ 1 file changed, 14 insertions(+), 1 deletions(-)
+
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index be4930052a..03d1d9b8a1 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -1397,7 +1397,20 @@ def get_default_config(
+         if current_platform.is_rocm():
+             num_stages = num_stages_rocm
+         elif M <= 32:
+-            num_stages = 4
++            # MUSA: 4 pipelining stages collapse occupancy for tiny-M MoE on S5000.
++            # At the Nemotron-3.5 MTP6 decode shape (7 tokens x topk 6 = 42 useful
++            # rows over 13-41 of 128 experts, one 16-row tile each) the tiny-M default
++            # is 4 stages / BLOCK_K=128, which reserves ~4x the shared memory per
++            # block and costs most of the resident blocks.  Measured on S5000, same
++            # container and image, 4096-in/128-out, one request: 11.635 ms/token at
++            # 4 stages vs 9.563 ms/token at 1 stage (-17.80%), byte-identical output
++            # (same SHA over all 9 measured requests) and unchanged TTFT (1648 vs
++            # 1678 ms).  BLOCK_SIZE_N=128 alone regresses (+8.46%), so staging is the
++            # whole effect.  CUDA keeps the upstream 4 stages.
++            num_stages = 1 if getattr(current_platform, "is_musa", lambda: False)() else 4
++            logger.info_once(
++                "MoE default config for tiny M: M=%d num_stages=%d", M, num_stages
++            )
+         else:
+             num_stages = 3
+ 
