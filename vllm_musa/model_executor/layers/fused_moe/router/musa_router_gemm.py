@@ -46,6 +46,18 @@ every other MoE model keeps its own tier chain untouched, which the unit tests a
 for the foreign gate shapes actually used in this repo.  Disable with
 ``VLLM_MUSA_ROUTER_GATE_FP32=0``.
 
+Trace safety
+------------
+The guard must decide **identically for real tensors and for the FakeTensors Dynamo
+traces with**: a check like ``x.device.type == "musa"`` is true at runtime but false
+under tracing (FakeTensors report ``meta``), so the branch would be folded into the
+compiled graph as "not applicable" and the kernel would silently never run.  That
+happened in the first version of this wiring: on eager it was 348/348 accepted, in
+serving the profiled decode window contained zero router-gate kernels and the vendor
+FP32 SGEMM still ran 29x per step - same output, no speedup.  The platform check is
+therefore a module-level Python flag, and the per-call checks only use tensor
+metadata that is identical for real and fake tensors (dtype, shape, contiguity).
+
 Two notes for reviewers
 -----------------------
 * An operator-level alternative is a BF16 tensor-core GEMM: both operands are exactly
@@ -68,6 +80,7 @@ import os
 import torch
 import triton
 import triton.language as tl
+from vllm.platforms import current_platform
 from vllm.utils.torch_utils import direct_register_custom_op
 
 __all__ = ["router_gate_enabled", "router_gate_fp32"]
@@ -85,6 +98,13 @@ _SUPPORTED_WEIGHT_SHAPE = (_EXPERTS, _HIDDEN)
 _CFG_SMALL = (16, 32, 128, 4, 3)
 _CFG_LARGE = (16, 64, 64, 4, 3)
 _CFG_MAX_TOKENS = 128
+
+# Evaluated once, at import: a per-call ``x.device.type == "musa"`` test would read
+# "meta" while Dynamo traces (see "Trace safety" above) and disable the kernel in
+# compiled runs.  "meta" is therefore a *supported* device here - it is how tracing and
+# capture present the operands, and the op's fake impl serves it.
+_ON_MUSA = current_platform.device_type == "musa"
+_ACCEPTED_DEVICES = ("musa", "meta")
 
 
 def router_gate_enabled() -> bool:
@@ -143,8 +163,12 @@ def _router_gate_fp32_kernel(
 
 def _launch(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     m = x.shape[0]
-    block_m, block_n, block_k, num_warps, num_stages = _pick_cfg(m)
     out = torch.empty((m, _EXPERTS), dtype=torch.float32, device=x.device)
+    if m == 0:
+        # An empty batch is legal (idle step) but a zero-sized grid is not worth
+        # launching; F.linear would return an empty tensor here too.
+        return out
+    block_m, block_n, block_k, num_warps, num_stages = _pick_cfg(m)
     grid = (triton.cdiv(m, block_m), _EXPERTS // block_n)
     _router_gate_fp32_kernel[grid](
         x,
@@ -190,15 +214,15 @@ def router_gate_fp32(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor | No
     runs once per MoE layer per forward step.  ``None`` means "not applicable" and
     never an error, so the caller can treat this as an optional tier.
     """
-    if not router_gate_enabled():
-        return None
-    if x.device.type != "musa":
+    if not _ON_MUSA or not router_gate_enabled():
         return None
     if weight.dtype != torch.float32 or weight.shape != _SUPPORTED_WEIGHT_SHAPE:
         return None
-    if x.shape[0] == 0 or x.shape[-1] != _HIDDEN:
+    if x.shape[-1] != _HIDDEN:
         return None
     if x.dtype not in (torch.float32, torch.bfloat16):
+        return None
+    if x.device.type not in _ACCEPTED_DEVICES:
         return None
     if not x.is_contiguous() or not weight.is_contiguous():
         return None
