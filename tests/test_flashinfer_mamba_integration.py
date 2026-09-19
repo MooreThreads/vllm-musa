@@ -22,7 +22,7 @@ def test_flashinfer_pin_targets_musa_nemotron_fork() -> None:
     pins = _pins()
     assert pins["FLASHINFER_REPOSITORY"] == "https://github.com/yeahdongcn/flashinfer.git"
     assert re.fullmatch(r"[0-9a-f]{40}", pins["FLASHINFER_COMMIT"])
-    assert pins["FLASHINFER_COMMIT"] == "a30b0e2afb1953f6db1589f2e49e391b2851f028"
+    assert pins["FLASHINFER_COMMIT"] == "cca9f452f917154e39a4b44c27316c02254455e2"
 
 
 def test_setup_overlays_pinned_mamba_provider() -> None:

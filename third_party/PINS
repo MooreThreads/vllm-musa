@@ -13,4 +13,4 @@ VLLM_COMMIT=2cf0a6915ce544dc493a0990f2ea38d81601128a
 # with VLLM_TAG/VLLM_COMMIT.
 # The fork carries the standalone MUSA/Nemotron Mamba2 and SSD provider.
 FLASHINFER_REPOSITORY=https://github.com/yeahdongcn/flashinfer.git
-FLASHINFER_COMMIT=a30b0e2afb1953f6db1589f2e49e391b2851f028
+FLASHINFER_COMMIT=cca9f452f917154e39a4b44c27316c02254455e2
