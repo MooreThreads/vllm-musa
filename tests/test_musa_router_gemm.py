@@ -9,6 +9,12 @@ Three things are asserted here:
   chain is untouched, it honours ``VLLM_MUSA_ROUTER_GATE_FP32=0``, and it *does*
   accept the one gate shape this kernel is tuned for (so an over-strict guard cannot
   make the other tests pass vacuously);
+* the guard decides the same way for the FakeTensors Dynamo traces with as for real
+  tensors.  A per-call ``x.device.type`` test passes at runtime but reads ``meta`` while
+  tracing, so the tier was folded into the compiled graph as "not applicable" and the
+  kernel never ran in serving: eager 348/348 accepted, compiled trace zero router-gate
+  kernels with the vendor FP32 SGEMM still at 29 calls per step.  That is a silent
+  perf-only failure, so it gets its own test;
 * on MUSA the kernel is **bitwise identical** to the FP32 reference the router used
   before (``x.float() @ weight.T``), for both BF16 and FP32 activations and for both
   a BF16-valued weight (what a BF16 checkpoint produces) and a full-precision one.
@@ -73,15 +79,36 @@ def test_guard_declines_unsupported_dtypes_and_layouts() -> None:
     assert router_gate_fp32(x, w.to(torch.float16)) is None
     # Narrowed activations are declined; FP32 and BF16 are the supported inputs.
     assert router_gate_fp32(x.to(torch.float16), w) is None
-    # Mismatched hidden size and an empty batch are declined.
+    # A mismatched hidden size is declined; an empty batch is served with an empty
+    # result (idle steps are legal and must not fall through to another tier).
     assert router_gate_fp32(x[:, :1024].contiguous(), w) is None
-    assert router_gate_fp32(x[:0], w) is None
+    empty = router_gate_fp32(x[:0], w)
+    assert empty is not None and tuple(empty.shape) == (0, EXPERTS)
     # Non-contiguous operands are declined rather than silently reinterpreted.
     wide = torch.zeros((EXPERTS, 2 * HIDDEN), device="musa", dtype=torch.float32)
     assert router_gate_fp32(x, wide[:, ::2]) is None
     # The one supported combination is accepted, which keeps every "is None" above
     # meaningful.
     assert router_gate_fp32(x, w) is not None
+
+
+@requires_musa
+def test_guard_accepts_meta_device_tensors_the_way_tracing_sees_them() -> None:
+    """Under Dynamo (and under capture) the operands are not MUSA tensors: tracing sees
+    FakeTensors, whose ``device.type`` is ``meta``.  A per-call device test therefore
+    reads "not MUSA" exactly where it matters, folds the tier away in the compiled
+    graph, and costs the speedup while leaving the output identical - a silent
+    perf-only failure that no numeric test can see.  The platform decision has to be
+    a module-level property instead, which is what this asserts.
+    """
+    meta_x = torch.zeros((7, HIDDEN), dtype=torch.bfloat16, device="meta")
+    meta_w = torch.zeros((EXPERTS, HIDDEN), dtype=torch.float32, device="meta")
+    assert meta_x.device.type == "meta", "the premise of this test changed"
+    out = router_gate_fp32(meta_x, meta_w)
+    assert out is not None and tuple(out.shape) == (7, EXPERTS)
+    # A foreign shape must still be declined when the tensors are not real.
+    foreign = torch.zeros((128, 2048), dtype=torch.float32, device="meta")
+    assert router_gate_fp32(meta_x[:, :2048], foreign) is None
 
 
 @requires_musa
