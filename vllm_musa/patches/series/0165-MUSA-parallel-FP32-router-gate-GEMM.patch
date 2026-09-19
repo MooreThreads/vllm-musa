@@ -1,34 +1,32 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Fri, 19 Sep 2026 11:50:00 +0800
+Date: Fri, 19 Sep 2026 12:40:00 +0800
 Subject: [PATCH] MUSA: vllm.model_executor.layers.fused_moe.router.gate_linear
 
 ---
- vllm/model_executor/layers/fused_moe/router/gate_linear.py | 21 +++++++++++++++++++++
- 1 file changed, 21 insertions(+)
+ .../layers/fused_moe/router/gate_linear.py            | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
 
 diff --git a/vllm/model_executor/layers/fused_moe/router/gate_linear.py b/vllm/model_executor/layers/fused_moe/router/gate_linear.py
-index ba46c1d..0e5ec38 100644
+index ba46c1d..cd534e5 100644
 --- a/vllm/model_executor/layers/fused_moe/router/gate_linear.py
 +++ b/vllm/model_executor/layers/fused_moe/router/gate_linear.py
-@@ -179,6 +179,27 @@ class GateLinear(ReplicatedLinear):
+@@ -179,6 +179,25 @@ class GateLinear(ReplicatedLinear):
      def forward(
          self, x: torch.Tensor
      ) -> torch.Tensor | tuple[torch.Tensor, Parameter | None]:
 +        # Tier 0 (MUSA): parallel FP32 router gate.
 +        #
-+        # With force_fp32_compute the FP32 weight reaches Tier 6 and lands on the
++        # With force_fp32_compute the FP32 weight would reach Tier 6 and land on the
 +        # vendor FP32 SGEMM, which launches with grid=(1,1,1) and costs ~292 us at
 +        # every M on S5000 - 19% of the decode step device time for Nemotron-3.5
-+        # (29 MoE layers x 1 call per step).  The MUSA kernel below is bitwise
-+        # identical to that GEMM (same FP32 accumulation order) and ~1.9x faster
-+        # at decode M, so the router's top-k and the model output do not change.
-+        if (
-+            x.device.type == "musa"
-+            and x.shape[-1] == 2688
-+            and self.weight.shape == (128, 2688)
-+        ):
-+            from vllm_musa.model_executor.layers.fused_moe.router.musa_router_gemm import (  # noqa: E501
++        # (29 MoE layers x 1 call per step).  The MUSA kernel is bitwise identical to
++        # that GEMM (same FP32 accumulation order) and ~1.9x faster at decode M, so
++        # the router's top-k and the model output do not change.  All shape/backend
++        # policy lives in the MUSA module; it returns None for anything it does not
++        # own, leaving every other model's tier chain untouched.
++        if x.device.type == "musa":
++            from vllm_musa.model_executor.layers.fused_moe.router.musa_router_gemm import (
 +                router_gate_fp32,
 +            )
 +
