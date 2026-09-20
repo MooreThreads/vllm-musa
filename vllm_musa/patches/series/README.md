@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **165 patches**. This branch includes the Qwen3.6 patches for common
+Currently **166 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -43,7 +43,9 @@ still opt into Model Runner V2 explicitly. DeepSeek-V4 512-d sparse C4/C128 comp
 1..128 is dispatched to a native MUSA kernel, with Triton kept as the
 shape fallback. On that same native path the compressor also writes
 packed kv/score+ape into the state cache so Triton `save_partial_states`
-is skipped. The fused TileLang `hc_head` is
+is skipped. Interleaved MRoPE rebuilds the T/H/W frequency layout with a
+strided copy rather than per-channel index arithmetic, which keeps the
+per-layer launch count off the eager prefill path. The fused TileLang `hc_head` is
 enabled on MUSA by importing TileLang before the eager JIT decorators capture
 their module globals. DeepEP shutdown now drops cached handles before native
 teardown and supports both explicit `destroy()` and legacy destructor-only

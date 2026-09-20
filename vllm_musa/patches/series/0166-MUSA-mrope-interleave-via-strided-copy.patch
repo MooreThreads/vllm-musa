@@ -1,0 +1,20 @@
+--- a/vllm/model_executor/layers/rotary_embedding/mrope.py
++++ b/vllm/model_executor/layers/rotary_embedding/mrope.py
+@@ -228,12 +228,11 @@ def apply_interleaved_rope(x: torch.Tensor, mrope_section: list[int]) -> torch.T
+     Reorganizes frequency layout from chunked [TTT...HHH...WWW] to
+     interleaved [THWTHWTHW...TT], preserving frequency continuity.
+     """
+-    channels = torch.arange(x.shape[-1], device=x.device)
+-    is_height = (channels % 3 == 1) & (channels < mrope_section[1] * 3)
+-    is_width = (channels % 3 == 2) & (channels < mrope_section[2] * 3)
+-
+-    result = torch.where(is_height, x[1], x[0])
+-    return torch.where(is_width, x[2], result)
++    # MUSA: strided copy keeps this off the per-layer launch path.
++    x_t = x[0].clone()
++    x_t[..., 1 : mrope_section[1] * 3 : 3] = x[1, ..., 1 : mrope_section[1] * 3 : 3]
++    x_t[..., 2 : mrope_section[2] * 3 : 3] = x[2, ..., 2 : mrope_section[2] * 3 : 3]
++    return x_t
+ 
+ 
+ class MRotaryEmbedding(RotaryEmbeddingBase):
