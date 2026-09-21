@@ -13,6 +13,13 @@ with a sliding window. A mixed sliding/full model then ran its sliding layers on
 TRITON_ATTN and its full layers on FLASH_ATTN — two KV-cache layout families in
 one step — and died in ``init_kv_cache`` with ``assert kv_cache.shape[1] == 2``.
 
+Restoring that one capability is *not* part of this change: it also decides which
+backend a windowed model runs on, and the windowed MATE FA path has no numerical
+evidence yet (see the gap entry below). Until it does, the gap stays declared
+here so the next dropped capability is still visible, and
+``test_known_intentional_gaps_still_exist`` fails the moment somebody restores
+the override without removing the entry.
+
 The check is deliberately source-level (``ast``) so it runs anywhere, including
 CPU-only CI, without importing torch or a MUSA build.
 """
@@ -35,7 +42,20 @@ _SHADOW_CATEGORY = "4a"
 # Upstream capabilities a MUSA shadow intentionally does NOT declare, keyed by
 # entry id. Leave empty when the shadow is expected to keep full parity; every
 # entry needs a reason, because it is exactly this list that hides a regression.
-_INTENTIONAL_GAPS: dict[str, dict[str, str]] = {}
+_INTENTIONAL_GAPS: dict[str, dict[str, str]] = {
+    # Reachable only by an explicit --attention-backend FLASH_ATTN: automatic
+    # selection refuses FLASH_ATTN for these layers anyway on MUSA (mm_prefix
+    # requires FA4). Restoring the override would move uniform-window models
+    # without mm_prefix onto MATE's windowed FA path, and that path is unmeasured
+    # — the only such models available are MiMo-V2.5 (293 GB) and
+    # DeepSeek-V4.1-Flash (541/736 GB), neither fitting on one S5000.
+    "v1.attention.backends.flash_attn": {
+        "supports_sliding_window": (
+            "deferred until windowed MATE FA has numerical evidence "
+            "(MUSA-100051): restore the override and delete this entry together"
+        )
+    },
+}
 
 
 def _load_manifest():

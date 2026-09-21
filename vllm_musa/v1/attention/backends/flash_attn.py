@@ -254,22 +254,6 @@ class MUSAFlashAttentionBackend(AttentionBackend):
         return True
 
     @classmethod
-    def supports_sliding_window(cls) -> bool:
-        # mate's FA3 wrapper takes window_size= on every entry point, and this
-        # impl derives it per LAYER (self.sliding_window -> sliding_window_size on
-        # the decode/prefill/split paths) so interleaved sliding/full models work:
-        # only the AOT scheduler needs a single window for all layers, and it
-        # disables itself when the model mixes them. Base AttentionBackend
-        # defaults this to False, which made backend SELECTION reject
-        # FLASH_ATTN for any model with a sliding window: a mixed model then ran
-        # its sliding layers on TRITON_ATTN and its full layers on FLASH_ATTN —
-        # two KV-cache layout families in one step — and died in init_kv_cache
-        # (`assert kv_cache.shape[1] == 2`). Upstream FlashAttentionBackend
-        # declares True for the same reason; this override went missing when the
-        # class was copied. Evidence: generated/MUSA-100051/.
-        return True
-
-    @classmethod
     def supports_attn_type(cls, attn_type: str) -> bool:
         """FlashAttention supports all attention types."""
         return attn_type in (
