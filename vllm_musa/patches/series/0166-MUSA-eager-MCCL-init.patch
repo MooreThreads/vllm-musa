@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Subject: [PATCH] MUSA: scope eager MCCL init to GLM DSA multi-node PP
+
+---
+--- a/vllm/distributed/parallel_state.py
++++ b/vllm/distributed/parallel_state.py
+@@ -1682,7 +1682,7 @@
+             )
+         else:
+             # this backend is used for WORLD
+-            torch.distributed.init_process_group(
++            init_kwargs = dict(
+                 backend=backend,
+                 init_method=distributed_init_method if store is None else None,
+                 store=store,
+@@ -1690,6 +1690,11 @@
+                 rank=rank,
+                 timeout=timeout,
+             )
++            # Only the validated GLM DSA multi-node PP path needs eager MCCL:
++            # its async PP P2P path can leave an isend Work unfinished. Keep
++            # all other models/topologies on the upstream lazy initialization.
++            model_config = getattr(config, "model_config", None)
++            hf_config = getattr(model_config, "hf_config", None)
++            hf_text_config = getattr(model_config, "hf_text_config", None)
++            architectures = (
++                getattr(model_config, "architectures", None)
++                or getattr(hf_config, "architectures", None)
++                or getattr(hf_text_config, "architectures", None)
++                or ()
++            )
++            model_type = (
++                getattr(model_config, "model_type", None)
++                or getattr(hf_config, "model_type", None)
++                or getattr(hf_text_config, "model_type", None)
++            )
++            is_glm_dsa = (
++                "GlmMoeDsaForCausalLM" in architectures
++                or model_type == "glm_moe_dsa"
++            )
++            needs_glm_pp_eager_mccl = (
++                is_glm_dsa
++                and backend == "mccl"
++                and config.parallel_config.nnodes > 1
++                and config.parallel_config.pipeline_parallel_size > 1
++            )
++            if (
++                needs_glm_pp_eager_mccl
++                and getattr(torch.version, "musa", None) is not None
++                and local_rank >= 0
++            ):
++                init_kwargs["device_id"] = torch.device("musa", local_rank)
++            torch.distributed.init_process_group(**init_kwargs)
+         if enable_elastic_ep:
+             tp_pp_cpu_group = torch.distributed.new_group(
+                 backend="gloo", timeout=timeout
