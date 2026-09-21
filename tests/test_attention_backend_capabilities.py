@@ -170,6 +170,24 @@ def test_diffusion_model_is_pinned_to_triton_attn():
         == platform.AttentionBackendEnum.TURBOQUANT
     )
 
+    already_triton = SimpleNamespace(
+        model_config=SimpleNamespace(is_diffusion=True),
+        attention_config=SimpleNamespace(
+            backend=platform.AttentionBackendEnum.TRITON_ATTN
+        ),
+    )
+    # the hook runs more than once per process; the second call must be a no-op
+    assert force(already_triton) is False
+    assert (
+        already_triton.attention_config.backend
+        == platform.AttentionBackendEnum.TRITON_ATTN
+    )
+    assert force(diffusion_config) is False, "repeated calls must stay idempotent"
+    assert (
+        diffusion_config.attention_config.backend
+        == platform.AttentionBackendEnum.TRITON_ATTN
+    )
+
     text_model = SimpleNamespace(
         model_config=SimpleNamespace(is_diffusion=False),
         attention_config=SimpleNamespace(backend=None),

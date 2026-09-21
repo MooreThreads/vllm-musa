@@ -222,6 +222,10 @@ def force_triton_attn_for_diffusion(vllm_config: "VllmConfig") -> bool:
         return False
 
     requested = attention_config.backend
+    if requested == AttentionBackendEnum.TRITON_ATTN:
+        # already what this path needs; the hook runs more than once per process
+        # (engine args, then the platform), so stay quiet and idempotent.
+        return False
     if requested in (None, AttentionBackendEnum.FLASH_ATTN):
         attention_config.backend = AttentionBackendEnum.TRITON_ATTN
         if requested is not None:
@@ -232,7 +236,7 @@ def force_triton_attn_for_diffusion(vllm_config: "VllmConfig") -> bool:
                 "this warning."
             )
         else:
-            logger.info(
+            logger.info_once(
                 "Diffusion model detected: selecting the TRITON_ATTN backend, "
                 "because per-request causal masks need a dynamic causal mask "
                 "that the MUSA FlashAttention path cannot express."
