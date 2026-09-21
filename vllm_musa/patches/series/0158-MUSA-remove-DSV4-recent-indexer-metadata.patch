@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: remove DSV4 recent indexer metadata
  1 file changed, 79 deletions(-)
 
 diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
-index 9b5bd73..480e71f 100644
+index 9b5bd73118..480e71fe20 100644
 --- a/vllm/v1/attention/backends/mla/indexer.py
 +++ b/vllm/v1/attention/backends/mla/indexer.py
 @@ -1,6 +1,5 @@

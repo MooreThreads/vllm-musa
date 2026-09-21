@@ -5,7 +5,7 @@ Subject: [PATCH] perf: add gated sharded Qwen Gumbel logits path
 
 ---
  .../model_executor/layers/logits_processor.py |  2 ++
- vllm/v1/worker/gpu/sample/gumbel.py           | 18 +++++++---
+ vllm/v1/worker/gpu/sample/gumbel.py           | 25 ++++++++++---
  vllm/v1/worker/gpu_model_runner.py            | 35 +++++++++++++++++--
  3 files changed, 55 insertions(+), 7 deletions(-)
 
@@ -23,10 +23,11 @@ index ab8d1d4102..efeb62095e 100644
              # Gather is not supported for some devices such as TPUs.
              # Use all-gather instead.
 diff --git a/vllm/v1/worker/gpu/sample/gumbel.py b/vllm/v1/worker/gpu/sample/gumbel.py
-index 28c6e0f402..e261180a25 100644
+index 28c6e0f402..eff07daf15 100644
 --- a/vllm/v1/worker/gpu/sample/gumbel.py
 +++ b/vllm/v1/worker/gpu/sample/gumbel.py
-@@ -60,6 +60,11 @@ def tl_rand64(seed, offset, includes_zero: tl.constexpr):
+@@ -60,7 +60,12 @@ def apply_temperature(
+ 
  @triton.jit
  def tl_rand64(seed, offset, includes_zero: tl.constexpr):
 -    lo, hi, _, _ = tl.randint4x(seed, offset)
@@ -39,7 +40,7 @@ index 28c6e0f402..e261180a25 100644
      lo = lo.to(tl.uint32, bitcast=True).to(tl.uint64)
      hi = hi.to(tl.uint32, bitcast=True).to(tl.uint64)
      r = (hi << 32) | lo
-@@ -125,6 +125,7 @@ def gumbel_noised_argmax(
+@@ -125,6 +130,7 @@ def gumbel_noised_argmax(
  def gumbel_block_argmax(
      logits,
      block,
@@ -47,7 +48,7 @@ index 28c6e0f402..e261180a25 100644
      mask,
      token_idx,
      expanded_idx_mapping_ptr,
-@@ -166,7 +167,7 @@ def gumbel_block_argmax(
+@@ -166,7 +172,7 @@ def gumbel_block_argmax(
      pos = tl.load(pos_ptr + token_idx)
      return gumbel_noised_argmax(
          logits,
@@ -56,7 +57,7 @@ index 28c6e0f402..e261180a25 100644
          mask,
          seed,
          pos,
-@@ -192,6 +193,7 @@ def _gumbel_sample_kernel(
+@@ -192,6 +198,7 @@ def _gumbel_sample_kernel(
      pos_ptr,
      temp_ptr,
      vocab_size,
@@ -64,7 +65,7 @@ index 28c6e0f402..e261180a25 100644
      BLOCK_SIZE: tl.constexpr,
      APPLY_TEMPERATURE: tl.constexpr,
      USE_FP64: tl.constexpr,
-@@ -200,6 +202,7 @@ def _gumbel_sample_kernel(
+@@ -200,6 +207,7 @@ def _gumbel_sample_kernel(
      token_idx = tl.program_id(0).to(tl.int64)
      block_idx = tl.program_id(1)
      block = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -72,7 +73,7 @@ index 28c6e0f402..e261180a25 100644
      mask = block < vocab_size
      logits = tl.load(
          logits_ptr + token_idx * logits_stride + block,
-@@ -211,6 +214,7 @@ def _gumbel_sample_kernel(
+@@ -211,6 +219,7 @@ def _gumbel_sample_kernel(
      value, idx = gumbel_block_argmax(
          logits,
          block,
@@ -80,7 +81,7 @@ index 28c6e0f402..e261180a25 100644
          mask,
          token_idx,
          expanded_idx_mapping_ptr,
-@@ -225,7 +229,7 @@ def _gumbel_sample_kernel(
+@@ -225,7 +234,7 @@ def _gumbel_sample_kernel(
          USE_FP64=USE_FP64,
          PER_TOKEN_COL=PER_TOKEN_COL,
      )
@@ -89,7 +90,7 @@ index 28c6e0f402..e261180a25 100644
      tl.store(local_argmax_ptr + token_idx * local_argmax_stride + block_idx, token_id)
      tl.store(local_max_ptr + token_idx * local_max_stride + block_idx, value)
  
-@@ -240,7 +244,9 @@ def gumbel_sample(
+@@ -240,7 +249,9 @@ def gumbel_sample(
      logits_cache: torch.Tensor | None = None,  # [max_num_reqs, num_cols, vocab_size]
      logits_cache_col: torch.Tensor | None = None,  # scalar or [num_tokens]
      use_fp64: bool = False,
@@ -100,7 +101,7 @@ index 28c6e0f402..e261180a25 100644
      # Enforce contiguity on non-strided input tensors
      expanded_idx_mapping = expanded_idx_mapping.contiguous()
      pos = pos.contiguous()
-@@ -268,6 +274,7 @@ def gumbel_sample(
+@@ -268,6 +279,7 @@ def gumbel_sample(
          pos,
          temperature,
          vocab_size,
@@ -108,7 +109,7 @@ index 28c6e0f402..e261180a25 100644
          BLOCK_SIZE=BLOCK_SIZE,
          APPLY_TEMPERATURE=apply_temperature,
          USE_FP64=use_fp64,
-@@ -276,4 +283,7 @@ def gumbel_sample(
+@@ -276,4 +288,7 @@ def gumbel_sample(
      # NOTE(woosuk): Use int64 for later indexing.
      max_block_idx = local_max.argmax(dim=-1, keepdim=True)
      sampled = local_argmax.gather(dim=-1, index=max_block_idx).view(-1)

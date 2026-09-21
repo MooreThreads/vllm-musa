@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: 2026-06-08T14:45:08+08:00
+Date: Mon, 8 Jun 2026 14:45:08 +0800
 Subject: [PATCH] MUSA: vllm.models.deepseek_v4.attention
 
 ---

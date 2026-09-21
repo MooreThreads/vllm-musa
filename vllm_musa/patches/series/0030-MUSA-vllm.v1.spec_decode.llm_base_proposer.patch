@@ -4,11 +4,11 @@ Date: Wed, 3 Jun 2026 11:47:36 +0000
 Subject: [PATCH] MUSA: vllm.v1.spec_decode.llm_base_proposer
 
 ---
- vllm/v1/spec_decode/llm_base_proposer.py | 155 ++++++++++++++++++++----
+ vllm/v1/spec_decode/llm_base_proposer.py | 155 +++++++++++++++++++----
  1 file changed, 132 insertions(+), 23 deletions(-)
 
 diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
-index 29a95caa88..d88cea23da 100644
+index 29a95caa88..8067b31a89 100644
 --- a/vllm/v1/spec_decode/llm_base_proposer.py
 +++ b/vllm/v1/spec_decode/llm_base_proposer.py
 @@ -15,13 +15,14 @@ from vllm.config import (
@@ -192,13 +192,13 @@ index 29a95caa88..d88cea23da 100644
 +                )
 +                common_attn_metadata.query_start_loc_cpu[: batch_size + 1] = (
 +                    torch.from_numpy(self.token_arange_np[: batch_size + 1]).clone()
-+                )
+                 )
 +            else:
 +                mode = self.cudagraph_dispatcher.cudagraph_mode
 +                is_full_sep = (
 +                    mode.decode_mode() == CUDAGraphMode.FULL
 +                    and mode.separate_routine()
-                 )
++                )
 +                uniform_decode = is_full_sep and common_attn_metadata is not None
 +                uniform_decode_query_len = None
 +
@@ -216,7 +216,7 @@ index 29a95caa88..d88cea23da 100644
  
              # Make sure to use EAGLE's own buffer during cudagraph capture.
              if (
-@@ -1661,12 +1733,30 @@ class SpecDecodeBaseProposer:
+@@ -1661,12 +1748,30 @@ class SpecDecodeBaseProposer:
              else:
                  slot_mapping_dict = slot_mappings or {}
  
@@ -248,7 +248,7 @@ index 29a95caa88..d88cea23da 100644
                  slot_mapping=slot_mapping_dict,
              ):
                  if self.supports_mm_inputs:
-@@ -1803,11 +1893,15 @@ class SpecDecodeBaseProposer:
+@@ -1803,11 +1908,15 @@ class SpecDecodeBaseProposer:
      def _determine_batch_execution_and_padding(
          self,
          num_tokens: int,
@@ -265,7 +265,7 @@ index 29a95caa88..d88cea23da 100644
          )
          num_tokens_padded = batch_desc.num_tokens
  
-@@ -1842,7 +1936,7 @@ class SpecDecodeBaseProposer:
+@@ -1842,7 +1951,7 @@ class SpecDecodeBaseProposer:
                  assert batch_desc.num_tokens == num_tokens_padded
                  num_tokens_across_dp[dp_rank] = num_tokens_padded
  

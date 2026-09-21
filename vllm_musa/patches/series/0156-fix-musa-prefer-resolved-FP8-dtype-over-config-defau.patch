@@ -6,17 +6,16 @@ Subject: [PATCH] fix(musa): prefer resolved FP8 dtype over config default
 Transformers may expose a missing expert_dtype as its FP4 default even when
 hf_overrides and DeepSeekFP8Config resolve the checkpoint as FP8. Prefer the
 resolved quant config in that mismatch for target and DSpark loaders.
-
 ---
  vllm/models/deepseek_v4/nvidia/model.py | 8 ++++++--
  vllm/models/deepseek_v4/nvidia/mtp.py   | 8 ++++++--
  2 files changed, 12 insertions(+), 4 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
-index dsv4dtype..dsv4dtype2 100644
+index b4e2d02eff..78fc92fda4 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
-@@ -1489,8 +1489,12 @@
+@@ -1489,8 +1489,12 @@ class DeepseekV4ForCausalLM(
          # The DeepSeek quant config resolves it from hf_overrides, so reuse that
          # authoritative value instead of silently selecting the FP4 mapper.
          expert_dtype = getattr(config, "expert_dtype", None)
@@ -32,10 +31,10 @@ index dsv4dtype..dsv4dtype2 100644
              self.hf_to_vllm_mapper = _make_deepseek_v4_weights_mapper(expert_dtype)
  
 diff --git a/vllm/models/deepseek_v4/nvidia/mtp.py b/vllm/models/deepseek_v4/nvidia/mtp.py
-index dsv4dtype..dsv4dtype2 100644
+index 6d53b8f08a..a27cf5f891 100644
 --- a/vllm/models/deepseek_v4/nvidia/mtp.py
 +++ b/vllm/models/deepseek_v4/nvidia/mtp.py
-@@ -378,8 +378,12 @@
+@@ -378,8 +378,12 @@ class DeepSeekV4MTP(nn.Module):
          # FP4/MXFP4 experts register ``..._weight_scale``. Choose the suffix
          # for the rename below based on the model's expert dtype.
          expert_dtype = getattr(self.config, "expert_dtype", None)

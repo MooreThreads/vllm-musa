@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: keep DSV4 learned indexer on graph decode
  1 file changed, 27 insertions(+), 235 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 7f65da5..4e4b000 100644
+index 7f65da56ca..4e4b0007ec 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -58,153 +58,19 @@ def _musa_sparse_indexer_is_current_stream_capturing() -> bool:

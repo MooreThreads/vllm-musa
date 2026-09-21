@@ -8,13 +8,13 @@ Subject: [PATCH] MUSA: dispatch DeepSeek-V4 sparse compressor to native op
  1 file changed, 35 insertions(+)
 
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
-index 0f7946ef6a..b7c1d2e4a1 100644
+index 0f7946ef6a..b12d317254 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
 @@ -110,6 +110,41 @@ def compress_norm_rope_store_triton(
          if handled:
              return
-
+ 
 +    if (
 +        head_dim == 512
 +        and not use_fp4_cache
