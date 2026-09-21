@@ -1,6 +1,17 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: 2026-09-15T14:51:05+08:00
+Subject: [PATCH] MUSA: disable-naive-moe-on-triton32
+
+---
+ vllm/model_executor/layers/fused_moe/fused_moe.py | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index a3396c2775..0570345bb8 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
-@@ -33,6 +33,7 @@
+@@ -33,6 +33,7 @@ from vllm.model_executor.layers.fused_moe.utils import (
  )
  from vllm.platforms import current_platform
  from vllm.triton_utils import tl, triton
@@ -8,7 +19,7 @@
  from vllm.triton_utils.allocation import set_triton_allocator
  from vllm.utils.math_utils import next_power_of_2
  from vllm.utils.platform_utils import get_device_name_as_file_name
-@@ -1602,7 +1603,8 @@
+@@ -1602,7 +1603,8 @@ def _prepare_expert_assignment(
      # Skips moe_align_block_size and activates the `sorted_token_ids is None`
      # path of the fused_moe_kernel kernel
      naive_block_assignment = (

@@ -1,6 +1,17 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: 2026-09-15T14:51:05+08:00
+Subject: [PATCH] MUSA: fix-Triton-chained-boolean-in-Mamba-postprocess
+
+---
+ vllm/v1/worker/mamba_utils.py | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/v1/worker/mamba_utils.py b/vllm/v1/worker/mamba_utils.py
+index 9b89af0812..28506a44f4 100644
 --- a/vllm/v1/worker/mamba_utils.py
 +++ b/vllm/v1/worker/mamba_utils.py
-@@ -353,8 +353,9 @@
+@@ -353,8 +353,9 @@ def postprocess_mamba_fused_kernel(
      # Update accepted-token count before early exits (per-request, so only
      # state_idx == 0 writes). Also guard on tile_idx == 0 so tiles > 0
      # (when TEMPORAL_TILES > 1) do not duplicate the store.

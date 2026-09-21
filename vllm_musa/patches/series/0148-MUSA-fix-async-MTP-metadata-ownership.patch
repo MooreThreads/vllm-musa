@@ -1,6 +1,17 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: 2026-09-15T14:51:05+08:00
+Subject: [PATCH] MUSA: fix-async-MTP-metadata-ownership
+
+---
+ vllm/v1/spec_decode/llm_base_proposer.py | 12 ++++--------
+ 1 file changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
+index 8067b31a89..5f888eb0ef 100644
 --- a/vllm/v1/spec_decode/llm_base_proposer.py
 +++ b/vllm/v1/spec_decode/llm_base_proposer.py
-@@ -699,14 +699,10 @@
+@@ -686,14 +686,10 @@ class SpecDecodeBaseProposer:
  
          common_attn_metadata.num_actual_tokens = batch_size
          common_attn_metadata.max_query_len = 1

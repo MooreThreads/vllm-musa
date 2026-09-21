@@ -1,5 +1,15 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: 2026-09-15T14:51:05+08:00
+Subject: [PATCH] MUSA: use-MUSA-event-for-async-MTP-state-readiness
+
+---
+ vllm/v1/spec_decode/llm_base_proposer.py | 12 ++++++++++++
+ vllm/v1/worker/gpu_model_runner.py       |  4 +++-
+ 2 files changed, 15 insertions(+), 1 deletion(-)
+
 diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
-index 5f888eb..41746e9 100644
+index 5f888eb0ef..41746e9c2a 100644
 --- a/vllm/v1/spec_decode/llm_base_proposer.py
 +++ b/vllm/v1/spec_decode/llm_base_proposer.py
 @@ -78,6 +78,7 @@ class SpecDecodeBaseProposer:
@@ -29,7 +39,7 @@ index 5f888eb..41746e9 100644
          draft_token_ids_list = [draft_token_ids]
  
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index c6f1b57..18659b6 100644
+index c6f1b577ed..18659b6c72 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -1026,7 +1026,9 @@ class GPUModelRunner(

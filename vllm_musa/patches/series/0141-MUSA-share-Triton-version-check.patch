@@ -1,3 +1,16 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: 2026-09-15T14:51:05+08:00
+Subject: [PATCH] MUSA: share-Triton-version-check
+
+---
+ vllm/triton_utils/musa.py | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+ create mode 100644 vllm/triton_utils/musa.py
+
+diff --git a/vllm/triton_utils/musa.py b/vllm/triton_utils/musa.py
+new file mode 100644
+index 0000000000..0dd80f4f7b
 --- /dev/null
 +++ b/vllm/triton_utils/musa.py
 @@ -0,0 +1,17 @@
