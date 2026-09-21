@@ -313,6 +313,63 @@ def _verify_rows(clone: Path) -> list[tuple]:
     return rows
 
 
+def _series_format_rows() -> list[tuple[str, str, str]]:
+    """``(patch name, status, detail)`` for every entry in ``series/``.
+
+    The build applies the series with ``git apply --recount -p1``
+    (``build_apply.py``), which silently repairs wrong hunk counts and accepts
+    bare diffs — but the *generation* path (``rebase``/``regen``) needs real
+    mailboxes that ``git am`` can consume. An entry that is hand-edited or a
+    bare diff therefore passes every build-side gate and only breaks the next
+    version bump, which is exactly how the series rotted before MUSA-100050.
+
+    Two cheap offline checks:
+      * the entry is a ``git format-patch`` mailbox (``git am`` requires it);
+      * ``git apply --stat`` parses it (catches hunk counts that no longer
+        match the body).
+    """
+    rows = []
+    for patch in sorted(SERIES_DIR.glob("*.patch")):
+        try:
+            first = patch.open("rb").readline().rstrip(b"\r\n")
+        except OSError as exc:
+            rows.append((patch.name, "unreadable", str(exc)))
+            continue
+        if first != _ZERO_COMMIT_HEADER:
+            rows.append(
+                (
+                    patch.name,
+                    "not-a-mailbox",
+                    "no 'From <sha> Mon Sep 17 00:00:00 2001' header: "
+                    "git am cannot replay it",
+                )
+            )
+            continue
+        r = subprocess.run(
+            ["git", "apply", "--stat", str(patch)], capture_output=True, text=True
+        )
+        if r.returncode:
+            rows.append((patch.name, "corrupt", (r.stderr or r.stdout).strip()[:100]))
+        else:
+            rows.append((patch.name, "clean", ""))
+    return rows
+
+
+def cmd_check_series(args) -> int:
+    rows = _series_format_rows()
+    print(f"=== musa_sync check-series: {len(rows)} entries in series/ ===")
+    bad = [r for r in rows if r[1] != "clean"]
+    for name, status, detail in bad:
+        print(f"  {status:<14} {name}")
+        if detail:
+            print(f"                 {detail}")
+    print(
+        f"--- {len(rows) - len(bad)} clean / {len(rows)} total / {len(bad)} need "
+        f"attention ---"
+    )
+    return 1 if bad else 0
+
+
 def cmd_verify(args) -> int:
     target = args.target or _default_target()
     if not target:
@@ -339,7 +396,17 @@ def cmd_verify(args) -> int:
         f"--- {n_clean} clean / {len(rows)} total / {len(bad)} need attention "
         f"({', '.join(sorted({r[2] for r in bad})) or 'none'}) ---"
     )
-    return 1 if bad else 0
+    # The rows above are build-side only; also gate the series' *generation*
+    # form, which they cannot see (see _series_format_rows).
+    fmt_rows = _series_format_rows()
+    fmt_bad = [r for r in fmt_rows if r[1] != "clean"]
+    print(
+        f"--- series format: {len(fmt_rows) - len(fmt_bad)} clean / "
+        f"{len(fmt_rows)} total / {len(fmt_bad)} need attention ---"
+    )
+    for name, status, detail in fmt_bad[:10]:
+        print(f"  {status:<14} {name}")
+    return 1 if (bad or fmt_bad) else 0
 
 
 # -------------------------------------------------------------------- rebase / regen
@@ -536,6 +603,12 @@ def main(argv: list[str] | None = None) -> int:
         "--repo", default=None, help="use an existing checkout instead of cloning"
     )
     p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser(
+        "check-series",
+        help="gate the series' generation form: every entry must be a git am mailbox",
+    )
+    p.set_defaults(func=cmd_check_series)
 
     p = sub.add_parser(
         "rebase", help="git am -3 the series onto vllm@<ref> in third_party/vllm"
