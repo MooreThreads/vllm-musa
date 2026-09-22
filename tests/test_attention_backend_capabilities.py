@@ -4,23 +4,15 @@
 Several backend modules under ``vllm_musa/v1/attention/backends/`` are copies of
 their upstream counterparts, and a copied ``AttentionBackend`` subclass must
 re-declare every capability it actually supports: the abstract base answers
-``False`` for all of them. That is a silent failure mode — nothing crashes at
-import time, the backend is merely *rejected* during selection.
+``False`` for all of them, nothing fails at import time, and the backend is merely
+rejected during selection — so a dropped override is silent.
 
-That is what happened to ``supports_sliding_window`` (MUSA-100051): the override
-was dropped when the class was copied, so FLASH_ATTN was refused for any model
-with a sliding window. A mixed sliding/full model then ran its sliding layers on
-TRITON_ATTN and its full layers on FLASH_ATTN — two KV-cache layout families in
-one step — and died in ``init_kv_cache`` with ``assert kv_cache.shape[1] == 2``.
+Two checks: every name the upstream class declares, and every name a shadow
+answers a constant ``False`` from while upstream serves it. A deliberate refusal
+belongs in ``_INTENTIONAL_GAPS`` with a reason.
 
-The override is restored here, together with the tripwire regeneration and the
-removal of the ``_INTENTIONAL_GAPS`` entry that #252 used to keep the gap
-declared while the windowed MATE FA path had no numerical evidence. The tripwire
-and the entry are a pair: ``test_known_intentional_gaps_still_exist`` fails if
-one moves without the other.
-
-The check is deliberately source-level (``ast``) so it runs anywhere, including
-CPU-only CI, without importing torch or a MUSA build.
+Deliberately source-level (``ast``) so it runs anywhere, including CPU-only CI,
+without importing torch or a MUSA build.
 """
 
 import ast
@@ -80,10 +72,9 @@ def _shadow_path(entry) -> Path:
 def _constant_capabilities(path: Path) -> dict[str, bool]:
     """``{name: value}`` for `supports_*` methods that just return a constant.
 
-    The name-level check below cannot see a shadow that declares the right
-    method and answers ``False`` from it — which is exactly the shape of the
-    MUSA-100051 bug. This second view catches that, and only that: methods with
-    real logic are left to the reader.
+    The name-level check cannot see a shadow that declares the right method and
+    answers ``False`` from it. This view catches that, and only that: methods
+    with real logic are left to the reader.
     """
     tree = ast.parse(path.read_text())
     out: dict[str, bool] = {}
@@ -271,12 +262,11 @@ def test_musa_fa_rejects_per_sequence_causal():
 
 
 def test_no_shadow_constantly_refuses_a_capability_upstream_supports():
-    """The MUSA-100051 bug, restated: `supports_x() -> False` in a shadow.
+    """A shadow must not declare a capability and then constantly refuse it.
 
-    The name-level parity check passes for a shadow that *declares* every
-    capability and answers `False` from the ones it cannot serve — that is how
-    FLASH_ATTN got silently rejected for every windowed model. A deliberate
-    refusal must be declared in _INTENTIONAL_GAPS, with a reason.
+    The name-level parity check passes when a shadow declares every capability
+    and answers `False` from the ones it cannot serve, which silently rejects it
+    during selection. A deliberate refusal is declared in _INTENTIONAL_GAPS.
     """
     upstream_root = _upstream_root()
     if upstream_root is None:
@@ -302,7 +292,7 @@ def test_no_shadow_constantly_refuses_a_capability_upstream_supports():
                 )
     assert not report, (
         "a MUSA shadow refuses a capability its upstream counterpart serves, so "
-        "backend selection will reject it: silent, and exactly the MUSA-100051 "
-        "failure mode. Declare a deliberate gap in _INTENTIONAL_GAPS with a "
-        "reason, or restore the capability:\n  " + "\n  ".join(report)
+        "backend selection rejects the backend silently. Declare a deliberate gap "
+        "in _INTENTIONAL_GAPS with a reason, or restore the capability:\n  "
+        + "\n  ".join(report)
     )

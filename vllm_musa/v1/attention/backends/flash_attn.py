@@ -70,31 +70,21 @@ logger = init_logger(__name__)
 def reject_per_sequence_causal(attn_metadata: Any) -> None:
     """Refuse the per-request causal mask MATE's FA3 wrapper cannot express.
 
-    Upstream FA4 takes ``dynamic_causal=`` (a 1-D per-request flag tensor) next to
-    the scalar ``causal``; ``mate``'s wrappers declare ``causal: bool`` only and no
-    FA4 exists on MUSA, so such a tensor cannot be honoured here. Upstream raises
-    the same error from its own guard ("Per-sequence causal requires FA4. Current
-    version: FA3"), so failing loudly keeps MUSA aligned — instead of passing a
-    tensor into a bool parameter, which raised an opaque "Boolean value of Tensor
-    with more than one element is ambiguous" from the branch conditions, or
-    silently took the non-AOT scheduler path.
+    FA4 takes ``dynamic_causal=`` beside the scalar ``causal``; ``mate`` declares
+    ``causal: bool`` and MUSA has no FA4, so a per-request flag tensor cannot be
+    honoured here and has to fail loudly instead of landing in a bool parameter.
+    Diffusion models pass exactly that tensor and run on TRITON_ATTN, whose
+    unified attention op implements the per-sequence causal path.
 
-    Diffusion models produce exactly this tensor (``diffusion_gemma.py`` builds a
-    per-request encoder/denoise flag) and are pinned to TRITON_ATTN, whose unified
-    attention op implements the per-sequence causal path.
-
-    Takes the metadata, not the flag: vLLM calls ``forward`` with
-    ``attn_metadata=None`` on the profiling/dummy path before the early return
-    below, so an unguarded ``attn_metadata.causal`` would break every model the
-    FlashAttention backend serves at engine start (caught on hardware by the
-    MUSA-100051 consolidation run).
+    Takes the metadata rather than the flag because ``forward`` is also called
+    with ``attn_metadata=None`` on the profiling path below.
     """
     causal = getattr(attn_metadata, "causal", None)
     if isinstance(causal, torch.Tensor):
         raise NotImplementedError(
             "Per-sequence causal (dynamic_causal) requires FlashAttention v4, "
             "which MUSA does not provide; diffusion models must use the "
-            "TRITON_ATTN backend (pinned in vllm_musa.platform, MUSA-100051)"
+            "TRITON_ATTN backend"
         )
 
 
@@ -287,17 +277,11 @@ class MUSAFlashAttentionBackend(AttentionBackend):
     @classmethod
     def supports_sliding_window(cls) -> bool:
         # mate's FA3 wrapper takes window_size= on every entry point, and this
-        # impl derives it per LAYER (self.sliding_window -> sliding_window_size on
-        # the decode/prefill/split paths) so interleaved sliding/full models work:
-        # only the AOT scheduler needs a single window for all layers, and it
-        # disables itself when the model mixes them. Base AttentionBackend
-        # defaults this to False, which made backend SELECTION reject
-        # FLASH_ATTN for any model with a sliding window: a mixed model then ran
-        # its sliding layers on TRITON_ATTN and its full layers on FLASH_ATTN —
-        # two KV-cache layout families in one step — and died in init_kv_cache
-        # (`assert kv_cache.shape[1] == 2`). Upstream FlashAttentionBackend
-        # declares True for the same reason; this override went missing when the
-        # class was copied (MUSA-100051).
+        # impl resolves it per LAYER (self.sliding_window -> sliding_window_size
+        # on the decode/prefill/split paths), so interleaved sliding/full models
+        # mix freely; only the AOT scheduler needs one window for all layers, and
+        # it disables itself when the model mixes them. Answering False would make
+        # backend selection reject FLASH_ATTN for every windowed model.
         return True
 
     @classmethod

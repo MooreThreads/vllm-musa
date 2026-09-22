@@ -204,25 +204,15 @@ def _configure_fused_add_rmsnorm_compile_range(
 def force_triton_attn_for_diffusion(vllm_config: "VllmConfig") -> bool:
     """Pin the TRITON_ATTN backend for diffusion models. Returns True if pinned.
 
-    Diffusion LMs (e.g. DiffusionGemma) ask for a PER-REQUEST causal mask — the
-    model passes `causal` as a tensor so that some requests attend causally and
-    others do not. The MUSA FlashAttention path cannot express that: `causal` is
-    a bool all the way into mate's FA3 wrapper, so AUTO selection (which prefers
-    FLASH_ATTN, see `_get_backend_priorities`) would silently ignore the mask.
-    Upstream reaches the same conclusion from the other side: its `fa_utils`
-    upgrades FA3 -> FA4 for exactly this case, logging
-    "Per-sequence causal (dynamic_causal) requires FA4" — and MUSA has no FA4.
-    TRITON_ATTN types `causal` as `bool | torch.Tensor` and honours it per
-    request (the unified attention op resolves it: `use_per_seq_causal`), which is
-    precisely what upstream falls back to on devices without FA4 — this pin is not
-    a MUSA-only workaround but that same resolution, made explicit.
+    Diffusion LMs pass `causal` as a per-request tensor, so that encoder and
+    denoise requests in one batch attend differently. The MUSA FlashAttention path
+    types `causal` as a bool all the way into mate's FA3 wrapper and would silently
+    ignore the mask; TRITON_ATTN types it `bool | torch.Tensor`, and its unified
+    attention op resolves it per request.
 
-    An explicit `--attention-backend FLASH_ATTN` is overridden too, with a warning:
-    honouring the request would silently ignore the model's per-request mask, and a
-    silently wrong result is worse than a changed flag. Any other backend is left
-    as the user chose, with a warning, and
-    `vllm_musa...flash_attn.reject_per_sequence_causal` refuses the mask if that
-    backend cannot express one.
+    An explicit FLASH_ATTN request is overridden too, because honouring it would
+    return silently wrong results; any other explicit backend is left as
+    requested, with a warning.
     """
     model_config = getattr(vllm_config, "model_config", None)
     attention_config = getattr(vllm_config, "attention_config", None)

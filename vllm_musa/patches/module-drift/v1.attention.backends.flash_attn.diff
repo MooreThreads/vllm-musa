@@ -56,7 +56,7 @@
  import vllm.envs as envs
  from vllm.config import (
      VllmConfig,
-@@ -55,61 +20,284 @@
+@@ -55,61 +20,268 @@
  from vllm.config.cache import CacheDType
  from vllm.distributed.parallel_state import get_dcp_group
  from vllm.logger import init_logger
@@ -118,31 +118,21 @@
 +def reject_per_sequence_causal(attn_metadata: Any) -> None:
 +    """Refuse the per-request causal mask MATE's FA3 wrapper cannot express.
 +
-+    Upstream FA4 takes ``dynamic_causal=`` (a 1-D per-request flag tensor) next to
-+    the scalar ``causal``; ``mate``'s wrappers declare ``causal: bool`` only and no
-+    FA4 exists on MUSA, so such a tensor cannot be honoured here. Upstream raises
-+    the same error from its own guard ("Per-sequence causal requires FA4. Current
-+    version: FA3"), so failing loudly keeps MUSA aligned — instead of passing a
-+    tensor into a bool parameter, which raised an opaque "Boolean value of Tensor
-+    with more than one element is ambiguous" from the branch conditions, or
-+    silently took the non-AOT scheduler path.
++    FA4 takes ``dynamic_causal=`` beside the scalar ``causal``; ``mate`` declares
++    ``causal: bool`` and MUSA has no FA4, so a per-request flag tensor cannot be
++    honoured here and has to fail loudly instead of landing in a bool parameter.
++    Diffusion models pass exactly that tensor and run on TRITON_ATTN, whose
++    unified attention op implements the per-sequence causal path.
 +
-+    Diffusion models produce exactly this tensor (``diffusion_gemma.py`` builds a
-+    per-request encoder/denoise flag) and are pinned to TRITON_ATTN, whose unified
-+    attention op implements the per-sequence causal path.
-+
-+    Takes the metadata, not the flag: vLLM calls ``forward`` with
-+    ``attn_metadata=None`` on the profiling/dummy path before the early return
-+    below, so an unguarded ``attn_metadata.causal`` would break every model the
-+    FlashAttention backend serves at engine start (caught on hardware by the
-+    MUSA-100051 consolidation run).
++    Takes the metadata rather than the flag because ``forward`` is also called
++    with ``attn_metadata=None`` on the profiling path below.
 +    """
 +    causal = getattr(attn_metadata, "causal", None)
 +    if isinstance(causal, torch.Tensor):
 +        raise NotImplementedError(
 +            "Per-sequence causal (dynamic_causal) requires FlashAttention v4, "
 +            "which MUSA does not provide; diffusion models must use the "
-+            "TRITON_ATTN backend (pinned in vllm_musa.platform, MUSA-100051)"
++            "TRITON_ATTN backend"
 +        )
 +
 +
@@ -353,21 +343,15 @@
 +    @classmethod
 +    def supports_sliding_window(cls) -> bool:
 +        # mate's FA3 wrapper takes window_size= on every entry point, and this
-+        # impl derives it per LAYER (self.sliding_window -> sliding_window_size on
-+        # the decode/prefill/split paths) so interleaved sliding/full models work:
-+        # only the AOT scheduler needs a single window for all layers, and it
-+        # disables itself when the model mixes them. Base AttentionBackend
-+        # defaults this to False, which made backend SELECTION reject
-+        # FLASH_ATTN for any model with a sliding window: a mixed model then ran
-+        # its sliding layers on TRITON_ATTN and its full layers on FLASH_ATTN —
-+        # two KV-cache layout families in one step — and died in init_kv_cache
-+        # (`assert kv_cache.shape[1] == 2`). Upstream FlashAttentionBackend
-+        # declares True for the same reason; this override went missing when the
-+        # class was copied (MUSA-100051).
++        # impl resolves it per LAYER (self.sliding_window -> sliding_window_size
++        # on the decode/prefill/split paths), so interleaved sliding/full models
++        # mix freely; only the AOT scheduler needs one window for all layers, and
++        # it disables itself when the model mixes them. Answering False would make
++        # backend selection reject FLASH_ATTN for every windowed model.
          return True
 
      @classmethod
-@@ -124,8 +312,9 @@
+@@ -124,8 +296,9 @@
 
      @classmethod
      def supports_per_head_quant_scales(cls) -> bool:
@@ -379,7 +363,7 @@
 
      @staticmethod
      def get_impl_cls() -> type["FlashAttentionImpl"]:
-@@ -145,56 +334,50 @@
+@@ -145,56 +318,50 @@
      ) -> tuple[int, ...]:
          if block_size % 16 != 0:
              raise ValueError("Block size must be a multiple of 16.")
@@ -459,7 +443,7 @@
 
      @classmethod
      def supports_sink(cls) -> bool:
-@@ -204,7 +387,7 @@
+@@ -204,7 +371,7 @@
 
      @classmethod
      def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
@@ -468,7 +452,7 @@
 
      @classmethod
      def supports_combination(
-@@ -219,28 +402,11 @@
+@@ -219,28 +386,11 @@
          use_mm_prefix: bool,
          device_capability: DeviceCapability,
      ) -> str | None:
@@ -500,7 +484,7 @@
          return None
 
 
-@@ -262,6 +428,21 @@
+@@ -262,6 +412,21 @@
      block_table: torch.Tensor
      slot_mapping: torch.Tensor
 
@@ -522,7 +506,7 @@
      # For cascade attention.
      use_cascade: bool
      common_prefix_len: int
-@@ -273,44 +454,23 @@
+@@ -273,44 +438,23 @@
      max_dcp_context_kv_len: int | None = None
      dcp_context_kv_lens: torch.Tensor | None = None
 
@@ -574,7 +558,7 @@
      sliding_window_configs: set[tuple[int, int] | None] = set()
      layers = get_layers_from_vllm_config(vllm_config, Attention)
      for layer in layers.values():
-@@ -318,20 +478,6 @@
+@@ -318,20 +462,6 @@
              continue
          sliding_window_configs.add(layer.impl.sliding_window)
      return sliding_window_configs
@@ -595,7 +579,7 @@
 
 
  class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetadata]):
-@@ -360,64 +506,17 @@
+@@ -360,64 +490,17 @@
      )
      supports_update_block_table: bool = True
 
@@ -665,7 +649,7 @@
 
      def __init__(
          self,
-@@ -443,6 +542,7 @@
+@@ -443,6 +526,7 @@
 
          self.max_num_splits = 0  # No upper bound on the number of splits.
          self.aot_schedule = get_flash_attn_version() == 3
@@ -673,7 +657,7 @@
 
          try:
              from vllm.distributed.parallel_state import get_dcp_group
-@@ -454,14 +554,6 @@
+@@ -454,14 +538,6 @@
              self.dcp_world_size = 1
              self.dcp_rank = 0
 
@@ -688,7 +672,7 @@
          self.cp_kv_cache_interleave_size = (
              self.parallel_config.cp_kv_cache_interleave_size
          )
-@@ -470,6 +562,16 @@
+@@ -470,6 +546,16 @@
              self.compilation_config.cudagraph_mode.has_full_cudagraphs()
          )
          self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
@@ -705,7 +689,7 @@
 
          if self.use_full_cuda_graph and self.aot_schedule:
              # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
-@@ -492,46 +594,38 @@
+@@ -492,46 +578,38 @@
              self.max_num_splits = (
                  self.attention_config.flash_attn_max_num_splits_for_cuda_graph
              )
@@ -777,7 +761,7 @@
 
      def build(
          self,
-@@ -553,11 +647,25 @@
+@@ -553,11 +631,25 @@
          slot_mapping = common_attn_metadata.slot_mapping
          causal = common_attn_metadata.causal
 
@@ -808,7 +792,7 @@
 
          if self.aot_sliding_window is None:
              self.aot_sliding_window = (-1, -1)
-@@ -585,87 +693,153 @@
+@@ -585,87 +677,153 @@
              # usage, because the intermediate buffers of size [num_splits,
              # num_heads, num_tokens, head_size] are allocated. Therefore,
              # we only set num_splits when using cuda graphs.
@@ -1022,7 +1006,7 @@
          elif use_cascade:
              cu_prefix_query_lens = torch.tensor(
                  [0, num_actual_tokens], dtype=torch.int32, device=self.device
-@@ -675,41 +849,107 @@
+@@ -675,41 +833,107 @@
              )
              # Use GPU tensor directly - no CPU sync needed
              suffix_kv_lens = seq_lens[:num_reqs] - common_prefix_len
@@ -1151,7 +1135,7 @@
 
          attn_metadata = FlashAttentionMetadata(
              num_actual_tokens=num_actual_tokens,
-@@ -717,14 +957,21 @@
+@@ -717,14 +941,21 @@
              query_start_loc=query_start_loc,
              max_seq_len=max_seq_len,
              seq_lens=seq_lens,
@@ -1177,7 +1161,7 @@
              use_cascade=use_cascade,
              common_prefix_len=common_prefix_len,
              scheduler_metadata=scheduler_metadata,
-@@ -735,50 +982,6 @@
+@@ -735,50 +966,6 @@
              max_num_splits=max_num_splits,
              causal=causal,
          )
@@ -1228,7 +1212,7 @@
          return attn_metadata
 
      def update_block_table(
-@@ -789,30 +992,11 @@
+@@ -789,30 +976,11 @@
      ) -> FlashAttentionMetadata:
          new_metadata = copy.copy(metadata)
          new_metadata.block_table = blk_table
@@ -1262,7 +1246,7 @@
 
      def use_cascade_attention(self, *args, **kwargs) -> bool:
          return use_cascade_attention(*args, **kwargs)
-@@ -861,40 +1045,44 @@
+@@ -861,40 +1029,44 @@
          self.vllm_flash_attn_version = get_flash_attn_version(
              requires_alibi=alibi_slopes is not None,
              head_size=head_size,
@@ -1323,7 +1307,7 @@
 
          vllm_config = get_current_vllm_config_or_none()
          dcp_a2a = (
-@@ -902,15 +1090,9 @@
+@@ -902,15 +1074,9 @@
              and vllm_config.parallel_config.decode_context_parallel_size > 1
              and vllm_config.parallel_config.dcp_comm_backend == "a2a"
          )
@@ -1342,7 +1326,7 @@
 
      def forward(
          self,
-@@ -920,7 +1102,7 @@
+@@ -920,7 +1086,7 @@
          value: torch.Tensor,
          kv_cache: torch.Tensor,
          attn_metadata: FlashAttentionMetadata,
@@ -1351,7 +1335,7 @@
          output_scale: torch.Tensor | None = None,
          output_block_scale: torch.Tensor | None = None,
      ) -> torch.Tensor:
-@@ -931,7 +1113,7 @@
+@@ -931,7 +1097,7 @@
              key: shape = [num_tokens, num_kv_heads, head_size]
              value: shape = [num_tokens, num_kv_heads, head_size]
              kv_cache: shape =
@@ -1360,7 +1344,7 @@
              attn_metadata: Metadata for attention.
          Returns:
              shape = [num_tokens, num_heads * head_size]
-@@ -939,9 +1121,12 @@
+@@ -939,9 +1105,12 @@
                {q,k,v}_descale to be (num_sequences, num_kv_heads).
                We use torch's .expand() to avoid duplicating values
          """
@@ -1376,7 +1360,7 @@
 
          if output_scale is not None or output_block_scale is not None:
              raise NotImplementedError(
-@@ -978,30 +1163,16 @@
+@@ -978,30 +1147,16 @@
                  layer,
              )
 
@@ -1416,7 +1400,7 @@
 
          if not attn_metadata.use_cascade:
              cu_seqlens_q = attn_metadata.query_start_loc
-@@ -1013,11 +1184,7 @@
+@@ -1013,11 +1168,7 @@
 
              descale_shape = (cu_seqlens_q.shape[0] - 1, self.num_kv_heads)
 
@@ -1429,7 +1413,7 @@
              k_descale = layer._k_scale.expand(descale_shape)
              v_descale = layer._v_scale.expand(descale_shape)
 
-@@ -1036,116 +1203,220 @@
+@@ -1036,116 +1187,220 @@
                  )
                  return output
              else:
@@ -1752,7 +1736,7 @@
          # Cascade attention (rare case).
          cascade_attention(
              output[:num_actual_tokens],
-@@ -1175,6 +1446,406 @@
+@@ -1175,6 +1430,406 @@
          )
          return output
 
@@ -2159,7 +2143,7 @@
      def do_kv_cache_update(
          self,
          layer: torch.nn.Module,
-@@ -1188,10 +1859,7 @@
+@@ -1188,10 +1843,7 @@
              # we use direct Q, K, V tensors without caching
              return
 
@@ -2171,7 +2155,7 @@
 
          # Reshape the input keys and values and store them in the cache.
          # Skip this if sharing KV cache with an earlier attention layer.
-@@ -1211,182 +1879,6 @@
+@@ -1211,182 +1863,6 @@
              layer._v_scale,
          )
 
@@ -2354,7 +2338,7 @@
      def _forward_encoder_attention(
          self,
          query: torch.Tensor,
-@@ -1406,12 +1898,12 @@
+@@ -1406,12 +1882,12 @@
              attn_metadata: Encoder attention metadata
              layer: The attention layer
          """
@@ -2371,7 +2355,7 @@
              raise NotImplementedError(
                  "quantization is not supported for encoder attention"
              )
-@@ -1422,202 +1914,28 @@
+@@ -1422,202 +1898,28 @@
          max_seqlen_q = attn_metadata.max_query_len
          max_seqlen_k = attn_metadata.max_query_len
 
@@ -2580,7 +2564,7 @@
 
 
  def use_cascade_attention(
-@@ -1726,9 +2044,10 @@
+@@ -1726,9 +2028,10 @@
  ) -> torch.Tensor:
      assert alibi_slopes is None, "Cascade attention does not support ALiBi."
      # TODO: Support sliding window.
