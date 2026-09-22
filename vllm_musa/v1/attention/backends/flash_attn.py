@@ -297,7 +297,7 @@ class MUSAFlashAttentionBackend(AttentionBackend):
         # two KV-cache layout families in one step — and died in init_kv_cache
         # (`assert kv_cache.shape[1] == 2`). Upstream FlashAttentionBackend
         # declares True for the same reason; this override went missing when the
-        # class was copied. Evidence: generated/MUSA-100051/.
+        # class was copied (MUSA-100051).
         return True
 
     @classmethod

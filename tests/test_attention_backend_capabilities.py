@@ -77,6 +77,38 @@ def _shadow_path(entry) -> Path:
     return ROOT / entry.upstream_path.replace("vllm/", "vllm_musa/", 1)
 
 
+def _constant_capabilities(path: Path) -> dict[str, bool]:
+    """``{name: value}`` for `supports_*` methods that just return a constant.
+
+    The name-level check below cannot see a shadow that declares the right
+    method and answers ``False`` from it — which is exactly the shape of the
+    MUSA-100051 bug. This second view catches that, and only that: methods with
+    real logic are left to the reader.
+    """
+    tree = ast.parse(path.read_text())
+    out: dict[str, bool] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name.startswith("supports_")):
+            continue
+        body = [
+            stmt
+            for stmt in node.body
+            if not (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Constant)
+                and isinstance(stmt.value.value, str)
+            )
+        ]
+        if (
+            len(body) == 1
+            and isinstance(body[0], ast.Return)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, bool)
+        ):
+            out[node.name] = body[0].value.value
+    return out
+
+
 def _shadow_entries():
     return [e for e in _load_manifest().ENTRIES if e.category == _SHADOW_CATEGORY]
 
@@ -206,6 +238,7 @@ def test_diffusion_model_is_pinned_to_triton_attn():
     )
     assert force(no_model) is False
 
+
 def test_musa_fa_rejects_per_sequence_causal():
     """A per-request causal mask needs FA4; MATE is FA3-class, so refuse loudly.
 
@@ -235,3 +268,41 @@ def test_musa_fa_rejects_per_sequence_causal():
     for tensor_mask in (torch.tensor([True, False]), torch.tensor([True])):
         with pytest.raises(NotImplementedError, match="requires FlashAttention v4"):
             reject(SimpleNamespace(causal=tensor_mask))
+
+
+def test_no_shadow_constantly_refuses_a_capability_upstream_supports():
+    """The MUSA-100051 bug, restated: `supports_x() -> False` in a shadow.
+
+    The name-level parity check passes for a shadow that *declares* every
+    capability and answers `False` from the ones it cannot serve — that is how
+    FLASH_ATTN got silently rejected for every windowed model. A deliberate
+    refusal must be declared in _INTENTIONAL_GAPS, with a reason.
+    """
+    upstream_root = _upstream_root()
+    if upstream_root is None:
+        pytest.skip("pinned vLLM checkout not available")
+
+    report = []
+    for entry in _shadow_entries():
+        shadow = _shadow_path(entry)
+        upstream = upstream_root / entry.upstream_path
+        if not shadow.exists() or not upstream.exists():
+            continue
+        gaps = _INTENTIONAL_GAPS.get(entry.id, {})
+        upstream_values = _constant_capabilities(upstream)
+        for name, value in _constant_capabilities(shadow).items():
+            if (
+                value is False
+                and upstream_values.get(name) is True
+                and name not in gaps
+            ):
+                report.append(
+                    f"{entry.id} ({shadow.name}): {name}() returns False while "
+                    f"upstream returns True"
+                )
+    assert not report, (
+        "a MUSA shadow refuses a capability its upstream counterpart serves, so "
+        "backend selection will reject it: silent, and exactly the MUSA-100051 "
+        "failure mode. Declare a deliberate gap in _INTENTIONAL_GAPS with a "
+        "reason, or restore the capability:\n  " + "\n  ".join(report)
+    )

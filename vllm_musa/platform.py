@@ -215,10 +215,14 @@ def force_triton_attn_for_diffusion(vllm_config: "VllmConfig") -> bool:
     TRITON_ATTN types `causal` as `bool | torch.Tensor` and honours it per
     request (the unified attention op resolves it: `use_per_seq_causal`), which is
     precisely what upstream falls back to on devices without FA4 — this pin is not
-    a MUSA-only workaround but that same resolution, made explicit. An explicit
-    `--attention-backend` still wins; warn when that choice lands on a backend
-    that cannot honour a dynamic causal mask, and
-    `vllm_musa...flash_attn.reject_per_sequence_causal` refuses it there.
+    a MUSA-only workaround but that same resolution, made explicit.
+
+    An explicit `--attention-backend FLASH_ATTN` is overridden too, with a warning:
+    honouring the request would silently ignore the model's per-request mask, and a
+    silently wrong result is worse than a changed flag. Any other backend is left
+    as the user chose, with a warning, and
+    `vllm_musa...flash_attn.reject_per_sequence_causal` refuses the mask if that
+    backend cannot express one.
     """
     model_config = getattr(vllm_config, "model_config", None)
     attention_config = getattr(vllm_config, "attention_config", None)
@@ -236,8 +240,8 @@ def force_triton_attn_for_diffusion(vllm_config: "VllmConfig") -> bool:
             logger.warning(
                 "Overriding --attention-backend FLASH_ATTN with TRITON_ATTN: a "
                 "diffusion model passes a per-request (tensor) causal mask, which "
-                "FLASH_ATTN cannot express; pass TRITON_ATTN explicitly to silence "
-                "this warning."
+                "FLASH_ATTN cannot express, so the requested backend would return "
+                "silently wrong results."
             )
         else:
             logger.info_once(
