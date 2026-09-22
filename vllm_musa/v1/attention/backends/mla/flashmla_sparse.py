@@ -15,9 +15,7 @@ from vllm.config.cache import CacheDType
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability
 from vllm.v1.attention.backend import MultipleOf
-from vllm.v1.attention.backends.mla.flashmla_sparse import (
-    FlashMLASparseBackend,
-)
+from vllm.v1.attention.backends.mla.flashmla_sparse import FlashMLASparseBackend
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 
 from vllm_musa.v1.attention.ops.flashmla import (
