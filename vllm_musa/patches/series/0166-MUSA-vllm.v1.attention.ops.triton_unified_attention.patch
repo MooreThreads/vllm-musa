@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 21 Sep 2026 14:30:00 +0800
+Subject: [PATCH] MUSA: vllm.v1.attention.ops.triton_unified_attention
+
+---
+ .../attention/ops/triton_unified_attention.py | 24 +++++++++----------
+ 1 file changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
+index b8f7564..8146519 100644
+--- a/vllm/v1/attention/ops/triton_unified_attention.py
++++ b/vllm/v1/attention/ops/triton_unified_attention.py
+@@ -276,12 +276,12 @@ def kernel_unified_attention(
+     # ``int | None`` is the only annotation that lets the wrapper pass
+     # ``None`` here so Triton can skip materialising the strides when the
+     # ``USE_PER_TOKEN_HEAD_SCALES`` branch is dead.
+-    stride_ks_blk: int | None = None,
+-    stride_ks_slot: int | None = None,
+-    stride_ks_head: int | None = None,
+-    stride_vs_blk: int | None = None,
+-    stride_vs_slot: int | None = None,
+-    stride_vs_head: int | None = None,
++    stride_ks_blk: tl.int64 = 0,
++    stride_ks_slot: tl.int64 = 0,
++    stride_ks_head: tl.int64 = 0,
++    stride_vs_blk: tl.int64 = 0,
++    stride_vs_slot: tl.int64 = 0,
++    stride_vs_head: tl.int64 = 0,
+     # KV cache quantization mode handled inside this kernel via constexpr
+     # branches: NONE (0), FP8_PER_TENSOR (1), INT8_PER_TOKEN_HEAD (2),
+     # FP8_PER_TOKEN_HEAD (3). Sub-byte INT4 (4) uses its own
+@@ -1158,12 +1158,12 @@ def unified_attention(
+         stride_v_cache_1=v.stride(1),
+         stride_v_cache_2=v.stride(2),
+         stride_v_cache_3=v.stride(3),
+-        stride_ks_blk=ks_blk,
+-        stride_ks_slot=ks_slot,
+-        stride_ks_head=ks_head,
+-        stride_vs_blk=vs_blk,
+-        stride_vs_slot=vs_slot,
+-        stride_vs_head=vs_head,
++        stride_ks_blk=(ks_blk or 0),
++        stride_ks_slot=(ks_slot or 0),
++        stride_ks_head=(ks_head or 0),
++        stride_vs_blk=(vs_blk or 0),
++        stride_vs_slot=(vs_slot or 0),
++        stride_vs_head=(vs_head or 0),
+         query_start_len_ptr=cu_seqlens_q,
+         BLOCK_Q=BLOCK_Q,
+         num_seqs=num_seqs,
