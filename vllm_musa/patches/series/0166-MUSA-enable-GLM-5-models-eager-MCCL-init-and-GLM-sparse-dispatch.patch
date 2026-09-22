@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Subject: [PATCH] MUSA: scope eager MCCL init to GLM DSA multi-node PP
+Subject: [PATCH] MUSA: enable GLM-5 models with eager MCCL init and GLM sparse dispatch
 
 ---
 --- a/vllm/distributed/parallel_state.py
@@ -14,7 +14,7 @@ Subject: [PATCH] MUSA: scope eager MCCL init to GLM DSA multi-node PP
                  backend=backend,
                  init_method=distributed_init_method if store is None else None,
                  store=store,
-@@ -1690,6 +1690,11 @@
+@@ -1690,3 +1690,37 @@
                  rank=rank,
                  timeout=timeout,
              )
@@ -55,3 +55,42 @@ Subject: [PATCH] MUSA: scope eager MCCL init to GLM DSA multi-node PP
          if enable_elastic_ep:
              tp_pp_cpu_group = torch.distributed.new_group(
                  backend="gloo", timeout=timeout
+             )
+
+--- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
++++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+@@ -558,5 +558,23 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+         self.fp8_decode_padded_heads = self._compute_fp8_decode_padded_heads(num_heads)
+
+         vllm_config = get_current_vllm_config()
++        model_config = vllm_config.model_config
++        hf_config = getattr(model_config, "hf_config", None)
++        hf_text_config = getattr(model_config, "hf_text_config", None)
++        architectures = (
++            getattr(model_config, "architectures", None)
++            or getattr(hf_config, "architectures", None)
++            or getattr(hf_text_config, "architectures", None)
++            or ()
++        )
++        model_type = (
++            getattr(model_config, "model_type", None)
++            or getattr(hf_config, "model_type", None)
++            or getattr(hf_text_config, "model_type", None)
++        )
++        self._is_glm_dsa = (
++            "GlmMoeDsaForCausalLM" in architectures
++            or model_type == "glm_moe_dsa"
++        )
+         max_tokens = vllm_config.scheduler_config.max_num_batched_tokens
+         q_concat_shape = (max_tokens, num_heads, head_size)
+@@ -826,9 +833,10 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+
+         topk_indices = topk_indices.view(num_tokens, 1, -1)
+         output = flash_mla_sparse_fwd(
+             q,
+             kv_c_and_k_pe_cache,
+             topk_indices,
+             self.softmax_scale,
+             topk_length=topk_length,
++            is_glm_dsa=self._is_glm_dsa,
+         )[0]

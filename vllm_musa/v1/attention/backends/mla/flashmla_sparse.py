@@ -11,14 +11,12 @@ Registers the sparse-MLA backend so the MLA selector can pick it for DSA
 from os import getenv
 
 import torch
-from vllm.config import get_current_vllm_config_or_none
 from vllm.config.cache import CacheDType
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability
 from vllm.v1.attention.backend import MultipleOf
 from vllm.v1.attention.backends.mla.flashmla_sparse import (
     FlashMLASparseBackend,
-    FlashMLASparseImpl as _CoreFlashMLASparseImpl,
 )
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 
@@ -28,9 +26,6 @@ from vllm_musa.v1.attention.ops.flashmla import (
 )
 
 logger = init_logger(__name__)
-
-_active_model_config = None
-
 # MUSA: the upstream sparse backend imports FlashMLA ops from the core module,
 # which is backed by the CUDA `vllm._flashmla_C` (not built on MUSA). Rebind
 # those names in the core sparse module to the MUSA `flash_mla` equivalents so
@@ -89,6 +84,7 @@ def _can_use_tilelang_sparse_prefill(
 
 
 def _can_use_glm_mate_sparse_prefill(
+    is_glm_dsa: bool,
     q: torch.Tensor,
     kv: torch.Tensor,
     indices: torch.Tensor,
@@ -97,26 +93,6 @@ def _can_use_glm_mate_sparse_prefill(
     topk_length: torch.Tensor | None,
 ) -> bool:
     """Keep the MATE adapter to the validated GLM-5.x prefill contract."""
-    model_config = _active_model_config
-    if model_config is None:
-        return False
-    hf_config = getattr(model_config, "hf_config", None)
-    hf_text_config = getattr(model_config, "hf_text_config", None)
-    architectures = (
-        getattr(model_config, "architectures", None)
-        or getattr(hf_config, "architectures", None)
-        or getattr(hf_text_config, "architectures", None)
-        or ()
-    )
-    model_type = (
-        getattr(model_config, "model_type", None)
-        or getattr(hf_config, "model_type", None)
-        or getattr(hf_text_config, "model_type", None)
-    )
-    is_glm_dsa = (
-        "GlmMoeDsaForCausalLM" in architectures
-        or model_type == "glm_moe_dsa"
-    )
     return (
         is_glm_dsa
         and _can_use_tilelang_sparse_prefill(
@@ -127,7 +103,6 @@ def _can_use_glm_mate_sparse_prefill(
         and kv.shape[2] == 576
     )
 
-
 def _musa_backend_sparse_fwd(
     q: torch.Tensor,
     kv: torch.Tensor,
@@ -137,10 +112,11 @@ def _musa_backend_sparse_fwd(
     attn_sink: torch.Tensor | None = None,
     topk_length: torch.Tensor | None = None,
     out: torch.Tensor | None = None,
+    is_glm_dsa: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     sparse_mla_fwd_bf16 = None
     if _can_use_glm_mate_sparse_prefill(
-        q, kv, indices, d_v, attn_sink, topk_length
+        is_glm_dsa, q, kv, indices, d_v, attn_sink, topk_length
     ):
         logger.info_once("Using GLM DSA MATE sparse-MLA prefill adapter.")
         from vllm_musa.v1.attention.ops.sparse_mla_mate import (
@@ -186,20 +162,8 @@ _core_sparse.flash_mla_with_kvcache = _musa_mla_kvcache
 _core_sparse.FlashMLASchedMeta = _musa_sched_meta
 
 
-class MUSAFlashMLASparseImpl(_CoreFlashMLASparseImpl):
-    def __init__(self, *args, **kwargs) -> None:
-        global _active_model_config
-        config = get_current_vllm_config_or_none()
-        _active_model_config = getattr(config, "model_config", None)
-        super().__init__(*args, **kwargs)
-
-
 @register_backend(AttentionBackendEnum.FLASHMLA_SPARSE)
 class MUSAFlashMLASparseBackend(FlashMLASparseBackend):
-    @staticmethod
-    def get_impl_cls() -> type[MUSAFlashMLASparseImpl]:
-        return MUSAFlashMLASparseImpl
-
     @classmethod
     def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
         return capability.major == 3 and is_flashmla_sparse_supported()[0]
