@@ -67,6 +67,30 @@ if is_flash_attn_varlen_func_available():
 logger = init_logger(__name__)
 
 
+def reject_per_sequence_causal(causal: Any) -> None:
+    """Refuse the per-request causal mask MATE's FA3 wrapper cannot express.
+
+    Upstream FA4 takes ``dynamic_causal=`` (a 1-D per-request flag tensor) next to
+    the scalar ``causal``; ``mate``'s wrappers declare ``causal: bool`` only and no
+    FA4 exists on MUSA, so such a tensor cannot be honoured here. Upstream raises
+    the same error from its own guard ("Per-sequence causal requires FA4. Current
+    version: FA3"), so failing loudly keeps MUSA aligned — instead of passing a
+    tensor into a bool parameter, which raised an opaque "Boolean value of Tensor
+    with more than one element is ambiguous" from the branch conditions, or
+    silently took the non-AOT scheduler path.
+
+    Diffusion models produce exactly this tensor (``diffusion_gemma.py`` builds a
+    per-request encoder/denoise flag) and are pinned to TRITON_ATTN, whose unified
+    attention op implements the per-sequence causal path.
+    """
+    if isinstance(causal, torch.Tensor):
+        raise NotImplementedError(
+            "Per-sequence causal (dynamic_causal) requires FlashAttention v4, "
+            "which MUSA does not provide; diffusion models must use the "
+            "TRITON_ATTN backend (pinned in vllm_musa.platform, MUSA-100051)"
+        )
+
+
 def _is_musa_qwen_text_generation_architecture(model_config: Any) -> bool:
     return resolve_optimization_contract(model_config=model_config).prefers(
         OptimizationFeature.QWEN_FA3_SCHEDULER
@@ -1074,6 +1098,8 @@ class FlashAttentionImpl(AttentionImpl):
               {q,k,v}_descale to be (num_sequences, num_kv_heads).
               We use torch's .expand() to avoid duplicating values
         """
+        reject_per_sequence_causal(attn_metadata.causal)
+
         assert output is not None, "Output tensor must be provided."
         assert (
             self.vllm_flash_attn_version is not None

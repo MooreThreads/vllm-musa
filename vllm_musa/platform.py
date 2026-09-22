@@ -213,8 +213,12 @@ def force_triton_attn_for_diffusion(vllm_config: "VllmConfig") -> bool:
     upgrades FA3 -> FA4 for exactly this case, logging
     "Per-sequence causal (dynamic_causal) requires FA4" — and MUSA has no FA4.
     TRITON_ATTN types `causal` as `bool | torch.Tensor` and honours it per
-    request. An explicit `--attention-backend` still wins; warn when that choice
-    lands on a backend that cannot honour a dynamic causal mask.
+    request (the unified attention op resolves it: `use_per_seq_causal`), which is
+    precisely what upstream falls back to on devices without FA4 — this pin is not
+    a MUSA-only workaround but that same resolution, made explicit. An explicit
+    `--attention-backend` still wins; warn when that choice lands on a backend
+    that cannot honour a dynamic causal mask, and
+    `vllm_musa...flash_attn.reject_per_sequence_causal` refuses it there.
     """
     model_config = getattr(vllm_config, "model_config", None)
     attention_config = getattr(vllm_config, "attention_config", None)

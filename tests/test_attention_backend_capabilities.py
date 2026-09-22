@@ -219,3 +219,26 @@ def test_diffusion_model_is_pinned_to_triton_attn():
         model_config=None, attention_config=SimpleNamespace(backend=None)
     )
     assert force(no_model) is False
+
+def test_musa_fa_rejects_per_sequence_causal():
+    """A per-request causal mask needs FA4; MATE is FA3-class, so refuse loudly.
+
+    Without this the tensor travelled into ``causal=`` and surfaced as "Boolean
+    value of Tensor with more than one element is ambiguous" from a branch
+    condition, or silently selected the non-AOT scheduler path.
+    """
+    torch = pytest.importorskip("torch", reason="needs torch for the tensor check")
+    fa_backend = pytest.importorskip(
+        "vllm_musa.v1.attention.backends.flash_attn",
+        reason="the MUSA FA shadow needs a MUSA build (torchada/torch_musa)",
+    )
+    reject = fa_backend.reject_per_sequence_causal
+
+    # scalar forms are exactly what mate's `causal: bool` accepts
+    reject(True)
+    reject(False)
+
+    # any tensor is upstream-incompatible, including a single-request flag
+    for tensor_mask in (torch.tensor([True, False]), torch.tensor([True])):
+        with pytest.raises(NotImplementedError, match="requires FlashAttention v4"):
+            reject(tensor_mask)
