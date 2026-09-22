@@ -478,8 +478,7 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def check_and_update_config(cls, vllm_config: "VllmConfig") -> None:
-        # decide the attention backend before anything downstream reads it (see
-        # the docstring: diffusion models need a dynamic causal mask).
+        # pin the diffusion backend before anything reads the attention config
         force_triton_attn_for_diffusion(vllm_config)
 
         # when dflash spec-decode is active, coerce the draft-loop

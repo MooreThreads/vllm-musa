@@ -276,12 +276,12 @@ class MUSAFlashAttentionBackend(AttentionBackend):
 
     @classmethod
     def supports_sliding_window(cls) -> bool:
-        # mate's FA3 wrapper takes window_size= on every entry point, and this
-        # impl resolves it per LAYER (self.sliding_window -> sliding_window_size
-        # on the decode/prefill/split paths), so interleaved sliding/full models
-        # mix freely; only the AOT scheduler needs one window for all layers, and
-        # it disables itself when the model mixes them. Answering False would make
-        # backend selection reject FLASH_ATTN for every windowed model.
+        # mate's FA3 wrapper takes window_size=, and this impl resolves it per
+        # LAYER (self.sliding_window -> sliding_window_size on the decode/prefill/
+        # split paths), so interleaved sliding/full models mix freely; only the AOT
+        # scheduler needs one window for all layers and it disables itself when the
+        # model mixes them. Answering False here rejects FLASH_ATTN for windowed
+        # models outright.
         return True
 
     @classmethod

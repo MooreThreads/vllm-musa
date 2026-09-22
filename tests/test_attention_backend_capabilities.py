@@ -1,18 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Guards the attention-backend capabilities MUSA shadows must keep declaring.
 
-Several backend modules under ``vllm_musa/v1/attention/backends/`` are copies of
-their upstream counterparts, and a copied ``AttentionBackend`` subclass must
-re-declare every capability it actually supports: the abstract base answers
-``False`` for all of them, nothing fails at import time, and the backend is merely
-rejected during selection — so a dropped override is silent.
-
-Two checks: every name the upstream class declares, and every name a shadow
-answers a constant ``False`` from while upstream serves it. A deliberate refusal
-belongs in ``_INTENTIONAL_GAPS`` with a reason.
-
-Deliberately source-level (``ast``) so it runs anywhere, including CPU-only CI,
-without importing torch or a MUSA build.
+A shadowed ``AttentionBackend`` subclass must re-declare every capability it
+serves: the abstract base answers ``False`` for all of them, nothing fails at
+import time, and the backend is merely rejected during selection. Two checks:
+every ``supports_*`` name the upstream class declares, and every name a shadow
+answers a constant ``False`` from while upstream serves it — a deliberate
+refusal belongs in ``_INTENTIONAL_GAPS`` with a reason. Source-level (``ast``)
+so it also runs without torch or a MUSA build.
 """
 
 import ast
@@ -158,7 +153,7 @@ def test_known_intentional_gaps_still_exist():
 
 
 def test_diffusion_model_is_pinned_to_triton_attn():
-    """Diffusion passes a tensor `causal`; only TRITON_ATTN honours it (100051)."""
+    """Diffusion passes a tensor `causal`; only TRITON_ATTN honours it."""
     platform = pytest.importorskip(
         "vllm_musa.platform",
         reason="vllm_musa.platform needs a MUSA build (torchada/torch_musa)",
@@ -233,9 +228,9 @@ def test_diffusion_model_is_pinned_to_triton_attn():
 def test_musa_fa_rejects_per_sequence_causal():
     """A per-request causal mask needs FA4; MATE is FA3-class, so refuse loudly.
 
-    Without this the tensor travelled into ``causal=`` and surfaced as "Boolean
-    value of Tensor with more than one element is ambiguous" from a branch
-    condition, or silently selected the non-AOT scheduler path.
+    A tensor in ``causal=`` would instead surface as an opaque "Boolean value of
+    Tensor with more than one element is ambiguous" from a branch condition, or
+    silently select the non-AOT scheduler path.
     """
     torch = pytest.importorskip("torch", reason="needs torch for the tensor check")
     fa_backend = pytest.importorskip(
@@ -244,10 +239,8 @@ def test_musa_fa_rejects_per_sequence_causal():
     )
     reject = fa_backend.reject_per_sequence_causal
 
-    # the profiling/dummy path: vLLM calls forward with attn_metadata=None before
-    # its own early return, so the guard must be a no-op there (regression caught
-    # on hardware: an unguarded `attn_metadata.causal` killed engine start for
-    # every FA-served model).
+    # vLLM calls forward with attn_metadata=None on the profiling path, so the
+    # guard has to be a no-op there
     reject(None)
     reject(object())  # no `causal` attribute at all
 
