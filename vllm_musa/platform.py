@@ -201,6 +201,60 @@ def _configure_fused_add_rmsnorm_compile_range(
     return True
 
 
+def force_triton_attn_for_diffusion(vllm_config: "VllmConfig") -> bool:
+    """Pin the TRITON_ATTN backend for diffusion models. Returns True if pinned.
+
+    Diffusion LMs (e.g. DiffusionGemma) ask for a PER-REQUEST causal mask — the
+    model passes `causal` as a tensor so that some requests attend causally and
+    others do not. The MUSA FlashAttention path cannot express that: `causal` is
+    a bool all the way into mate's FA3 wrapper, so AUTO selection (which prefers
+    FLASH_ATTN, see `_get_backend_priorities`) would silently ignore the mask.
+    Upstream reaches the same conclusion from the other side: its `fa_utils`
+    upgrades FA3 -> FA4 for exactly this case, logging
+    "Per-sequence causal (dynamic_causal) requires FA4" — and MUSA has no FA4.
+    TRITON_ATTN types `causal` as `bool | torch.Tensor` and honours it per
+    request (the unified attention op resolves it: `use_per_seq_causal`), which is
+    precisely what upstream falls back to on devices without FA4 — this pin is not
+    a MUSA-only workaround but that same resolution, made explicit. An explicit
+    `--attention-backend` still wins; warn when that choice lands on a backend
+    that cannot honour a dynamic causal mask, and
+    `vllm_musa...flash_attn.reject_per_sequence_causal` refuses it there.
+    """
+    model_config = getattr(vllm_config, "model_config", None)
+    attention_config = getattr(vllm_config, "attention_config", None)
+    if attention_config is None or not getattr(model_config, "is_diffusion", False):
+        return False
+
+    requested = attention_config.backend
+    if requested == AttentionBackendEnum.TRITON_ATTN:
+        # already what this path needs; the hook runs more than once per process
+        # (engine args, then the platform), so stay quiet and idempotent.
+        return False
+    if requested in (None, AttentionBackendEnum.FLASH_ATTN):
+        attention_config.backend = AttentionBackendEnum.TRITON_ATTN
+        if requested is not None:
+            logger.warning(
+                "Overriding --attention-backend FLASH_ATTN with TRITON_ATTN: a "
+                "diffusion model passes a per-request (tensor) causal mask, which "
+                "FLASH_ATTN cannot express; pass TRITON_ATTN explicitly to silence "
+                "this warning."
+            )
+        else:
+            logger.info_once(
+                "Diffusion model detected: selecting the TRITON_ATTN backend, "
+                "because per-request causal masks need a dynamic causal mask "
+                "that the MUSA FlashAttention path cannot express."
+            )
+        return True
+    logger.warning(
+        "Diffusion model with --attention-backend %s: per-request causal masks "
+        "require a backend that accepts a tensor `causal` (TRITON_ATTN); if this "
+        "backend types `causal: bool`, the mask will be ignored.",
+        requested,
+    )
+    return False
+
+
 class MUSAPlatformBase(Platform):
     _enum = PlatformEnum.OOT  # Out-of-tree platform
     device_name: str = "musa"
@@ -430,6 +484,10 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def check_and_update_config(cls, vllm_config: "VllmConfig") -> None:
+        # decide the attention backend before anything downstream reads it (see
+        # the docstring: diffusion models need a dynamic causal mask).
+        force_triton_attn_for_diffusion(vllm_config)
+
         # when dflash spec-decode is active, coerce the draft-loop
         # CUDAGraph capture to block-aligned FULL sizes (see below). The dflash
         # source patch (DFlashProposer.dummy_run signature) is applied at BUILD
