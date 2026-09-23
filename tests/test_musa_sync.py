@@ -59,9 +59,12 @@ def test_report(ms, capsys):
     rc = ms.main(["report"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "174 divergences" in out
-    assert "'1': 112" in out and "'2': 23" in out and "'3': 1" in out
-    assert "'4a': 2" in out and "'5': 28" in out and "'6': 8" in out
+    # The census follows the manifest, which grows with the base: assert the
+    # shape against the manifest rather than today's numbers.
+    assert f"{len(ms.manifest.ENTRIES)} divergences" in out
+    by_cat = Counter(e.category for e in ms.manifest.ENTRIES)
+    for category, n in sorted(by_cat.items()):
+        assert f"'{category}': {n}" in out
 
 
 def test_report_doc(ms, capsys):
