@@ -1,0 +1,404 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 18 Sep 2026 07:00:00 +0800
+Subject: [PATCH] MUSA: bound DSV4 long-prefill indexer logits
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 0000000..1111111 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -12,7 +12,11 @@
+ from vllm._aiter_ops import rocm_aiter_ops
+ from vllm.compilation.breakable_cudagraph import eager_break_during_capture
+ from vllm.config import CUDAGraphMode, get_current_vllm_config
+-from vllm.distributed import get_dcp_group, get_pcp_group
++from vllm.distributed import get_dcp_group, get_pcp_group, get_tp_group
++from vllm_musa.optimization_contract import (
++    deepseek_v4_long_prefill_logits_budget_mb,
++    deepseek_v4_long_prefill_tp_partition_min_seq_len,
++)
+ from vllm.forward_context import get_forward_context
+ from vllm.logger import init_logger
+ from vllm.model_executor.custom_op import CustomOp
+@@ -115,9 +119,21 @@
+     return max(0, min(width, int(total_seq_lens)))
+ 
+ 
+-def _musa_sparse_indexer_materialized_prefill_chunk_rows(rows: int) -> int:
++def _musa_sparse_indexer_materialized_prefill_chunk_rows(
++    rows: int,
++    total_seq_lens: int,
++    is_deepseek_v4: bool = False,
++) -> int:
++    """Bound each FP32 logits tile by the configured indexer budget."""
+     chunk_rows = 512
+-    chunk_rows = max(1, min(chunk_rows, 1024))
++    logits_budget_mb = (
++        deepseek_v4_long_prefill_logits_budget_mb()
++        if is_deepseek_v4
++        else int(envs.VLLM_SPARSE_INDEXER_MAX_LOGITS_MB)
++    )
++    max_logits_elems = max(1, logits_budget_mb) * 1024 * 1024 // 4
++    rows_for_budget = max(1, max_logits_elems // max(1, int(total_seq_lens)))
++    chunk_rows = min(chunk_rows, rows_for_budget)
+     return max(1, min(chunk_rows, int(rows)))
+ 
+ 
+@@ -458,7 +474,6 @@
+         or kv_cache.dtype != torch.uint8
+         or weights.dtype != torch.float32
+         or kv_cache.ndim != 3
+-        or (is_deepseek_v4 and int(chunk.total_seq_lens) > 4096)
+         or int(chunk.num_reqs) != 1
+     ):
+         return False
+@@ -479,6 +494,32 @@
+     if block_size <= 0:
+         return False
+
++    use_bounded_long_prefill = is_deepseek_v4 and total_seq_lens > 4096
++    paged_block_size = block_size
++    paged_kv_cache = kv_cache
++    paged_block_table = chunk.block_table[:1]
++    if use_bounded_long_prefill:
++        # MUSA: paged-MQA must see live compressed pages, not max_model_len.
++        needed_src_pages = (int(total_seq_lens) + block_size - 1) // block_size
++        paged_block_table = paged_block_table[:, : max(1, needed_src_pages)].contiguous()
++    if use_bounded_long_prefill and block_size != 64:
++        if block_size % 64 != 0:
++            return False
++        pages_per_block = block_size // 64
++        paged_block_size = 64
++        paged_kv_cache = kv_cache.view(-1, 64, kv_cache.shape[-1])
++        page_offsets = torch.arange(
++            pages_per_block,
++            device=paged_block_table.device,
++            dtype=paged_block_table.dtype,
++        )
++        original_pages = paged_block_table.unsqueeze(-1)
++        paged_block_table = torch.where(
++            original_pages >= 0,
++            original_pages * pages_per_block + page_offsets,
++            torch.full_like(original_pages + page_offsets, -1),
++        ).flatten(1)
++
+     row_starts = chunk.cu_seqlen_ks[:rows].clamp(min=0, max=total_seq_lens)
+     row_ends = chunk.cu_seqlen_ke[:rows].clamp(min=0, max=total_seq_lens)
+     # Paged-MQA logits use absolute prefix coordinates; row_starts is applied
+@@ -487,13 +528,108 @@
+     if context_lens.dtype != torch.int32:
+         context_lens = context_lens.to(torch.int32)
+ 
+-    kv_paged = kv_cache.unsqueeze(-2)
++    kv_paged = paged_kv_cache.unsqueeze(-2)
+     row_starts = row_starts.to(torch.long)
+     row_ends = row_ends.to(torch.long)
+-    positions = torch.arange(total_seq_lens, device=q_quant.device, dtype=torch.long)
++    positions = (
++        None
++        if use_bounded_long_prefill
++        else torch.arange(total_seq_lens, device=q_quant.device, dtype=torch.long)
++    )
++
++    work_q = q_quant[:rows]
++    work_weights = weights[:rows]
++    work_starts = row_starts
++    work_ends = row_ends
++    work_context_lens = context_lens
++    work_output = topk_indices[:rows, :topk]
++    work_rows = rows
++    tp_group = get_tp_group()
++    tp_world_size = int(tp_group.world_size)
++    # MUSA: Gloo D2H+CPU gather only pays off past ~64k compressed keys.
++    tp_partition_rows = (
++        use_bounded_long_prefill
++        and tp_world_size > 1
++        and int(total_seq_lens)
++        > deepseek_v4_long_prefill_tp_partition_min_seq_len()
++    )
++    tp_rows_per_rank = 0
++    if tp_partition_rows:
++        tp_rows_per_rank = (rows + tp_world_size - 1) // tp_world_size
++        local_row_start = min(
++            int(tp_group.rank_in_group) * tp_rows_per_rank,
++            rows,
++        )
++        local_row_end = min(local_row_start + tp_rows_per_rank, rows)
++        local_rows = local_row_end - local_row_start
++
++        def _musa_slice_and_pad_rows(tensor: torch.Tensor) -> torch.Tensor:
++            local = tensor[local_row_start:local_row_end]
++            if local_rows == tp_rows_per_rank:
++                return local
++            padded = torch.empty(
++                (tp_rows_per_rank, *tensor.shape[1:]),
++                device=tensor.device,
++                dtype=tensor.dtype,
++            )
++            if local_rows > 0:
++                padded[:local_rows].copy_(local)
++            padded[local_rows:].copy_(
++                tensor[rows - 1 : rows].expand(
++                    tp_rows_per_rank - local_rows,
++                    *tensor.shape[1:],
++                )
++            )
++            return padded
++
++        work_q = _musa_slice_and_pad_rows(q_quant)
++        work_weights = _musa_slice_and_pad_rows(weights)
++        work_starts = _musa_slice_and_pad_rows(row_starts)
++        work_ends = _musa_slice_and_pad_rows(row_ends)
++        work_context_lens = _musa_slice_and_pad_rows(context_lens)
++        work_output = torch.empty(
++            tp_rows_per_rank,
++            topk,
++            device=topk_indices.device,
++            dtype=topk_indices.dtype,
++        )
++        work_rows = tp_rows_per_rank
++
++    def _musa_finish_materialized_prefill() -> bool:
++        if not tp_partition_rows:
++            return True
++        # MUSA: gather compact top-k indices over Gloo. Device all_gather
++        # hangs on this long-prefill path even when every rank participates.
++        cpu_work = work_output.detach().to("cpu").contiguous()
++        gathered_parts = [
++            torch.empty_like(cpu_work) for _ in range(tp_world_size)
++        ]
++        torch.distributed.all_gather(
++            gathered_parts, cpu_work, group=tp_group.cpu_group
++        )
++        gathered = torch.cat(gathered_parts, dim=0)
++        topk_indices[:rows, :topk].copy_(
++            gathered[:rows].to(
++                device=topk_indices.device, dtype=topk_indices.dtype
++            )
++        )
++        return True
++
+     materialized_chunk_rows = _musa_sparse_indexer_materialized_prefill_chunk_rows(
+-        rows
++        work_rows,
++        total_seq_lens,
++        is_deepseek_v4=is_deepseek_v4,
+     )
++    if is_deepseek_v4 and total_seq_lens > 4096:
++        logger.info_once(
++            "Using bounded MUSA DeepSeek-V4 materialized indexer prefill "
++            "for %d compressed keys (%d query rows per logits tile, "
++            "tp_partition=%s, local_rows=%d).",
++            total_seq_lens,
++            materialized_chunk_rows,
++            tp_partition_rows,
++            work_rows,
++        )
+     materialized_topk_sorted = _musa_sparse_indexer_materialized_prefill_topk_sorted()
+     materialized_direct_topk = (
+         _musa_sparse_indexer_materialized_prefill_direct_topk_enabled()
+@@ -509,18 +645,29 @@
+             return False
+ 
+         logits = logits[:chunk_rows, :total_seq_lens]
+-        starts = row_starts[row_start:row_end]
+-        ends = row_ends[row_start:row_end]
++        starts = work_starts[row_start:row_end]
++        ends = work_ends[row_start:row_end]
+         if is_glm52:
+             _musa_custom_ops.sparse_indexer_topk(
+                 logits,
+                 starts,
+                 ends,
+-                topk_indices[row_start:row_end, :topk],
++                work_output[row_start:row_end, :topk],
++                topk,
++            )
++            return True
++
++        if use_bounded_long_prefill:
++            _musa_custom_ops.sparse_indexer_topk(
++                logits,
++                starts.to(torch.int32).contiguous(),
++                ends.to(torch.int32).contiguous(),
++                work_output[row_start:row_end, :topk],
+                 topk,
+             )
+             return True
+ 
++        assert positions is not None
+         valid_positions = (
+             (positions.unsqueeze(0) >= starts.unsqueeze(1))
+             & (positions.unsqueeze(0) < ends.unsqueeze(1))
+@@ -570,7 +717,7 @@
+                 full_local,
+                 direct_local,
+             )
+-            topk_indices[row_start:row_end, :topk].copy_(
++            work_output[row_start:row_end, :topk].copy_(
+                 direct_local.to(topk_indices.dtype)
+             )
+             return True
+@@ -582,40 +729,44 @@
+             sorted=materialized_topk_sorted,
+         ).indices.contiguous()
+         _musa_custom_ops.deepseek_v4_indexer_rerank_prefill(
+-            q_quant[row_start:row_end],
++            work_q[row_start:row_end],
+             kv_cache,
+-            weights[row_start:row_end],
++            work_weights[row_start:row_end],
+             chunk.block_table,
+             chunk.cu_seq_lens,
+             chunk.token_to_seq,
+             chunk.cu_seqlen_ks[row_start:row_end],
+             chunk.cu_seqlen_ke[row_start:row_end],
+             approx_abs,
+-            topk_indices[row_start:row_end, :topk],
++            work_output[row_start:row_end, :topk],
+             topk,
+         )
+         return True
+ 
+     def _musa_fill_with_deep_gemm_provider(_musa_deep_gemm) -> bool:
+-        get_num_sms = getattr(_musa_deep_gemm, "get_num_sms", None)
++        get_num_mps = getattr(
++            _musa_deep_gemm,
++            "get_num_mps",
++            getattr(_musa_deep_gemm, "get_num_sms", None),
++        )
+         try:
+-            num_mps = int(get_num_sms()) if get_num_sms is not None else 0
++            num_mps = int(get_num_mps()) if get_num_mps is not None else 0
+         except Exception:
+             num_mps = 0
+ 
+-        for row_start in range(0, rows, materialized_chunk_rows):
+-            row_end = min(row_start + materialized_chunk_rows, rows)
++        for row_start in range(0, work_rows, materialized_chunk_rows):
++            row_end = min(row_start + materialized_chunk_rows, work_rows)
+             chunk_rows = row_end - row_start
+-            context_chunk = context_lens[row_start:row_end].contiguous()
++            context_chunk = work_context_lens[row_start:row_end].contiguous()
+             schedule_meta = _musa_deep_gemm.get_paged_mqa_logits_metadata(
+-                context_chunk, block_size, num_mps
++                context_chunk, paged_block_size, num_mps
+             )
+             logits = _musa_deep_gemm.fp8_paged_mqa_logits(
+-                q_quant[row_start:row_end].unsqueeze(1).contiguous(),
++                work_q[row_start:row_end].unsqueeze(1).contiguous(),
+                 kv_paged,
+-                weights[row_start:row_end].contiguous(),
++                work_weights[row_start:row_end].contiguous(),
+                 context_chunk,
+-                chunk.block_table[:1].expand(chunk_rows, -1).contiguous(),
++                paged_block_table.expand(chunk_rows, -1).contiguous(),
+                 schedule_meta,
+                 total_seq_lens,
+                 False,
+@@ -625,21 +776,21 @@
+         return True
+ 
+     def _musa_fill_with_vllm_deep_gemm(_vllm_deep_gemm) -> bool:
+-        for row_start in range(0, rows, materialized_chunk_rows):
+-            row_end = min(row_start + materialized_chunk_rows, rows)
++        for row_start in range(0, work_rows, materialized_chunk_rows):
++            row_end = min(row_start + materialized_chunk_rows, work_rows)
+             chunk_rows = row_end - row_start
+-            context_chunk = context_lens[row_start:row_end].contiguous()
++            context_chunk = work_context_lens[row_start:row_end].contiguous()
+             schedule_meta = _vllm_deep_gemm.get_paged_mqa_logits_metadata(
+                 context_chunk,
+-                block_size,
++                paged_block_size,
+                 _vllm_deep_gemm.get_num_sms(),
+             )
+             logits = _vllm_deep_gemm.fp8_fp4_paged_mqa_logits(
+-                (q_quant[row_start:row_end].unsqueeze(1).contiguous(), None),
++                (work_q[row_start:row_end].unsqueeze(1).contiguous(), None),
+                 kv_paged,
+-                weights[row_start:row_end].contiguous(),
++                work_weights[row_start:row_end].contiguous(),
+                 context_chunk,
+-                chunk.block_table[:1].expand(chunk_rows, -1).contiguous(),
++                paged_block_table.expand(chunk_rows, -1).contiguous(),
+                 schedule_metadata=schedule_meta,
+                 max_model_len=total_seq_lens,
+                 clean_logits=False,
+@@ -648,6 +799,7 @@
+                 return False
+         return True
+ 
++    provider_errors: list[str] = []
+     for provider_name in ("mate.deep_gemm", "deep_gemm"):
+         try:
+             if provider_name == "mate.deep_gemm":
+@@ -656,16 +808,29 @@
+                 import deep_gemm as _musa_deep_gemm
+ 
+             if _musa_fill_with_deep_gemm_provider(_musa_deep_gemm):
+-                return True
+-        except Exception:
+-            pass
++                return _musa_finish_materialized_prefill()
++        except Exception as exc:
++            provider_errors.append(
++                f"{provider_name}: {type(exc).__name__}: {str(exc)[:160]}"
++            )
+ 
+     try:
+         from vllm.utils import deep_gemm as _vllm_deep_gemm
+ 
+-        return _musa_fill_with_vllm_deep_gemm(_vllm_deep_gemm)
+-    except Exception:
+-        return False
++        if _musa_fill_with_vllm_deep_gemm(_vllm_deep_gemm):
++            return _musa_finish_materialized_prefill()
++        provider_errors.append("vllm.utils.deep_gemm: returned no result")
++    except Exception as exc:
++        provider_errors.append(
++            f"vllm.utils.deep_gemm: {type(exc).__name__}: {str(exc)[:160]}"
++        )
++    if use_bounded_long_prefill:
++        logger.warning_once(
++            "MUSA DeepSeek-V4 bounded long-prefill indexer providers "
++            "failed; falling back to the Torch exact path: %s",
++            "; ".join(provider_errors),
++        )
++    return False
+ 
+ 
+ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
+@@ -726,6 +891,32 @@
+         )
+         return True
+ 
++    is_deepseek_v4 = (
++        head_dim == 128
++        and q_quant.ndim == 3
++        and q_quant.shape[1] == 64
++        and topk_tokens <= 512
++        and q_quant.dtype == torch.float8_e4m3fn
++        and kv_cache.dtype == torch.uint8
++        and weights.dtype == torch.float32
++    )
++    if (
++        is_deepseek_v4
++        and allow_deepseek_v4_materialized
++        and int(chunk.total_seq_lens) > 4096
++        and _musa_try_fill_prefill_topk_from_materialized_logits(
++            q_quant,
++            kv_cache,
++            weights,
++            chunk,
++            topk_indices,
++            topk_tokens,
++            head_dim,
++            allow_deepseek_v4=True,
++        )
++    ):
++        return True
++
+     if (
+         not _musa_sparse_indexer_native_decode_enabled()
+         or head_dim != 128
