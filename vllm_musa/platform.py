@@ -870,6 +870,11 @@ class MUSAPlatformBase(Platform):
         dtype: torch.dtype,
         backend: "AttentionBackendEnum | None" = None,
     ) -> "AttentionBackendEnum":
+        # The visual tower can be constructed before the decoder attention
+        # selector. Register the MUSA classes before walking ViT candidates;
+        # otherwise the registry still points at the upstream NVIDIA FA class,
+        # whose capability gate rejects MUSA and falls back to Triton.
+        register_attention_backends()
         if backend is not None:
             assert backend in cls.get_supported_vit_attn_backends(), (
                 f"Backend {backend} is not supported for vit attention. "
