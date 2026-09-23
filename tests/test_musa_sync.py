@@ -329,3 +329,75 @@ def test_verify_rows_synthetic(ms, tmp_path):
     rows2 = ms._verify_rows(clone)
     statuses = {did: s for did, cat, s, _ in rows2 if cat == "6"}
     assert statuses["vllm__v1__spec_decode__eagle"] == "missing-target", statuses
+
+
+def _series_fixture(tmp_path: Path, *names: str) -> Path:
+    """A series dir holding copies of one real entry under the given names."""
+    series = tmp_path / "series"
+    series.mkdir()
+    donor = sorted((ROOT / "vllm_musa" / "patches" / "series").glob("*.patch"))[0]
+    for name in names:
+        shutil.copyfile(donor, series / name)
+    return series
+
+
+def test_series_numbering_rows_reports_duplicate_and_gap(ms):
+    rows = [
+        ("0001-a.patch", "clean", ""),
+        ("0002-b.patch", "clean", ""),
+        ("0002-c.patch", "clean", ""),
+    ]
+    assert ms._series_numbering_rows(rows) == [
+        ("series/0002", "duplicate-number", "0002-b.patch, 0002-c.patch"),
+        ("series numbering", "non-contiguous", "expected 0001..0003, missing 0003"),
+    ]
+
+
+def test_series_numbering_rows_flags_unnumbered_and_accepts_healthy(ms):
+    rows = [("0001-a.patch", "clean", ""), ("fix-thing.patch", "clean", "")]
+    assert [r[1] for r in ms._series_numbering_rows(rows)] == [
+        "unnumbered",
+        "non-contiguous",
+    ]
+    healthy = [("0001-a.patch", "clean", ""), ("0002-b.patch", "clean", "")]
+    assert ms._series_numbering_rows(healthy) == []
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_check_series_flags_duplicate_number(ms, tmp_path, monkeypatch, capsys):
+    # Two PRs each picking "the next free number" apply cleanly, so nothing
+    # else notices until a regeneration — the gate has to catch it earlier.
+    monkeypatch.setattr(
+        ms,
+        "SERIES_DIR",
+        _series_fixture(tmp_path, "0001-a.patch", "0002-b.patch", "0002-c.patch"),
+    )
+    rc = ms.main(["check-series"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "duplicate-number" in out and "0002-b.patch, 0002-c.patch" in out
+    assert "non-contiguous" in out and "missing 0003" in out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_check_series_flags_gap(ms, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        ms, "SERIES_DIR", _series_fixture(tmp_path, "0001-a.patch", "0003-c.patch")
+    )
+    rc = ms.main(["check-series"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "non-contiguous" in out and "missing 0002" in out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_check_series_accepts_unique_contiguous(ms, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        ms,
+        "SERIES_DIR",
+        _series_fixture(tmp_path, "0001-a.patch", "0002-b.patch", "0003-c.patch"),
+    )
+    rc = ms.main(["check-series"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "numbering: 3 entries are unique and contiguous 0001..0003" in out

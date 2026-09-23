@@ -323,10 +323,12 @@ def _series_format_rows() -> list[tuple[str, str, str]]:
     bare diff therefore passes every build-side gate and only breaks the next
     version bump, which is exactly how the series rotted before MUSA-100050.
 
-    Two cheap offline checks:
+    Cheap offline checks:
       * the entry is a ``git format-patch`` mailbox (``git am`` requires it);
       * ``git apply --stat`` parses it (catches hunk counts that no longer
-        match the body).
+        match the body);
+      * the series' numbering is unique and contiguous
+        (``_series_numbering_rows``).
     """
     rows = []
     for patch in sorted(SERIES_DIR.glob("*.patch")):
@@ -355,8 +357,52 @@ def _series_format_rows() -> list[tuple[str, str, str]]:
     return rows
 
 
+def _series_numbering_rows(rows) -> list[tuple[str, str, str]]:
+    """Series-level numbering: unique, and contiguous ``0001..N``.
+
+    ``regen`` numbers the entries itself (``git format-patch --no-numbered``
+    plus a contiguous renumber), so a duplicate or a gap can only come from
+    hand numbering. Both are silent everywhere else: two PRs each pick "the
+    next free number" in isolation, each one applies cleanly, and the collision
+    surfaces only when somebody regenerates — or not at all, if a duplicate
+    entry happens to be applied by prefix order.
+    """
+    names = [name for name, _, _ in rows]
+    numbered = {name[:4] for name in names if name[:4].isdigit()}
+    out = [
+        (name, "unnumbered", "expected NNNN-<slug>.patch")
+        for name in names
+        if not name[:4].isdigit()
+    ]
+    duplicates = sorted(
+        num for num in numbered if sum(1 for n in names if n[:4] == num) > 1
+    )
+    for num in duplicates:
+        out.append(
+            (
+                f"series/{num}",
+                "duplicate-number",
+                ", ".join(name for name in names if name[:4] == num),
+            )
+        )
+    # A duplicate shifts everything after it, so the series is only whole when
+    # it is exactly 0001..<number of entries>.
+    expected = {f"{i:04d}" for i in range(1, len(names) + 1)}
+    missing = sorted(expected - numbered)
+    if missing:
+        out.append(
+            (
+                "series numbering",
+                "non-contiguous",
+                f"expected 0001..{len(names):04d}, missing {', '.join(missing)}",
+            )
+        )
+    return out
+
+
 def cmd_check_series(args) -> int:
     rows = _series_format_rows()
+    number_rows = _series_numbering_rows(rows)
     print(f"=== musa_sync check-series: {len(rows)} entries in series/ ===")
     bad = [r for r in rows if r[1] != "clean"]
     for name, status, detail in bad:
@@ -367,7 +413,17 @@ def cmd_check_series(args) -> int:
         f"--- {len(rows) - len(bad)} clean / {len(rows)} total / {len(bad)} need "
         f"attention ---"
     )
-    return 1 if bad else 0
+    for name, status, detail in number_rows:
+        print(f"  {status:<14} {name}")
+        if detail:
+            print(f"                 {detail}")
+    print(
+        f"--- numbering: {len(number_rows)} problem(s) ---"
+        if number_rows
+        else f"--- numbering: {len(rows)} entries are unique and contiguous "
+        f"0001..{len(rows):04d} ---"
+    )
+    return 1 if (bad or number_rows) else 0
 
 
 def cmd_verify(args) -> int:
@@ -400,13 +456,16 @@ def cmd_verify(args) -> int:
     # form, which they cannot see (see _series_format_rows).
     fmt_rows = _series_format_rows()
     fmt_bad = [r for r in fmt_rows if r[1] != "clean"]
+    number_rows = _series_numbering_rows(fmt_rows)
     print(
         f"--- series format: {len(fmt_rows) - len(fmt_bad)} clean / "
         f"{len(fmt_rows)} total / {len(fmt_bad)} need attention ---"
     )
     for name, status, detail in fmt_bad[:10]:
         print(f"  {status:<14} {name}")
-    return 1 if (bad or fmt_bad) else 0
+    for name, status, detail in number_rows:
+        print(f"  {status:<14} {name}")
+    return 1 if (bad or fmt_bad or number_rows) else 0
 
 
 # -------------------------------------------------------------------- rebase / regen
