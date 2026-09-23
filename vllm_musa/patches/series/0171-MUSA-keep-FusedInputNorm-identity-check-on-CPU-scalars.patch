@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sun, 20 Sep 2026 16:04:52 +0800
+Subject: [PATCH] MUSA: keep FusedInputNorm identity check on CPU scalars
+
+Compare CPU identity coefficients as Python floats so ones_like/zeros_like
+cannot follow the accelerator default device during model construction.
+---
+ vllm/model_executor/models/vision.py | 11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/models/vision.py b/vllm/model_executor/models/vision.py
+index 0ccf410ed5..f3003c1f7a 100644
+--- a/vllm/model_executor/models/vision.py
++++ b/vllm/model_executor/models/vision.py
+@@ -603,10 +603,9 @@ class FusedInputNorm(nn.Module):
+         self.channel = channel
+ 
+         # Model construction can set the accelerator as PyTorch's default
+-        # device. Determine whether the normalization is an identity on CPU
+-        # so torch.allclose does not introduce a device synchronization while
+-        # the model is being initialized. The actual buffers below still use
+-        # the caller's default device.
++        # device. Compare the CPU identity coefficients as Python floats so
++        # ones_like/zeros_like cannot follow that default device. The actual
++        # buffers below still use the caller's default device.
+         image_mean_cpu = torch.tensor(image_mean, dtype=dtype, device="cpu") * (
+             1.0 / rescale_factor
+         )
+@@ -616,8 +615,8 @@ class FusedInputNorm(nn.Module):
+         weight_cpu = 1.0 / image_std_cpu
+         bias_cpu = -image_mean_cpu / image_std_cpu
+         self.is_identity = bool(
+-            torch.allclose(weight_cpu, torch.ones_like(weight_cpu))
+-            and torch.allclose(bias_cpu, torch.zeros_like(bias_cpu))
++            all(abs(float(x) - 1.0) < 1e-6 for x in weight_cpu.flatten().tolist())
++            and all(abs(float(x)) < 1e-6 for x in bias_cpu.flatten().tolist())
+         )
+ 
+         if not self.is_identity:
