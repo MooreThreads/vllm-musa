@@ -3,9 +3,11 @@ From: musa <musa@local>
 Subject: [PATCH] MUSA: enable GLM-5 models with eager MCCL init and GLM sparse dispatch
 
 ---
+diff --git a/vllm/distributed/parallel_state.py b/vllm/distributed/parallel_state.py
+index 128db90..fc1182e 100644
 --- a/vllm/distributed/parallel_state.py
 +++ b/vllm/distributed/parallel_state.py
-@@ -1682,7 +1682,7 @@
+@@ -1682,7 +1682,7 @@ def init_distributed_environment(
              )
          else:
              # this backend is used for WORLD
@@ -39,9 +41,11 @@ Subject: [PATCH] MUSA: enable GLM-5 models with eager MCCL init and GLM sparse d
          if enable_elastic_ep:
              tp_pp_cpu_group = torch.distributed.new_group(
                  backend="gloo", timeout=timeout
+diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+index e62e027..f11cd9a 100644
 --- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
 +++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
-@@ -558,6 +558,14 @@
+@@ -558,6 +558,14 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
          self.fp8_decode_padded_heads = self._compute_fp8_decode_padded_heads(num_heads)
  
          vllm_config = get_current_vllm_config()
