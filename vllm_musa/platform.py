@@ -870,7 +870,6 @@ class MUSAPlatformBase(Platform):
         dtype: torch.dtype,
         backend: "AttentionBackendEnum | None" = None,
     ) -> "AttentionBackendEnum":
-        
         register_attention_backends()
         if backend is not None:
             assert backend in cls.get_supported_vit_attn_backends(), (
