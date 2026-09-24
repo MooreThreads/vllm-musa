@@ -191,12 +191,25 @@ conditioning a decision, not a way to get tokens echoed verbatim.
 
 ## Validation and known limits
 
+One case the port carries from upstream, `test_diffusion_scheduler_is_selected_by_default`,
+did not complete inside a 600 s cap on the leased container; the same case against the
+**unpatched** image parks 195 of 196 threads in `futex_wait_queue_me` at 0 % CPU, so it is an
+environmental limitation of this test, not of serving the model. Nothing above depends on it.
+
+
 Validated on one S5000 (MUSA 5.2.0, `torch`/`torch_musa` 2.11.0.post1+musa5.2.0, vLLM-MUSA
-v0.28.0) with image digest `sha256:f5ff4913…`:
+v0.28.0) with image digest `sha256:7bd8f1935c1b7aa40a8bf0d90fdcda08ab09178592a45222c719b5a9d1696c20`
+(the port it bakes is MooreThreads/vllm-musa#249 at `2c3f829be4fc`, entries `0172`-`0186` of a
+186-entry series):
 
 - upstream's read tests pass inside the image: **64 passed, 0 failed**, with no `xfail` — the four
   `test_read_emits_at_convergence_while_generation_waits_for_commit` cases run unmodified, because the
   ported sampling step emits a converged read in place instead of the host loop re-implementing it;
+- re-validated on the rebuilt image above: `/v1/models` answers 280 s after start; one state with
+  three questions reads in a single pass (`urgent noul=0.335`, `category billing p=0.999`,
+  `severity score=2.37` over `none/mild/serious/critical`); the CLI answers `p(yes)=0.785` with
+  `reads=4` in 1.6 s and flips to `no` on a state with no urgency; the log carries no
+  `400 Bad Request`. Draws are samples, so probabilities differ between runs;
 - both endpoints were exercised end to end, including a three-question read in one canvas and a
   `choice` question with 25 alternatives (the interposer's limit is 26) through `/v1/systemone`;
 - the 25-alternative read does not depend on the entrypoint's `--max-logprobs 32`: on this request path
