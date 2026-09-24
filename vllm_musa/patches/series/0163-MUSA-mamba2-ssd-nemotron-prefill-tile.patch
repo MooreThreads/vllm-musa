@@ -1,9 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 24 Sep 2026 10:30:00 +0800
+Subject: [PATCH] MUSA: mamba2 ssd nemotron prefill tile
+
+---
+ .../layers/mamba/ops/ssd_chunk_scan.py        | 43 +++++++++++++++++--
+ 1 file changed, 39 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
+index c2bbbea..33514fe 100644
 --- a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
 +++ b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
-@@ -17,6 +17,26 @@
+@@ -17,10 +17,31 @@ TRITON_22 = version.parse(triton.__version__) >= version.parse("2.2.0")
  from vllm.triton_utils.musa import is_musa_triton_32
-
-
+ 
+ 
 +def _musa_ssd_early_config_prune(configs, named_args, **kwargs):
 +    """Select the wider tile only for the verified Nemotron SSD shape."""
 +    if not is_musa_triton_32():
@@ -26,8 +37,15 @@
 +
  def _ssd_autotune_configs():
      # MUSA Triton 3.2.x cannot compile the
-     # broad upstream autotune search. Use a conservative tile only for that
-@@ -28,7 +48,12 @@
+-    # broad upstream autotune search. Use a conservative tile only for that
+-    # stack while preserving CUDA/ROCm and newer Triton behavior.
++    # broad upstream autotune search. That stack pins two tiles and
++    # _musa_ssd_early_config_prune picks one by shape, while CUDA/ROCm and
++    # newer Triton keep the upstream search.
+ 
+     if is_musa_triton_32():
+         return [
+@@ -28,7 +49,12 @@ def _ssd_autotune_configs():
                  {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32},
                  num_stages=1,
                  num_warps=2,
@@ -36,15 +54,15 @@
 +            triton.Config(
 +                {"BLOCK_SIZE_M": 32, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 32},
 +                num_stages=1,
-+                num_warps=2,
++                num_warps=8,
 +            ),
          ]
      return [
-
-@@ -161,9 +186,18 @@
+ 
+@@ -161,9 +187,18 @@ def _ssd_autotune_configs():
      ]
-
-
+ 
+ 
 +def _ssd_autotune_kwargs():
 +    if is_musa_triton_32():
 +        return {
