@@ -40,7 +40,7 @@ different dependency revision. Verify the installed package versions against
 the branch pins; build and use the local image below when exact parity is
 required.
 At the time of this backport, the published tag reports MATE/Flash 0.2.4 and
-tilelang_musa 0.1.8, while this branch pins 0.2.6 and 0.1.12 respectively.
+tilelang_musa 0.1.8, while this branch pins 0.2.7 and 0.1.12 respectively.
 
 The image uses `vllm serve` as its entrypoint, so pass the model path followed
 by the engine arguments from the [serving cookbook](cookbook/README.md). Apply
