@@ -66,6 +66,16 @@ no-thinking request handling is different: GLM-5.3 needs the documented
 template workaround, while GLM-5.2 uses its checkpoint template with
 `chat_template_kwargs: {"enable_thinking": false}`.
 
+## DiffusionGemma
+
+These recipes use the model's own diffusion canvas (`canvas_length 256`,
+`max_denoising_steps 48`) and additionally expose the structured-read interposer
+on port 18011.
+
+| Model | Hardware | Endpoints | Recipe |
+|---|---|---|---|
+| [DiffusionGemma-26B-A4B-it](diffusiongemma/diffusiongemma-26b-a4b-it.md) | 1x S5000, TP1 | `/v1/chat/completions` and `/v1/systemone` | [Open recipe](diffusiongemma/diffusiongemma-26b-a4b-it.md) |
+
 ## Verify a server
 
 The recipes expose an OpenAI-compatible endpoint on port 8000.
