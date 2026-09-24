@@ -72,9 +72,11 @@ vllm serve /models/diffusiongemma-26B-A4B-it \
   --diffusion-config '{"canvas_length": 256, "max_denoising_steps": 48}'
 ```
 
-`--max-logprobs 32` matches upstream's own example for this interposer: the interposer asks for 20
-top logprobs and for the logprobs of every label token in the schema, and the pinned vLLM's default
-`max_logprobs` is 20, which leaves the label union no headroom.
+`--max-logprobs 32` matches upstream's own example for this interposer, and a wide schema needs it:
+the interposer asks for `logprobs` **and** for the logprobs of every label token in the schema, and
+the pinned request path requires `logprobs == len(logprob_token_ids)` while also bounding `logprobs`
+by `max_logprobs` (default 20). A `choice` question with 25 alternatives — the interposer allows up
+to 26 — therefore needs a cap of at least 25, which the image's entrypoint sets to 32.
 
 Then start the interposer against it (the file is upstream's `examples/features/structured_diffusion/structured_server.py`,
 also at `/opt/jev/structured_server.py` inside the image):
@@ -191,14 +193,20 @@ conditioning a decision, not a way to get tokens echoed verbatim.
 ## Validation and known limits
 
 Validated on one S5000 (MUSA 5.2.0, `torch`/`torch_musa` 2.11.0.post1+musa5.2.0, vLLM-MUSA
-v0.28.0) with image digest `sha256:b395fa92…`:
+v0.28.0) with image digest `sha256:f5ff4913…`:
 
-- upstream's read tests pass inside the image (60 passed, 4 xfailed — the four assert behaviour at
-  the compiled sampling step, which this branch emits from the host loop instead); re-run after the
-  recipe's port was rebased onto the current `v0.28.0-dev`, with the same result;
-- both endpoints were exercised end to end, including a three-question read in one canvas;
+- upstream's read tests pass inside the image: **64 passed, 0 failed**, with no `xfail` — the four
+  `test_read_emits_at_convergence_while_generation_waits_for_commit` cases run unmodified, because the
+  ported sampling step emits a converged read in place instead of the host loop re-implementing it;
+- both endpoints were exercised end to end, including a three-question read in one canvas and a
+  `choice` question with 25 alternatives (the interposer's limit is 26) through `/v1/systemone`;
+- the entrypoint's `--max-logprobs 32` is what makes that wide schema legal: `logprobs` is bounded by
+  `max_logprobs` and must equal the label-id union, so 25 alternatives exceed the pinned default of 20
+  (`--max-logprobs` is a request-level cap; `logprob_token_ids` has its own limit of 128);
 - canvas narrowing, seeding, pinning, `read_only` and `max_steps` were exercised, and out-of-vocabulary
   seeds are rejected at admission.
+
+A yes/no margin is per-run: the same `urgent` question has come back at 0.36, 0.79, 0.722 and 0.96.
 
 Not covered here: TP>1, concurrent requests, image/vision inputs, and canvases other than the
 model's own 256. The image is built by layering the structured-read port (PR
