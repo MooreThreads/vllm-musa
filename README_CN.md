@@ -23,6 +23,7 @@
 - [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next`
 - [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash`
 - [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
+- [DiffusionGemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev`
 
 这些模型专用标签独立于当前分支维护；投入生产前请核对确切的镜像和模型版本。
 
@@ -37,7 +38,7 @@ vLLM-MUSA 是摩尔线程为 [vLLM](https://github.com/vllm-project/vllm) 提供
 - 使用固定的 MUSA 软件栈：PyTorch/torch_musa 2.11.0.post1（MUSA 5.2.0）、
   MATE 0.2.6 和 torchada 0.1.83；当前分支仍属于升级候选版本。
 - 提供 MUSA 原生注意力机制、通信、自定义算子和编译支持。
-- 针对 S5000 上 Qwen 和 DeepSeek-V4-Flash 的各个模型检查点提供配置示例。
+- 针对 S5000 上 Qwen、DeepSeek-V4-Flash 与 DiffusionGemma 的各个模型检查点提供配置示例。
 
 ## 快速开始
 

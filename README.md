@@ -23,6 +23,7 @@
 - [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next`
 - [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash`
 - [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
+- [DiffusionGemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev`
 
 These model-specific tags are maintained independently of this branch; verify
 the exact image and model revision before production use.
@@ -38,7 +39,7 @@ providing an OpenAI-compatible inference and serving engine for MUSA GPUs.
 - Uses the pinned MUSA stack: PyTorch/torch_musa 2.11.0.post1 (MUSA 5.2.0),
   MATE 0.2.6, and torchada 0.1.83; this branch remains an upgrade candidate.
 - MUSA-native attention, communication, custom ops, and compilation support.
-- Per-checkpoint recipes for Qwen and DeepSeek-V4-Flash on S5000.
+- Per-checkpoint recipes for Qwen, DeepSeek-V4-Flash and DiffusionGemma on S5000.
 
 ## Getting started
 
