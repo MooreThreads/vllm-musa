@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 24 Sep 2026 22:27:21 +0800
+Subject: [PATCH] MUSA: vllm.config.scheduler
+
+---
+ vllm/config/scheduler.py | 18 +++++++++++-------
+ 1 file changed, 11 insertions(+), 7 deletions(-)
+
+diff --git a/vllm/config/scheduler.py b/vllm/config/scheduler.py
+index 1b82b2c..190fbeb 100644
+--- a/vllm/config/scheduler.py
++++ b/vllm/config/scheduler.py
+@@ -179,13 +179,17 @@ class SchedulerConfig:
+ 
+         # The first half of this warning can be removed once the Scheduler interface is
+         # finalized and we can maintain support for scheduler classes that implement it
+-        logger.warning_once(
+-            "Using custom scheduler class %s. This scheduler interface is not public "
+-            "and compatibility may not be maintained. If you have subclassed Scheduler "
+-            "instead of AsyncScheduler, you will see degraded performance due to async "
+-            "scheduling being disabled.",
+-            self.scheduler_cls,  # type: ignore[arg-type]
+-        )
++        if not (
++            isinstance(self.scheduler_cls, str)
++            and self.scheduler_cls.startswith("vllm.")
++        ):
++            logger.warning_once(
++                "Using custom scheduler class %s. This scheduler interface is not "
++                "public and compatibility may not be maintained. If you have "
++                "subclassed Scheduler instead of AsyncScheduler, you will see "
++                "degraded performance due to async scheduling being disabled.",
++                self.scheduler_cls,  # type: ignore[arg-type]
++            )
+         if not isinstance(self.scheduler_cls, str):
+             return cast(type["SchedulerInterface"], self.scheduler_cls)
+         return resolve_obj_by_qualname(self.scheduler_cls)
+-- 
+2.34.1
+

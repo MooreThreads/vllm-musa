@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 24 Sep 2026 22:27:21 +0800
+Subject: [PATCH] MUSA: vllm.v1.worker.gpu.spec_decode.utils
+
+---
+ vllm/v1/worker/gpu/spec_decode/utils.py | 29 +++++++++++++++++++++++--
+ 1 file changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/spec_decode/utils.py b/vllm/v1/worker/gpu/spec_decode/utils.py
+index e25672e..d64b6f9 100644
+--- a/vllm/v1/worker/gpu/spec_decode/utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/utils.py
+@@ -18,12 +18,22 @@ class DraftTokensHandler:
+         self.req_ids: list[str] = []
+         self.draft_tokens_np: np.ndarray | None = None
+         self.num_draft_tokens: int = 0
++        # Per-request draft counts when a model state narrows some requests.
++        self.num_draft_tokens_per_req: list[int] | None = None
+ 
+     def set_draft_tokens(
+-        self, input_batch: InputBatch, draft_tokens: torch.Tensor
++        self,
++        input_batch: InputBatch,
++        draft_tokens: torch.Tensor,
++        num_draft_tokens_per_req: np.ndarray | None = None,
+     ) -> None:
+         self.req_ids = input_batch.req_ids
+         self.num_draft_tokens = draft_tokens.shape[1]
++        self.num_draft_tokens_per_req = (
++            None
++            if num_draft_tokens_per_req is None
++            else num_draft_tokens_per_req.tolist()
++        )
+         if not input_batch.has_structured_output_reqs:
+             # No draft token validation needs to be performed by
+             # the scheduler for this batch.
+@@ -43,12 +53,27 @@ class DraftTokensHandler:
+             self.copy_event.record()
+ 
+     def get_draft_tokens(self) -> DraftTokenIds | None:
++        per_req = self.num_draft_tokens_per_req
+         if self.draft_tokens_np is not None:
+             self.copy_event.synchronize()
+             draft_token_ids = self.draft_tokens_np.tolist()
++            if per_req is not None:
++                if len(per_req) != len(draft_token_ids):
++                    # The per-request widths come from the model state and the rows
++                    # from the draft buffer: they describe the same batch, so a
++                    # mismatch is a state bug. zip would silently drop the tail and
++                    # leave those requests without draft tokens.
++                    raise ValueError(
++                        "num_draft_tokens_per_req has "
++                        f"{len(per_req)} entries for {len(draft_token_ids)} draft rows"
++                    )
++                draft_token_ids = [row[:n] for row, n in zip(draft_token_ids, per_req)]
+         else:
+             # This case only happens when async scheduling is disabled.
+-            draft_token_ids = [[-1] * self.num_draft_tokens for _ in self.req_ids]
++            draft_token_ids = [
++                [-1] * (self.num_draft_tokens if per_req is None else per_req[i])
++                for i in range(len(self.req_ids))
++            ]
+         return DraftTokenIds(self.req_ids, draft_token_ids)
+ 
+ 
+-- 
+2.34.1
+
