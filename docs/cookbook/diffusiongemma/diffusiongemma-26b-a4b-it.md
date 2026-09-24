@@ -72,11 +72,9 @@ vllm serve /models/diffusiongemma-26B-A4B-it \
   --diffusion-config '{"canvas_length": 256, "max_denoising_steps": 48}'
 ```
 
-`--max-logprobs 32` matches upstream's own example for this interposer, and a wide schema needs it:
-the interposer asks for `logprobs` **and** for the logprobs of every label token in the schema, and
-the pinned request path requires `logprobs == len(logprob_token_ids)` while also bounding `logprobs`
-by `max_logprobs` (default 20). A `choice` question with 25 alternatives — the interposer allows up
-to 26 — therefore needs a cap of at least 25, which the image's entrypoint sets to 32.
+`--max-logprobs 32` matches upstream's own example for this interposer. It is *not* the label union's
+cap: `logprob_token_ids` takes precedence over `top_logprobs`, so `max_logprobs` is not consulted for
+these reads, and the union is bounded separately at 128 ids.
 
 Then start the interposer against it (the file is upstream's `examples/features/structured_diffusion/structured_server.py`,
 also at `/opt/jev/structured_server.py` inside the image):
@@ -141,8 +139,9 @@ labels; `diagnostics.timing.reads` reports how many reads were averaged.
 **Treat the numbers as one sample, not as constants.** Across repeated runs of the same request the
 `choice` and `score` answers were stable (`billing` at 0.998, `serious`/`critical` around 0.92), while
 the yes/no margin moved a lot — the same `urgent` question came back at 0.36, 0.79, 0.722 and 0.96 on
-four runs. Use `--samples` (or `--extra auto_max=...`) to average more reads when a yes/no margin has to
-carry a decision, and treat a single yes/no read as a weak signal.
+four runs. Use `samples` (or `auto_max`) in the request body — or `--samples` / `--extra auto_max=...` on
+the bundled `systemone.py` below — to average more reads when a yes/no margin has to carry a decision,
+and treat a single yes/no read as a weak signal. The interposer itself takes no `--samples`.
 
 All questions of a stage are read in one **joint canvas**, so three questions cost one read instead
 of three; the server still averages several draws per question (`samples`, default auto), and
@@ -200,9 +199,10 @@ v0.28.0) with image digest `sha256:f5ff4913…`:
   ported sampling step emits a converged read in place instead of the host loop re-implementing it;
 - both endpoints were exercised end to end, including a three-question read in one canvas and a
   `choice` question with 25 alternatives (the interposer's limit is 26) through `/v1/systemone`;
-- the entrypoint's `--max-logprobs 32` is what makes that wide schema legal: `logprobs` is bounded by
-  `max_logprobs` and must equal the label-id union, so 25 alternatives exceed the pinned default of 20
-  (`--max-logprobs` is a request-level cap; `logprob_token_ids` has its own limit of 128);
+- the 25-alternative read does not depend on the entrypoint's `--max-logprobs 32`: on this request path
+  `logprob_token_ids` takes precedence over `top_logprobs`, so `max_logprobs` (default 20) is never
+  consulted and the union is bounded by `MAX_LOGPROB_TOKEN_IDS = 128`. The flag stays because
+  upstream's example passes it and this is the artifact the recipe was validated with;
 - canvas narrowing, seeding, pinning, `read_only` and `max_steps` were exercised, and out-of-vocabulary
   seeds are rejected at admission.
 
