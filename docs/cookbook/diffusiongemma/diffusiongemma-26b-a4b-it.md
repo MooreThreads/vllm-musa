@@ -140,8 +140,8 @@ labels; `diagnostics.timing.reads` reports how many reads were averaged.
 
 **Treat the numbers as one sample, not as constants.** Across repeated runs of the same request the
 `choice` and `score` answers were stable (`billing` at 0.998, `serious`/`critical` around 0.92), while
-the yes/no margin moved a lot — the same `urgent` question came back at 0.36, 0.79 and 0.96 on three
-runs. Use `--samples` (or `--extra auto_max=...`) to average more reads when a yes/no margin has to
+the yes/no margin moved a lot — the same `urgent` question came back at 0.36, 0.79, 0.722 and 0.96 on
+four runs. Use `--samples` (or `--extra auto_max=...`) to average more reads when a yes/no margin has to
 carry a decision, and treat a single yes/no read as a weak signal.
 
 All questions of a stage are read in one **joint canvas**, so three questions cost one read instead
