@@ -41,6 +41,10 @@ docker run -d --name diffusiongemma \
   registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev
 ```
 
+If the checkpoint is mounted elsewhere, update both the mount and `MODEL`. On a shared host, `8000`
+is often already taken — remap the host side (`-p 18091:8000`) and use that port in the client
+commands below; the interposer port `18011` must stay free for the CLI to work as written.
+
 The entrypoint starts `vllm serve`, waits until `/v1/models` answers (~5 minutes for this
 checkpoint on one S5000), then starts the interposer. Overrides: `MODEL`, `SERVED_NAME`, `PORT`,
 `API_PORT`, `CANVAS`, `DENOISE_STEPS`, `GMEM` (default 0.75), `MAX_LEN`, `BACKEND`.
@@ -122,6 +126,12 @@ For a `score` question, `score` is the expectation over the ordered scale you se
 `2.92` here means "between serious and critical"), and `legend` maps the string index back to your
 labels; `diagnostics.timing.reads` reports how many reads were averaged.
 
+**Treat the numbers as one sample, not as constants.** Across repeated runs of the same request the
+`choice` and `score` answers were stable (`billing` at 0.998, `serious`/`critical` around 0.92), while
+the yes/no margin moved a lot — the same `urgent` question came back at 0.36, 0.79 and 0.96 on three
+runs. Use `--samples` (or `--extra auto_max=...`) to average more reads when a yes/no margin has to
+carry a decision, and treat a single yes/no read as a weak signal.
+
 All questions in one request are read in a **single canvas** (one denoising pass), so a decision
 with three questions costs about as much as one generation. The image ships a CLI for this
 (`/opt/jev/systemone.py`, also usable standalone; stdlib only):
@@ -134,8 +144,10 @@ systemone.py --endpoint http://localhost:18011 \
 ```
 
 `--quiet` prints `id<TAB>answer<TAB>confidence` for scripts, `--json` prints the raw response.
-Set `--no-proxy` when the client host exports `http_proxy`; otherwise the call goes through the
-proxy and fails with a 502.
+Two practical notes: set `--no-proxy` when the client host exports `http_proxy`, otherwise the call
+goes through the proxy and fails with a 502 (the same applies to the `curl` examples above — add
+`--noproxy '*'`); and if the very first `/v1/systemone` call fails right after the interposer comes up,
+retry once before debugging.
 
 ## Per-request diffusion knobs
 
@@ -161,8 +173,9 @@ conditioning a decision, not a way to get tokens echoed verbatim.
   `--gpu-memory-utilization 0.90` OOMs at canvas 256 on one S5000; the recipe values used for
   validation were 0.75 and 0.80.
 - `PYTORCH_MUSA_ALLOC_CONF=expandable_segments:True` is set by the image entrypoint.
-- The canvas is the unit of work: `max_tokens`/`max_new_tokens` below the canvas does not make a
-  request cheaper, it just truncates the returned canvas.
+- The canvas is the unit of work, and `max_tokens` only bounds it: the model can stop early, so the
+  same short prompt returned 247 tokens at `max_tokens: 256` and 15 tokens at `max_tokens: 64` with
+  `finish_reason: stop`. Set `diffusion_canvas_length` when you actually want a narrower canvas.
 
 ## Validation and known limits
 
@@ -170,7 +183,8 @@ Validated on one S5000 (MUSA 5.2.0, `torch`/`torch_musa` 2.11.0.post1+musa5.2.0,
 v0.28.0) with image digest `sha256:b395fa92…`:
 
 - upstream's read tests pass inside the image (60 passed, 4 xfailed — the four assert behaviour at
-  the compiled sampling step, which this branch emits from the host loop instead);
+  the compiled sampling step, which this branch emits from the host loop instead); re-run after the
+  recipe's port was rebased onto the current `v0.28.0-dev`, with the same result;
 - both endpoints were exercised end to end, including a three-question read in one canvas;
 - canvas narrowing, seeding, pinning, `read_only` and `max_steps` were exercised, and out-of-vocabulary
   seeds are rejected at admission.
