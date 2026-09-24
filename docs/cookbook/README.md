@@ -70,7 +70,10 @@ template workaround, while GLM-5.2 uses its checkpoint template with
 
 These recipes use the model's own diffusion canvas (`canvas_length 256`,
 `max_denoising_steps 48`) and additionally expose the structured-read interposer
-on port 18011.
+on port 18011. That interposer only works with the structured-read port from
+[MooreThreads/vllm-musa#249](https://github.com/MooreThreads/vllm-musa/pull/249):
+the published image below carries it, while an install built from the branch
+alone does not.
 
 | Model | Hardware | Endpoints | Recipe |
 |---|---|---|---|

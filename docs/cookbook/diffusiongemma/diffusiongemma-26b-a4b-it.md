@@ -51,6 +51,11 @@ checkpoint on one S5000), then starts the interposer. Overrides: `MODEL`, `SERVE
 
 ### Option B — from an installed vLLM-MUSA
 
+Requires the structured-read port from MooreThreads/vllm-musa#249 on top of `v0.28.0`: this branch
+does not carry it, and without it the four `diffusion_*` request knobs have no reader (the request is
+accepted and silently read from an unseeded canvas, so `/v1/systemone` would return a well-formed but
+wrong distribution). Use the `:jev` image above, or apply #249 before starting the interposer.
+
 ```bash
 export TORCHDYNAMO_DISABLE=1
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
@@ -63,8 +68,13 @@ vllm serve /models/diffusiongemma-26B-A4B-it \
   --enforce-eager \
   --max-model-len 4096 \
   --gpu-memory-utilization 0.75 \
+  --max-logprobs 32 \
   --diffusion-config '{"canvas_length": 256, "max_denoising_steps": 48}'
 ```
+
+`--max-logprobs 32` matches upstream's own example for this interposer: the interposer asks for 20
+top logprobs and for the logprobs of every label token in the schema, and the pinned vLLM's default
+`max_logprobs` is 20, which leaves the label union no headroom.
 
 Then start the interposer against it (the file is upstream's `examples/features/structured_diffusion/structured_server.py`,
 also at `/opt/jev/structured_server.py` inside the image):
@@ -132,9 +142,10 @@ the yes/no margin moved a lot — the same `urgent` question came back at 0.36, 
 runs. Use `--samples` (or `--extra auto_max=...`) to average more reads when a yes/no margin has to
 carry a decision, and treat a single yes/no read as a weak signal.
 
-All questions in one request are read in a **single canvas** (one denoising pass), so a decision
-with three questions costs about as much as one generation. The image ships a CLI for this
-(`/opt/jev/systemone.py`, also usable standalone; stdlib only):
+All questions of a stage are read in one **joint canvas**, so three questions cost one read instead
+of three; the server still averages several draws per question (`samples`, default auto), and
+`diagnostics.timing.reads` is how many passes that took (4 in the example above). The image ships a
+CLI for this (`/opt/jev/systemone.py`, also usable standalone; stdlib only):
 
 ```bash
 systemone.py --endpoint http://localhost:18011 \
