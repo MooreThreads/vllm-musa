@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .deepseek_v4 import resolve_deepseek_v4_contract
+from .glm import resolve_glm_contract
 from .qwen import resolve_qwen_contract
 from .types import ExecutionSignature, ModelSignature, MusaOptimizationContract
 
@@ -16,5 +17,6 @@ ContractProvider = Callable[
 # fast paths.
 CONTRACT_PROVIDERS: tuple[ContractProvider, ...] = (
     resolve_deepseek_v4_contract,
+    resolve_glm_contract,
     resolve_qwen_contract,
 )

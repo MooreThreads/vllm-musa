@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Subject: [PATCH] MUSA: enable GLM-5 models with eager MCCL init and GLM sparse dispatch
+
+---
+diff --git a/vllm/distributed/parallel_state.py b/vllm/distributed/parallel_state.py
+index 128db90..fc1182e 100644
+--- a/vllm/distributed/parallel_state.py
++++ b/vllm/distributed/parallel_state.py
+@@ -1682,7 +1682,7 @@ def init_distributed_environment(
+             )
+         else:
+             # this backend is used for WORLD
+-            torch.distributed.init_process_group(
++            init_kwargs = dict(
+                 backend=backend,
+                 init_method=distributed_init_method if store is None else None,
+                 store=store,
+@@ -1690,6 +1690,24 @@
+                 rank=rank,
+                 timeout=timeout,
+             )
++            from vllm_musa.optimization_contract import (
++                OptimizationFeature,
++                resolve_optimization_contract,
++            )
++            contract = resolve_optimization_contract(config)
++            needs_glm_pp_eager_mccl = (
++                contract.prefers(OptimizationFeature.GLM5_EAGER_MCCL_INIT)
++                and backend == "mccl"
++                and config.parallel_config.nnodes > 1
++                and config.parallel_config.pipeline_parallel_size > 1
++            )
++            if (
++                needs_glm_pp_eager_mccl
++                and getattr(torch.version, "musa", None) is not None
++                and local_rank >= 0
++            ):
++                init_kwargs["device_id"] = torch.device("musa", local_rank)
++            torch.distributed.init_process_group(**init_kwargs)
+         if enable_elastic_ep:
+             tp_pp_cpu_group = torch.distributed.new_group(
+                 backend="gloo", timeout=timeout
+diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+index e62e027..f11cd9a 100644
+--- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
++++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+@@ -558,6 +558,14 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+         self.fp8_decode_padded_heads = self._compute_fp8_decode_padded_heads(num_heads)
+ 
+         vllm_config = get_current_vllm_config()
++        from vllm_musa.optimization_contract import (
++            OptimizationFeature,
++            bind_optimization_contract,
++        )
++        optimization_contract = bind_optimization_contract(self, vllm_config)
++        self._is_glm_dsa = optimization_contract.prefers(
++            OptimizationFeature.GLM5_SPARSE_MLA_MATE_PREFILL
++        )
+         max_tokens = vllm_config.scheduler_config.max_num_batched_tokens
+         q_concat_shape = (max_tokens, num_heads, head_size)
+         if is_quantized_kv_cache(kv_cache_dtype):
+@@ -830,6 +838,7 @@
+             topk_indices,
+             self.softmax_scale,
+             topk_length=topk_length,
++            is_glm_dsa=self._is_glm_dsa,
+         )[0]
+ 
+         output = output[:, : self.num_heads, :]

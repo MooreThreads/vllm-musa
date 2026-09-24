@@ -6,6 +6,7 @@ from .policy import (
     deepseek_v4_long_prefill_logits_budget_mb,
     deepseek_v4_long_prefill_tp_partition_min_seq_len,
 )
+from .glm import resolve_glm_contract
 from .resolver import (
     bind_optimization_contract,
     prefers_optimization,
@@ -34,4 +35,5 @@ __all__ = [
     "matches_qwen35_moe_bf16_prefill_layer",
     "prefers_optimization",
     "resolve_optimization_contract",
+    "resolve_glm_contract",
 ]

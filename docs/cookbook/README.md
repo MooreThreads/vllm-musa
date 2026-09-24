@@ -54,6 +54,18 @@ release line are intentionally not carried over.
 |---|---|---|---|
 | [DeepSeek-V4-Flash](deepseek/deepseek-v4-flash.md) | 8x S5000, TP8 | Fixed MTP4 | MTP-off |
 
+## GLM
+
+| Model | Precision | Hardware | Recommended profile | Recipe |
+|---|---|---|---|---|
+| GLM-5.3 | FP8 | 16x S5000, TP8 + PP2 | FULL_DECODE_ONLY | [Open recipe](glm/glm-5.3-fp8.md) |
+| GLM-5.2 | FP8 | 16x S5000, TP8 + PP2 | Same as GLM-5.3 | [Open recipe](glm/glm-5.3-fp8.md) |
+
+GLM-5.2 and GLM-5.3 share the serving topology and graph profile. Their
+no-thinking request handling is different: GLM-5.3 needs the documented
+template workaround, while GLM-5.2 uses its checkpoint template with
+`chat_template_kwargs: {"enable_thinking": false}`.
+
 ## Verify a server
 
 The recipes expose an OpenAI-compatible endpoint on port 8000.

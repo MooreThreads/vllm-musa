@@ -7,6 +7,7 @@ from enum import Enum
 class ModelFamily(str, Enum):
     UNKNOWN = "unknown"
     DEEPSEEK_V4 = "deepseek_v4"
+    GLM5 = "glm5"
     QWEN2 = "qwen2"
     QWEN3 = "qwen3"
     QWEN35_36 = "qwen3.5_3.6"
@@ -61,6 +62,8 @@ class OptimizationFeature(str, Enum):
     QWEN_TP4_SHARDED_GUMBEL = "qwen.tp4_sharded_gumbel"
     QWEN35_SHARED_EXPERT_FOLD = "qwen3.5_3.6.shared_expert_fold"
     QWEN35_INTERLEAVED_MROPE_QK = "qwen3.5_3.6.interleaved_mrope_qk"
+    GLM5_SPARSE_MLA_MATE_PREFILL = "glm5.sparse_mla_mate_prefill"
+    GLM5_EAGER_MCCL_INIT = "glm5.eager_mccl_init"
     HYBRID_SEPARATE_MAMBA_POOL = "hybrid.separate_mamba_pool"
 
 
