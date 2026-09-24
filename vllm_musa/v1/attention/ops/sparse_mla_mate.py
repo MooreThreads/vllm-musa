@@ -6,9 +6,7 @@ from __future__ import annotations
 from mate.sparse_mla.tilelang.sparse_mla_prefill import sparse_mla_prefill_fwd
 
 
-def sparse_mla_fwd_bf16(
-    q, kv, indices, sm_scale, d_v=512, topk_length=None
-):
+def sparse_mla_fwd_bf16(q, kv, indices, sm_scale, d_v=512, topk_length=None):
     """Run the MATE v32 prefill kernel for the GLM DSA layout.
 
     The caller gates this adapter on the GLM DSA architecture and on the

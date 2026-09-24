@@ -101,6 +101,7 @@ def _can_use_glm_mate_sparse_prefill(
         and kv.shape[2] == 576
     )
 
+
 def _musa_backend_sparse_fwd(
     q: torch.Tensor,
     kv: torch.Tensor,
@@ -116,13 +117,11 @@ def _musa_backend_sparse_fwd(
     if _can_use_glm_mate_sparse_prefill(
         is_glm_dsa, q, kv, indices, d_v, attn_sink, topk_length
     ):
-        logger.info_once("Using GLM DSA MATE sparse-MLA prefill adapter.")
+        logger.info_once("Using GLM DSA MATE sparse-MLA adapter.")
         from vllm_musa.v1.attention.ops.sparse_mla_mate import (
             sparse_mla_fwd_bf16,
         )
-    elif _can_use_tilelang_sparse_prefill(
-        q, kv, indices, d_v, attn_sink, topk_length
-    ):
+    elif _can_use_tilelang_sparse_prefill(q, kv, indices, d_v, attn_sink, topk_length):
         # Preserve the pre-existing generic TileLang route for non-GLM MLA
         # models; it has a different implementation contract from MATE v32.
         from vllm_musa.v1.attention.ops.sparse_mla_tilelang import (

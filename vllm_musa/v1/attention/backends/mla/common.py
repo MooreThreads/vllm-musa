@@ -85,12 +85,10 @@ use_trtllm_ragged_deepseek_prefill = getattr(
 
 
 class MUSAMLAPrefillBackend(MLAPrefillBackend):
-    """Compatibility backend for vLLM v0.22 MLA prefill selection.
+    """MLA prefill backend for MATE FlashAttention.
 
-    MUSA keeps the prefill execution in this module's MLACommonImpl because
-    mate's FlashAttention interface differs from upstream CUDA FA. v0.22 still
-    requires MLAAttention to own a prefill_backend object, so provide a backend
-    that participates in metadata construction while execution remains here.
+    vLLM dispatches prefill through this object. The MATE FA3 wrapper differs
+    from upstream CUDA FA, so execution helpers are shared with MLACommonImpl.
     """
 
     supported_dtypes = [torch.float16, torch.bfloat16]
@@ -157,7 +155,7 @@ class MUSAMLAPrefillBackend(MLAPrefillBackend):
         out: torch.Tensor | None = None,
         output_scale: torch.Tensor | None = None,
     ):
-        """Run MUSA FA3 prefill through the vLLM 0.28 backend contract."""
+        """Run new-token prefill through MATE FlashAttention."""
         if output_scale is not None:
             raise NotImplementedError("MUSA MLA prefill does not support output_scale")
         prefill = self._prefill_metadata
