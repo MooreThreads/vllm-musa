@@ -59,7 +59,7 @@ bash docker/build_image.sh
 With the defaults this produces:
 
 ```
-vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.11.0.post1_musa5.2.0
+vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.11.0.post2_musa5.2.0
 ```
 
 The release image accepts the model and engine arguments directly. This block
@@ -228,7 +228,7 @@ Two build-time details make this work on such a host:
 ```bash
 docker run --rm <MUSA GPU flags> \
   --entrypoint python \
-  vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.11.0.post1_musa5.2.0 \
+  vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.11.0.post2_musa5.2.0 \
   -c "import torch, torch_musa; print('musa available:', torch.musa.is_available())"
 ```
 
