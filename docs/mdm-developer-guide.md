@@ -1,7 +1,8 @@
 # vLLM-MUSA Developer Guide — the MUSA Divergence Manifest (MDM)
 
-vLLM-MUSA is an out-of-tree plugin on top of upstream vLLM, plus ~90 source-level
-divergences from upstream. Instead of patching an installed vLLM at runtime, the
+vLLM-MUSA is an out-of-tree plugin on top of upstream vLLM, plus ~200
+source-level divergences from upstream (209 rows in the manifest census that
+`musa_sync report` prints; 171 of them are `series/` entries). Instead of patching an installed vLLM at runtime, the
 **MUSA Divergence Manifest (MDM)** keeps those divergences as a build-time
 `git format-patch` series applied to a *pinned* upstream vLLM clone. This guide
 covers building, the developer edit loop, updating the pinned vLLM, and
@@ -36,9 +37,9 @@ is fine for running but not for `regen`.
 | `vllm_musa/patches/build_apply.py` | applies the series at build time (`git apply`, idempotent) |
 | `vllm_musa/patches/*.patch.py` | cat-6 object/monkey-patches (each has a `def apply()`) |
 | `vllm_musa/patches/module-drift/*.diff` | cat-4a drift tripwires (never applied; `verify` reports drift) |
-| `tools/musa_sync.py` | maintenance driver: `apply` / `verify` / `rebase` / `regen` / `report` |
+| `tools/musa_sync.py` | maintenance driver: `apply` / `verify` / `check-series` / `rebase` / `regen` / `report` |
 | `Makefile.sync` | thin make wrapper over `musa_sync` |
-| `tools/patch_validate.py` | offline verify gate |
+| `tools/patch_validate.py` | offline verify gate (any known subcommand passes through) |
 | `tools/musa_verify/` | on-hardware verify harness (model smokes + unit tests) |
 
 ## 1. Build & install
@@ -165,12 +166,69 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
 
 - **Offline gate (no GPU):** `python tools/musa_sync.py verify` (alias:
   `python tools/patch_validate.py`). Clones upstream, `git apply --check`s every
-  series diff, existence-probes cat-5/6 seams, checks cat-4a tripwires. Run before
-  every bump / PR. A passing run reports every divergence as clean / `0 need attention`.
+  series diff, existence-probes cat-5/6 seams, checks cat-4a tripwires, and gates
+  the series' generation form (`check-series`). Run before every bump / PR. A
+  passing run reports `0 need attention` and ends with `=== musa_sync verify:
+  PASS ===`. The row *status* is not uniform: the `series/` entries and the cat-4a
+  tripwires read `clean`, while the cat-5/6 seam probes read `present` (an
+  existence probe, not a patch-state check).
+- **Series form gate:** `python tools/musa_sync.py check-series [--repo <checkout>]`
+  `[--replay | --round-trip]`. Four modes, four costs, and each one needs a
+  checkout in a specific state:
+
+  | invocation | needs | what it proves | cost |
+  |---|---|---|---|
+  | `check-series` | nothing | *shape* only: every entry is a regular file, not the whole-patch CRLF form (measured per line: a lone CR on a structural line, and a CR that is *content* — an added line of a CRLF file — are both accepted by `git apply` and `git am`, so they are not reported), a non-empty slug, a canonical `git format-patch` mailbox (all-zero `From 000…` separator, `From:` author, RFC-2822 `Date:`, `Subject: [PATCH] ` whose slug matches what `git format-patch` would name it — RFC-2047 decoding, `.`-run collapsing and the 52-character cap included), an `index` line **when the entry has a hunk**, and a diff `git apply --stat` can parse; numbering is unique and contiguous from `0001`; no two entries share a diff body | <1 s |
+  | `… --repo <checkout>` | a checkout of the pin | the above, plus every `index` anchor resolves to a **blob** there, or is a preimage an *earlier* entry declares as its postimage. The checkout is validated first, so a typo'd path, `/dev/null`, a file or an empty repository is a `repo-unusable` row even for a series that declares no preimage at all | <1 s |
+  | `… --repo <checkout> --replay` | a checkout **at the pin** | the above, plus what only a replay can settle: `git am -3` of the whole series in a **disposable clone** (first entry git refuses, with git's own error line → `replay-failed`; an entry that applies *nothing* → `replay-noop`, the signature of a checkout that already holds the series); every `(path, postimage)` an entry declares must be the blob **at that path in the commit that entry created** (`exemption-unearned` — an invented id, a blob a *later* entry produces, or the pin's own copy of the file, is not what this entry produced); and the series also applies the way the **build** applies it, sequentially with `git apply --recount -p1` (`build-path-conflict` — `git am -3` rescues a stale hunk with a 3-way merge, `build_apply.py` does not) | ~19 s per 171 entries |
+  | `… --repo <checkout> --round-trip` | a checkout that **holds** the series (`rebase` first) | the fixed point, non-tautologically: it runs exactly what `cmd_regen` runs (`git format-patch --no-signature --no-numbered --zero-commit` from `VLLM_COMMIT`/`VLLM_TAG` plus the canonical author rewrite) **in the checkout you passed**, and rows any entry whose bytes (`round-trip-dirty`) or name (`regen` names this entry …) it would rewrite, or any count mismatch (`round-trip-count`, one row that says the checkout does not hold *this* series). Whether the checkout holds the series is decided by pairing the entries **position for position** — entry *i* of the series against entry *i* of `regen`'s output, at least half of them agreeing on the subject slug — and a checkout that fails that is `round-trip-unverifiable`: one row, rather than a pass and rather than a per-entry cascade of "`regen` names this entry …" rows. The positional form matters in both directions: a set intersection would pair a foreign history that merely reuses half the slugs (measured: a `round-trip-dirty` row for every entry of a state), and would refuse a series whose subjects repeat (measured: 4 entries sharing one slug read as a single-slug set) | <1 s |
+
+  `--replay` and `--round-trip` cannot be combined: they need contradictory
+  checkout states (one before the series is applied, one after), and asking for
+  both is a usage error (exit 2).
+
+  The default mode is the cheap half, and it is deliberately *not* the whole
+  story: it cannot know whether a hunk still applies, and it cannot know whether
+  `regen` would leave an entry byte-for-byte alone (an extra `Signed-off-by`, a
+  deleted `---` diffstat or a changed author ident all pass it). Where it must
+  defer it says so in this document: an anchor "exempted" by an earlier entry's
+  declaration is only proven by `--replay`, and the regen fixed point is only
+  proven by `--round-trip` against a checkout that holds the series.
+  `--repo` hands it an existing checkout instead of a fresh clone, and that checkout must
+  be **at the pin and unpatched**: the cat-4a/4b probes compare its own files, so a checkout
+  that already holds the series reports 34 divergences (`1 clean / 209 total`). Reset it with
+  `git -C <repo> reset --hard <pin>` before probing.
+  It fails closed on a missing or empty `series/`, on a symlink/directory/
+  chmod-000/fifo/0-byte entry, and on an unusable `--repo` (validated before it
+  is consulted, so a typo'd path cannot pass a series that declares no anchor); a
+  red series makes `verify` exit 1 even when every divergence is clean. A usage error prints
+  `=== musa_sync check-series: FAIL (usage) ===`.
+  **Nothing invokes the gate automatically:** there is no in-repo CI workflow
+  and no git hook that runs `check-series` or `patch_validate.py`, and the PR
+  pipelines are external to this tree. Whatever gate runs, runs because a human
+  or an external pipeline typed the command — so the cost table above is what
+  decides which mode a reviewer should ask for.
 - **On-hardware:** `tools/musa_verify/verify.sh` (configured via env vars
   `MUSA_HOST`, `MUSA_CONTAINER`, `MUSA_VENV`, … — never commit real values) runs the
   patch unit tests plus one functional server smoke per model, each pinned to its
   own MUSA device. `tools/musa_verify/unit_tests.sh` runs `tests/test_patches.py`.
+
+### Exit codes and verdicts
+
+Every `musa_sync` **gate** subcommand (`check-series`, `verify`, `regen`,
+`rebase`) that has something to report ends with one explicit verdict line, and
+the process verdict is unambiguous (`regen --area module` is a mode of `regen`,
+not a subcommand). Three paths print only an `ERROR:` line — a usage/config error
+(exit 2), a missing `git` on `PATH` (exit 1) and `regen`'s internal checks on the
+patches it generated (exit 1) — so a caller parsing output must read the exit
+code. The two reporting commands do not print a verdict at all: `report` prints
+the manifest census and `apply` prints `--- N applied, … ---`:
+
+| code | meaning |
+|---|---|
+| 0 | `=== musa_sync <cmd>: PASS ===` — nothing needs attention |
+| 1 | `=== musa_sync <cmd>: FAIL (<counters>) ===` — see the rows above; `verify` prints the series-format section *before* the divergence summary so the last line always agrees with the exit code |
+| 2 | usage/config error, not a verdict: no resolvable target (`verify`, `regen`, `rebase` with no `--target`/`VLLM_COMMIT`/`VLLM_TAG`), a target the `--repo` checkout does not contain, `--replay`/`--round-trip` without `--repo`, or both at once |
 
 ## 7. Command reference
 
@@ -179,7 +237,8 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
 | cmd | what it does |
 |---|---|
 | `apply` | build-time: `git apply` the series to a cloned vLLM |
-| `verify` | offline pre-bump gate: status of every divergence |
+| `verify` | offline pre-bump gate: status of every divergence (+ the series-format gate) |
+| `check-series [--repo PATH] [--replay \| --round-trip]` | gate the series' generation form: every entry must be a canonical `git am` mailbox with canonical numbering; `--repo` also resolves the `index` anchors against that checkout (at the pin), `--replay` also replays the series and probes the build path there, `--round-trip` instead compares the series with what `regen` writes from a checkout that holds it (see §6 for the state each mode needs) |
 | `rebase <tag>` | `git am -3` the series onto `vllm@<tag>` (sets up commits for `regen`) |
 | `regen` | regenerate `series/` from the clone's commits (`git format-patch`) |
 | `report` | print the manifest census |

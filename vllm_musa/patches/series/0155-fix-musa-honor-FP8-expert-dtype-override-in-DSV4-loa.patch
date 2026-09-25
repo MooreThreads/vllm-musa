@@ -7,17 +7,16 @@ Converted DeepSeek-V4 FP8 checkpoints can omit expert_dtype from the
 transformers config. Reuse the resolved DeepSeek quantization config for target
 and DSpark MTP weight mapping so --hf-overrides expert_dtype=fp8 selects the
 FP8 block scale names.
-
 ---
  vllm/models/deepseek_v4/nvidia/model.py | 7 ++++++-
- vllm/models/deepseek_v4/nvidia/mtp.py   | 9 +++++----
- 2 files changed, 11 insertions(+), 5 deletions(-)
+ vllm/models/deepseek_v4/nvidia/mtp.py   | 7 ++++---
+ 2 files changed, 10 insertions(+), 4 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
-index 128debf70c..dsv4dtype 100644
+index 0e9571b805..b4e2d02eff 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
-@@ -1485,7 +1485,12 @@
+@@ -1485,7 +1485,12 @@ class DeepseekV4ForCausalLM(
  
          config = vllm_config.model_config.hf_config
          self.config = config
@@ -32,10 +31,10 @@ index 128debf70c..dsv4dtype 100644
              self.hf_to_vllm_mapper = _make_deepseek_v4_weights_mapper(expert_dtype)
  
 diff --git a/vllm/models/deepseek_v4/nvidia/mtp.py b/vllm/models/deepseek_v4/nvidia/mtp.py
-index 128debf70c..dsv4dtype 100644
+index eaf105205c..6d53b8f08a 100644
 --- a/vllm/models/deepseek_v4/nvidia/mtp.py
 +++ b/vllm/models/deepseek_v4/nvidia/mtp.py
-@@ -377,10 +377,11 @@
+@@ -377,10 +377,11 @@ class DeepSeekV4MTP(nn.Module):
          # FP8 experts register ``..._weight_scale_inv`` (block_quant) while
          # FP4/MXFP4 experts register ``..._weight_scale``. Choose the suffix
          # for the rename below based on the model's expert dtype.

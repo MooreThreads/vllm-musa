@@ -1,6 +1,17 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 15 Sep 2026 14:51:05 +0800
+Subject: [PATCH] MUSA: mamba2-ssd-concrete-initial-state-strides
+
+---
+ vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
+index f551306320..c2bbbeae05 100644
 --- a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
 +++ b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
-@@ -499,6 +499,7 @@
+@@ -499,6 +499,7 @@ def _chunk_scan_fwd(
      initstates_ptr = initial_states
      if is_musa_triton_32() and initial_states is None:
          initstates_ptr = states

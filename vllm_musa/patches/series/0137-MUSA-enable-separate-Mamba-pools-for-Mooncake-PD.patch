@@ -43,8 +43,8 @@ index 831937fb9b..ea87e17bdb 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
 @@ -1411,11 +1411,17 @@ def _musa_has_mamba_and_attention(kv_cache_groups) -> bool:
-
-
+ 
+ 
  def _musa_separate_pool_eligible(vllm_config, kv_cache_groups) -> bool:
 -    # KV connectors can defer frees through the coordinator's shared-pool API;
 -    # keep the upstream shared-pool layout until that API carries pool ownership.
@@ -62,9 +62,9 @@ index 831937fb9b..ea87e17bdb 100644
 +        and (kv_transfer_config is None or mooncake_connector)
          and _musa_has_mamba_and_attention(kv_cache_groups)
      )
-
+ 
 @@ -1967,7 +1973,10 @@ def get_kv_cache_groups(
-
+ 
      if (
          musa_mamba_separate_pool_enabled()
 -        and vllm_config.kv_transfer_config is None

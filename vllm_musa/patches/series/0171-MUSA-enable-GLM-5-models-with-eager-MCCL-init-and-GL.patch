@@ -1,10 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Subject: [PATCH] MUSA: enable GLM-5 models with eager MCCL init and GLM sparse dispatch
+Date: Fri, 25 Sep 2026 12:30:00 +0800
+Subject: [PATCH] MUSA: enable GLM-5 models with eager MCCL init and GLM sparse
+ dispatch
 
 ---
+ vllm/distributed/parallel_state.py            | 20 ++++++++++++++++++-
+ .../attention/backends/mla/flashmla_sparse.py |  9 +++++++++
+ 2 files changed, 28 insertions(+), 1 deletion(-)
+
 diff --git a/vllm/distributed/parallel_state.py b/vllm/distributed/parallel_state.py
-index 128db90..fc1182e 100644
+index 128db903d4..fc1182e29d 100644
 --- a/vllm/distributed/parallel_state.py
 +++ b/vllm/distributed/parallel_state.py
 @@ -1682,7 +1682,7 @@ def init_distributed_environment(
@@ -16,7 +22,7 @@ index 128db90..fc1182e 100644
                  backend=backend,
                  init_method=distributed_init_method if store is None else None,
                  store=store,
-@@ -1690,6 +1690,24 @@
+@@ -1690,6 +1690,24 @@ def init_distributed_environment(
                  rank=rank,
                  timeout=timeout,
              )
@@ -42,7 +48,7 @@ index 128db90..fc1182e 100644
              tp_pp_cpu_group = torch.distributed.new_group(
                  backend="gloo", timeout=timeout
 diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
-index e62e027..f11cd9a 100644
+index e62e02779c..f11cd9a5ec 100644
 --- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
 +++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
 @@ -558,6 +558,14 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
@@ -60,7 +66,7 @@ index e62e027..f11cd9a 100644
          max_tokens = vllm_config.scheduler_config.max_num_batched_tokens
          q_concat_shape = (max_tokens, num_heads, head_size)
          if is_quantized_kv_cache(kv_cache_dtype):
-@@ -830,6 +838,7 @@
+@@ -830,6 +838,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
              topk_indices,
              self.softmax_scale,
              topk_length=topk_length,

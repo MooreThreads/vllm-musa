@@ -1,21 +1,21 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Wed, 9 Sep 2026 16:45:00 +0800
-Subject: [PATCH] MUSA: provide typed optional pointers for DSpark rejection sampler
+Subject: [PATCH] MUSA: provide typed optional pointers for DSpark rejection
+ sampler
 
 The MUSA Triton frontend requires typed pointers for optional tensors even when
 constexpr flags disable their loads. Preserve the original feature booleans,
 then use one-element MUSA buffers for dead optional branches.
-
 ---
- vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py | 25 ++++++++++++++++++++++++-
- 1 file changed, 24 insertions(+), 1 deletion(-)
+ .../spec_decode/rejection_sampler_utils.py    | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
-index 3ea9f35ee8..dsparkrej 100644
+index c2857861bc..09e51f792d 100644
 --- a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
 +++ b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
-@@ -962,6 +962,7 @@
+@@ -962,6 +962,7 @@ def rejection_sample(
      num_logits, vocab_size = target_logits.shape
      draft_logits_stride_0 = 0
      draft_logits_stride_1 = 0
@@ -23,7 +23,7 @@ index 3ea9f35ee8..dsparkrej 100644
      if has_draft_logits := draft_logits is not None:
          draft_logits_stride_0 = draft_logits.stride(0)
          draft_logits_stride_1 = draft_logits.stride(1)
-@@ -969,6 +970,13 @@
+@@ -969,6 +970,13 @@ def rejection_sample(
          # vocab size is larger than the draft's due to padding.
          vocab_size = min(vocab_size, draft_logits.size(-1))
  
@@ -37,7 +37,7 @@ index 3ea9f35ee8..dsparkrej 100644
      # Compute the per-vocab-block logits stats, such as target argmax
      # (for greedy requests), and target max + softmax exponential
      # (for non-greedy requests).
-@@ -1092,6 +1100,15 @@
+@@ -1092,6 +1100,15 @@ def rejection_sample(
          cumulative_log_p = None
          local_residual_mass = None
  
@@ -53,7 +53,7 @@ index 3ea9f35ee8..dsparkrej 100644
      # Sample up until the first rejected/bonus token, and store
      # the step.
      sampled = draft_sampled.new_empty(
-@@ -1134,7 +1151,7 @@
+@@ -1134,7 +1151,7 @@ def rejection_sample(
          vocab_num_blocks,
          PADDED_VOCAB_NUM_BLOCKS=padded_vocab_num_blocks,
          HAS_DRAFT_LOGITS=has_draft_logits,

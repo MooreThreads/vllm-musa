@@ -6,16 +6,15 @@ Subject: [PATCH] MUSA: dispatch DeepSeek-V4 DSpark context KV insert
 The upstream DSpark draft model directly invokes CUDA-only DeepSeek-V4 KV
 insertion operators. Reuse the regular MUSA custom-op wrapper for DSpark
 context KV setup while preserving the CUDA paths.
-
 ---
  vllm/models/deepseek_v4/nvidia/dspark.py | 18 ++++++++++++++++++
  1 file changed, 18 insertions(+)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/dspark.py b/vllm/models/deepseek_v4/nvidia/dspark.py
-index 128debf70c..dsparkmusa 100644
+index b702d7ec9c..2810ed4e5b 100644
 --- a/vllm/models/deepseek_v4/nvidia/dspark.py
 +++ b/vllm/models/deepseek_v4/nvidia/dspark.py
-@@ -23,6 +23,7 @@
+@@ -23,6 +23,7 @@ from vllm.distributed import (
  )
  from vllm.forward_context import get_forward_context, is_forward_context_available
  from vllm.logger import init_logger
@@ -23,7 +22,7 @@ index 128debf70c..dsparkmusa 100644
  from vllm.model_executor.kernels.mhc.tilelang import (
      hc_head_fused_kernel_tilelang,
      mhc_post_tilelang,
-@@ -254,6 +255,23 @@
+@@ -254,6 +255,23 @@ def _insert_context_kv(
          dtype=kv.dtype,
          device=kv.device,
      )

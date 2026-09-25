@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: keep DSV4 learned indexer dispatch
  1 file changed, 26 insertions(+), 75 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 7877fd5..7b3fc0c 100644
+index 7d3a7859ca..f87dc0b5b9 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
-@@ -474,15 +474,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -472,15 +472,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
  
          # Keep the attention input preparation in the captured graph. Only the
          # sparse indexer and MLA attention run in the eager break below.
@@ -28,7 +28,7 @@ index 7877fd5..7b3fc0c 100644
          )
          qr, kv = qr_kv.split([self.q_lora_rank, self.head_dim], dim=-1)
          qr, kv = fused_q_kv_rmsnorm(
-@@ -502,7 +495,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -500,7 +493,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
              indexer_weights,
              positions,
              o_padded,
@@ -36,7 +36,7 @@ index 7877fd5..7b3fc0c 100644
          )
          o = o_padded[:, : self.n_local_heads, :]
  
-@@ -520,7 +512,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -518,7 +510,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          indexer_weights: torch.Tensor | None,
          positions: torch.Tensor,
          o_padded: torch.Tensor,
@@ -44,7 +44,7 @@ index 7877fd5..7b3fc0c 100644
      ) -> None:
          """Wide eager region: the whole of ``_prepare_and_attn`` runs eagerly.
  
-@@ -536,7 +527,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -534,7 +525,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
              indexer_weights,
              positions,
              o_padded,
@@ -52,7 +52,7 @@ index 7877fd5..7b3fc0c 100644
          )
  
      def _prepare_and_attn(
-@@ -549,7 +539,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -547,7 +537,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          indexer_weights: torch.Tensor | None,
          positions: torch.Tensor,
          o_padded: torch.Tensor,
@@ -60,7 +60,7 @@ index 7877fd5..7b3fc0c 100644
      ) -> None:
          """Attention input preparation followed by the sparse indexer and MLA.
  
-@@ -576,50 +565,29 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -574,50 +563,29 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          if indexer is not None:
              assert compressor is not None
              assert indexer_kv_score is not None
@@ -134,7 +134,7 @@ index 7877fd5..7b3fc0c 100644
          elif compressor is not None:
              aux_stream = aux_streams[0] if aux_streams is not None else None
              q, _ = maybe_execute_in_parallel(
-@@ -652,10 +620,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -650,10 +618,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          return qr_kv
  
      def _run_parallel_input_projections(
@@ -146,7 +146,7 @@ index 7877fd5..7b3fc0c 100644
      ) -> tuple[
          torch.Tensor,
          torch.Tensor | None,
-@@ -701,7 +666,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -699,7 +664,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
                      torch.float32,
                  )
  
@@ -155,7 +155,7 @@ index 7877fd5..7b3fc0c 100644
              aux_fns[2] = indexer_compressor_kv_score
  
          qr_kv, (kv_score, indexer_weights, indexer_kv_score) = execute_in_parallel(
-@@ -1071,20 +1036,6 @@ class DeepseekV4Indexer(nn.Module):
+@@ -1069,20 +1034,6 @@ class DeepseekV4Indexer(nn.Module):
              torch.cuda.Event(),
          ]
  
