@@ -26,6 +26,7 @@ from typing import Any
 import torch
 import torch._inductor.pattern_matcher as pm
 import torch.fx as fx
+from torch._subclasses.fake_tensor import FakeTensor
 from torch._inductor.pattern_matcher import PatternMatcherPass
 
 import vllm.ir.ops
@@ -97,54 +98,6 @@ def _rms_input_weight_supported_dtype(match: pm.Match) -> bool:
             supported = supported and residual.meta["val"].dtype == x_dtype
         return supported
     return True
-
-
-def _fill_fused_meta(
-    *,
-    fused,
-    rms,
-    residual_out,
-    raw,
-    inputs,
-    eps: float,
-    comm_id: int,
-    use_raw: bool,
-) -> None:
-    """Populate ``meta["val"]`` on nodes inserted by the manual rewrite.
-
-    ``fx.Graph.call_function`` does not set node metadata. Every node this pass
-    inserts therefore lacks ``meta["val"]``, and any later pass that dispatches on
-    an argument's fake tensor -- notably ``VllmIRLoweringPass.lower_matched_op``,
-    which does ``fx.map_arg(node.args, lambda arg: arg.meta["val"])`` -- raises
-    ``KeyError: 'val'``. That is why enabling this pass crashed engine startup
-    under ``cudagraph_mode=FULL_AND_PIECEWISE`` (piecewise AOT capture runs the IR
-    lowering pass) while it appeared to work in eager, where no such pass runs.
-
-    The fused ops have ``register_fake`` implementations, so evaluating them with
-    the input nodes' own fake tensors yields metadata of the correct shape and
-    dtype without touching device memory. Do not open a ``FakeTensorMode`` here:
-    the inputs are already fakes owned by the ambient mode, and nesting a second
-    one raises ``AssertionError: Mixing fake modes NYI``.
-    """
-    fakes = [a.meta.get("val") if isinstance(a, fx.Node) else None for a in inputs]
-    if any(f is None for f in fakes):
-        return  # cannot derive metadata; leave the graph as it was
-    if use_raw:
-        out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default(
-            fakes[0], fakes[1], fakes[2], float(eps), comm_id
-        )
-        fused.meta["val"] = out
-        rms.meta["val"] = out[0]
-        residual_out.meta["val"] = out[1]
-        if raw is not None:
-            raw.meta["val"] = out[2]
-    else:
-        out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default(
-            fakes[0], fakes[1], fakes[2], float(eps), comm_id
-        )
-        fused.meta["val"] = out
-        rms.meta["val"] = out[0]
-        residual_out.meta["val"] = out[1]
 
 
 class MusaAllReduceRMSNormPattern:
@@ -536,6 +489,80 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
         value = node.meta.get("val")
         return value if isinstance(value, torch.Tensor) else None
 
+    def _insert_fused_ar_rmsnorm(
+        self,
+        graph: fx.Graph,
+        before: fx.Node,
+        car: fx.Node,
+        residual: Any,
+        weight: Any,
+        eps: Any,
+        use_raw: bool,
+    ) -> tuple[fx.Node, fx.Node, fx.Node | None]:
+        """Insert the fused AR+RMSNorm op and publish its ``meta["val"]``.
+
+        ``fx.Graph.call_function`` leaves ``meta`` empty and later passes index
+        ``arg.meta["val"]`` unguarded, so the metadata must be published here,
+        taken from the fused ops' own ``register_fake`` implementations. Both
+        rewrite arms insert through this method so the invariant cannot drift.
+
+        Callers must gate on ``_manual_residual_inputs_supported`` first: the
+        fake implementations are evaluated on the input nodes' own fake tensors,
+        and metadata is never derived from real tensors.
+        """
+        with graph.inserting_before(before):
+            if use_raw:
+                fused = graph.call_function(
+                    torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default,
+                    args=(car.args[0], residual, weight, eps, self.comm_id),
+                )
+                fused_rms = graph.call_function(
+                    operator.getitem, args=(fused, 0)
+                )
+                fused_residual = graph.call_function(
+                    operator.getitem, args=(fused, 1)
+                )
+                fused_raw = graph.call_function(
+                    operator.getitem, args=(fused, 2)
+                )
+            else:
+                fused = graph.call_function(
+                    torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default,
+                    args=(car.args[0], residual, weight, eps, self.comm_id),
+                )
+                fused_rms = graph.call_function(
+                    operator.getitem, args=(fused, 0)
+                )
+                fused_residual = graph.call_function(
+                    operator.getitem, args=(fused, 1)
+                )
+                fused_raw = None
+
+        fakes = [
+            self._node_tensor_meta(node) for node in (car.args[0], residual, weight)
+        ]
+        if not all(isinstance(fake, FakeTensor) for fake in fakes):
+            raise AssertionError(
+                "fused AR+RMSNorm rewrite requires fake tensors in meta['val']; "
+                "gate on _manual_residual_inputs_supported before calling"
+            )
+
+        if use_raw:
+            out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default(
+                fakes[0], fakes[1], fakes[2], float(eps), self.comm_id
+            )
+        else:
+            out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default(
+                fakes[0], fakes[1], fakes[2], float(eps), self.comm_id
+            )
+        fused.meta["val"] = out
+        fused_rms.meta["val"] = out[0]
+        fused_residual.meta["val"] = out[1]
+        if fused_raw is not None:
+            fused_raw.meta["val"] = out[2]
+
+        return fused_rms, fused_residual, fused_raw
+
     def _manual_residual_inputs_supported(
         self, car: fx.Node, residual: Any, weight: Any
     ) -> bool:
@@ -697,43 +724,10 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                 ]
                 use_raw = bool(raw_users)
 
-                with graph.inserting_before(fused_add):
-                    if use_raw:
-                        fused = graph.call_function(
-                            torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default,
-                            args=(car.args[0], residual, weight, eps, self.comm_id),
-                        )
-                        fused_rms = graph.call_function(
-                            operator.getitem, args=(fused, 0)
-                        )
-                        fused_residual = graph.call_function(
-                            operator.getitem, args=(fused, 1)
-                        )
-                        fused_raw = graph.call_function(
-                            operator.getitem, args=(fused, 2)
-                        )
-                    else:
-                        fused = graph.call_function(
-                            torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default,
-                            args=(car.args[0], residual, weight, eps, self.comm_id),
-                        )
-                        fused_rms = graph.call_function(
-                            operator.getitem, args=(fused, 0)
-                        )
-                        fused_residual = graph.call_function(
-                            operator.getitem, args=(fused, 1)
-                        )
-                        fused_raw = None
-
-                _fill_fused_meta(
-                    fused=fused,
-                    rms=fused_rms,
-                    residual_out=fused_residual,
-                    raw=fused_raw,
-                    inputs=(car.args[0], residual, weight),
-                    eps=eps,
-                    comm_id=self.comm_id,
-                    use_raw=use_raw,
+                fused_rms, fused_residual, fused_raw = (
+                    self._insert_fused_ar_rmsnorm(
+                        graph, fused_add, car, residual, weight, eps, use_raw
+                    )
                 )
 
                 for user, index in output_indices.items():
@@ -790,33 +784,11 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                 raw_users = [user for user in list(car.users) if user is not add]
                 use_raw = bool(raw_users)
 
-                with graph.inserting_before(rms):
-                    if use_raw:
-                        fused = graph.call_function(
-                            torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default,
-                            args=(car.args[0], residual, weight, eps, self.comm_id),
-                        )
-                        fused_rms = graph.call_function(
-                            operator.getitem, args=(fused, 0)
-                        )
-                        fused_residual = graph.call_function(
-                            operator.getitem, args=(fused, 1)
-                        )
-                        fused_raw = graph.call_function(
-                            operator.getitem, args=(fused, 2)
-                        )
-                    else:
-                        fused = graph.call_function(
-                            torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default,
-                            args=(car.args[0], residual, weight, eps, self.comm_id),
-                        )
-                        fused_rms = graph.call_function(
-                            operator.getitem, args=(fused, 0)
-                        )
-                        fused_residual = graph.call_function(
-                            operator.getitem, args=(fused, 1)
-                        )
-                        fused_raw = None
+                fused_rms, fused_residual, fused_raw = (
+                    self._insert_fused_ar_rmsnorm(
+                        graph, rms, car, residual, weight, eps, use_raw
+                    )
+                )
 
                 rms.replace_all_uses_with(fused_rms)
                 for user in list(add.users):
