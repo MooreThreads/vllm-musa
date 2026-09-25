@@ -72,12 +72,13 @@ Subcommands::
         Neither is the default: both clone a repository and spawn git per entry.
         No in-repo CI or hook invokes this gate today.
 
-Every **gate** subcommand (``check-series``, ``verify``, ``regen``, ``rebase``,
-``module``) ends with one explicit ``=== musa_sync <cmd>: PASS|FAIL ===`` verdict
-line whose counts agree with the exit code: 0 = PASS, 1 = FAIL, 2 = usage/config
-error (e.g. ``verify`` with no resolvable target). The two reporting commands do
-not print one: ``report`` renders the manifest census and ``apply`` prints
+Every **gate** subcommand (``check-series``, ``verify``, ``regen``, ``rebase``)
+ends with one explicit ``=== musa_sync <cmd>: PASS|FAIL ===`` verdict line whose
+counts agree with the exit code: 0 = PASS, 1 = FAIL, 2 = usage/config error (e.g.
+``verify`` with no resolvable target). The two reporting commands do not print
+one: ``report`` renders the manifest census and ``apply`` prints
 ``--- N applied, … ---``, so a caller parsing either must read the exit code.
+(``regen --area module`` is a mode of ``regen``, not a subcommand.)
 
 Stdlib-only; loads manifest.py + build_apply.py BY FILE PATH so it never imports
 the ``vllm_musa`` package (works before install, in plain CI).
@@ -738,6 +739,40 @@ def _canonical_form_problem(
     return None
 
 
+_DIFF_HEADER_LINE = re.compile(
+    rb"^(index |new file mode |deleted file mode |old mode |new mode "
+    rb"|similarity index |dissimilarity index |rename from |rename to "
+    rb"|copy from |copy to )"
+)
+
+
+def _header_run_start(text: bytes, pos: int) -> int:
+    """Start of the diff-header run directly above ``pos`` (at most one `index`).
+
+    A bare diff still carries its header lines — ``index``, modes, rename/copy —
+    and the ``index`` line sits above the ``--- a/…`` pair the caller found. At
+    most ONE ``index`` line is swallowed: `git diff` writes one per file section,
+    and a commit message that quotes an ``index deadbeef..cafebabe`` line directly
+    above the diff (no blank line between them) is prose, which this must not read
+    as an anchor — that promise is why the slice exists. The residual ambiguity is
+    irreducible from bytes alone: a bare diff whose only anchor line is such a
+    quoted line reads as prose and is rowed ``no-index-line`` (a shape complaint;
+    ``--replay`` still says whether `git am` can replay it).
+    """
+    start = pos
+    seen_index = False
+    while start > 0:
+        line_start = text.rfind(b"\n", 0, start - 1) + 1
+        if line_start >= start or not _DIFF_HEADER_LINE.match(text[line_start:start]):
+            break
+        if text.startswith(b"index ", line_start):
+            if seen_index:
+                break
+            seen_index = True
+        start = line_start
+    return start
+
+
 def _diff_body(text: bytes) -> bytes:
     """The entry's diff, from its first ``diff --git`` or ``--- a/… +++ b/…`` pair.
 
@@ -762,50 +797,133 @@ def _diff_body(text: bytes) -> bytes:
     m = re.search(rb"(?m)^--- [^\n]*\n\+\+\+ [^\n]*\n", text)
     if m is None:
         return b""
-    start = m.start()
-    # A bare diff still carries its header lines (`index`, modes, rename/copy),
-    # and the `index` line in particular is below the separator but *above* the
-    # `--- a/…` pair this fallback found — so walk back over exactly those.
-    header = re.compile(
-        rb"(?m)^(index |new file mode |deleted file mode |old mode |new mode "
-        rb"|similarity index |dissimilarity index |rename from |rename to "
-        rb"|copy from |copy to )"
-    )
-    while start > 0:
-        line_start = text.rfind(b"\n", 0, start - 1) + 1
-        if line_start >= start or not header.match(text[line_start:start]):
-            break
-        start = line_start
-    return text[start:]
+    return text[_header_run_start(text, m.start()) :]
+
+
+def _target_resolves(repo: Path | None, target: str) -> bool:
+    """Whether ``target`` resolves in ``repo`` (or can be fetched into a clone).
+
+    ``verify`` used to report a green run for a target that the checkout it was
+    handed does not contain: `--repo` was accepted and the divergence rows were
+    computed against whatever that checkout had, so a mistyped or stale pin read
+    as PASS. Without a repo the fresh clone is fetched first, so nothing can be
+    decided here and the answer is "assume yes".
+    """
+    if repo is None:
+        return True
+    r = _git(Path(repo), "rev-parse", "--verify", "--quiet", f"{target}^{{commit}}")
+    return r.returncode == 0
+
+
+def _unquote_git_path(raw: bytes) -> str:
+    """Undo git's C-quoting of a path (``core.quotePath`` defaults to true).
+
+    ``git diff``/``format-patch`` write a path containing a non-ASCII byte, a
+    quote or a backslash as a C string — ``"a/caf\\303\\251.txt"`` — and a parser
+    that reads the quoted form as the literal path misses the section entirely.
+    That is how a hand-edited ``index`` line in such a file escaped the postimage
+    check (measured: the entry replayed, the exemption stayed unverified).
+    """
+    if not (raw.startswith(b'"') and raw.endswith(b'"')):
+        return raw.decode("utf-8", "replace")
+    body, out, i = raw[1:-1], bytearray(), 0
+    while i < len(body):
+        ch = body[i]
+        if ch == 0x5C and i + 1 < len(body):
+            nxt = body[i + 1]
+            if 0x30 <= nxt <= 0x37:  # up to three octal digits
+                digits = b""
+                j = i + 1
+                while j < len(body) and len(digits) < 3 and 0x30 <= body[j] <= 0x37:
+                    digits += bytes([body[j]])
+                    j += 1
+                out.append(int(digits, 8) & 0xFF)
+                i = j
+                continue
+            out.append(
+                {0x61: 0x07, 0x62: 0x08, 0x74: 0x09, 0x6E: 0x0A, 0x76: 0x0B,
+                 0x66: 0x0C, 0x72: 0x0D, 0x22: 0x22, 0x5C: 0x5C}.get(nxt, nxt)
+            )
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return out.decode("utf-8", "replace")
+
+
+def _diff_section_path(section: bytes) -> str | None:
+    """The ``b`` side path of one diff section, or None for a deletion."""
+    token = rb'"(?:[^"\\]|\\.)*"|\S+'
+    head = re.search(rb"(?m)^diff --git (" + token + rb") (" + token + rb")", section)
+    if head:
+        raw = head.group(2)
+    else:
+        plus = re.search(
+            rb"(?m)^\+\+\+ (" + token + rb")(?:\t[^\n]*)?\n", section
+        )
+        minus = re.search(
+            rb"(?m)^--- (" + token + rb")(?:\t[^\n]*)?\n", section
+        )
+        if plus is None or minus is None:
+            return None
+        raw = plus.group(1)
+        if _unquote_git_path(raw).rstrip("\r") == "/dev/null":
+            raw = minus.group(1)  # a deletion: the declared path is the a side
+    path = _unquote_git_path(raw).rstrip("\r")
+    for prefix in ("b/", "a/"):
+        if path.startswith(prefix):
+            return path[len(prefix):]
+    return path
 
 
 def _declared_postimages(text: bytes) -> list[tuple[str, str]]:
     """``(path, postimage)`` for every ``index`` line, in diff order.
 
     The path comes from the section's ``diff --git a/… b/…`` header, or from its
-    ``+++ b/…`` line for a bare diff; a deletion has no postimage and is skipped.
-    This is what lets the replay check an entry's declaration against *the commit
-    that entry created* rather than against the object database.
+    ``+++ b/…`` line for a bare diff; git's C-quoting is undone, and a trailing
+    TAB timestamp is dropped. This is what lets the replay check an entry's
+    declaration against *the commit that entry created*.
+
+    Two shapes that used to be skipped are now read, because skipping them was a
+    way to fake an exemption:
+
+    * a **deletion** (``+++ /dev/null``) whose ``index`` line names a *non-null*
+      postimage — no commit can hold a blob at a path it deleted, so the check
+      must see it and say so (a real deletion declares the all-zero id and is
+      skipped by the caller);
+    * a **gitlink** (``new file mode 160000``) whose ``index`` line names a
+      submodule *commit*, which is not a blob at all and cannot be earned — such
+      a section is skipped here, because rowing it would reject a legitimate
+      submodule bump (it is the one shape where the declaration is not a blob).
     """
     body = _diff_body(text)
     out: list[tuple[str, str]] = []
-    # Split into file sections; a bare diff is one section with no header.
-    sections = re.split(rb"(?m)^(?=diff --git )", body)
-    for section in sections:
-        if not section.strip():
+    chunks = re.split(rb"(?m)^(?=diff --git )", body)
+    sections: list[bytes] = []
+    for chunk in chunks:
+        if not chunk.strip():
             continue
-        m = re.search(rb"(?m)^diff --git a/([^\n]+) b/([^\n]+)\n", section)
-        if m:
-            path = m.group(2).decode("utf-8", "replace")
+        if re.search(rb"(?m)^diff --git ", chunk) is None:
+            # a bare diff: several files may follow one another, each with its own
+            # `--- a/…` + `+++ b/…` pair and no `diff --git` line at all
+            pairs = list(
+                re.finditer(rb"(?m)^--- [^\n]*\n\+\+\+ [^\n]*\n", chunk)
+            )
+            starts = sorted({_header_run_start(chunk, m.start()) for m in pairs})
+            for i, start in enumerate(starts):
+                end = starts[i + 1] if i + 1 < len(starts) else len(chunk)
+                if chunk[start:end].strip():
+                    sections.append(chunk[start:end])
         else:
-            plus = re.search(rb"(?m)^\+\+\+ b/([^\n]+)\n", section)
-            if not plus:
-                continue
-            path = plus.group(1).decode("utf-8", "replace")
-        if re.search(rb"(?m)^\+\+\+ /dev/null\n", section):
+            sections.append(chunk)
+    for section in sections:
+        if re.search(rb"(?m)^(?:new file mode|new mode|old mode) 160000\n", section):
+            continue  # a gitlink: the "postimage" is a commit, not a blob
+        path = _diff_section_path(section)
+        if path is None:
             continue
-        for m2 in _INDEX_LINE.finditer(section):
-            out.append((path, m2.group(2).decode()))
+        for m in _INDEX_LINE.finditer(section):
+            out.append((path, m.group(2).decode()))
     return out
 
 
@@ -1017,8 +1135,10 @@ def _series_entry_problem(
     if _HUNK_RE.search(_diff_body(text)) and not _INDEX_LINE.search(_diff_body(text)):
         return (
             "no-index-line",
-            "no 'index <blob>..<blob>' line: git am -3 cannot build its 3-way "
-            "ancestor (sha1 information is lacking or useless)",
+            "no 'index <blob>..<blob>' line: `git format-patch` writes one for "
+            "every hunk, and without it `git am -3` has no 3-way ancestor to fall "
+            "back on (the entry still applies while its context is unchanged; "
+            "`--replay` says whether it does)",
         )
     if unresolved:
         return (
@@ -1226,6 +1346,14 @@ def _round_trip_rows(
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _entry_subject_slug(text: bytes) -> str:
+    """The slug `git format-patch` would name this entry by (``""`` if none)."""
+    subject = _header_value(_header_lines(text), b"Subject")
+    if subject is None or not subject.startswith(_TITLE_PREFIX):
+        return ""
+    return _git_slug(_decode_header_word(subject[len(_TITLE_PREFIX) :]))
+
+
 def _round_trip_rows_in(
     repo: Path, tmp: Path, paths: list[Path]
 ) -> list[tuple[str, str, str]]:
@@ -1291,6 +1419,27 @@ def _round_trip_rows_in(
                 "round-trip-count",
                 f"`regen` writes {len(generated)} entries from {repo} but the "
                 f"series has {len(paths)}: this checkout does not hold the series, "
+                "so the fixed point cannot be checked here (run `rebase` first, or "
+                "`--replay` against a checkout at the pin)",
+            )
+        ]
+    # Same count is not the same series: `_series_base` accepts `HEAD~count`, so a
+    # checkout with `count` commits of *its own* (measured: two real workspace
+    # checkouts, 2535 and 2399 commits) pairs the series with unrelated history and
+    # reports ~280 `round-trip-dirty` rows for a state. The subjects are what
+    # `regen` derives the names from, so require most of them to agree before
+    # pairing; a checkout that holds the series matches on all but the entries a
+    # rename would explain.
+    want = {_entry_subject_slug(entry.read_bytes()) for entry in paths}
+    got = {_entry_subject_slug(patch.read_bytes()) for patch in generated}
+    if len(want & got) < max(1, len(paths) // 2):
+        return [
+            (
+                str(SERIES_DIR),
+                "round-trip-unverifiable",
+                f"{repo} has {len(generated)} commits above "
+                f"{base}, but only {len(want & got)} of their subject slugs match "
+                f"the series' {len(paths)}: this checkout does not hold the series, "
                 "so the fixed point cannot be checked here (run `rebase` first, or "
                 "`--replay` against a checkout at the pin)",
             )
@@ -1657,6 +1806,20 @@ def _numbering_line(rows, number_rows) -> str | None:
     )
 
 
+def _series_file_names() -> set[str]:
+    """Entry-file names in ``series/``, both raw and as rows display them.
+
+    `_entry_file_rows` keys on the *display* name (control characters escaped), so
+    the real listing has to be offered in both forms or a hostile filename is rowed
+    and then dropped from the totals.
+    """
+    try:
+        names = {p.name for p in SERIES_DIR.iterdir() if p.is_file()}
+    except OSError:
+        return set()
+    return names | {_safe_name(name) for name in names}
+
+
 def _entry_file_rows(
     rows: list[tuple[str, str, str]],
 ) -> list[tuple[str, str, str]]:
@@ -1672,7 +1835,11 @@ def _entry_file_rows(
     """
     seen: dict[str, tuple[str, str, str]] = {}
     for row in rows:
-        if (SERIES_DIR / row[0]).is_file():
+        # ``row[0]`` is the *display* name (control characters escaped), so a real
+        # entry with a hostile name must be matched against the directory listing
+        # too — otherwise its row vanishes from the counts while still failing the
+        # run, and the summary reads `0 total`.
+        if (SERIES_DIR / row[0]).is_file() or row[0] in _series_file_names():
             seen.setdefault(row[0], row)
     return [seen[name] for name in sorted(seen)]
 
@@ -1767,12 +1934,27 @@ def cmd_check_series(args) -> int:
 
 
 def cmd_verify(args) -> int:
+    """Probe the manifest's divergences against a checkout of the pin.
+
+    ``--repo`` is a *probe* checkout: it must be at the target and unpatched, since
+    the cat-4a/4b rows compare its own files (measured: a checkout that holds the
+    series reports 34 false divergences). The target must resolve in it — a stale or
+    mistyped pin used to read as a green run.
+    """
     target = args.target or _default_target()
     if not target:
         print(
             "ERROR: no target ref (pass --target or set VLLM_COMMIT/VLLM_TAG "
             "in third_party/PINS)"
         )
+        return 2
+    if not _target_resolves(args.repo, target):
+        print(
+            f"ERROR: target {target} does not resolve in "
+            f"{args.repo or 'the fresh clone'}: `verify` would otherwise report a "
+            "green run for a commit that is not the pin"
+        )
+        print("=== musa_sync verify: FAIL (bad-target) ===")
         return 2
     clone, temp = _ensure_clone(target, args.repo)
     try:
@@ -1793,7 +1975,13 @@ def cmd_verify(args) -> int:
     # Series format comes first, and the divergence summary stays last of the
     # summaries: the documented success line is the one a reader checks, so a
     # red series run must not end on `0 need attention`.
-    _print_series_section(fmt_rows, number_rows, label="series format: ", limit=10)
+    _print_series_section(
+        fmt_rows,
+        number_rows,
+        label="series format: ",
+        limit=10,
+        entries=_entry_file_rows(fmt_rows),
+    )
     for did, cat, status, detail in rows:
         line = f"  [{cat:>2}] {status:<14} {did}"
         if detail:
@@ -1862,6 +2050,7 @@ def cmd_rebase(args) -> int:
             )
             return 1
     print(f"rebased {len(order)} patches onto vllm@{target} (git am -3)")
+    print("=== musa_sync rebase: PASS ===")
     return 0
 
 
@@ -1888,9 +2077,18 @@ def _regen_module_tripwires() -> int:
 
 
 def cmd_regen(args) -> int:
-    if args.area == "module":
-        return _regen_module_tripwires()
     target = _default_target()
+    if args.area == "module":
+        if not target:
+            print(
+                "ERROR: no target ref: set VLLM_COMMIT or VLLM_TAG in "
+                "third_party/PINS (or pass --target)"
+            )
+            print("=== musa_sync regen: FAIL (usage) ===")
+            return 2
+        rc = _regen_module_tripwires()
+        print(f"=== musa_sync regen: {'PASS' if rc == 0 else 'FAIL (module-4a)'} ===")
+        return rc
     if not target:
         print(
             "ERROR: no target ref: set VLLM_COMMIT or VLLM_TAG in third_party/PINS "
@@ -1968,6 +2166,7 @@ def cmd_regen(args) -> int:
         f"regenerated {len(generated)} contiguous patches in {SERIES_DIR} "
         f"from vllm@{target}..HEAD; pruned {len(stale)} stale files"
     )
+    print("=== musa_sync regen: PASS ===")
     return 0
 
 

@@ -1290,10 +1290,11 @@ def test_crlf_entry_replays_with_git_am_but_not_with_the_build_applier(
     # so itself, because replaying a series the build cannot apply is the whole
     # divergence this gate exists to catch.
     rows = ms._replay_rows(repo, [crlf], {crlf.name: crlf.read_bytes()})
-    # Two rows, and both are true: the build path cannot apply it at all, and the
-    # CRLF damage means the blob the replay lands is not the one the entry
-    # declares for that path (round 4's per-entry postimage check).
-    assert [r[1] for r in rows] == ["exemption-unearned", "build-path-conflict"]
+    # One row, and it is the true one: the build path cannot apply it at all. The
+    # per-entry postimage check stays quiet here because `git am -3` lands exactly
+    # the blob the entry declares (round 5 reads CRLF'd sections too, so the extra
+    # row the round-4 parser produced was itself a false positive).
+    assert [r[1] for r in rows] == ["build-path-conflict"]
     assert ms.build_apply.apply_patch(repo, crlf, check_only=True) == "conflict"
     assert [r[1] for r in ms._series_format_rows()] == ["non-canonical-crlf"]
 
@@ -2644,3 +2645,240 @@ def test_entry_rows_are_counted_per_file_not_per_row(ms, tmp_path, monkeypatch):
     assert ms._entry_file_rows(rows) == [
         ("0001-a.patch", "non-canonical-crlf", "first finding")
     ]
+
+
+# --- round 5: path parsing, order-blindness in the round-trip mode, counts, exits
+
+
+def test_declared_postimages_reads_quoted_deleted_and_multi_file_sections(ms):
+    """Round 5: three shapes the parser used to miss, each with a consequence.
+
+    * git C-quotes a path that holds a non-ASCII byte, a quote or a backslash
+      (`core.quotePath` defaults to true) — a parser that reads the quoted form as
+      the literal path finds no section, so a hand-edited `index` line in such a
+      file escaped the postimage check entirely;
+    * a **deletion** whose `index` line names a non-null postimage can never be
+      earned (no commit holds a blob at a path it deleted), so skipping the
+      section left an exemption that the fabricate-then-exempt trick needs;
+    * a bare diff may carry **several** files, and splitting at the `--- a/…` pair
+      instead of at the header run that precedes it attributed every later file's
+      `index` line to the first file's path.
+
+    Mutation: skip `+++ /dev/null` sections, drop `_unquote_git_path`, or split the
+    bare body at the pair rather than at `_header_run_start`.
+    """
+    def mailbox(subject: str, diff: str) -> bytes:
+        return _mailbox(subject, diff)
+
+    quoted = mailbox(
+        "quoted",
+        'diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"\n'
+        'index 1111111111..2222222222 100644\n'
+        '--- "a/caf\\303\\251.txt"\n+++ "b/caf\\303\\251.txt"\n'
+        "@@ -1 +1,2 @@\n alpha\n+beta\n",
+    )
+    assert ms._declared_postimages(quoted) == [("caf\u00e9.txt", "2222222222")]
+
+    deleted = mailbox(
+        "deleted",
+        "diff --git a/gone.txt b/gone.txt\n"
+        "deleted file mode 100644\n"
+        "index 1111111111..2222222222\n"  # hand-edited: a deletion cannot hold this
+        "--- a/gone.txt\n+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n-alpha\n",
+    )
+    assert ms._declared_postimages(deleted) == [("gone.txt", "2222222222")]
+    # ... while a real deletion (the all-zero id `format-patch` writes) is read too
+    # and skipped by the caller's zero check, not by a blanket `/dev/null` skip.
+    real = deleted.replace(b"1111111111..2222222222", b"1111111111..0000000000")
+    assert ms._declared_postimages(real) == [("gone.txt", "0000000000")]
+
+    # The same deletion as a *bare* diff: its path can only come from the `--- a/…`
+    # side, and reading the `+++ /dev/null` side instead would name the section after
+    # a path no commit ever held.
+    bare_deleted = mailbox(
+        "bare-deleted",
+        "index 1111111111..2222222222 100644\n"
+        "--- a/gone.txt\n+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n-alpha\n",
+    )
+    assert ms._declared_postimages(bare_deleted) == [("gone.txt", "2222222222")]
+
+    gitlink = mailbox(
+        "gitlink",
+        "diff --git a/sub b/sub\n"
+        "new file mode 160000\n"
+        "index 0000000000..1234567890\n"
+        "--- /dev/null\n+++ b/sub\n"
+        "@@ -0,0 +1 @@\n+Subproject commit 1234567890\n",
+    )
+    # a submodule's "postimage" is a commit id, not a blob: rowing it would reject
+    # a legitimate submodule bump, so the section is skipped.
+    assert ms._declared_postimages(gitlink) == []
+
+    two_files = mailbox(
+        "two-files",
+        "index 1111111111..2222222222 100644\n"
+        "--- a/x.txt\n+++ b/x.txt\n@@ -1 +1,2 @@\n a\n+b\n"
+        "index 3333333333..4444444444 100755\n"
+        "--- a/y.txt\n+++ b/y.txt\n@@ -1 +1,2 @@\n c\n+d\n",
+    )
+    assert ms._declared_postimages(two_files) == [
+        ("x.txt", "2222222222"),
+        ("y.txt", "4444444444"),
+    ]
+
+
+def test_a_quoted_index_line_just_above_a_bare_diff_is_prose_not_an_anchor(ms):
+    """Round 5: the bare-diff walk-back swallowed more than one `index` line.
+
+    `git diff` writes exactly one `index` line per file section, so the fallback
+    that exposes a bare diff's hunks may swallow one — but it used to swallow a
+    run, which meant a commit message quoting `index deadbeef..cafebabe` directly
+    above its own bare diff was read as an anchor: `--repo` then reported
+    `missing-index-blob deadbeef` for an entry `git am` replays happily, and the
+    same shape could mask a genuinely missing anchor.
+
+    Mutation: drop the `seen_index` cap in `_header_run_start`.
+    """
+    real = (
+        "index 5555555555..6666666666 100644\n"
+        "--- a/z.txt\n+++ b/z.txt\n@@ -1 +1,2 @@\n alpha\n+beta\n"
+    )
+    with_prose = _mailbox(
+        "prose", "index deadbeef..cafebabe 100644 in the message\n" + real
+    )
+    assert ms._declared_blobs(with_prose) == [("5555555555", "6666666666")]
+    assert ms._declared_postimages(with_prose) == [("z.txt", "6666666666")]
+
+    # The residual ambiguity, pinned here rather than hidden: with a *single* quoted
+    # line directly above the diff there is nothing in the bytes that distinguishes
+    # it from a real anchor, and the walk-back resolves towards "anchor" — so this
+    # one shape still reports `missing-index-blob deadbeef` under `--repo` for an
+    # entry `git am` replays. It is a hand-made entry whose message runs straight
+    # into its diff; `git format-patch` always separates the message from the diff
+    # with `---` plus a diffstat, so no generated entry has this shape.
+    only_prose = _mailbox(
+        "only-prose",
+        "index deadbeef..cafebabe 100644 in the message\n"
+        "--- a/z.txt\n+++ b/z.txt\n@@ -1 +1,2 @@\n alpha\n+beta\n",
+    )
+    assert ms._declared_blobs(only_prose) == [("deadbeef", "cafebabe")]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_round_trip_refuses_a_checkout_with_unrelated_history(ms, tmp_path, monkeypatch, capsys):
+    """Round 5: `--round-trip` paired the series with a checkout that is not it.
+
+    `_series_base` falls back to `HEAD~count`, so a checkout with exactly `count`
+    commits of its own (the audit measured two real workspace checkouts, 2535 and
+    2399 commits) produced ~280 `round-trip-dirty` rows for a *state*. The subjects
+    are what `regen` derives names from, so most of them must agree before the
+    entries are paired.
+
+    Mutation: pair the entries whenever the counts match.
+    """
+    repo, base, entries = _maintenance_repo(tmp_path, ("a", "b", "c"))
+    monkeypatch.setattr(ms, "_default_target", lambda: None)  # force the HEAD~count path
+    # The entries stay canonical (so nothing else rows) and only their subjects are
+    # rewritten: that is what makes this series "not the one this checkout holds".
+    series = tmp_path / "series"
+    series.mkdir()
+    for i, (_name, body) in enumerate(entries, start=1):
+        slug = f"unrelated{'xyzw'[i - 1]}"
+        text = re.sub(
+            r"Subject: \[PATCH\] .*\n", f"Subject: [PATCH] {slug}\n", body.decode(), count=1
+        )
+        (series / f"{i:04d}-{slug}.patch").write_text(text)
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    rc = ms.main(["check-series", "--repo", str(repo), "--round-trip"])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert out.count("round-trip-unverifiable") == 1
+    assert "round-trip-dirty" not in out
+    assert "does not hold the series" in out
+    assert "--- 3 clean / 3 total / 1 need attention ---" in out
+
+
+def test_entry_rows_match_a_hostile_filename_by_its_real_name(ms, tmp_path, monkeypatch):
+    """Round 5: counts keyed on the *display* name dropped a real entry.
+
+    `_entry_file_rows` filtered with `SERIES_DIR / row[0].is_file()`, and `row[0]`
+    is the escaped display name, so an entry whose name holds a control character
+    was rowed but excluded from the totals — a red run reading `0 total`.
+
+    Mutation: match only `SERIES_DIR / row[0]`.
+    """
+    series = tmp_path / "series"
+    series.mkdir()
+    weird = series / "0001-we\u0001ird.patch"
+    weird.write_text("x")
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+    display = ms._safe_name(weird.name)
+    assert display != weird.name
+
+    rows = [(display, "no-index-line", "detail")]
+    assert ms._entry_file_rows(rows) == [(display, "no-index-line", "detail")]
+
+
+def test_regen_and_rebase_end_with_a_verdict_line(ms, tmp_path, monkeypatch, capsys):
+    """Round 5: the docstring promised a verdict line; `regen`/`rebase` printed none.
+
+    The same round showed `regen --area module` bypassing the target check and
+    dying with a `TypeError` traceback, so the module area is guarded too.
+
+    Everything here is hermetic: `WORKDIR`, `SERIES_DIR` and the apply order all
+    point at the fixture, so no real checkout is touched (the first cut of this
+    test ran `rebase` against the real series order and the real workdir).
+
+    Mutation: drop the `=== musa_sync regen/rebase: PASS ===` lines, or move the
+    target check back below the `module` branch.
+    """
+    monkeypatch.setattr(ms, "_default_target", lambda: None)
+    assert ms.main(["regen", "--area", "module"]) == 2
+    out = capsys.readouterr().out
+    assert "=== musa_sync regen: FAIL (usage) ===" in out
+    assert "Traceback" not in out
+
+    repo, base, entries = _maintenance_repo(tmp_path, ("a",))
+    series = tmp_path / "series"
+    series.mkdir()
+    order = []
+    for name, body in entries:
+        path = series / name
+        path.write_bytes(body)
+        order.append(path)
+    monkeypatch.setattr(ms, "_default_target", lambda: base)
+    monkeypatch.setattr(ms, "WORKDIR", repo)
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+    monkeypatch.setattr(ms, "_checkout", lambda target: 0)  # never touch a real tree
+    monkeypatch.setattr(ms.manifest, "series_apply_order", lambda: list(order))
+
+    # `regen` regenerates the entries from `target..HEAD`, so the fixture is used in
+    # its natural shape first (the commits are there) ...
+    assert ms.main(["regen"]) == 0
+    assert "=== musa_sync regen: PASS ===" in capsys.readouterr().out
+    # ... and `rebase` re-applies them, so the checkout goes back to the base: a
+    # no-op checkout would make `git am` fail and return 1, not 0.
+    _git(repo, "reset", "--hard", base)
+    assert ms.main(["rebase"]) == 0
+    assert "=== musa_sync rebase: PASS ===" in capsys.readouterr().out
+
+
+def test_verify_refuses_a_target_the_checkout_does_not_contain(ms, tmp_path, monkeypatch, capsys):
+    """Round 5: `verify --repo X --target Y` reported a green run for an absent Y.
+
+    Without the guard the divergence rows were computed against whatever the given
+    checkout had, so a stale or mistyped pin read as PASS (exit 0) — or raised. The
+    documented contract is exit 2 with a verdict line for a config error.
+
+    Mutation: drop the `_target_resolves` guard in `cmd_verify`.
+    """
+    repo, _base, _entries = _maintenance_repo(tmp_path, ("a",))
+    rc = ms.main(["verify", "--repo", str(repo), "--target", "deadbeefdeadbeef"])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert "does not resolve" in out
+    assert "=== musa_sync verify: FAIL (bad-target) ===" in out
+    assert "Traceback" not in out

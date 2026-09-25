@@ -180,7 +180,7 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
   |---|---|---|---|
   | `check-series` | nothing | *shape* only: every entry is a regular file, not the whole-patch CRLF form (measured per line: a lone CR on a structural line, and a CR that is *content* — an added line of a CRLF file — are both accepted by `git apply` and `git am`, so they are not reported), a non-empty slug, a canonical `git format-patch` mailbox (all-zero `From 000…` separator, `From:` author, RFC-2822 `Date:`, `Subject: [PATCH] ` whose slug matches what `git format-patch` would name it — RFC-2047 decoding, `.`-run collapsing and the 52-character cap included), an `index` line **when the entry has a hunk**, and a diff `git apply --stat` can parse; numbering is unique and contiguous from `0001`; no two entries share a diff body | <1 s |
   | `… --repo <checkout>` | a checkout of the pin | the above, plus every `index` anchor resolves to a **blob** there, or is a preimage an *earlier* entry declares as its postimage. The checkout is validated first, so a typo'd path, `/dev/null`, a file or an empty repository is a `repo-unusable` row even for a series that declares no preimage at all | <1 s |
-  | `… --repo <checkout> --replay` | a checkout **at the pin** | the above, plus what only a replay can settle: `git am -3` of the whole series in a **disposable clone** (first entry git refuses, with git's own error line → `replay-failed`; an entry that applies *nothing* → `replay-noop`, the signature of a checkout that already holds the series); every postimage the series *declares* must be reachable from the commits the replay created (`exemption-unearned` — an invented id, or the pin's own copy of the file, is not a postimage the series produced); and the series also applies the way the **build** applies it, sequentially with `git apply --recount -p1` (`build-path-conflict` — `git am -3` rescues a stale hunk with a 3-way merge, `build_apply.py` does not) | ~19 s per 171 entries |
+  | `… --repo <checkout> --replay` | a checkout **at the pin** | the above, plus what only a replay can settle: `git am -3` of the whole series in a **disposable clone** (first entry git refuses, with git's own error line → `replay-failed`; an entry that applies *nothing* → `replay-noop`, the signature of a checkout that already holds the series); every `(path, postimage)` an entry declares must be the blob **at that path in the commit that entry created** (`exemption-unearned` — an invented id, a blob a *later* entry produces, or the pin's own copy of the file, is not what this entry produced); and the series also applies the way the **build** applies it, sequentially with `git apply --recount -p1` (`build-path-conflict` — `git am -3` rescues a stale hunk with a 3-way merge, `build_apply.py` does not) | ~19 s per 171 entries |
   | `… --repo <checkout> --round-trip` | a checkout that **holds** the series (`rebase` first) | the fixed point, non-tautologically: it runs exactly what `cmd_regen` runs (`git format-patch --no-signature --no-numbered --zero-commit` from `VLLM_COMMIT`/`VLLM_TAG` plus the canonical author rewrite) **in the checkout you passed**, and rows any entry whose bytes (`round-trip-dirty`) or name (`regen` names this entry …) it would rewrite, or any count mismatch (`round-trip-count`, one row that says the checkout does not hold *this* series). A checkout that does not hold the series — including the pin itself — is `round-trip-unverifiable`, again one row rather than a pass and rather than a per-entry cascade of "`regen` names this entry …" rows | <1 s |
 
   `--replay` and `--round-trip` cannot be combined: they need contradictory
@@ -194,6 +194,10 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
   defer it says so in this document: an anchor "exempted" by an earlier entry's
   declaration is only proven by `--replay`, and the regen fixed point is only
   proven by `--round-trip` against a checkout that holds the series.
+  `--repo` hands it an existing checkout instead of a fresh clone, and that checkout must
+  be **at the pin and unpatched**: the cat-4a/4b probes compare its own files, so a checkout
+  that already holds the series reports 34 divergences (`1 clean / 209 total`). Reset it with
+  `git -C <repo> reset --hard <pin>` before probing.
   It fails closed on a missing or empty `series/`, on a symlink/directory/
   chmod-000/fifo/0-byte entry, and on an unusable `--repo` (validated before it
   is consulted, so a typo'd path cannot pass a series that declares no anchor); a
@@ -212,8 +216,8 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
 ### Exit codes and verdicts
 
 Every `musa_sync` **gate** subcommand (`check-series`, `verify`, `regen`,
-`rebase`, `module`) ends with one explicit verdict line, and the process verdict is
-unambiguous. The two reporting commands do not: `report` prints the manifest
+`rebase`) ends with one explicit verdict line, and the process verdict is
+unambiguous (`regen --area module` is a mode of `regen`, not a subcommand). The two reporting commands do not: `report` prints the manifest
 census and `apply` prints `--- N applied, … ---`, so a caller reading either must
 use the exit code:
 
@@ -221,7 +225,7 @@ use the exit code:
 |---|---|
 | 0 | `=== musa_sync <cmd>: PASS ===` — nothing needs attention |
 | 1 | `=== musa_sync <cmd>: FAIL (<counters>) ===` — see the rows above; `verify` prints the series-format section *before* the divergence summary so the last line always agrees with the exit code |
-| 2 | usage/config error, not a verdict: no resolvable target (`verify`, `regen`, `rebase` with no `--target`/`VLLM_COMMIT`/`VLLM_TAG`), `--replay`/`--round-trip` without `--repo`, or both at once |
+| 2 | usage/config error, not a verdict: no resolvable target (`verify`, `regen`, `rebase` with no `--target`/`VLLM_COMMIT`/`VLLM_TAG`), a target the `--repo` checkout does not contain, `--replay`/`--round-trip` without `--repo`, or both at once |
 
 ## 7. Command reference
 
