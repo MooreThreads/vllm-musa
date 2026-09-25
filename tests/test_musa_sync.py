@@ -1419,28 +1419,33 @@ def test_check_series_rejects_a_non_regular_entry(ms, tmp_path, monkeypatch, cap
         ("chmod-000", "unreadable"),
         ("dangling-symlink", "not-regular-file"),
         ("directory", "not-regular-file"),
+        ("fifo", "not-regular-file"),
     ],
 )
 def test_cli_never_tracebacks_on_a_broken_entry_file(
     tmp_path, kind, status
 ):
-    """F9: chmod-000 / dangling symlink / directory entries used to kill the CLI
-    at import time (`manifest.py: _patch_target`), rc 1 with a traceback and no
-    verdict line.
+    """F8/F9: chmod-000 / dangling symlink / directory entries used to kill the
+    CLI at import time (`manifest.py: _patch_target`), rc 1 with a traceback and
+    no verdict line, and a fifo entry used to *hang* it there forever
+    (`read_text` blocks until a writer appears).
 
-    Mutation: let ``manifest._patch_target`` raise OSError again (it is read at
-    import time, before any subcommand can print anything).
+    Mutation: let ``manifest._patch_target`` raise OSError again, or drop its
+    ``stat.S_ISREG`` guard (the fifo case then hangs instead of failing).
     """
     tree = _cli_tree(tmp_path, {"0001-a.patch": _canonical_entry("a")})
     entry = tree / "vllm_musa" / "patches" / "series" / "0001-a.patch"
     if kind == "chmod-000":
         entry.chmod(0o000)
+    elif kind == "dangling-symlink":
+        entry.unlink()
+        os.symlink("/nonexistent", entry)
+    elif kind == "directory":
+        entry.unlink()
+        entry.mkdir()
     else:
         entry.unlink()
-        if kind == "dangling-symlink":
-            os.symlink("/nonexistent", entry)
-        else:
-            entry.mkdir()
+        os.mkfifo(entry)
 
     try:
         result = _run_cli(tree, "check-series")
