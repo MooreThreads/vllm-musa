@@ -169,14 +169,32 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
   the series' generation form (`check-series`). Run before every bump / PR. A
   passing run reports every divergence as clean / `0 need attention` and ends with
   `=== musa_sync verify: PASS ===`.
-- **Series form gate (no repo needed):** `python tools/musa_sync.py check-series`
-  (add `--repo <checkout>` to also resolve the blobs the series' `index` lines
-  declare). Every entry must be a `regen` fixed point — the all-zero
-  `From 000…` separator, a `From:` author ident, at least one `index` line, and a
-  diff `git apply --stat` can parse — because the build-side gate (`git apply
-  --recount`) repairs all four silently and only the next `git am -3` bump
-  notices. It fails closed on a missing or empty `series/`, and a red series makes
-  `verify` exit 1 even when every divergence is clean.
+- **Series form gate:** `python tools/musa_sync.py check-series [--repo <checkout>]`
+  `[--replay] [--round-trip]`. Three modes, three costs:
+
+  | invocation | what it proves | cost |
+  |---|---|---|
+  | `check-series` | *shape* only, no repository: every entry is a regular LF-only file with a non-empty slug, a canonical `git format-patch` mailbox (all-zero `From 000…` separator, `From:` author, RFC-2822 `Date:`, `Subject: [PATCH] ` whose slug matches the filename), ≥1 `index` line, and a diff `git apply --stat` can parse; numbering is unique and contiguous from `0001`; no two entries share a diff body | <1 s |
+  | `… --repo <checkout>` | the above, plus every `index` anchor resolves to a **blob** in that checkout (or is a postimage an *earlier* entry produces) | <1 s |
+  | `… --repo <checkout> --replay` | the above, plus `git am -3` of the whole series in a **disposable clone** of `--repo`, reporting the first entry git refuses with git's own error line | ~10 s per 171 entries |
+  | `… --repo <checkout> --round-trip` | the above, plus `regen` itself in that clone: any entry whose bytes or filename `regen` would rewrite is a `round-trip-dirty` row | ~10 s |
+
+  The default mode is the cheap half, and it is deliberately *not* the whole
+  story: it cannot know whether a hunk still applies, and it cannot know whether
+  `regen` would leave an entry byte-for-byte alone (an extra `Signed-off-by`, a
+  deleted `---` diffstat or a changed author ident all pass it). Use `--replay`
+  to ask git whether the series still applies to the pin and `--round-trip` to
+  ask whether the series is literally what `regen` writes. Both are opt-in
+  because both clone a repo and spawn one git process per entry.
+  It fails closed on a missing or empty `series/`, on a symlink/directory/
+  chmod-000 entry, and on an unusable `--repo`; a red series makes `verify` exit
+  1 even when every divergence is clean.
+
+  **Nothing invokes the gate automatically:** there is no in-repo CI workflow
+  and no git hook that runs `check-series` or `patch_validate.py`, and the PR
+  pipelines are external to this tree. Whatever gate runs, runs because a human
+  or an external pipeline typed the command — so the cost table above is what
+  decides which mode a reviewer should ask for.
 - **On-hardware:** `tools/musa_verify/verify.sh` (configured via env vars
   `MUSA_HOST`, `MUSA_CONTAINER`, `MUSA_VENV`, … — never commit real values) runs the
   patch unit tests plus one functional server smoke per model, each pinned to its
@@ -201,7 +219,7 @@ verdict is unambiguous:
 |---|---|
 | `apply` | build-time: `git apply` the series to a cloned vLLM |
 | `verify` | offline pre-bump gate: status of every divergence (+ the series-format gate) |
-| `check-series [--repo PATH]` | gate the series' generation form: every entry must be a canonical `git am` mailbox; `--repo` also resolves the `index` blobs against that checkout |
+| `check-series [--repo PATH] [--replay] [--round-trip]` | gate the series' generation form: every entry must be a canonical `git am` mailbox with canonical numbering; `--repo` also resolves the `index` anchors against that checkout, `--replay` also `git am -3`s the series in a disposable clone of it, `--round-trip` also runs `regen` there and fails on any entry it would rewrite (see §6 for the cost of each) |
 | `rebase <tag>` | `git am -3` the series onto `vllm@<tag>` (sets up commits for `regen`) |
 | `regen` | regenerate `series/` from the clone's commits (`git format-patch`) |
 | `report` | print the manifest census |
