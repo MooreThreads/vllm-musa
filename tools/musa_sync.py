@@ -1220,9 +1220,12 @@ def cmd_check_series(args) -> int:
             "clone of --repo; pass --repo <vllm checkout at the pin>"
         )
         return 2
-    rows = _series_format_rows(
-        args.repo, replay=args.replay, round_trip=args.round_trip
-    )
+    # Resolve --repo once, here: the replay clones it from a temporary
+    # directory, so a relative path (the documented invocation is
+    # `check-series --repo third_party/vllm`) would otherwise be resolved
+    # against that tempdir and reported as "repository ... does not exist".
+    repo = Path(args.repo).resolve() if args.repo else None
+    rows = _series_format_rows(repo, replay=args.replay, round_trip=args.round_trip)
     number_rows = _series_numbering_rows(rows)
     bad = [r for r in rows if r[1] != "clean"]
     if any(status in _SERIES_FATAL for _, status, _ in rows):

@@ -1032,6 +1032,34 @@ def test_check_series_replay_reports_the_entry_git_cannot_replay(
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_check_series_replay_accepts_a_relative_repo_path(
+    ms, tmp_path, monkeypatch, capsys
+):
+    """A relative ``--repo`` must work in the replay modes too.
+
+    The replay clones ``--repo`` from a temporary directory, so a path left
+    relative is resolved against that tempdir and every entry comes back
+    ``repo-unusable`` ("repository ... does not exist") — while the documented
+    invocation is exactly ``check-series --repo third_party/vllm``.
+
+    Mutation: drop the ``Path(args.repo).resolve()`` in ``cmd_check_series``.
+    """
+    repo, name, text = _formatted_entry(tmp_path)
+    series = tmp_path / "series"
+    _write_series(series, name, text)
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+    monkeypatch.chdir(tmp_path)  # so "upstream" is a path relative to cwd
+
+    assert ms.main(["check-series", "--repo", "upstream"]) == 0
+    capsys.readouterr()
+    assert ms.main(["check-series", "--repo", "upstream", "--replay"]) == 0, (
+        capsys.readouterr().out
+    )
+    assert "repo-unusable" not in capsys.readouterr().out
+    assert ms.main(["check-series", "--repo", "upstream", "--round-trip"]) == 0
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
 def test_check_series_replay_and_round_trip_need_a_repo(ms, capsys):
     """F1/F4b: both modes are opt-in and neither guesses a repository.
 
