@@ -2020,6 +2020,14 @@ def test_round_trip_at_the_pin_says_unverifiable_not_a_cascade(
     assert rc == 1
     assert out.count("round-trip-unverifiable") == 1
     assert "round-trip-count" not in out and "produces no entry" not in out
+    # The series-level row is not an entry: it must not be counted as one, and
+    # must not be handed to the numbering gate (which would report the series
+    # *directory* as an entry with a missing NNNN- prefix — a second, false
+    # problem). Mutation: drop the ``entries`` filter from ``_print_series_section``
+    # or ``_series_numbering_rows``.
+    assert "unnumbered" not in out
+    assert "--- 1 clean / 1 total / 1 need attention ---" in out
+    assert "--- numbering: 1 entries are unique and contiguous 0001..0001 ---" in out
 
 
 def test_series_gate_gives_a_zero_byte_entry_its_own_row(ms, tmp_path, monkeypatch):

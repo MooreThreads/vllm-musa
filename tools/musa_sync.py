@@ -1568,14 +1568,37 @@ def _numbering_line(rows, number_rows) -> str | None:
     )
 
 
+def _entry_file_rows(
+    rows: list[tuple[str, str, str]],
+) -> list[tuple[str, str, str]]:
+    """The rows that name an entry file in ``series/``.
+
+    Series-level rows describe the *run*, not an entry: ``round-trip-unverifiable``
+    is keyed by the series directory itself. Counting them as entries made the
+    pin-state ``--round-trip`` summary read "171 clean / 172 total" and handed the
+    directory to the numbering gate, which then reported it as an entry with a
+    missing ``NNNN-`` prefix — a second, false problem on top of the real one.
+    """
+    return [row for row in rows if (SERIES_DIR / row[0]).is_file()]
+
+
 def _print_series_section(
-    rows, number_rows, *, label: str = "", limit: int | None = None
+    rows,
+    number_rows,
+    *,
+    label: str = "",
+    limit: int | None = None,
+    entries=None,
 ) -> None:
     """Print the series-format evidence: bad rows with their detail, the clean
     summary, then numbering.
 
     Shared by ``check-series`` and ``verify`` so a red series looks the same in
     both, including the ``… N more`` marker when ``limit`` truncates the rows.
+
+    ``entries`` is the subset of ``rows`` that names an entry file; the summary
+    counts and the numbering line read it, so a series-level row (which is
+    printed like any other) cannot inflate "171 entries" to 172.
     """
     bad = [r for r in rows if r[1] != "clean"]
     shown = bad if limit is None else bad[:limit]
@@ -1585,15 +1608,21 @@ def _print_series_section(
             print(f"                 {detail}")
     if len(shown) < len(bad):
         print(f"  … {len(bad) - len(shown)} more (run `check-series` for the full list)")
+    counted = rows if entries is None else entries
+    # "clean" counts *entries* that are clean, "need attention" counts every bad
+    # row: a series-level row (e.g. a state problem the entries cannot express)
+    # is a problem without being an entry, and folding it into the clean count
+    # claimed one of 171 clean entries was dirty.
+    dirty_entries = sum(1 for _, status, _ in counted if status != "clean")
     print(
-        f"--- {label}{len(rows) - len(bad)} clean / {len(rows)} total / "
+        f"--- {label}{len(counted) - dirty_entries} clean / {len(counted)} total / "
         f"{len(bad)} need attention ---"
     )
     for name, status, detail in number_rows:
         print(f"  {status:<14} {name}")
         if detail:
             print(f"                 {detail}")
-    line = _numbering_line(rows, number_rows)
+    line = _numbering_line(counted, number_rows)
     if line:
         print(line)
 
@@ -1622,13 +1651,17 @@ def cmd_check_series(args) -> int:
     # against that tempdir and reported as "repository ... does not exist".
     repo = Path(args.repo).resolve() if args.repo else None
     rows = _series_format_rows(repo, replay=args.replay, round_trip=args.round_trip)
-    number_rows = _series_numbering_rows(rows)
+    # Numbering and the per-entry counts read the *files* in series/, so they
+    # skip the series-level rows the deep modes can add (see _entry_file_rows);
+    # the verdict below still fails on every row.
+    entries = _entry_file_rows(rows)
+    number_rows = _series_numbering_rows(entries)
     bad = [r for r in rows if r[1] != "clean"]
     if any(status in _SERIES_FATAL for _, status, _ in rows):
         print(f"=== musa_sync check-series: {SERIES_DIR} cannot be gated ===")
     else:
-        print(f"=== musa_sync check-series: {len(rows)} entries in series/ ===")
-    _print_series_section(rows, number_rows)
+        print(f"=== musa_sync check-series: {len(entries)} entries in series/ ===")
+    _print_series_section(rows, number_rows, entries=entries)
     verdict = (
         "PASS"
         if not (bad or number_rows)
