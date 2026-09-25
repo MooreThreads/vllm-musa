@@ -170,26 +170,31 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
   passing run reports every divergence as clean / `0 need attention` and ends with
   `=== musa_sync verify: PASS ===`.
 - **Series form gate:** `python tools/musa_sync.py check-series [--repo <checkout>]`
-  `[--replay] [--round-trip]`. Three modes, three costs:
+  `[--replay | --round-trip]`. Four modes, four costs, and each one needs a
+  checkout in a specific state:
 
-  | invocation | what it proves | cost |
-  |---|---|---|
-  | `check-series` | *shape* only, no repository: every entry is a regular LF-only file with a non-empty slug, a canonical `git format-patch` mailbox (all-zero `From 000…` separator, `From:` author, RFC-2822 `Date:`, `Subject: [PATCH] ` whose slug matches the filename), ≥1 `index` line, and a diff `git apply --stat` can parse; numbering is unique and contiguous from `0001`; no two entries share a diff body | <1 s |
-  | `… --repo <checkout>` | the above, plus every `index` anchor resolves to a **blob** in that checkout (or is a postimage an *earlier* entry produces) | <1 s |
-  | `… --repo <checkout> --replay` | the above, plus `git am -3` of the whole series in a **disposable clone** of `--repo`, reporting the first entry git refuses with git's own error line | ~10 s per 171 entries |
-  | `… --repo <checkout> --round-trip` | the above, plus `regen` itself in that clone: any entry whose bytes or filename `regen` would rewrite is a `round-trip-dirty` row | ~10 s |
+  | invocation | needs | what it proves | cost |
+  |---|---|---|---|
+  | `check-series` | nothing | *shape* only: every entry is a regular LF-only file with a non-empty slug, a canonical `git format-patch` mailbox (all-zero `From 000…` separator, `From:` author, RFC-2822 `Date:`, `Subject: [PATCH] ` whose slug matches what `git format-patch` would name it — RFC-2047 decoding, `.`-run collapsing and the 52-character cap included), an `index` line **when the entry has a hunk**, and a diff `git apply --stat` can parse; numbering is unique and contiguous from `0001`; no two entries share a diff body | <1 s |
+  | `… --repo <checkout>` | a checkout of the pin | the above, plus every `index` anchor resolves to a **blob** there, or is a preimage an *earlier* entry declares as its postimage | <1 s |
+  | `… --repo <checkout> --replay` | a checkout **at the pin** | the above, plus three things only a replay can settle: `git am -3` of the whole series in a **disposable clone** (first entry git refuses, with git's own error line → `replay-failed`); every postimage the series *declares* really exists once the replay has run (`exemption-unearned` — an exemption from an invented `index` id is not an exemption); and the series also applies the way the **build** applies it, sequentially with `git apply --recount -p1` (`build-path-conflict` — `git am -3` rescues a stale hunk with a 3-way merge, `build_apply.py` does not) | ~20 s per 171 entries |
+  | `… --repo <checkout> --round-trip` | a checkout that **holds** the series (`rebase` first) | the fixed point, non-tautologically: it runs exactly what `cmd_regen` runs (`git format-patch --no-signature --no-numbered --zero-commit` from `VLLM_COMMIT`/`VLLM_TAG` plus the canonical author rewrite) **in the checkout you passed**, and rows any entry whose bytes (`round-trip-dirty`) or name (`regen` names this entry …) it would rewrite, or any count mismatch (`round-trip-count`). A checkout that does not hold the series is `round-trip-unverifiable`, not a pass | ~2 s |
+
+  `--replay` and `--round-trip` cannot be combined: they need contradictory
+  checkout states (one before the series is applied, one after), and asking for
+  both is a usage error (exit 2).
 
   The default mode is the cheap half, and it is deliberately *not* the whole
   story: it cannot know whether a hunk still applies, and it cannot know whether
   `regen` would leave an entry byte-for-byte alone (an extra `Signed-off-by`, a
-  deleted `---` diffstat or a changed author ident all pass it). Use `--replay`
-  to ask git whether the series still applies to the pin and `--round-trip` to
-  ask whether the series is literally what `regen` writes. Both are opt-in
-  because both clone a repo and spawn one git process per entry.
+  deleted `---` diffstat or a changed author ident all pass it). Where it must
+  defer it says so in this document: an anchor "exempted" by an earlier entry's
+  declaration is only proven by `--replay`, and the regen fixed point is only
+  proven by `--round-trip` against a checkout that holds the series.
   It fails closed on a missing or empty `series/`, on a symlink/directory/
-  chmod-000 entry, and on an unusable `--repo`; a red series makes `verify` exit
-  1 even when every divergence is clean.
-
+  chmod-000/fifo entry, and on an unusable `--repo`; a red series makes `verify`
+  exit 1 even when every divergence is clean. A usage error prints
+  `=== musa_sync check-series: FAIL (usage) ===`.
   **Nothing invokes the gate automatically:** there is no in-repo CI workflow
   and no git hook that runs `check-series` or `patch_validate.py`, and the PR
   pipelines are external to this tree. Whatever gate runs, runs because a human
@@ -219,7 +224,7 @@ verdict is unambiguous:
 |---|---|
 | `apply` | build-time: `git apply` the series to a cloned vLLM |
 | `verify` | offline pre-bump gate: status of every divergence (+ the series-format gate) |
-| `check-series [--repo PATH] [--replay] [--round-trip]` | gate the series' generation form: every entry must be a canonical `git am` mailbox with canonical numbering; `--repo` also resolves the `index` anchors against that checkout, `--replay` also `git am -3`s the series in a disposable clone of it, `--round-trip` also runs `regen` there and fails on any entry it would rewrite (see §6 for the cost of each) |
+| `check-series [--repo PATH] [--replay \| --round-trip]` | gate the series' generation form: every entry must be a canonical `git am` mailbox with canonical numbering; `--repo` also resolves the `index` anchors against that checkout (at the pin), `--replay` also replays the series and probes the build path there, `--round-trip` instead compares the series with what `regen` writes from a checkout that holds it (see §6 for the state each mode needs) |
 | `rebase <tag>` | `git am -3` the series onto `vllm@<tag>` (sets up commits for `regen`) |
 | `regen` | regenerate `series/` from the clone's commits (`git format-patch`) |
 | `report` | print the manifest census |

@@ -34,25 +34,39 @@ Subcommands::
         Census of the manifest: a status line per divergence, or (--doc) the
         Markdown census table.
 
-    check-series [--repo PATH] [--replay] [--round-trip]
+    check-series [--repo PATH] [--replay | --round-trip]
         Fail-closed form gate on series/. By default it is the cheap, offline
         half: every entry must *be* a canonical ``git format-patch`` mailbox —
         all-zero separator, ``From:`` author, RFC-2822 ``Date:``,
-        ``Subject: [PATCH] `` whose slug matches the filename, an ``index``
-        line, LF-only with a final newline, a diff ``git apply --stat`` can
-        parse — the numbering must be unique and contiguous from ``0001``, and
-        no two entries may share a diff body. ``--repo`` additionally resolves
-        the blobs those ``index`` lines declare (a preimage may be absent only
-        when an EARLIER entry produces it).
+        ``Subject: [PATCH] `` whose slug is the one git would put in the
+        filename (RFC-2047 words decoded, ``.`` runs collapsed, a trailing
+        ``.``/``-`` stripped, 52 characters), an ``index`` line whenever the
+        entry has a hunk, LF-only with a final newline, a diff ``git apply
+        --stat`` can parse — the numbering must be unique and contiguous from
+        ``0001``, and no two entries may share a diff body. ``--repo``
+        additionally resolves the blobs those ``index`` lines declare to
+        BLOBS (a preimage may be absent only when an EARLIER entry declares it
+        as its postimage; an id that resolves to a commit or tree is reported).
 
         The default mode proves *shape*, never replayability: it cannot know
         whether a hunk still applies, nor whether ``regen`` would rewrite the
-        entry. ``--replay`` closes the first gap (``git am -3`` the whole
-        series into a disposable clone of ``--repo``, reporting the first entry
-        that fails with git's own error line), ``--round-trip`` the second
-        (replay, then ``regen``, and fail on any byte or filename difference).
-        Both cost a clone plus one git process per entry, so neither is the
-        default. No in-repo CI or hook invokes this gate today.
+        entry. The two deeper modes each need the checkout in a specific state
+        and are mutually exclusive (asking for both is a usage error):
+
+          * ``--replay`` (checkout AT THE PIN) runs ``git am -3`` over the
+            series in a disposable clone, then checks two things only a replay
+            can settle — that every postimage the series declares really exists
+            afterwards (an exemption earned by an invented ``index`` id is not
+            one) and that the series also applies the way the build does,
+            sequentially with ``git apply --recount -p1``;
+          * ``--round-trip`` (checkout HOLDING the series; run ``rebase``
+            first) runs exactly what ``cmd_regen`` runs against *that* checkout
+            and rows any entry whose bytes or filename ``regen`` would rewrite,
+            plus any count mismatch. A checkout that does not hold the series
+            is reported, never passed on a guess.
+
+        Neither is the default: both clone a repository and spawn git per entry.
+        No in-repo CI or hook invokes this gate today.
 
 Every subcommand ends with one explicit ``=== musa_sync <cmd>: PASS|FAIL ===``
 verdict line whose counts agree with the exit code: 0 = PASS, 1 = FAIL, 2 =
@@ -68,6 +82,7 @@ import argparse
 import difflib
 import importlib.util
 import re
+from email.header import decode_header, make_header
 import shutil
 import stat
 import subprocess
@@ -114,6 +129,7 @@ _DATE_LINE = re.compile(
 )
 _DIFF_START = b"diff --git "
 _EMPTY_SLUG = re.compile(r"^[0-9]{4}-+\.patch$")
+_HUNK_RE = re.compile(rb"^@@ ", re.M)
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 # Rows that mean "series/ cannot be gated at all": one row, no numbering claim.
 _SERIES_FATAL = (
@@ -191,6 +207,10 @@ def _run_git(
             input=stdin_text,
             capture_output=True,
             text=True,
+            # A series entry may carry a non-UTF-8 byte in its headers; without
+            # this, decoding git's own output raises UnicodeDecodeError out of
+            # subprocess and the gate dies with a traceback instead of a verdict.
+            errors="replace",
         )
     except FileNotFoundError as exc:
         raise GitMissing(
@@ -519,13 +539,34 @@ def _header_value(header: list[bytes], field: bytes) -> bytes | None:
     return value
 
 
+def _decode_header_word(value: bytes) -> str:
+    """An RFC-2822 header value with any RFC-2047 encoded words decoded.
+
+    ``git format-patch`` writes a non-ASCII subject as an encoded word
+    (``=?UTF-8?q?...?=``) in the header while slugging the *decoded* text into
+    the filename, so comparing the raw header against the filename rejects
+    every entry with a non-ASCII subject — including ones already in this
+    repository's history.
+    """
+    text = value.decode("utf-8", "replace")
+    if "=?" not in text:
+        return text
+    try:
+        return str(make_header(decode_header(text)))
+    except (ValueError, LookupError, UnicodeError):
+        return text
+
+
 def _git_slug(subject: str) -> str:
     """The filename slug ``git format-patch`` derives from ``subject``.
 
-    Characters outside ``[A-Za-z0-9._]`` become ``-`` (runs collapse, leading
-    ones drop), trailing ``-`` are stripped, then the slug is truncated — the
-    shipped series' longest slug is exactly 52 characters. ``regen`` renames an
-    entry to this slug, so a filename that does not match is not a fixed point.
+    Empirically pinned against real ``git format-patch`` output (see
+    ``test_git_slug_matches_format_patch``): characters outside
+    ``[A-Za-z0-9._]`` become ``-``, runs of ``-`` collapse, runs of ``.``
+    collapse to one, trailing ``-`` and ``.`` are stripped, then the slug is
+    truncated to ``_MAX_SUBJECT_SLUG`` — the shipped series' longest slug is
+    exactly 52 characters. ``regen`` renames an entry to this slug, so a
+    filename that does not match is not a fixed point.
     """
     out: list[str] = []
     for ch in subject:
@@ -533,7 +574,9 @@ def _git_slug(subject: str) -> str:
             out.append(ch)
         elif out and out[-1] != "-":
             out.append("-")
-    return "".join(out).rstrip("-")[:_MAX_SUBJECT_SLUG]
+    slug = "".join(out)
+    slug = re.sub(r"\.{2,}", ".", slug)
+    return slug.rstrip("-.")[:_MAX_SUBJECT_SLUG]
 
 
 def _mailbox_form_problem(text: bytes) -> tuple[str, str] | None:
@@ -626,7 +669,7 @@ def _canonical_form_problem(
             "non-canonical-subject",
             "no `[PATCH] ` subject prefix: `regen` writes one",
         )
-    slug = _git_slug(subject[len(_TITLE_PREFIX) :].decode("utf-8", "replace"))
+    slug = _git_slug(_decode_header_word(subject[len(_TITLE_PREFIX) :]))
     stem = name[: -len(".patch")]
     if "-" in stem:
         number, _, filename_slug = stem.partition("-")
@@ -716,7 +759,15 @@ def _missing_index_blobs(
       * only postimages declared by entries that **precede** this one in
         ``order`` (the series' filename order) exempt it. A postimage the entry
         declares itself, or one a *later* entry produces, is not yet in the odb
-        when this entry replays, so it cannot justified an absent anchor.
+        when this entry replays, so it cannot justify an absent anchor;
+      * an exempt id that resolves here to something that is **not a blob**
+        (a commit or tree id) is not exempt: no replay can produce it as a
+        postimage, so it stays a reported anchor.
+
+    The exemption is still only as strong as the earlier entry's *declaration*:
+    an id that resolves to nothing is deferred, not proven, and only
+    ``check-series --replay`` settles whether the series produces it. Run the
+    replay on any series whose anchors were edited by hand.
 
     Null ids (``0000000000``, a creation hunk) are never resolvable and never
     required.
@@ -724,21 +775,49 @@ def _missing_index_blobs(
     zero = lambda blob: bool(_ZERO_BLOB.match(blob.encode()))  # noqa: E731
     needed: dict[str, set[str]] = {}
     produced: set[str] = set()
+    exempt_declared: set[str] = set()
     for name in order:
         text = texts.get(name)
         if text is None:  # already rowed as not-regular-file / unreadable
             continue
         pairs = _declared_blobs(text)
+        exempt_declared.update(
+            pre for pre, _post in pairs if not zero(pre) and pre in produced
+        )
         wanted = {
             pre for pre, _post in pairs if not zero(pre) and pre not in produced
         }
         if wanted:
             needed[name] = wanted
         produced.update(post for _, post in pairs if not zero(post))
+    if not needed and not exempt_declared:
+        return {}
+    queried = sorted(
+        {blob for wanted in needed.values() for blob in wanted} | exempt_declared
+    )
+    types = _repo_object_types(repo, queried)
+    # An exempt id is exempt because an *earlier entry declares* it as its
+    # postimage — a declaration, not proof: the series may never produce it (a
+    # hand-edited ``index`` line), and the id may not even be a blob id. Where
+    # the id resolves here, demand a blob now; the ids that resolve to nothing
+    # are exactly the ones only a real replay can settle, which is what
+    # ``--replay`` does.
+    def unusable_exempt(blob: str) -> bool:
+        return types.get(blob) not in (None, "blob", "missing")
+
     if not needed:
         return {}
-    queried = sorted({blob for wanted in needed.values() for blob in wanted})
-    types = _repo_object_types(repo, queried)
+    for name in order:
+        text = texts.get(name)
+        if text is None:
+            continue
+        bad = {
+            pre
+            for pre, _post in _declared_blobs(text)
+            if not zero(pre) and unusable_exempt(pre)
+        }
+        if bad:
+            needed.setdefault(name, set()).update(bad)
     out: dict[str, list[str]] = {}
     for name, wanted in needed.items():
         bad = []
@@ -753,44 +832,6 @@ def _missing_index_blobs(
             )
         if bad:
             out[name] = bad
-    return out
-    """Entry name -> declared blob ids this repo cannot resolve.
-
-    An entry's ``index`` line records the blobs its hunks are anchored to, and
-    ``git am -3`` uses them to build a real 3-way ancestor — ids left behind by
-    a series regenerated against some *other* base make the entry replay as a
-    plain apply or not at all.
-
-    A blob the series itself creates (any entry's postimage) is *expected* to be
-    absent from a checkout that never had the series applied: only
-    ``rebase``/``regen`` put those objects in the odb. Measured on the shipped
-    171-entry series, a fresh shallow clone at the pin resolves 133/225
-    preimages and 0/230 postimages, yet ``git am -3`` replays all 171 of them —
-    so "missing from this repo" alone is not a defect, while "missing and not
-    produced by the series" is. Null ids (``0000000000``, a creation hunk) are
-    never resolvable and never required.
-    """
-    produced = {
-        post
-        for text in texts.values()
-        for _, post in _declared_blobs(text)
-        if not _ZERO_BLOB.match(post.encode())
-    }
-    wanted: dict[str, set[str]] = {}
-    for name, text in texts.items():
-        for pre, post in _declared_blobs(text):
-            # A postimage is always in `produced` (the entry creates it), so in
-            # practice only the preimages reach the repo: they are the ids the
-            # entry must anchor to.
-            for blob in (pre, post):
-                if _ZERO_BLOB.match(blob.encode()) or blob in produced:
-                    continue
-                wanted.setdefault(blob, set()).add(name)
-    found = _repo_has_blobs(repo, sorted(wanted))
-    out: dict[str, list[str]] = {}
-    for blob in sorted(set(wanted) - found):
-        for name in sorted(wanted[blob]):
-            out.setdefault(name, []).append(blob)
     return out
 
 
@@ -824,7 +865,13 @@ def _series_entry_problem(
             "no 'From: <name> <email>' in the first 3 lines: git am rejects it "
             "(empty ident name)",
         )
-    if not _INDEX_LINE.search(text):
+    # Only a hunk needs the index: `git am -3` builds its 3-way ancestor from
+    # it and dies with "sha1 information is lacking or useless" without one.
+    # A rename, a mode-only change and a binary blob all carry no hunk and no
+    # index line — real `git format-patch` output that both paths apply
+    # (`git am -3` and `git apply --recount -p1`), so requiring one there would
+    # reject a legitimate entry.
+    if _HUNK_RE.search(text) and not _INDEX_LINE.search(text):
         return (
             "no-index-line",
             "no 'index <blob>..<blob>' line: git am -3 cannot build its 3-way "
@@ -919,9 +966,18 @@ def _series_format_rows(
         rows = [
             (_safe_name(patch.name), *status[patch.name]) for patch in paths
         ]
-        if repo and (replay or round_trip):
+        if repo and replay:
             rows = _merge_replay_rows(
-                rows, _replay_rows(Path(repo), paths, round_trip=round_trip)
+                rows, _replay_rows(Path(repo), paths, texts)
+            )
+        elif repo and round_trip:
+            # Not a replay: `--round-trip` asks whether `regen` reproduces the
+            # series from a checkout that already HOLDS it (see
+            # `_round_trip_rows`). Replaying here would compare the series with
+            # itself — and a checkout that holds the series cannot be replayed
+            # into anyway: the entries are already applied.
+            rows = _merge_replay_rows(
+                rows, _round_trip_rows(Path(repo), paths)
             )
     except GitMissing as exc:
         return [(str(SERIES_DIR), "git-unavailable", str(exc))]
@@ -930,13 +986,29 @@ def _series_format_rows(
     return rows
 
 
+#: git's generic failure text. `git am` prints it *before* the line that says
+#: what actually went wrong, so taking the first `error:` line blind reports the
+#: symptom and hides the cause.
+_GENERIC_GIT_ERRORS = (
+    "error: Failed to merge in the changes.",
+    "error: could not build fake ancestor",
+)
+
+
 def _git_first_error(r: subprocess.CompletedProcess) -> str:
-    """git's own first error line from a failed invocation."""
+    """git's own most informative error line from a failed invocation."""
     lines = [
         line.strip()
         for line in f"{r.stdout or ''}\n{r.stderr or ''}".splitlines()
         if line.strip()
     ]
+    errors = [
+        line
+        for line in lines
+        if line.startswith(("error:", "fatal:")) and line not in _GENERIC_GIT_ERRORS
+    ]
+    if errors:
+        return errors[0][:200]
     for line in lines:
         if line.startswith(("error:", "fatal:")):
             return line[:200]
@@ -944,20 +1016,49 @@ def _git_first_error(r: subprocess.CompletedProcess) -> str:
 
 
 def _first_diff_line(want: bytes, got: bytes) -> str:
-    """A one-line description of the first difference between two byte blobs."""
+    """The first difference between two byte blobs, and how many there are.
+
+    The count matters: a non-canonical ``From:`` line is the first difference
+    *and* exactly one line long, while a rewritten hunk behind it would be
+    invisible if only the first difference were reported.
+    """
     a, b = want.splitlines(), got.splitlines()
+    differing = sum(1 for x, y in zip(a, b) if x != y) + abs(len(a) - len(b))
     for i, (x, y) in enumerate(zip(a, b)):
         if x != y:
             return (
-                f"line {i + 1}: the entry has {x[:60]!r}, regen writes {y[:60]!r}"
+                f"line {i + 1} of {differing} differing: the entry has "
+                f"{x[:60]!r}, regen writes {y[:60]!r}"
             )
     return f"{len(a)} lines in the entry vs {len(b)} from regen"
 
 
+def _series_base(repo: Path, count: int) -> str | None:
+    """The ref ``regen`` would diff from, when ``repo`` holds the series.
+
+    ``cmd_regen`` diffs ``VLLM_COMMIT``/``VLLM_TAG`` from ``third_party/PINS``
+    against the worktree's HEAD, so the pin is the first candidate. A checkout
+    that holds some other pin is accepted when it is exactly ``count`` commits
+    ahead of its own ``HEAD~count`` — the shape the series implies — so the
+    check can also run against a scratch clone; anything else yields None and
+    the caller reports that this repository cannot answer the question.
+    """
+    target = _default_target()
+    if target:
+        r = _git(repo, "rev-parse", "--verify", "--quiet", f"{target}^{{commit}}")
+        if r.returncode == 0:
+            return target
+    if count:
+        r = _git(repo, "rev-parse", "--verify", "--quiet", f"HEAD~{count}^{{commit}}")
+        if r.returncode == 0:
+            return f"HEAD~{count}"
+    return None
+
+
 def _round_trip_rows(
-    clone: Path, tmp: Path, base: str, paths: list[Path]
+    repo: Path, paths: list[Path]
 ) -> list[tuple[str, str, str]]:
-    """Entries ``regen`` would rewrite after a successful replay.
+    """Entries ``regen`` would rewrite, diffed against the *caller's* repo.
 
     Exactly what ``cmd_regen`` runs (``git format-patch --no-signature
     --no-numbered --zero-commit`` plus the canonical author rewrite), so the
@@ -965,11 +1066,41 @@ def _round_trip_rows(
     ``Signed-off-by``, a deleted ``---`` diffstat, an edited-but-valid ``Date:``,
     a renamed slug, a renumbered subject. Entries pair up by position, which is
     how ``regen`` numbers them (one entry per commit, ``0001..NNNN``).
+
+    The diff runs in ``repo`` — the checkout the caller passed — and not in the
+    disposable replay clone. Format-patching the clone's own ``git am`` commits
+    would compare the series with itself and call any self-consistent series a
+    fixed point, including one whose hunks or ``index`` postimages were edited
+    by hand: the clone holds the series, the checkout holds the history the
+    series is supposed to describe.
     """
+    tmp = Path(tempfile.mkdtemp(prefix="musa-gate-roundtrip-"))
+    try:
+        return _round_trip_rows_in(repo, tmp, paths)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _round_trip_rows_in(
+    repo: Path, tmp: Path, paths: list[Path]
+) -> list[tuple[str, str, str]]:
+    """``_round_trip_rows`` with an explicit scratch directory."""
+    base = _series_base(repo, len(paths))
+    if base is None:
+        return [
+            (
+                str(SERIES_DIR),
+                "round-trip-unverifiable",
+                f"{repo} does not hold this series (no such pin, and HEAD is not "
+                f"{len(paths)} commits ahead), so `regen` has nothing to compare "
+                "against: run `musa_sync rebase <pin>` first, or drop "
+                "--round-trip",
+            )
+        ]
     staged = tmp / "staged"
     staged.mkdir()
     r = _git(
-        clone,
+        repo,
         "format-patch",
         "--no-signature",
         "--no-numbered",
@@ -989,7 +1120,18 @@ def _round_trip_rows(
     generated = sorted(staged.glob("*.patch"))
     for patch in generated:
         _normalize_patch_author(patch)  # what cmd_regen does before comparing
-    rows: list[tuple[str, str, str]] = []
+    if len(generated) != len(paths):
+        rows: list[tuple[str, str, str]] = [
+            (
+                str(SERIES_DIR),
+                "round-trip-count",
+                f"`regen` writes {len(generated)} entries from {repo} but the "
+                f"series has {len(paths)}: the series does not describe this "
+                "history",
+            )
+        ]
+    else:
+        rows = []
     for entry, regen in zip(paths, generated):
         want, got = entry.read_bytes(), regen.read_bytes()
         if entry.name == regen.name and want == got:
@@ -1032,7 +1174,7 @@ def _round_trip_rows(
 
 
 def _replay_rows(
-    repo: Path, paths: list[Path], *, round_trip: bool
+    repo: Path, paths: list[Path], texts: dict[str, bytes]
 ) -> list[tuple[str, str, str]]:
     """Replay the series in a disposable clone of ``repo``; rows for what fails.
 
@@ -1042,6 +1184,18 @@ def _replay_rows(
     replay starts from that clone's HEAD, and the clone gets its own committer
     identity so a machine without a global ``user.email`` does not turn every
     replay into a spurious failure.
+
+    A replay that applies also settles two questions the cheap half can only
+    defer, both answered here and nowhere else:
+
+      * every postimage the series *declares* must exist as a blob once the
+        replay has run. An ``index`` line naming an id no entry produces is a
+        hand-edited anchor, and the preimages it exempts were never verified
+        (``exemption-unearned``);
+      * the series must also apply the way the *build* applies it — sequentially
+        with ``git apply --recount -p1``. ``git am -3`` rescues a stale hunk with
+        a 3-way merge, the build path does not, so a series can replay green and
+        still break ``build_apply.py`` (``build-path-conflict``).
     """
     tmp = Path(tempfile.mkdtemp(prefix="musa-gate-replay-"))
     try:
@@ -1053,18 +1207,91 @@ def _replay_rows(
             )
         _run_git(clone, "config", "user.email", "musa@local")
         _run_git(clone, "config", "user.name", "musa")
-        base = _git(clone, "rev-parse", "HEAD").stdout.strip()
-        for patch in paths:
+        for index, patch in enumerate(paths):
             r = _git(clone, "am", "-3", str(patch))
             if r.returncode != 0:
                 detail = _git_first_error(r)
                 _git(clone, "am", "--abort")
+                if index == 0 and texts.get(patch.name, b"").strip():
+                    # The commonest way to get here is not a broken entry: it is
+                    # a checkout that already CONTAINS the series (after
+                    # `rebase`), which `--round-trip` is the mode for.
+                    detail += (
+                        " (the first entry fails here: if this checkout already "
+                        "holds the series, replay needs one at the pin, and "
+                        "--round-trip is the mode for the maintenance state)"
+                    )
                 return [(_safe_name(patch.name), "replay-failed", detail)]
-        if not round_trip:
-            return []
-        return _round_trip_rows(clone, tmp, base, paths)
+        return _unearned_exemption_rows(clone, paths, texts) + _build_path_rows(
+            tmp, repo, paths
+        )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _unearned_exemption_rows(
+    clone: Path, paths: list[Path], texts: dict[str, bytes]
+) -> list[tuple[str, str, str]]:
+    """Postimages the series declares that the finished replay never produced."""
+    declared: dict[str, str] = {}
+    for patch in paths:
+        text = texts.get(patch.name)
+        if text is None:
+            continue
+        for _pre, post in _declared_blobs(text):
+            if not _ZERO_BLOB.match(post.encode()):
+                declared.setdefault(post, patch.name)
+    if not declared:
+        return []
+    ids = sorted(declared)
+    types = _repo_object_types(clone, ids)
+    rows = [
+        (
+            _safe_name(declared[blob]),
+            "exemption-unearned",
+            f"the entry declares {blob} as its postimage, but the replay "
+            f"produced no such blob ({types.get(blob, 'missing')}): any preimage "
+            "exempted by that declaration is unverified",
+        )
+        for blob in ids
+        if types.get(blob) != "blob"
+    ]
+    return rows
+
+
+def _build_path_rows(
+    tmp: Path, repo: Path, paths: list[Path]
+) -> list[tuple[str, str, str]]:
+    """Apply the series the way ``build_apply.py`` does; rows for what breaks.
+
+    ``build_apply.py`` walks the directory in filename order and applies each
+    entry with ``git apply --recount -p1``, with no 3-way fallback. The replay
+    above is ``git am -3``, which *does* fall back, so this is the only place
+    the gate can see a series that replays and still fails a build.
+    """
+    clone = tmp / "build-path"
+    r = _run_git(tmp, "clone", "--quiet", "--shared", str(repo), str(clone))
+    if r.returncode:
+        return [
+            (
+                str(SERIES_DIR),
+                "repo-unusable",
+                f"cannot clone {repo} for the build-path probe: "
+                f"{_git_first_error(r)}",
+            )
+        ]
+    for patch in paths:
+        r = _git(clone, "apply", "--recount", "-p1", str(patch))
+        if r.returncode:
+            return [
+                (
+                    _safe_name(patch.name),
+                    "build-path-conflict",
+                    "`git apply --recount -p1` (what build_apply.py runs) fails "
+                    f"here: {(r.stderr or r.stdout).strip().splitlines()[-1][:120]}",
+                )
+            ]
+    return []
 
 
 def _merge_replay_rows(
@@ -1214,11 +1441,22 @@ def _print_series_section(
 
 
 def cmd_check_series(args) -> int:
+    if args.replay and args.round_trip:
+        print(
+            "ERROR: --replay and --round-trip need different repositories: "
+            "--replay applies the series to a checkout AT THE PIN (run it "
+            "before `rebase`), --round-trip asks whether `regen` reproduces the "
+            "series from a checkout that already HOLDS it (run it after "
+            "`rebase`). Run them as two commands."
+        )
+        print("=== musa_sync check-series: FAIL (usage) ===")
+        return 2
     if (args.replay or args.round_trip) and not args.repo:
         print(
-            "ERROR: --replay/--round-trip replay the series into a disposable "
-            "clone of --repo; pass --repo <vllm checkout at the pin>"
+            "ERROR: --replay needs --repo <vllm checkout at the pin>; "
+            "--round-trip needs --repo <checkout holding the series>"
         )
+        print("=== musa_sync check-series: FAIL (usage) ===")
         return 2
     # Resolve --repo once, here: the replay clones it from a temporary
     # directory, so a relative path (the documented invocation is
@@ -1497,14 +1735,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--replay",
         action="store_true",
-        help="also `git am -3` the whole series into a disposable clone of "
-        "--repo and report the first entry that cannot replay (needs --repo)",
+        help="replay the series with `git am -3` in a disposable clone of "
+        "--repo (give a checkout AT THE PIN) and additionally require every "
+        "declared postimage to exist afterwards and the series to apply the way "
+        "the build applies it (`git apply --recount -p1`)",
     )
     p.add_argument(
         "--round-trip",
         action="store_true",
-        help="replay, then run `regen` in that disposable clone and fail on any "
-        "entry it would rewrite (needs --repo; implies --replay)",
+        help="compare the series with what `regen` writes from --repo (give a "
+        "checkout HOLDING the series, i.e. after `rebase`) and fail on any "
+        "entry it would rewrite; mutually exclusive with --replay, which needs "
+        "a checkout in the opposite state",
     )
     p.set_defaults(func=cmd_check_series)
 

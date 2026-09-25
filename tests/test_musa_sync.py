@@ -9,6 +9,7 @@ verify row-builder against synthetic checkouts.
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -768,7 +769,11 @@ def test_repo_half_only_asks_for_blobs_the_series_cannot_produce(ms, tmp_path, m
         for _, post in ms._declared_blobs(patch.read_bytes())
     }
     assert queried, "the blob half must still consult the repo"
-    assert not set(queried) & produced  # MUSA-side ids are exempt
+    # Produced ids are *asked about* — their object type decides whether an
+    # exemption holds — but never reported: a clone that cannot resolve them
+    # leaves the series clean.
+    assert set(queried) & produced
+    assert not [r for r in rows if r[1] != "clean"]
     assert not [b for b in queried if ms._ZERO_BLOB.match(b.encode())]
 
 
@@ -816,13 +821,67 @@ def test_repo_half_exempts_an_anchor_only_an_earlier_entry_produces(
         for name, status, detail in ms._series_format_rows(tmp_path)
     }
 
-    # 0002 anchors on the blob 0001 produces earlier in the series: exempt, and
-    # never asked of the repo at all.
-    assert "1111111111" not in queried
+    # 0002 anchors on the blob 0001 produces earlier in the series: exempt. It
+    # is asked about — the exemption only holds while the id really is a blob —
+    # but a repo that cannot resolve it is not an error.
+    assert "1111111111" in queried
     assert rows["0002-second.patch"][0] == "clean"
     # 0001's own anchor (eeeeeeeeee) has no producer before it.
     assert rows["0001-first.patch"][0] == "missing-index-blob"
     assert "eeeeeeeeee" in queried
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_repo_half_rejects_an_exempt_anchor_that_is_not_a_blob(
+    ms, tmp_path, monkeypatch
+):
+    """Audit finding: the exemption said nothing about the id itself.
+
+    An anchor was exempt because an *earlier entry declares* it as a postimage —
+    a declaration the series need never honour, and one that can name an object
+    that is not a blob at all. No replay can produce a commit id as a postimage,
+    so when the id resolves here the cheap half must refuse it; ids that resolve
+    to nothing are what ``--replay`` settles (see the doctored-anchor test).
+
+    Mutation: drop the ``unusable_exempt`` filter from ``_missing_index_blobs``.
+    """
+    monkeypatch.setattr(
+        ms,
+        "_repo_object_types",
+        lambda repo, blobs: {
+            b: ("commit" if b == "1111111111" else "blob") for b in blobs
+        },
+    )
+    series = tmp_path / "series"
+    _write_series(
+        series,
+        "0001-first.patch",
+        _mailbox(
+            "first",
+            "diff --git a/value.txt b/value.txt\n"
+            "index eeeeeeeeee..1111111111 100644\n"
+            "--- a/value.txt\n+++ b/value.txt\n"
+            "@@ -1 +1,2 @@\n alpha\n+first\n",
+        ),
+    )
+    _write_series(
+        series,
+        "0002-second.patch",
+        _mailbox(
+            "second",
+            "diff --git a/value.txt b/value.txt\n"
+            "index 1111111111..2222222222 100644\n"
+            "--- a/value.txt\n+++ b/value.txt\n"
+            "@@ -1,2 +1,3 @@\n alpha\n first\n+second\n",
+        ),
+    )
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    rows = {
+        name: status for name, status, _ in ms._series_format_rows(tmp_path)
+    }
+
+    assert rows["0002-second.patch"] == "missing-index-blob"
 
 
 def test_mailbox_status_splits_real_sha_from_garbage(ms, tmp_path, monkeypatch, capsys):
@@ -1056,7 +1115,10 @@ def test_check_series_replay_accepts_a_relative_repo_path(
         capsys.readouterr().out
     )
     assert "repo-unusable" not in capsys.readouterr().out
-    assert ms.main(["check-series", "--repo", "upstream", "--round-trip"]) == 0
+    # --round-trip needs a checkout that HOLDS the series (a different state),
+    # so the relative path is exercised here by the replay; the mode's own
+    # contract is pinned by the round-trip tests below.
+    assert ms.main(["check-series", "--repo", "upstream", "--replay", "--round-trip"]) == 2
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
@@ -1066,9 +1128,12 @@ def test_check_series_replay_and_round_trip_need_a_repo(ms, capsys):
     Mutation: return 0 instead of 2 for a missing ``--repo``.
     """
     assert ms.main(["check-series", "--replay"]) == 2
-    assert "pass --repo" in capsys.readouterr().out
+    assert '--repo' in capsys.readouterr().out
     assert ms.main(["check-series", "--round-trip"]) == 2
-    assert "pass --repo" in capsys.readouterr().out
+    assert "--repo" in capsys.readouterr().out
+    # The two modes need contradictory checkout states, so combining them is a
+    # usage error rather than a silently weaker run.
+    assert ms.main(["check-series", "--repo", ".", "--replay", "--round-trip"]) == 2
 
 
 def _ghost_anchor_diff(ghost: str) -> str:
@@ -1105,7 +1170,7 @@ def test_repo_half_rejects_an_anchor_the_entry_itself_declares_as_a_postimage(
     out = capsys.readouterr().out
     assert "missing-index-blob" in out and ghost in out and "0001-ghost.patch" in out
     # The gate now agrees with git: this entry cannot replay at that pin.
-    assert ms._replay_rows(repo, [entry], round_trip=False)[0][1] == "replay-failed"
+    assert ms._replay_rows(repo, [entry], {entry.name: entry.read_bytes()})[0][1] == "replay-failed"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
@@ -1204,7 +1269,11 @@ def test_crlf_entry_replays_with_git_am_but_not_with_the_build_applier(
     crlf = _write_series(series, name, text.replace(b"\n", b"\r\n"))
     monkeypatch.setattr(ms, "SERIES_DIR", series)
 
-    assert ms._replay_rows(repo, [crlf], round_trip=False) == []  # git am -3: fine
+    # git am -3 is fine with it, the build path is not — and the replay now says
+    # so itself, because replaying a series the build cannot apply is the whole
+    # divergence this gate exists to catch.
+    rows = ms._replay_rows(repo, [crlf], {crlf.name: crlf.read_bytes()})
+    assert [r[1] for r in rows] == ["build-path-conflict"]
     assert ms.build_apply.apply_patch(repo, crlf, check_only=True) == "conflict"
     assert [r[1] for r in ms._series_format_rows()] == ["non-canonical-crlf"]
 
@@ -1320,7 +1389,37 @@ def test_check_series_rejects_a_duplicated_diff_body(ms, tmp_path, monkeypatch, 
     assert "0002-b.patch" in out and "byte-identical to 0001-a.patch" in out
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def _maintenance_repo(tmp_path: Path, messages: tuple[str, ...] = ("a",)):
+    """``(repo, base, [(name, bytes), ...])``: a checkout that HOLDS the series.
+
+    Every entry is applied to ``repo``, so HEAD is the pin plus one commit per
+    entry — the shape ``regen`` and ``check-series --round-trip`` describe.
+    ``_formatted_entry`` deliberately leaves its entry *unapplied*, which is the
+    shape a replay-only check needs; the two are not interchangeable. ``base``
+    is the fixture's own starting commit: tests monkeypatch ``_default_target``
+    to return it so the mode resolves its base the way it does in production,
+    where ``third_party/PINS`` answers instead.
+    """
+    repo = tmp_path / "upstream"
+    base = _init_repo(repo)
+    _git(repo, "config", "user.email", "musa@local")
+    _git(repo, "config", "user.name", "musa")
+    for i, message in enumerate(messages):
+        (repo / "value.txt").write_text(f"{message}\n" * (i + 1))
+        _git(repo, "add", "value.txt")
+        _git(repo, "commit", "--quiet", "-m", message)
+    staged = tmp_path / "generated"
+    subprocess.run(
+        [
+            "git", "-C", str(repo), "format-patch", "--no-signature",
+            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return repo, base, [(p.name, p.read_bytes()) for p in sorted(staged.glob("*.patch"))]
+
+
 def test_check_series_round_trip_reports_what_regen_would_rewrite(
     ms, tmp_path, monkeypatch, capsys
 ):
@@ -1330,7 +1429,8 @@ def test_check_series_round_trip_reports_what_regen_would_rewrite(
 
     Mutation: make ``_round_trip_rows`` return [] after a successful replay.
     """
-    repo, name, text = _formatted_entry(tmp_path)
+    repo, base, [(name, text)] = _maintenance_repo(tmp_path)
+    monkeypatch.setattr(ms, "_default_target", lambda: base)
     series = tmp_path / "series"
     _write_series(
         series, name, text.replace(b"From: musa <musa@local>", b"From: someone <s@x>")
@@ -1340,12 +1440,87 @@ def test_check_series_round_trip_reports_what_regen_would_rewrite(
     # The cheap half and a plain replay are both happy with it.
     assert ms.main(["check-series", "--repo", str(repo)]) == 0
     capsys.readouterr()
-    assert ms.main(["check-series", "--repo", str(repo), "--replay"]) == 0
-    capsys.readouterr()
     assert ms.main(["check-series", "--repo", str(repo), "--round-trip"]) == 1
     out = capsys.readouterr().out
 
     assert "round-trip-dirty" in out and "regen writes" in out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_check_series_round_trip_sees_a_self_consistent_doctored_entry(
+    ms, tmp_path, monkeypatch, capsys
+):
+    """Audit finding F-roundtrip: the mode compared the series with ITSELF.
+
+    It replayed into a clone and then format-patched those very `git am`
+    commits, so any self-consistent series was a fixed point: an entry whose
+    hunk was edited by hand (and whose whole diff still applies) came back
+    green from all four modes, while the next real ``regen`` rewrote it — from
+    the checkout's history — without a word.
+
+    Mutation: format-patch the replay clone instead of the caller's repo.
+    """
+    repo, base, [(name, text)] = _maintenance_repo(tmp_path)
+    monkeypatch.setattr(ms, "_default_target", lambda: base)
+    # The diff still applies (only the added line changes), so a replay is
+    # clean; the entry no longer describes the commit that is really there.
+    doctored = text.replace(b"+a\n", b"+a-doctored\n")
+    assert doctored != text
+    series = tmp_path / "series"
+    _write_series(series, name, doctored)
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    assert ms.main(["check-series", "--repo", str(repo)]) == 0
+    capsys.readouterr()
+    assert ms.main(["check-series", "--repo", str(repo), "--round-trip"]) == 1
+    assert "round-trip-dirty" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_check_series_round_trip_counts_entries_against_the_history(
+    ms, tmp_path, monkeypatch, capsys
+):
+    """A series missing its last entry is not a fixed point either: `regen`
+    would restore it, and the build would have shipped one patch less.
+
+    Mutation: compare with ``zip`` alone, so the extra generated entry is
+    dropped instead of rowed.
+    """
+    repo, base, entries = _maintenance_repo(tmp_path, ("a", "b"))
+    monkeypatch.setattr(ms, "_default_target", lambda: base)
+    series = tmp_path / "series"
+    for name, text in entries[:-1]:  # drop the last entry
+        _write_series(series, name, text)
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    assert ms.main(["check-series", "--repo", str(repo), "--round-trip"]) == 1
+    out = capsys.readouterr().out
+    assert "round-trip-count" in out and "writes 2 entries" in out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_check_series_round_trip_fails_closed_on_a_repo_that_lacks_the_series(
+    ms, tmp_path, monkeypatch, capsys
+):
+    """`regen` diffs a checkout that HOLDS the series. A checkout sitting at the
+    pin has nothing to compare against, and guessing an answer there is exactly
+    the tautology the mode used to fall into.
+
+    Mutation: return [] when ``_series_base`` finds no base.
+    """
+    # Two entries, but a checkout with a single commit and no resolvable pin:
+    # nothing can tell `regen` what to diff.
+    repo, _, _ = _maintenance_repo(tmp_path)
+    series = tmp_path / "series"
+    _write_series(series, "0001-a.patch", _canonical_entry("a"))
+    _write_series(series, "0002-b.patch", _canonical_entry("b"))
+    monkeypatch.setattr(ms, "_default_target", lambda: None)
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+    monkeypatch.setattr(ms, "SERIES_DIR", tmp_path / "series")
+
+    assert ms.main(["check-series", "--repo", str(repo), "--round-trip"]) == 1
+    out = capsys.readouterr().out
+    assert "round-trip-unverifiable" in out and "rebase" in out
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
@@ -1357,14 +1532,249 @@ def test_check_series_round_trip_accepts_a_regen_fixed_point(
 
     Mutation: make ``_round_trip_rows`` report every entry.
     """
-    repo, name, text = _formatted_entry(tmp_path)
-    _write_series(tmp_path / "series", name, text)
-    monkeypatch.setattr(ms, "SERIES_DIR", tmp_path / "series")
+    repo, base, entries = _maintenance_repo(tmp_path, ("a", "b"))
+    monkeypatch.setattr(ms, "_default_target", lambda: base)
+    series = tmp_path / "series"
+    for name, text in entries:
+        _write_series(series, name, text)
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
 
     assert ms.main(["check-series", "--repo", str(repo), "--round-trip"]) == 0
     assert capsys.readouterr().out.strip().endswith(
         "=== musa_sync check-series: PASS ==="
     )
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_replay_refuses_an_exemption_no_entry_earns(ms, tmp_path, monkeypatch, capsys):
+    """Audit finding §1: the exemption trusted a *declaration*.
+
+    Entry 0001's ``index`` line can name any id at all as its postimage, and a
+    later entry anchoring on that id is exempt from the ``--repo`` check purely
+    because the declaration precedes it. Nothing in the cheap half can tell a
+    real postimage from an invented one; a replay can, because it holds the odb
+    the series produced.
+
+    Mutation: drop the ``_unearned_exemption_rows`` term from ``_replay_rows``.
+    """
+    repo, name, text = _formatted_entry(tmp_path)
+    ghost = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    # 0001 keeps its real preimage and claims an id no replay can produce.
+    first = re.sub(rb"index ([0-9a-f]+)\.\.([0-9a-f]+)", rb"index \1.." + ghost.encode(), text, count=1)
+    assert first != text and ghost.encode() in first
+    series = tmp_path / "series"
+    _write_series(series, name, first)
+    _write_series(
+        series,
+        "0002-append-gamma.patch",
+        _mailbox(
+            "append gamma",
+            "diff --git a/value.txt b/value.txt\n"
+            f"index {ghost}..2222222222 100644\n"
+            "--- a/value.txt\n+++ b/value.txt\n"
+            "@@ -1,2 +1,3 @@\n alpha\n beta\n+gamma\n",
+        ),
+    )
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    # The cheap half defers: 0002's anchor is declared by 0001, which precedes it.
+    assert ms.main(["check-series", "--repo", str(repo)]) == 0
+    capsys.readouterr()
+    assert ms.main(["check-series", "--repo", str(repo), "--replay"]) == 1
+    out = capsys.readouterr().out
+    assert "exemption-unearned" in out and ghost in out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_replay_reports_a_series_the_build_path_cannot_apply(
+    ms, tmp_path, monkeypatch, capsys
+):
+    """Audit finding §5: ``git am -3`` rescues a stale hunk with a 3-way merge,
+    ``git apply --recount -p1`` (what ``build_apply.py`` runs) does not.
+
+    A series can therefore replay green and still break the build — the one
+    failure this gate exists to catch before a build does. The fixture is the
+    real shape of it: an entry generated against a *different* base (a later
+    state of the file), self-consistent with its own ``index`` blobs, checked
+    against a checkout that never had that base.
+
+    Mutation: drop the ``_build_path_rows`` term from ``_replay_rows``.
+    """
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(scratch)], check=True)
+    _git(scratch, "config", "user.email", "musa@local")
+    _git(scratch, "config", "user.name", "musa")
+    (scratch / "value.txt").write_text("one\ntwo\nthree\nfour\nfive\n")
+    _git(scratch, "add", "value.txt")
+    _git(scratch, "commit", "--quiet", "-m", "c0")
+    pin_sha = _git(scratch, "rev-parse", "HEAD").stdout.strip()
+    (scratch / "value.txt").write_text("one\ntwo\nthree\nfour\nFIVE\n")
+    _git(scratch, "add", "value.txt")
+    _git(scratch, "commit", "--quiet", "-m", "c1")
+    later = _git(scratch, "rev-parse", "HEAD").stdout.strip()
+    (scratch / "value.txt").write_text("one\ntwo\nThree\nfour\nFIVE\n")
+    _git(scratch, "add", "value.txt")
+    _git(scratch, "commit", "--quiet", "-m", "c2")
+
+    staged = tmp_path / "generated"
+    staged.mkdir()
+    subprocess.run(
+        [
+            "git", "-C", str(scratch), "format-patch", "--no-signature",
+            "--no-numbered", "--zero-commit", "-o", str(staged),
+            f"{later}..HEAD",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    entry = sorted(staged.glob("*.patch"))[0]
+    pin = tmp_path / "pin"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--local", str(scratch), str(pin)],
+        check=True,
+        capture_output=True,
+    )
+    _git(pin, "reset", "--hard", "--quiet", pin_sha)
+
+    series = tmp_path / "series"
+    _write_series(series, entry.name, entry.read_bytes())
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    # The cheap half is green: this is a real format-patch entry.
+    assert [r[1] for r in ms._series_format_rows()] == ["clean"]
+    assert ms.main(["check-series", "--repo", str(pin), "--replay"]) == 1
+    assert "build-path-conflict" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_round_trip_rows_pin_the_filename_fixed_point(ms, tmp_path, monkeypatch):
+    """The *filename* half of the fixed point, which no end-to-end test can
+    reach: when `regen` would rename an entry, the cheap half has already
+    rowed it, so only a direct call to this helper pins the branch.
+
+    Mutation: ``if entry.name == regen.name and want == got`` -> ``if True and
+    want == got`` (verified: the whole suite still passed without this test).
+    """
+    repo, base, [(name, text)] = _maintenance_repo(tmp_path, ("a",))
+    monkeypatch.setattr(ms, "_default_target", lambda: base)
+    renamed = tmp_path / "series" / "0001-not-the-slug.patch"
+    renamed.parent.mkdir()
+    renamed.write_bytes(text)  # same bytes, different name
+
+    rows = ms._round_trip_rows(repo, [renamed])
+
+    assert rows and rows[0][1] == "round-trip-dirty"
+    assert "names this entry" in rows[0][2] and name in rows[0][2]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_replay_survives_a_non_utf8_subject(ms, tmp_path, monkeypatch, capsys):
+    """Audit finding §4: one non-UTF-8 byte in a Subject ended `--replay` in a
+    raw ``UnicodeDecodeError`` traceback — exit 1, no verdict line — because
+    ``subprocess`` decodes git's output as UTF-8 and git echoes the subject back
+    in its failure message.
+
+    Mutation: drop ``errors="replace"`` from ``_run_git``.
+    """
+    repo, name, text = _formatted_entry(tmp_path)
+    broken = text.replace(b"Subject: [PATCH] a", b"Subject: [PATCH] caf\xe9").replace(
+        b"-alpha", b"-ghost-line"
+    )
+    assert broken != text
+    _write_series(tmp_path / "series", name, broken)
+    monkeypatch.setattr(ms, "SERIES_DIR", tmp_path / "series")
+
+    rc = ms.main(["check-series", "--repo", str(repo), "--replay"])
+    out = capsys.readouterr()
+    assert rc == 1
+    assert "Traceback" not in out.out + out.err
+    assert "=== musa_sync check-series: FAIL" in out.out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_series_gate_accepts_hunkless_entries(ms, tmp_path):
+    """Audit finding §2b: a rename and a mode-only change carry NO ``index``
+    line — that is correct `git format-patch` output, and both the replay path
+    (``git am -3``) and the build path (``git apply --recount -p1``) apply them.
+
+    The row's justification ("git am -3 cannot build its 3-way ancestor") is
+    only true of an entry with a hunk, so only a hunk may require the index.
+
+    Mutation: require an index line unconditionally again.
+    """
+    repo = tmp_path / "upstream"
+    base = _init_repo(repo)
+    _git(repo, "config", "user.email", "musa@local")
+    _git(repo, "config", "user.name", "musa")
+    (repo / "other.txt").write_text("one\ntwo\n")
+    _git(repo, "add", "other.txt")
+    _git(repo, "commit", "--quiet", "-m", "add other")
+    _git(repo, "mv", "other.txt", "renamed.txt")
+    _git(repo, "commit", "--quiet", "-m", "MUSA: rename other.txt")
+    _git(repo, "update-index", "--chmod=+x", "renamed.txt")
+    _git(repo, "commit", "--quiet", "-m", "MUSA: make it executable")
+    staged = tmp_path / "generated"
+    subprocess.run(
+        [
+            "git", "-C", str(repo), "format-patch", "--no-signature",
+            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    entries = sorted(staged.glob("*.patch"))
+    assert len(entries) == 3
+    hunkless = [
+        p for p in entries if b"@@ " not in p.read_bytes()
+    ]
+    assert len(hunkless) == 2, [p.name for p in entries]  # the rename and the chmod
+    for patch in entries:
+        text = patch.read_bytes()
+        if patch in hunkless:
+            assert not ms._INDEX_LINE.search(text), patch.name
+        assert ms._canonical_form_problem(text, patch.name, {}) is None, patch.name
+        assert ms._series_entry_problem(text, []) is None, patch.name
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_series_gate_accepts_subjects_git_itself_slugifies(ms, tmp_path):
+    """The gate's slug rule must agree with the real `git format-patch` on the
+    subjects that used to be rejected: a trailing '.', runs of '.', an RFC-2047
+    encoded non-ASCII subject, and a subject longer than the 52-character cap.
+
+    Mutation: strip the ``re.sub(r"\.{2,}", ...)``/``rstrip("-.")`` from
+    ``_git_slug``, or drop the ``_decode_header_word`` call.
+    """
+    subjects = (
+        "MUSA: fix the crash.",
+        "MUSA: dots...runs..here",
+        "MUSA: handle the caf\u00e9 path",
+        "MUSA: " + "long " * 20 + "subject",
+    )
+    repo = tmp_path / "upstream"
+    base = _init_repo(repo)
+    _git(repo, "config", "user.email", "musa@local")
+    _git(repo, "config", "user.name", "musa")
+    for i, subject in enumerate(subjects):
+        (repo / "value.txt").write_text(f"{i}\n")
+        _git(repo, "add", "value.txt")
+        _git(repo, "commit", "--quiet", "-m", subject)
+    staged = tmp_path / "generated"
+    subprocess.run(
+        [
+            "git", "-C", str(repo), "format-patch", "--no-signature",
+            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    entries = sorted(staged.glob("*.patch"))
+    assert len(entries) == len(subjects)
+
+    for patch in entries:
+        problem = ms._canonical_form_problem(patch.read_bytes(), patch.name, {})
+        assert problem is None, f"{patch.name}: {problem}"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
@@ -1527,7 +1937,7 @@ def test_check_series_replay_fails_closed_on_a_repo_it_cannot_clone(
     assert "repo-unusable" in capsys.readouterr().out
     # ... and the clone failure itself is a RepoUnusable, not a traceback.
     with pytest.raises(ms.RepoUnusable, match="cannot clone"):
-        ms._replay_rows(plain, [entry], round_trip=False)
+        ms._replay_rows(plain, [entry], {entry.name: entry.read_bytes()})
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
