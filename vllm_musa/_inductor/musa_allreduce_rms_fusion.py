@@ -99,6 +99,54 @@ def _rms_input_weight_supported_dtype(match: pm.Match) -> bool:
     return True
 
 
+def _fill_fused_meta(
+    *,
+    fused,
+    rms,
+    residual_out,
+    raw,
+    inputs,
+    eps: float,
+    comm_id: int,
+    use_raw: bool,
+) -> None:
+    """Populate ``meta["val"]`` on nodes inserted by the manual rewrite.
+
+    ``fx.Graph.call_function`` does not set node metadata. Every node this pass
+    inserts therefore lacks ``meta["val"]``, and any later pass that dispatches on
+    an argument's fake tensor -- notably ``VllmIRLoweringPass.lower_matched_op``,
+    which does ``fx.map_arg(node.args, lambda arg: arg.meta["val"])`` -- raises
+    ``KeyError: 'val'``. That is why enabling this pass crashed engine startup
+    under ``cudagraph_mode=FULL_AND_PIECEWISE`` (piecewise AOT capture runs the IR
+    lowering pass) while it appeared to work in eager, where no such pass runs.
+
+    The fused ops have ``register_fake`` implementations, so evaluating them with
+    the input nodes' own fake tensors yields metadata of the correct shape and
+    dtype without touching device memory. Do not open a ``FakeTensorMode`` here:
+    the inputs are already fakes owned by the ambient mode, and nesting a second
+    one raises ``AssertionError: Mixing fake modes NYI``.
+    """
+    fakes = [a.meta.get("val") if isinstance(a, fx.Node) else None for a in inputs]
+    if any(f is None for f in fakes):
+        return  # cannot derive metadata; leave the graph as it was
+    if use_raw:
+        out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default(
+            fakes[0], fakes[1], fakes[2], float(eps), comm_id
+        )
+        fused.meta["val"] = out
+        rms.meta["val"] = out[0]
+        residual_out.meta["val"] = out[1]
+        if raw is not None:
+            raw.meta["val"] = out[2]
+    else:
+        out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default(
+            fakes[0], fakes[1], fakes[2], float(eps), comm_id
+        )
+        fused.meta["val"] = out
+        rms.meta["val"] = out[0]
+        residual_out.meta["val"] = out[1]
+
+
 class MusaAllReduceRMSNormPattern:
     """Replace allreduce + RMSNorm with a MUSA fused CAR-RMSNorm op."""
 
@@ -676,6 +724,17 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                             operator.getitem, args=(fused, 1)
                         )
                         fused_raw = None
+
+                _fill_fused_meta(
+                    fused=fused,
+                    rms=fused_rms,
+                    residual_out=fused_residual,
+                    raw=fused_raw,
+                    inputs=(car.args[0], residual, weight),
+                    eps=eps,
+                    comm_id=self.comm_id,
+                    use_raw=use_raw,
+                )
 
                 for user, index in output_indices.items():
                     replacement = fused_rms if index == 0 else fused_residual
