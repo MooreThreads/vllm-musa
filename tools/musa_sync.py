@@ -72,9 +72,12 @@ Subcommands::
         Neither is the default: both clone a repository and spawn git per entry.
         No in-repo CI or hook invokes this gate today.
 
-Every subcommand ends with one explicit ``=== musa_sync <cmd>: PASS|FAIL ===``
-verdict line whose counts agree with the exit code: 0 = PASS, 1 = FAIL, 2 =
-usage/config error (e.g. ``verify`` with no resolvable target).
+Every **gate** subcommand (``check-series``, ``verify``, ``regen``, ``rebase``,
+``module``) ends with one explicit ``=== musa_sync <cmd>: PASS|FAIL ===`` verdict
+line whose counts agree with the exit code: 0 = PASS, 1 = FAIL, 2 = usage/config
+error (e.g. ``verify`` with no resolvable target). The two reporting commands do
+not print one: ``report`` renders the manifest census and ``apply`` prints
+``--- N applied, … ---``, so a caller parsing either must read the exit code.
 
 Stdlib-only; loads manifest.py + build_apply.py BY FILE PATH so it never imports
 the ``vllm_musa`` package (works before install, in plain CI).
@@ -736,18 +739,74 @@ def _canonical_form_problem(
 
 
 def _diff_body(text: bytes) -> bytes:
-    """The entry from its first ``diff --git`` on, or ``b""`` when it has none.
+    """The entry's diff, from its first ``diff --git`` or ``--- a/… +++ b/…`` pair.
 
     The whole *diff* is searched, not just the mailbox header: a commit message
     with a body pushes the first ``index`` line far below the separator (line 22
     in the longest shipped entry), so a first-12-lines scan reads clean on
     entries that have no ``index`` line at all. What is excluded is the prose
-    *above* the first ``diff --git``: a commit message that quotes an
-    ``index deadbeef..cafebabe`` line, or the words ``@@``, is text, and reading
-    it as an anchor asked authors to avoid quoting their own upstream.
+    *above* the diff: a commit message that quotes an ``index deadbeef..cafebabe``
+    line, or the words ``@@``, is text, and reading it as an anchor asked authors
+    to avoid quoting their own upstream.
+
+    A **bare diff** has no ``diff --git`` line, and returning ``b""`` for it hid
+    its hunks from every caller: an entry that is a bare diff with a real hunk and
+    no ``index`` line passed all four modes, which is the shape this gate exists to
+    catch. The fallback therefore accepts the ``--- a/…`` + ``+++ b/…`` header pair
+    a real diff carries; a commit message that merely mentions a path has no such
+    adjacent pair.
     """
     at = text.find(b"diff --git ")
-    return text[at:] if at >= 0 else b""
+    if at >= 0:
+        return text[at:]
+    m = re.search(rb"(?m)^--- [^\n]*\n\+\+\+ [^\n]*\n", text)
+    if m is None:
+        return b""
+    start = m.start()
+    # A bare diff still carries its header lines (`index`, modes, rename/copy),
+    # and the `index` line in particular is below the separator but *above* the
+    # `--- a/…` pair this fallback found — so walk back over exactly those.
+    header = re.compile(
+        rb"(?m)^(index |new file mode |deleted file mode |old mode |new mode "
+        rb"|similarity index |dissimilarity index |rename from |rename to "
+        rb"|copy from |copy to )"
+    )
+    while start > 0:
+        line_start = text.rfind(b"\n", 0, start - 1) + 1
+        if line_start >= start or not header.match(text[line_start:start]):
+            break
+        start = line_start
+    return text[start:]
+
+
+def _declared_postimages(text: bytes) -> list[tuple[str, str]]:
+    """``(path, postimage)`` for every ``index`` line, in diff order.
+
+    The path comes from the section's ``diff --git a/… b/…`` header, or from its
+    ``+++ b/…`` line for a bare diff; a deletion has no postimage and is skipped.
+    This is what lets the replay check an entry's declaration against *the commit
+    that entry created* rather than against the object database.
+    """
+    body = _diff_body(text)
+    out: list[tuple[str, str]] = []
+    # Split into file sections; a bare diff is one section with no header.
+    sections = re.split(rb"(?m)^(?=diff --git )", body)
+    for section in sections:
+        if not section.strip():
+            continue
+        m = re.search(rb"(?m)^diff --git a/([^\n]+) b/([^\n]+)\n", section)
+        if m:
+            path = m.group(2).decode("utf-8", "replace")
+        else:
+            plus = re.search(rb"(?m)^\+\+\+ b/([^\n]+)\n", section)
+            if not plus:
+                continue
+            path = plus.group(1).decode("utf-8", "replace")
+        if re.search(rb"(?m)^\+\+\+ /dev/null\n", section):
+            continue
+        for m2 in _INDEX_LINE.finditer(section):
+            out.append((path, m2.group(2).decode()))
+    return out
 
 
 def _declared_blobs(text: bytes) -> list[tuple[str, str]]:
@@ -891,8 +950,6 @@ def _missing_index_blobs(
     def unusable_exempt(blob: str) -> bool:
         return types.get(blob) not in (None, "blob", "missing")
 
-    if not needed:
-        return {}
     for name in order:
         text = texts.get(name)
         if text is None:
@@ -1013,11 +1070,13 @@ def _series_format_rows(
     ``--replay``/``round_trip`` ask git itself, in a disposable clone of
     ``repo`` (the caller's checkout is never opened for writing):
 
-      * ``replay``: ``git am -3`` every entry in order and report the first one
-        git refuses, with git's own first error line;
-      * ``round_trip``: replay, then ``git format-patch`` (what ``regen``
-        runs) and report every entry whose bytes or filename ``regen`` would
-        change.
+      * ``replay``: ``git am -3`` every entry in order **in a disposable clone
+        of** ``repo`` and report the first one git refuses, with git's own first
+        error line;
+      * ``round_trip``: run ``git format-patch`` (what ``regen`` runs) in the
+        checkout you passed — it needs one that *holds* the series — and report
+        every entry whose bytes or filename ``regen`` would change, or the single
+        count/state row when the checkout holds a different history instead.
 
     ``repo`` is optional so the cheap half stays usable where cloning is not
     (a PR runner with no checkout): without it the blob half is skipped.
@@ -1222,17 +1281,21 @@ def _round_trip_rows_in(
     for patch in generated:
         _normalize_patch_author(patch)  # what cmd_regen does before comparing
     if len(generated) != len(paths):
-        rows: list[tuple[str, str, str]] = [
+        # A checkout that does not hold *this* series — the pin plus a commit of
+        # its own, another branch, the upstream/vllm-musa repo itself — makes
+        # `regen` write a different number of entries, and pairing them one by one
+        # described that state as 170-odd broken entries. One fact, one row.
+        return [
             (
                 str(SERIES_DIR),
                 "round-trip-count",
                 f"`regen` writes {len(generated)} entries from {repo} but the "
-                f"series has {len(paths)}: the series does not describe this "
-                "history",
+                f"series has {len(paths)}: this checkout does not hold the series, "
+                "so the fixed point cannot be checked here (run `rebase` first, or "
+                "`--replay` against a checkout at the pin)",
             )
         ]
-    else:
-        rows = []
+    rows: list[tuple[str, str, str]] = []
     for entry, regen in zip(paths, generated):
         want, got = entry.read_bytes(), regen.read_bytes()
         if entry.name == regen.name and want == got:
@@ -1309,7 +1372,7 @@ def _replay_rows(
         _run_git(clone, "config", "user.email", "musa@local")
         _run_git(clone, "config", "user.name", "musa")
         applied = 0
-        pre_head = _git(clone, "rev-parse", "HEAD").stdout.strip()
+        made: dict[str, str | None] = {}
         for patch in paths:
             head_before = _git(clone, "rev-parse", "HEAD").stdout.strip()
             r = _git(clone, "am", "-3", str(patch))
@@ -1343,7 +1406,8 @@ def _replay_rows(
                     )
                 return [(_safe_name(patch.name), "replay-failed", detail)]
             applied += 1
-        return _unearned_exemption_rows(clone, paths, texts, pre_head) + (
+            made[patch.name] = head_after
+        return _unearned_exemption_rows(clone, paths, texts, made) + (
             _build_path_rows(tmp, repo, paths)
         )
     finally:
@@ -1351,57 +1415,82 @@ def _replay_rows(
 
 
 def _unearned_exemption_rows(
-    clone: Path, paths: list[Path], texts: dict[str, bytes], pre_head: str
+    clone: Path,
+    paths: list[Path],
+    texts: dict[str, bytes],
+    applied: dict[str, str | None],
 ) -> list[tuple[str, str, str]]:
-    """Postimages the series declares that the replay did not produce.
+    """Postimages an entry declares that *that entry's own commit* does not hold.
 
-    "Produced" is *reachability from the commits the replay created*, not mere
-    existence in the object database: every clone already holds the base's own
-    blobs, so an `index` line naming the pin's version of the file — a real blob,
-    and one no entry produces — would satisfy an existence test. Measured on the
-    shipped series: 0 of the 230 declared postimages resolve before the replay
-    and all 230 are reachable from it afterwards, so the strict reading costs
-    nothing here.
+    "Produced" is a per-entry fact, not a reachability one: after the replay the
+    declared id must be the blob at the declared path **in the commit the entry
+    itself created**. Three weaker readings were measured, and all three are
+    wrong:
+
+    * existence in the object database — every clone already holds the base's own
+      blobs, so an `index` line naming the pin's version of the file would pass;
+    * reachability from *any* commit the replay created — order-blind, so a
+      fabricated id that a **later** entry happens to produce passes as well;
+    * reachability from ``pre_head..HEAD`` via ``git rev-list --objects`` — that
+      range omits blobs also reachable from the base, so an entry creating a file
+      whose content already exists there (a new empty ``__init__.py``; the pin
+      tracks 252 empty files) was a false FAIL.
+
+    Measured on the shipped series: 0 of the 230 declared postimages resolve in a
+    fresh clone at the pin, and 230/230 are the declared path's blob in the very
+    commit that declares them, so the strict reading costs nothing here.
     """
-    declared: dict[str, str] = {}
+    declared: dict[tuple[str, str], str] = {}
     for patch in paths:
         text = texts.get(patch.name)
         if text is None:
             continue
-        for _pre, post in _declared_blobs(text):
+        for path, post in _declared_postimages(text):
             if not _ZERO_BLOB.match(post.encode()):
-                declared.setdefault(post, patch.name)
+                declared.setdefault((patch.name, post), path)
     if not declared:
         return []
-    ids = sorted(declared)
+    ids = sorted({blob for _name, blob in declared})
     types = _repo_object_types(clone, ids)
-    reachable = set(
-        _git(clone, "rev-list", "--objects", f"{pre_head}..HEAD").stdout.split()
-    )
     rows = []
-    for blob in ids:
+    for (name, blob), path in sorted(declared.items()):
         full = _git(clone, "rev-parse", "--verify", f"{blob}^{{blob}}")
         if full.returncode:
             kind = types.get(blob, "missing")
             rows.append(
                 (
-                    _safe_name(declared[blob]),
+                    _safe_name(name),
                     "exemption-unearned",
                     f"the entry declares {blob} as its postimage, but the replay "
                     f"produced no such blob ({kind}): any preimage exempted by "
                     "that declaration is unverified",
                 )
             )
-        elif full.stdout.strip() not in reachable:
-            rows.append(
-                (
-                    _safe_name(declared[blob]),
-                    "exemption-unearned",
-                    f"the entry declares {blob} as its postimage, but no commit "
-                    "the replay created contains that blob: any preimage exempted "
-                    "by that declaration is unverified",
+            continue
+        commit = applied.get(name)
+        at_path = (
+            _git(clone, "rev-parse", "--verify", f"{commit}:{path}") if commit else None
+        )
+        if at_path is not None and at_path.returncode == 0 and (
+            at_path.stdout.strip() == full.stdout.strip()
+        ):
+            continue
+        rows.append(
+            (
+                _safe_name(name),
+                "exemption-unearned",
+                f"the entry declares {blob} as the postimage of {path}, but the "
+                "commit it created does not hold that blob there"
+                + (
+                    f" (it holds {(at_path.stdout or '').strip()[:10] or 'nothing'})"
+                    if at_path is not None and at_path.returncode == 0
+                    else " (the entry created no commit)"
+                    if not commit
+                    else ""
                 )
+                + ": any preimage exempted by that declaration is unverified",
             )
+        )
     return rows
 
 
@@ -1571,15 +1660,21 @@ def _numbering_line(rows, number_rows) -> str | None:
 def _entry_file_rows(
     rows: list[tuple[str, str, str]],
 ) -> list[tuple[str, str, str]]:
-    """The rows that name an entry file in ``series/``.
+    """One row per entry *file* in ``series/``, for counting and numbering.
 
-    Series-level rows describe the *run*, not an entry: ``round-trip-unverifiable``
-    is keyed by the series directory itself. Counting them as entries made the
-    pin-state ``--round-trip`` summary read "171 clean / 172 total" and handed the
-    directory to the numbering gate, which then reported it as an entry with a
-    missing ``NNNN-`` prefix — a second, false problem on top of the real one.
+    Two kinds of row must not be counted as entries. Series-level rows describe
+    the *run* — ``round-trip-unverifiable`` is keyed by the series directory
+    itself, and counting it made the pin-state summary read "171 clean / 172
+    total" and handed the directory to the numbering gate, which reported it as an
+    entry with a missing ``NNNN-`` prefix. And a *file* can carry two rows (a
+    rename plus a rewrite, say), which made a one-entry series report "2 entries
+    in series/" and number itself twice. Both counts read this list instead.
     """
-    return [row for row in rows if (SERIES_DIR / row[0]).is_file()]
+    seen: dict[str, tuple[str, str, str]] = {}
+    for row in rows:
+        if (SERIES_DIR / row[0]).is_file():
+            seen.setdefault(row[0], row)
+    return [seen[name] for name in sorted(seen)]
 
 
 def _print_series_section(
@@ -1746,6 +1841,13 @@ def _checkout(target: str) -> int:
 
 def cmd_rebase(args) -> int:
     target = args.tag or _default_target()
+    if not target:
+        print(
+            "ERROR: no target ref: set VLLM_COMMIT or VLLM_TAG in third_party/PINS "
+            "(or pass a tag/ref)"
+        )
+        print("=== musa_sync rebase: FAIL (usage) ===")
+        return 2
     if _checkout(target):
         return 1
     order = manifest.series_apply_order()
@@ -1790,8 +1892,12 @@ def cmd_regen(args) -> int:
         return _regen_module_tripwires()
     target = _default_target()
     if not target:
-        print("ERROR: VLLM_COMMIT or VLLM_TAG is required in third_party/PINS")
-        return 1
+        print(
+            "ERROR: no target ref: set VLLM_COMMIT or VLLM_TAG in third_party/PINS "
+            "(or pass --target)"
+        )
+        print("=== musa_sync regen: FAIL (usage) ===")
+        return 2
     with tempfile.TemporaryDirectory(prefix="musa-regen-series-") as tmp:
         staged = Path(tmp)
         r = _git(

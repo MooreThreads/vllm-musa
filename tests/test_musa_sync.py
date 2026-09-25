@@ -150,8 +150,14 @@ def test_normalize_patch_author_preserves_non_utf8_bytes(ms, tmp_path):
 def test_regen_requires_pinned_target(ms, monkeypatch, capsys):
     monkeypatch.setattr(ms, "_default_target", lambda: None)
 
-    assert ms.main(["regen"]) == 1
-    assert "VLLM_COMMIT or VLLM_TAG is required" in capsys.readouterr().out
+    # A missing target is a usage/config error, not a verdict about the series:
+    # exit 2 with an explicit verdict line, like every other config failure.
+    # Round 4: `regen` returned 1 with no verdict line, and `rebase` raised
+    # TypeError from an unresolved ref (no PINS target) instead of returning.
+    assert ms.main(["regen"]) == 2
+    assert "=== musa_sync regen: FAIL (usage) ===" in capsys.readouterr().out
+    assert ms.main(["rebase"]) == 2
+    assert "=== musa_sync rebase: FAIL (usage) ===" in capsys.readouterr().out
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
@@ -1284,7 +1290,10 @@ def test_crlf_entry_replays_with_git_am_but_not_with_the_build_applier(
     # so itself, because replaying a series the build cannot apply is the whole
     # divergence this gate exists to catch.
     rows = ms._replay_rows(repo, [crlf], {crlf.name: crlf.read_bytes()})
-    assert [r[1] for r in rows] == ["build-path-conflict"]
+    # Two rows, and both are true: the build path cannot apply it at all, and the
+    # CRLF damage means the blob the replay lands is not the one the entry
+    # declares for that path (round 4's per-entry postimage check).
+    assert [r[1] for r in rows] == ["exemption-unearned", "build-path-conflict"]
     assert ms.build_apply.apply_patch(repo, crlf, check_only=True) == "conflict"
     assert [r[1] for r in ms._series_format_rows()] == ["non-canonical-crlf"]
 
@@ -1991,7 +2000,8 @@ def test_replay_rejects_a_declared_postimage_the_series_does_not_produce(
     out = capsys.readouterr().out
 
     assert rc == 1
-    assert "exemption-unearned" in out and "no commit the replay created" in out
+    assert "exemption-unearned" in out
+    assert "the commit it created does not hold that blob there" in out
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
@@ -2375,3 +2385,262 @@ def test_developer_guide_documents_the_gate_truthfully():
         assert flag in guide, flag
     assert "no in-repo CI" in guide
     assert "runs on every PR" not in guide
+
+
+# --- round 4: a bare diff, a false FAIL, order-blindness, other states, tree ids
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_bare_diff_with_a_hunk_needs_an_index_line(ms, tmp_path, monkeypatch):
+    """Round 4: a bare diff hid its hunks from the gate entirely.
+
+    `_diff_body` sliced at the first `diff --git` and returned `b""` when there
+    was none, so "an entry with a hunk needs an `index` line" never ran and a bare
+    diff with a real hunk but no `index` line passed all four modes — the shape
+    this gate exists to catch (see `pr250-round5-base-repro.log`: the base's own
+    series is bare diffs).
+
+    Mutation: return `b""` again when there is no `diff --git`.
+    """
+    series = tmp_path / "series"
+    body = (
+        "--- a/value.txt\n"
+        "+++ b/value.txt\n"
+        "@@ -1 +1,2 @@\n"
+        " alpha\n"
+        "+beta\n"
+    )
+    _write_series(series, "0001-bare-hunk.patch", _mailbox("bare-hunk", body))
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    assert [r[1] for r in ms._series_format_rows()] == ["no-index-line"]
+
+    # ... and the same bare diff *with* an index line is not rejected: the
+    # fallback must not turn every bare diff into a finding.
+    with_index = body.replace(
+        "--- a/value.txt", "index 1111111111..2222222222 100644\n--- a/value.txt"
+    )
+    _write_series(series, "0001-bare-hunk.patch", _mailbox("bare-hunk", with_index))
+    assert [r[1] for r in ms._series_format_rows() if r[1] != "clean"] == []
+    assert ms._declared_blobs(_mailbox("bare-hunk", with_index)) == [
+        ("1111111111", "2222222222")
+    ]
+    assert ms._declared_postimages(_mailbox("bare-hunk", with_index)) == [
+        ("value.txt", "2222222222")
+    ]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_replay_accepts_a_new_file_whose_content_already_exists(
+    ms, tmp_path, monkeypatch, capsys
+):
+    """Round 4: the postimage check was a false FAIL on a new *empty* file.
+
+    `git rev-list --objects pre_head..HEAD` omits blobs that are also reachable
+    from the base, and the pin tracks 252 empty files: an entry that creates one
+    declares the empty blob, the replay produces it, and the check still said the
+    replay "produced no such blob". It now asks the commit the entry created for
+    the blob *at the declared path*.
+
+    Mutation: go back to the `rev-list --objects pre_head..HEAD` membership test.
+    """
+    repo = tmp_path / "upstream"
+    _init_repo(repo)
+    _git(repo, "config", "user.email", "musa@local")
+    _git(repo, "config", "user.name", "musa")
+    (repo / "empty_base.txt").write_bytes(b"")  # the base already holds the empty blob
+    _git(repo, "add", "empty_base.txt")
+    _git(repo, "commit", "--quiet", "-m", "the base holds an empty file")
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(ms, "_default_target", lambda: base)
+
+    (repo / "probe_empty.py").write_bytes(b"")
+    _git(repo, "add", "probe_empty.py")
+    _git(repo, "commit", "--quiet", "-m", "MUSA: add an empty probe module")
+    staged = tmp_path / "generated"
+    subprocess.run(
+        [
+            "git", "-C", str(repo), "format-patch", "--no-signature", "--no-numbered",
+            "--zero-commit", "-o", str(staged), base,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    entry = sorted(staged.glob("*.patch"))[0]
+    _git(repo, "reset", "--hard", "--quiet", base)
+    series = tmp_path / "series"
+    _write_series(series, entry.name, entry.read_bytes())
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    rc = ms.main(["check-series", "--repo", str(repo), "--replay"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "exemption-unearned" not in out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_postimage_is_checked_against_the_entrys_own_commit(
+    ms, tmp_path, monkeypatch, capsys
+):
+    """Round 4: reachability was order-blind and therefore gameable.
+
+    Entry 1 declares, as its postimage, the blob entry 2 will produce. Under a
+    reachability test that declaration reads as earned (the object does exist once
+    the replay finishes), which is what launders an absent preimage anchor; the
+    check now asks whether the commit *entry 1* created holds that blob at entry
+    1's path.
+
+    Mutation: compare against `rev-list --objects` of the whole replay instead of
+    the entry's own commit.
+    """
+    repo, base, entries = _maintenance_repo(tmp_path, ("a", "b"))
+    monkeypatch.setattr(ms, "_default_target", lambda: base)
+    first_commit, second_commit = (
+        _git(repo, "rev-parse", "HEAD~1").stdout.strip(),
+        _git(repo, "rev-parse", "HEAD").stdout.strip(),
+    )
+    own_blob = _git(repo, "rev-parse", f"{first_commit}:value.txt").stdout.strip()
+    later_blob = _git(repo, "rev-parse", f"{second_commit}:value.txt").stdout.strip()
+
+    name1, text1 = entries[0]
+    series = tmp_path / "series"
+    _write_series(series, name1, text1)
+    path1 = series / name1
+
+    # entry 1's own declaration is earned: the commit it created holds the blob at
+    # its path, so the check stays quiet.
+    assert (
+        ms._unearned_exemption_rows(repo, [path1], {name1: text1}, {name1: first_commit})
+        == []
+    )
+
+    # entry 1 now *declares* the blob entry 2 produces. Reachability cannot tell
+    # the two apart, because that object does exist once the replay ends.
+    declared = re.sub(
+        rb"index ([0-9a-f]{7,40})\.\.[0-9a-f]{7,40}",
+        rb"index \1.." + later_blob[:10].encode(),
+        text1,
+        count=1,
+    )
+    assert declared != text1
+    rows = ms._unearned_exemption_rows(
+        repo, [path1], {name1: declared}, {name1: first_commit}
+    )
+    assert [r[1] for r in rows] == ["exemption-unearned"]
+    assert "the commit it created does not hold that blob there" in rows[0][2]
+    assert later_blob[:10] in rows[0][2]  # the blob the entry declares
+    assert own_blob[:10] in rows[0][2]  # and the one its commit actually holds
+    # ... and the object *is* in the clone: that is what made the old reachability
+    # test — and the even older existence test — accept this declaration.
+    assert _git(repo, "cat-file", "-t", later_blob).stdout.strip() == "blob"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_round_trip_in_a_checkout_with_a_different_history_is_one_row(
+    ms, tmp_path, monkeypatch, capsys
+):
+    """Round 4: "one row, not a cascade" was only true for the pin itself.
+
+    A checkout one commit past the pin, another branch, or the vllm-musa repo
+    itself makes `regen` write a different number of entries, and the per-entry
+    pairing then described that *state* as 170-odd broken entries. The count
+    mismatch is one row now.
+
+    Mutation: run the per-entry pairing even when the counts differ.
+    """
+    repo, base, entries = _maintenance_repo(tmp_path, ("a",))
+    monkeypatch.setattr(ms, "_default_target", lambda: base)
+    _git(repo, "commit", "--allow-empty", "--quiet", "-m", "an extra commit of its own")
+    series = tmp_path / "series"
+    for name, text in entries:
+        _write_series(series, name, text)
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    rc = ms.main(["check-series", "--repo", str(repo), "--round-trip"])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert out.count("round-trip-count") == 1
+    assert "round-trip-dirty" not in out
+    assert "--- 1 clean / 1 total / 1 need attention ---" in out
+    assert "numbering: 1 entries are unique and contiguous 0001..0001" in out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_non_blob_exempt_anchor_is_reported_without_a_needed_preimage(
+    ms, tmp_path, monkeypatch
+):
+    """Round 4: the non-blob exemption rule was skipped when nothing was "needed".
+
+    A series whose anchors all resolve, or are exempt, left `needed` empty, and
+    the early return skipped the rule that an *exempt* id must be a blob if it
+    resolves at all — so a tree id declared as a postimage passed unremarked.
+
+    Mutation: restore `if not needed: return {}` before the exemption loop.
+    """
+    repo = tmp_path / "upstream"
+    _init_repo(repo)
+    tree = _git(repo, "rev-parse", "HEAD^{tree}").stdout.strip()
+
+    series = tmp_path / "series"
+    _write_series(
+        series,
+        "0001-declares-a-tree.patch",
+        _mailbox(
+            "declares-a-tree",
+            "diff --git a/value.txt b/value.txt\n"
+            # A null preimage keeps `needed` empty: the tree id this entry declares
+            # as its postimage is then the *only* anchor the rule has to look at.
+            f"index 0000000000..{tree[:10]} 100644\n"
+            "--- a/value.txt\n+++ b/value.txt\n"
+            "@@ -1 +1,2 @@\n alpha\n+beta\n",
+        ),
+    )
+    _write_series(
+        series,
+        "0002-uses-it.patch",
+        _mailbox(
+            "uses-it",
+            "diff --git a/value.txt b/value.txt\n"
+            f"index {tree[:10]}..3333333333 100644\n"
+            "--- a/value.txt\n+++ b/value.txt\n"
+            "@@ -1 +1,2 @@\n alpha\n+gamma\n",
+        ),
+    )
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+    names = [p.name for p in sorted(series.glob("*.patch"))]
+    rows = ms._missing_index_blobs(
+        repo, {name: (series / name).read_bytes() for name in names}, names
+    )
+    assert rows, "a tree id declared as a postimage must be reported"
+    assert any(tree[:10] in " ".join(bad) for bad in rows.values())
+    # entry 2's preimage is exempt (an earlier entry declares it), and entry 1
+    # declares a null one — so nothing is "needed" and only the exemption rule can
+    # report this series. That is the state the early return used to skip.
+    assert not any("1111111111" in " ".join(bad) for bad in rows.values())
+
+
+def test_entry_rows_are_counted_per_file_not_per_row(ms, tmp_path, monkeypatch):
+    """Round 4: the entry count was a *row* count, so one entry could read as two.
+
+    `_entry_file_rows` dropped the series-level rows but kept one row per row, so
+    an entry carrying two findings (a rename plus a rewrite, say) made the header,
+    the summary and the numbering line all say "2 entries" for a series of one.
+    The counts and the numbering gate read this list, so it must hold exactly one
+    row per entry *file*.
+
+    Mutation: key the result by row instead of by entry file.
+    """
+    series = tmp_path / "series"
+    series.mkdir()
+    (series / "0001-a.patch").write_text("x")
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    rows = [
+        ("0001-a.patch", "non-canonical-crlf", "first finding"),
+        ("0001-a.patch", "no-index-line", "second finding on the same entry"),
+        ("series-dir", "round-trip-unverifiable", "a run-level row"),
+    ]
+
+    assert ms._entry_file_rows(rows) == [
+        ("0001-a.patch", "non-canonical-crlf", "first finding")
+    ]
