@@ -2882,3 +2882,140 @@ def test_verify_refuses_a_target_the_checkout_does_not_contain(ms, tmp_path, mon
     assert "does not resolve" in out
     assert "=== musa_sync verify: FAIL (bad-target) ===" in out
     assert "Traceback" not in out
+
+
+# --- round 6 of the audit: the guard had to be positional, gitlinks had three shapes
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_round_trip_guard_is_positional_not_a_set_intersection(ms, tmp_path, monkeypatch, capsys):
+    """A *set* of subject slugs accepts a checkout that is not this series.
+
+    `regen` numbers the entries and derives each name from its commit's subject, so
+    entry *i* of a checkout that holds the series agrees with entry *i* of the
+    series. The first version of this guard intersected two *sets*: a foreign
+    checkout that merely reuses half the shipped slugs — in any order — was paired
+    entry by entry and reported a `round-trip-dirty` row per entry for a state.
+
+    Mutation: compare `set(want) & set(got)` instead of the per-position pairs.
+    """
+    repo, base, entries = _maintenance_repo(tmp_path, ("a", "b", "c"))
+    monkeypatch.setattr(ms, "_default_target", lambda: None)  # the HEAD~count path
+    series = tmp_path / "series"
+    series.mkdir()
+    # the same three subjects, in the wrong slots: every slug is present, none of
+    # them where the series puts it
+    bodies = {name.split("-", 1)[1][:-6]: body for name, body in entries}
+    for i, slug in enumerate(("c", "a", "b"), start=1):
+        (series / f"{i:04d}-{slug}.patch").write_bytes(bodies[slug])
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    rc = ms.main(["check-series", "--repo", str(repo), "--round-trip"])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert out.count("round-trip-unverifiable") == 1
+    assert "position for position" in out
+    assert "round-trip-dirty" not in out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_round_trip_pairs_a_held_series_whose_subjects_repeat(ms, tmp_path, monkeypatch, capsys):
+    """The same guard must not refuse the checkout that *holds* the series.
+
+    With a set intersection, a series whose four entries share one subject collapses
+    to a single slug — `len(want & got) == 1 < 4 // 2` — so the very checkout that
+    holds it byte-for-byte was reported as `round-trip-unverifiable`. Position for
+    position all four agree, which is what the comparison now asks.
+
+    Mutation: compare `set(want) & set(got)` instead of the per-position pairs.
+    """
+    repo, base, entries = _maintenance_repo(tmp_path, ("same", "same", "same", "same"))
+    monkeypatch.setattr(ms, "_default_target", lambda: None)
+    series = tmp_path / "series"
+    series.mkdir()
+    for name, body in entries:
+        (series / name).write_bytes(body)
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+
+    rc = ms.main(["check-series", "--repo", str(repo), "--round-trip"])
+    out = capsys.readouterr().out
+    assert "round-trip-unverifiable" not in out, out
+    assert "round-trip-dirty" not in out, out
+    assert rc == 0, out
+
+
+def test_gitlink_sections_are_skipped_in_all_three_shapes(ms):
+    """A submodule entry is not a blob declaration — in any of the three shapes.
+
+    The first fix keyed on the mode *line*, which `format-patch` writes for an
+    addition (`new file mode 160000`), a removal (`deleted file mode 160000`) and a
+    type change, but **not** for a bump: a bump writes the mode in the `index`
+    line's mode field (`index <c1>..<c2> 160000`). So a legitimate bump was still
+    read as a blob declaration and rowed for ids no superproject checkout can hold
+    as a blob, in both directions (`missing-index-blob` for its preimage, and its
+    declared postimage can never be earned).
+
+    Mutation: match only the `new file mode 160000` line.
+    """
+    add = _mailbox(
+        "add",
+        "diff --git a/sub b/sub\nnew file mode 160000\n"
+        "index 0000000000..1234567890\n--- /dev/null\n+++ b/sub\n"
+        "@@ -0,0 +1 @@\n+Subproject commit 1234567890\n",
+    )
+    bump = _mailbox(
+        "bump",
+        "diff --git a/sub b/sub\nindex f40ec0584d1..d649cd7a2b3 160000\n"
+        "--- a/sub\n+++ b/sub\n@@ -1 +1 @@\n-Subproject commit f40ec0584d1\n"
+        "+Subproject commit d649cd7a2b3\n",
+    )
+    remove = _mailbox(
+        "remove",
+        "diff --git a/sub b/sub\ndeleted file mode 160000\n"
+        "index c7d3b4b1f0e..0000000000\n--- a/sub\n+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n-Subproject commit c7d3b4b1f0e\n",
+    )
+    for name, text in (("add", add), ("bump", bump), ("remove", remove)):
+        assert ms._declared_postimages(text) == [], name
+        assert ms._declared_blobs(text) == [], name
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
+def test_regen_and_rebase_report_a_verdict_on_the_paths_that_fail(ms, tmp_path, monkeypatch, capsys):
+    """The verdict line has to exist on the failure paths too.
+
+    `regen` in a checkout with nothing above the pin printed only an ERROR and
+    exited 1; `rebase` on a conflict and on an unusable checkout returned with no
+    verdict line at all — while the docstring the same branch ships says every gate
+    path ends in one.
+
+    Mutation: drop the `FAIL (no-patches)` / `FAIL (conflict)` / `FAIL (checkout)`
+    lines.
+    """
+    repo, base, entries = _maintenance_repo(tmp_path, ("a",))
+    series = tmp_path / "series"
+    series.mkdir()
+    monkeypatch.setattr(ms, "_default_target", lambda: base)
+    monkeypatch.setattr(ms, "WORKDIR", repo)
+    monkeypatch.setattr(ms, "SERIES_DIR", series)
+    monkeypatch.setattr(ms, "_checkout", lambda target: 0)
+    # nothing above the pin -> no patches
+    _git(repo, "reset", "--hard", base)
+    assert ms.main(["regen"]) == 1
+    assert "=== musa_sync regen: FAIL (no-patches) ===" in capsys.readouterr().out
+
+    # an entry that cannot apply -> a conflict, with a verdict line
+    (repo / "value.txt").write_text("conflicting content\n")
+    _git(repo, "add", "value.txt")
+    _git(repo, "commit", "--quiet", "-m", "conflicting")
+    bogus = series / "0001-bogus.patch"
+    bogus.write_bytes(
+        _mailbox(
+            "bogus",
+            "diff --git a/never.txt b/never.txt\nindex 1111111111..2222222222 100644\n"
+            "--- a/never.txt\n+++ b/never.txt\n@@ -1 +1,2 @@\n-nothing here\n+something\n",
+        )
+    )
+    monkeypatch.setattr(ms.manifest, "series_apply_order", lambda: [bogus])
+    assert ms.main(["rebase"]) == 1
+    assert "=== musa_sync rebase: FAIL (conflict) ===" in capsys.readouterr().out

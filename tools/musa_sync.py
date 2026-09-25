@@ -739,6 +739,15 @@ def _canonical_form_problem(
     return None
 
 
+# A file-mode-only submodule entry: `format-patch` writes the mode on a
+# `new file mode`/`deleted file mode`/`old mode`/`new mode` line for an addition,
+# a removal or a type change, and in the mode field of the `index` line for a bump.
+_GITLINK = re.compile(
+    rb"(?m)^(?:new file mode|deleted file mode|old mode|new mode) 160000\n"
+    rb"|^index [0-9a-f]+\.\.[0-9a-f]+ 160000\n"
+)
+
+
 _DIFF_HEADER_LINE = re.compile(
     rb"^(index |new file mode |deleted file mode |old mode |new mode "
     rb"|similarity index |dissimilarity index |rename from |rename to "
@@ -851,6 +860,32 @@ def _unquote_git_path(raw: bytes) -> str:
     return out.decode("utf-8", "replace")
 
 
+def _diff_sections(body: bytes) -> list[bytes]:
+    """Split a diff body into per-file sections.
+
+    A `diff --git` body is one section per file. A **bare** diff has no such line,
+    so several files can follow one another — each with its own `--- a/…` +
+    `+++ b/…` pair — and each section starts at the header run *above* its pair
+    (`index`, modes, rename/copy), not at the pair itself: splitting at the pair
+    would leave the `index` line in the previous section and attribute it, and its
+    postimage, to the previous file's path.
+    """
+    sections: list[bytes] = []
+    for chunk in re.split(rb"(?m)^(?=diff --git )", body):
+        if not chunk.strip():
+            continue
+        if re.search(rb"(?m)^diff --git ", chunk) is None:
+            pairs = list(re.finditer(rb"(?m)^--- [^\n]*\n\+\+\+ [^\n]*\n", chunk))
+            starts = sorted({_header_run_start(chunk, m.start()) for m in pairs})
+            for i, start in enumerate(starts):
+                end = starts[i + 1] if i + 1 < len(starts) else len(chunk)
+                if chunk[start:end].strip():
+                    sections.append(chunk[start:end])
+        else:
+            sections.append(chunk)
+    return sections
+
+
 def _diff_section_path(section: bytes) -> str | None:
     """The ``b`` side path of one diff section, or None for a deletion."""
     token = rb'"(?:[^"\\]|\\.)*"|\S+'
@@ -898,26 +933,8 @@ def _declared_postimages(text: bytes) -> list[tuple[str, str]]:
     """
     body = _diff_body(text)
     out: list[tuple[str, str]] = []
-    chunks = re.split(rb"(?m)^(?=diff --git )", body)
-    sections: list[bytes] = []
-    for chunk in chunks:
-        if not chunk.strip():
-            continue
-        if re.search(rb"(?m)^diff --git ", chunk) is None:
-            # a bare diff: several files may follow one another, each with its own
-            # `--- a/…` + `+++ b/…` pair and no `diff --git` line at all
-            pairs = list(
-                re.finditer(rb"(?m)^--- [^\n]*\n\+\+\+ [^\n]*\n", chunk)
-            )
-            starts = sorted({_header_run_start(chunk, m.start()) for m in pairs})
-            for i, start in enumerate(starts):
-                end = starts[i + 1] if i + 1 < len(starts) else len(chunk)
-                if chunk[start:end].strip():
-                    sections.append(chunk[start:end])
-        else:
-            sections.append(chunk)
-    for section in sections:
-        if re.search(rb"(?m)^(?:new file mode|new mode|old mode) 160000\n", section):
+    for section in _diff_sections(body):
+        if _GITLINK.search(section):
             continue  # a gitlink: the "postimage" is a commit, not a blob
         path = _diff_section_path(section)
         if path is None:
@@ -928,12 +945,22 @@ def _declared_postimages(text: bytes) -> list[tuple[str, str]]:
 
 
 def _declared_blobs(text: bytes) -> list[tuple[str, str]]:
-    """``(preimage, postimage)`` blob ids from every ``index`` line in the diff."""
+    """``(preimage, postimage)`` blob ids from every ``index`` line in the diff.
+
+    Gitlink sections are skipped: their ids are *commits* in the submodule's object
+    database, so neither "the anchor must resolve to a blob here" nor "the entry
+    must be able to produce this postimage here" has a meaning for them. Both
+    directions are false FAILs on a legitimate submodule add, bump or removal —
+    measured on real `format-patch` output for each of the three shapes.
+    """
     body = _diff_body(text)
-    return [
-        (m.group(1).decode(), m.group(2).decode())
-        for m in _INDEX_LINE.finditer(body)
-    ]
+    out: list[tuple[str, str]] = []
+    for section in _diff_sections(body):
+        if _GITLINK.search(section):
+            continue
+        for m in _INDEX_LINE.finditer(section):
+            out.append((m.group(1).decode(), m.group(2).decode()))
+    return out
 
 
 def _require_usable_repo(repo: Path) -> None:
@@ -1426,22 +1453,25 @@ def _round_trip_rows_in(
     # Same count is not the same series: `_series_base` accepts `HEAD~count`, so a
     # checkout with `count` commits of *its own* (measured: two real workspace
     # checkouts, 2535 and 2399 commits) pairs the series with unrelated history and
-    # reports ~280 `round-trip-dirty` rows for a state. The subjects are what
-    # `regen` derives the names from, so require most of them to agree before
-    # pairing; a checkout that holds the series matches on all but the entries a
-    # rename would explain.
-    want = {_entry_subject_slug(entry.read_bytes()) for entry in paths}
-    got = {_entry_subject_slug(patch.read_bytes()) for patch in generated}
-    if len(want & got) < max(1, len(paths) // 2):
+    # reports a `round-trip-dirty` row for every entry of a state. The comparison is
+    # **positional**: `regen` numbers the entries and derives each name from its
+    # commit's subject, so entry *i* of a checkout that holds the series agrees with
+    # entry *i* of the series — a set intersection would accept a foreign history
+    # that merely reuses half the slugs, and (on a series whose subjects repeat)
+    # refuse the very checkout that holds it byte-for-byte.
+    want = [_entry_subject_slug(entry.read_bytes()) for entry in paths]
+    got = [_entry_subject_slug(patch.read_bytes()) for patch in generated]
+    agree = sum(1 for a, b in zip(want, got) if a and a == b)
+    if agree < max(1, len(paths) // 2):
         return [
             (
                 str(SERIES_DIR),
                 "round-trip-unverifiable",
-                f"{repo} has {len(generated)} commits above "
-                f"{base}, but only {len(want & got)} of their subject slugs match "
-                f"the series' {len(paths)}: this checkout does not hold the series, "
-                "so the fixed point cannot be checked here (run `rebase` first, or "
-                "`--replay` against a checkout at the pin)",
+                f"{repo} has {len(generated)} commits above {base}, but only "
+                f"{agree} of their subject slugs match the series' {len(paths)} "
+                "position for position (at least half must): this checkout does not "
+                "hold the series, so the fixed point cannot be checked here (run "
+                "`rebase` first, or `--replay` against a checkout at the pin)",
             )
         ]
     rows: list[tuple[str, str, str]] = []
@@ -2037,6 +2067,7 @@ def cmd_rebase(args) -> int:
         print("=== musa_sync rebase: FAIL (usage) ===")
         return 2
     if _checkout(target):
+        print("=== musa_sync rebase: FAIL (checkout) ===")
         return 1
     order = manifest.series_apply_order()
     for patch in order:
@@ -2048,6 +2079,7 @@ def cmd_rebase(args) -> int:
                 "`git -C third_party/vllm am --continue`, then re-run; or "
                 "`git -C third_party/vllm am --abort` to back out."
             )
+            print("=== musa_sync rebase: FAIL (conflict) ===")
             return 1
     print(f"rebased {len(order)} patches onto vllm@{target} (git am -3)")
     print("=== musa_sync rebase: PASS ===")
@@ -2110,11 +2142,13 @@ def cmd_regen(args) -> int:
         )
         if r.returncode:
             print(r.stderr)
+            print("=== musa_sync regen: FAIL (format-patch) ===")
             return 1
 
         generated = sorted(staged.glob("*.patch"))
         if not generated:
             print(f"ERROR: no patches generated from vllm@{target}..HEAD")
+            print("=== musa_sync regen: FAIL (no-patches) ===")
             return 1
 
         for patch in generated:
