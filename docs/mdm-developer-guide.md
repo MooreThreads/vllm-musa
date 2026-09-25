@@ -216,10 +216,13 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
 ### Exit codes and verdicts
 
 Every `musa_sync` **gate** subcommand (`check-series`, `verify`, `regen`,
-`rebase`) ends with one explicit verdict line, and the process verdict is
-unambiguous (`regen --area module` is a mode of `regen`, not a subcommand). The two reporting commands do not: `report` prints the manifest
-census and `apply` prints `--- N applied, … ---`, so a caller reading either must
-use the exit code:
+`rebase`) that has something to report ends with one explicit verdict line, and
+the process verdict is unambiguous (`regen --area module` is a mode of `regen`,
+not a subcommand). Three paths print only an `ERROR:` line — a usage/config error
+(exit 2), a missing `git` on `PATH` (exit 1) and `regen`'s internal checks on the
+patches it generated (exit 1) — so a caller parsing output must read the exit
+code. The two reporting commands do not print a verdict at all: `report` prints
+the manifest census and `apply` prints `--- N applied, … ---`:
 
 | code | meaning |
 |---|---|

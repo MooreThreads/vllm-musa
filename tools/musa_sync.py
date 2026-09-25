@@ -73,11 +73,15 @@ Subcommands::
         No in-repo CI or hook invokes this gate today.
 
 Every **gate** subcommand (``check-series``, ``verify``, ``regen``, ``rebase``)
-ends with one explicit ``=== musa_sync <cmd>: PASS|FAIL ===`` verdict line whose
-counts agree with the exit code: 0 = PASS, 1 = FAIL, 2 = usage/config error (e.g.
-``verify`` with no resolvable target). The two reporting commands do not print
-one: ``report`` renders the manifest census and ``apply`` prints
-``--- N applied, … ---``, so a caller parsing either must read the exit code.
+that has something to report ends with one explicit
+``=== musa_sync <cmd>: PASS|FAIL ===`` verdict line whose counters agree with the
+exit code: 0 = PASS, 1 = FAIL, 2 = usage/config error (e.g. ``verify`` with no
+resolvable target). Three exit paths print only an ``ERROR:`` line, and a caller
+that parses output must read the exit code for them: a usage/config error (exit
+2), a missing ``git`` on ``PATH`` (exit 1), and ``regen``'s internal checks on the
+patches it generated (exit 1). The two reporting commands do not print a verdict
+at all: ``report`` renders the manifest census and ``apply`` prints
+``--- N applied, … ---``.
 (``regen --area module`` is a mode of ``regen``, not a subcommand.)
 
 Stdlib-only; loads manifest.py + build_apply.py BY FILE PATH so it never imports
@@ -1457,8 +1461,9 @@ def _round_trip_rows_in(
     # **positional**: `regen` numbers the entries and derives each name from its
     # commit's subject, so entry *i* of a checkout that holds the series agrees with
     # entry *i* of the series — a set intersection would accept a foreign history
-    # that merely reuses half the slugs, and (on a series whose subjects repeat)
-    # refuse the very checkout that holds it byte-for-byte.
+    # that merely reuses a quarter of the slugs, and (on a series whose subjects
+    # repeat) refuse the very checkout that holds it byte-for-byte. The bar is half
+    # rounded **down** (``len(paths) // 2``, at least 1), so 85 of the shipped 171.
     want = [_entry_subject_slug(entry.read_bytes()) for entry in paths]
     got = [_entry_subject_slug(patch.read_bytes()) for patch in generated]
     agree = sum(1 for a, b in zip(want, got) if a and a == b)
@@ -1469,7 +1474,8 @@ def _round_trip_rows_in(
                 "round-trip-unverifiable",
                 f"{repo} has {len(generated)} commits above {base}, but only "
                 f"{agree} of their subject slugs match the series' {len(paths)} "
-                "position for position (at least half must): this checkout does not "
+                f"position for position (at least {max(1, len(paths) // 2)}, half "
+                "rounded down, must): this checkout does not "
                 "hold the series, so the fixed point cannot be checked here (run "
                 "`rebase` first, or `--replay` against a checkout at the pin)",
             )

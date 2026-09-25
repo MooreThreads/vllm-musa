@@ -2772,9 +2772,12 @@ def test_round_trip_refuses_a_checkout_with_unrelated_history(ms, tmp_path, monk
 
     `_series_base` falls back to `HEAD~count`, so a checkout with exactly `count`
     commits of its own (the audit measured two real workspace checkouts, 2535 and
-    2399 commits) produced ~280 `round-trip-dirty` rows for a *state*. The subjects
-    are what `regen` derives names from, so most of them must agree before the
-    entries are paired.
+    2399 commits) was paired with unrelated history and reported a
+    `round-trip-dirty` row for **every entry** of a state — one per entry, so 171
+    for the shipped series. The subjects are what `regen` derives names from, and
+    they are compared position for position: at least `max(1, len(paths) // 2)`
+    (half rounded down — 85 of the shipped 171) must agree before the entries are
+    paired.
 
     Mutation: pair the entries whenever the counts match.
     """
