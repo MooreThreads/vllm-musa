@@ -34,6 +34,17 @@ Subcommands::
         Census of the manifest: a status line per divergence, or (--doc) the
         Markdown census table.
 
+    check-series [--repo PATH]
+        Fail-closed form gate on series/ — the ``regen`` fixed point. Every
+        entry must be a canonical ``git format-patch`` mailbox (all-zero
+        separator, ``From:`` author, an ``index`` line, a diff git can parse);
+        ``--repo`` additionally resolves the blobs those ``index`` lines
+        declare. The format half needs no repository, so it runs on every PR.
+
+Every subcommand ends with one explicit ``=== musa_sync <cmd>: PASS|FAIL ===``
+verdict line whose counts agree with the exit code: 0 = PASS, 1 = FAIL, 2 =
+usage/config error (e.g. ``verify`` with no resolvable target).
+
 Stdlib-only; loads manifest.py + build_apply.py BY FILE PATH so it never imports
 the ``vllm_musa`` package (works before install, in plain CI).
 """
@@ -43,6 +54,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import importlib.util
+import re
 import shutil
 import subprocess
 import sys
@@ -63,6 +75,22 @@ _ZERO_COMMIT_HEADER = (
     b"From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001"
 )
 _CANONICAL_PATCH_AUTHOR = b"From: musa <musa@local>"
+# Subcommand names in parser order. patch_validate.py uses this to tell an
+# explicit subcommand from a bare flag; test_subcommands_are_wired keeps it
+# honest against the real parser.
+SUBCOMMANDS = ("apply", "verify", "check-series", "rebase", "regen", "report")
+# Series generation form (see _series_format_rows).
+_MBOX_SEPARATOR = re.compile(rb"^From \S+ Mon Sep 17 00:00:00 2001$")
+_INDEX_LINE = re.compile(rb"^index ([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})", re.M)
+_ZERO_BLOB = re.compile(rb"^0+$")
+_NUMBER_PREFIX = re.compile(r"^([0-9]{4})(?:-|$)")
+# Rows that mean "series/ cannot be gated at all": one row, no numbering claim.
+_SERIES_FATAL = (
+    "missing-series-dir",
+    "empty-series",
+    "git-unavailable",
+    "repo-unusable",
+)
 
 
 def _load(name: str, path: Path):
@@ -105,10 +133,44 @@ def _normalize_patch_author(path: Path) -> None:
     path.write_bytes(b"".join(lines))
 
 
+class GitMissing(RuntimeError):
+    """The ``git`` executable is not on PATH — a reported failure, not a
+    traceback."""
+
+
+class RepoUnusable(RuntimeError):
+    """The ``--repo`` handed to the series gate is not a checkout git can read
+    objects from."""
+
+
+def _run_git(
+    cwd: Path | None, *args: str, stdin_text: str | None = None
+) -> subprocess.CompletedProcess:
+    """Run ``git`` with an explicit cwd.
+
+    ``cwd=None`` keeps the caller's directory, which ``_git`` pairs with
+    ``-C <repo>``; the series format gate always passes an explicit ``cwd`` so
+    its verdict cannot depend on where the user invoked it from. A missing
+    ``git`` raises GitMissing instead of an uncaught FileNotFoundError.
+    """
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=None if cwd is None else str(cwd),
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise GitMissing(
+            "git executable not found on PATH"
+            if shutil.which("git") is None
+            else str(exc)
+        ) from exc
+
+
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True
-    )
+    return _run_git(None, "-C", str(repo), *args)
 
 
 def _probe_upstream(clone: Path, upstream_path: str | None) -> bool:
@@ -313,7 +375,153 @@ def _verify_rows(clone: Path) -> list[tuple]:
     return rows
 
 
-def _series_format_rows() -> list[tuple[str, str, str]]:
+def _series_dir_paths() -> tuple[list[Path], tuple[str, str] | None]:
+    """The series entries, or a ``(status, detail)`` refusal when there is
+    nothing to gate.
+
+    A missing or empty ``series/`` is a *failure*, never a vacuous pass: a gate
+    that globs zero entries reports "0 clean / 0 total / 0 need attention" and
+    exits 0, which is how a deleted series directory stays green.
+    """
+    if not SERIES_DIR.is_dir():
+        return [], ("missing-series-dir", f"no series directory at {SERIES_DIR}")
+    paths = sorted(SERIES_DIR.glob("*.patch"))
+    if not paths:
+        return [], ("empty-series", f"{SERIES_DIR} holds no *.patch entries")
+    return paths, None
+
+
+def _declared_blobs(text: bytes) -> list[tuple[str, str]]:
+    """``(preimage, postimage)`` blob ids from every ``index`` line in an entry.
+
+    The whole entry is searched, not just its mailbox header: a commit message
+    with a body pushes the first ``index`` line far below the separator (line 22
+    in the longest shipped entry), so a first-12-lines scan reads clean on
+    entries that have no ``index`` line at all.
+    """
+    return [
+        (m.group(1).decode(), m.group(2).decode()) for m in _INDEX_LINE.finditer(text)
+    ]
+
+
+def _repo_has_blobs(repo: Path, blobs: list[str]) -> set[str]:
+    """The subset of ``blobs`` that ``repo`` can resolve.
+
+    One ``git cat-file --batch-check`` for the whole series rather than one
+    process per blob: the shipped series declares 355 distinct ids, which would
+    otherwise cost ~1.4 s of process spawns.
+    """
+    if not blobs:
+        return set()
+    r = _run_git(
+        None,
+        "-C",
+        str(repo),
+        "cat-file",
+        "--batch-check",
+        stdin_text="\n".join(blobs) + "\n",
+    )
+    if r.returncode:
+        raise RepoUnusable(
+            f"git cat-file in {repo} failed: {(r.stderr or r.stdout).strip()[:100]}"
+        )
+    return {
+        blob
+        for blob, line in zip(blobs, r.stdout.splitlines())
+        if not line.endswith(" missing")
+    }
+
+
+def _missing_index_blobs(
+    repo: Path, texts: dict[str, bytes]
+) -> dict[str, list[str]]:
+    """Entry name -> declared blob ids this repo cannot resolve.
+
+    An entry's ``index`` line records the blobs its hunks are anchored to, and
+    ``git am -3`` uses them to build a real 3-way ancestor — ids left behind by
+    a series regenerated against some *other* base make the entry replay as a
+    plain apply or not at all.
+
+    A blob the series itself creates (any entry's postimage) is *expected* to be
+    absent from a checkout that never had the series applied: only
+    ``rebase``/``regen`` put those objects in the odb. Measured on the shipped
+    171-entry series, a fresh shallow clone at the pin resolves 133/225
+    preimages and 0/230 postimages, yet ``git am -3`` replays all 171 of them —
+    so "missing from this repo" alone is not a defect, while "missing and not
+    produced by the series" is. Null ids (``0000000000``, a creation hunk) are
+    never resolvable and never required.
+    """
+    produced = {
+        post
+        for text in texts.values()
+        for _, post in _declared_blobs(text)
+        if not _ZERO_BLOB.match(post.encode())
+    }
+    wanted: dict[str, set[str]] = {}
+    for name, text in texts.items():
+        for pre, post in _declared_blobs(text):
+            # A postimage is always in `produced` (the entry creates it), so in
+            # practice only the preimages reach the repo: they are the ids the
+            # entry must anchor to.
+            for blob in (pre, post):
+                if _ZERO_BLOB.match(blob.encode()) or blob in produced:
+                    continue
+                wanted.setdefault(blob, set()).add(name)
+    found = _repo_has_blobs(repo, sorted(wanted))
+    out: dict[str, list[str]] = {}
+    for blob in sorted(set(wanted) - found):
+        for name in sorted(wanted[blob]):
+            out.setdefault(name, []).append(blob)
+    return out
+
+
+def _series_entry_problem(
+    text: bytes, unresolved: list[str]
+) -> tuple[str, str] | None:
+    """The first generation-form problem in one entry, or None when it is a
+    canonical ``regen`` fixed point."""
+    lines = [line.rstrip(b"\r") for line in text.split(b"\n")[:4]]
+    first = lines[0] if lines else b""
+    if first != _ZERO_COMMIT_HEADER and _MBOX_SEPARATOR.match(first):
+        return (
+            "non-canonical-mailbox",
+            "valid mbox but not the all-zero `regen` separator: re-run `regen` "
+            "to canonicalise it",
+        )
+    if first != _ZERO_COMMIT_HEADER:
+        return (
+            "not-a-mailbox",
+            "no 'From <token> Mon Sep 17 00:00:00 2001' separator: git am "
+            "cannot replay it",
+        )
+    # git am takes the author ident from the mailbox body: without a non-empty
+    # `From: ` in the first 3 lines it dies on 'empty ident name (for <>)'.
+    if not any(
+        line.startswith(b"From: ") and line[len(b"From: ") :].strip()
+        for line in lines[1:4]
+    ):
+        return (
+            "missing-author",
+            "no 'From: <name> <email>' in the first 3 lines: git am rejects it "
+            "(empty ident name)",
+        )
+    if not _INDEX_LINE.search(text):
+        return (
+            "no-index-line",
+            "no 'index <blob>..<blob>' line: git am -3 cannot build its 3-way "
+            "ancestor (sha1 information is lacking or useless)",
+        )
+    if unresolved:
+        return (
+            "missing-index-blob",
+            f"index blob(s) {', '.join(unresolved)} cannot be resolved in the "
+            "given repo and are not produced by this series: the entry cannot "
+            "replay against that pin",
+        )
+    return None
+
+
+def _series_format_rows(repo: Path | None = None) -> list[tuple[str, str, str]]:
     """``(patch name, status, detail)`` for every entry in ``series/``.
 
     The build applies the series with ``git apply --recount -p1``
@@ -323,42 +531,68 @@ def _series_format_rows() -> list[tuple[str, str, str]]:
     bare diff therefore passes every build-side gate and only breaks the next
     version bump, which is exactly how the series rotted before MUSA-100050.
 
-    Cheap offline checks:
-      * the entry is a ``git format-patch`` mailbox (``git am`` requires it);
+    Cheap offline checks, first problem wins:
+      * the entry is a ``git format-patch`` mailbox with the all-zero separator
+        ``regen`` writes (a real-sha mbox is replayable but not a fixed point);
+      * it carries a ``From: `` author ident, without which ``git am`` dies on
+        ``empty ident name``;
+      * it carries at least one ``index <blob>..<blob>`` line (searched over the
+        whole entry, not just the header), without which ``git am -3`` dies on
+        ``sha1 information is lacking or useless``;
+      * with ``repo``, every non-null blob those ``index`` lines declare is
+        resolvable there or produced by the series itself
+        (``_missing_index_blobs``);
       * ``git apply --stat`` parses it (catches hunk counts that no longer
         match the body);
       * the series' numbering is unique and contiguous
         (``_series_numbering_rows``).
+
+    ``repo`` is optional so the gate stays usable where cloning is not (a PR
+    runner with no checkout): without it the blob half is skipped and only the
+    format half runs.
     """
-    rows = []
-    for patch in sorted(SERIES_DIR.glob("*.patch")):
+    paths, refusal = _series_dir_paths()
+    if refusal:
+        return [(str(SERIES_DIR), refusal[0], refusal[1])]
+    status: dict[str, tuple[str, str]] = {}
+    texts: dict[str, bytes] = {}
+    for patch in paths:
         try:
-            first = patch.open("rb").readline().rstrip(b"\r\n")
+            texts[patch.name] = patch.read_bytes()
         except OSError as exc:
-            rows.append((patch.name, "unreadable", str(exc)))
-            continue
-        if first != _ZERO_COMMIT_HEADER:
-            rows.append(
-                (
-                    patch.name,
-                    "not-a-mailbox",
-                    "no 'From <sha> Mon Sep 17 00:00:00 2001' header: "
-                    "git am cannot replay it",
-                )
-            )
-            continue
-        r = subprocess.run(
-            ["git", "apply", "--stat", str(patch)], capture_output=True, text=True
-        )
-        if r.returncode:
-            rows.append((patch.name, "corrupt", (r.stderr or r.stdout).strip()[:100]))
-        else:
-            rows.append((patch.name, "clean", ""))
-    return rows
+            status[patch.name] = ("unreadable", str(exc))
+    try:
+        unresolved = _missing_index_blobs(Path(repo), texts) if repo else {}
+        for patch in paths:
+            text = texts.get(patch.name)
+            if text is None:  # already rowed as unreadable
+                continue
+            problem = _series_entry_problem(text, unresolved.get(patch.name, []))
+            if problem is None:
+                parsed = _run_git(ROOT, "apply", "--stat", str(patch))
+                if parsed.returncode:
+                    problem = ("corrupt", (parsed.stderr or parsed.stdout).strip()[:100])
+            status[patch.name] = problem or ("clean", "")
+    except GitMissing as exc:
+        return [(str(SERIES_DIR), "git-unavailable", str(exc))]
+    except RepoUnusable as exc:
+        return [(str(SERIES_DIR), "repo-unusable", str(exc))]
+    return [(patch.name, *status[patch.name]) for patch in paths]
+
+
+def _number_prefix(name: str) -> str | None:
+    """The entry's ``NNNN`` number, or None when the name is not numbered.
+
+    Strictly ASCII ``[0-9]{4}`` followed by ``-`` or the end of the name.
+    ``str.isdigit()`` is Unicode-aware and ``name[:4]`` silently mis-slices a
+    wider prefix (``00123-b.patch`` reads as ``0012``).
+    """
+    m = _NUMBER_PREFIX.match(name)
+    return m.group(1) if m else None
 
 
 def _series_numbering_rows(rows) -> list[tuple[str, str, str]]:
-    """Series-level numbering: unique, and contiguous ``0001..N``.
+    """Series-level numbering: every entry numbered, unique, and gapless.
 
     ``regen`` numbers the entries itself (``git format-patch --no-numbered``
     plus a contiguous renumber), so a duplicate or a gap can only come from
@@ -366,63 +600,102 @@ def _series_numbering_rows(rows) -> list[tuple[str, str, str]]:
     next free number" in isolation, each one applies cleanly, and the collision
     surfaces only when somebody regenerates — or not at all, if a duplicate
     entry happens to be applied by prefix order.
+
+    The expected range comes from the numbers *present* (``max``), not from the
+    entry count, so ``0001``+``0003`` reports the real gap instead of a phantom
+    trailing one; the numbers present are listed alongside it whenever the set
+    is not exactly ``0001..max``.
+
+    Out of scope by design: this reads names only, so a rename, or a content
+    swap that preserves the set of prefixes, is invisible here — the content
+    gates in ``_series_format_rows`` are what a swapped entry has to satisfy.
     """
-    names = [name for name, _, _ in rows]
-    numbered = {name[:4] for name in names if name[:4].isdigit()}
+    if any(status in _SERIES_FATAL for _, status, _ in rows):
+        return []  # nothing was gated: never claim `0001..0000`
+    numbers = {name: _number_prefix(name) for name, _, _ in rows}
     out = [
         (name, "unnumbered", "expected NNNN-<slug>.patch")
-        for name in names
-        if not name[:4].isdigit()
+        for name, number in numbers.items()
+        if number is None
     ]
-    duplicates = sorted(
-        num for num in numbered if sum(1 for n in names if n[:4] == num) > 1
-    )
-    for num in duplicates:
-        out.append(
-            (
-                f"series/{num}",
-                "duplicate-number",
-                ", ".join(name for name in names if name[:4] == num),
+    numbered = sorted({n for n in numbers.values() if n is not None})
+    for num in numbered:
+        same = [name for name, n in numbers.items() if n == num]
+        if len(same) > 1:
+            out.append((f"series/{num}", "duplicate-number", ", ".join(same)))
+    if numbered:
+        expected = {f"{i:04d}" for i in range(1, int(numbered[-1]) + 1)}
+        missing = sorted(expected - set(numbered))
+        if missing:
+            out.append(
+                (
+                    "series numbering",
+                    "non-contiguous",
+                    f"expected 0001..{numbered[-1]}, missing {', '.join(missing)} "
+                    f"(numbers present: {', '.join(numbered)})",
+                )
             )
-        )
-    # A duplicate shifts everything after it, so the series is only whole when
-    # it is exactly 0001..<number of entries>.
-    expected = {f"{i:04d}" for i in range(1, len(names) + 1)}
-    missing = sorted(expected - numbered)
-    if missing:
-        out.append(
-            (
-                "series numbering",
-                "non-contiguous",
-                f"expected 0001..{len(names):04d}, missing {', '.join(missing)}",
-            )
-        )
     return out
 
 
-def cmd_check_series(args) -> int:
-    rows = _series_format_rows()
-    number_rows = _series_numbering_rows(rows)
-    print(f"=== musa_sync check-series: {len(rows)} entries in series/ ===")
+def _numbering_line(rows, number_rows) -> str | None:
+    """The series-level numbering verdict, or None when there is nothing to
+    report (a missing or empty series has no numbering)."""
+    if number_rows:
+        return f"--- numbering: {len(number_rows)} problem(s) ---"
+    if not rows or any(status in _SERIES_FATAL for _, status, _ in rows):
+        return None
+    return (
+        f"--- numbering: {len(rows)} entries are unique and contiguous "
+        f"0001..{len(rows):04d} ---"
+    )
+
+
+def _print_series_section(
+    rows, number_rows, *, label: str = "", limit: int | None = None
+) -> None:
+    """Print the series-format evidence: bad rows with their detail, the clean
+    summary, then numbering.
+
+    Shared by ``check-series`` and ``verify`` so a red series looks the same in
+    both, including the ``… N more`` marker when ``limit`` truncates the rows.
+    """
     bad = [r for r in rows if r[1] != "clean"]
-    for name, status, detail in bad:
+    shown = bad if limit is None else bad[:limit]
+    for name, status, detail in shown:
         print(f"  {status:<14} {name}")
         if detail:
             print(f"                 {detail}")
+    if len(shown) < len(bad):
+        print(f"  … {len(bad) - len(shown)} more (run `check-series` for the full list)")
     print(
-        f"--- {len(rows) - len(bad)} clean / {len(rows)} total / {len(bad)} need "
-        f"attention ---"
+        f"--- {label}{len(rows) - len(bad)} clean / {len(rows)} total / "
+        f"{len(bad)} need attention ---"
     )
     for name, status, detail in number_rows:
         print(f"  {status:<14} {name}")
         if detail:
             print(f"                 {detail}")
-    print(
-        f"--- numbering: {len(number_rows)} problem(s) ---"
-        if number_rows
-        else f"--- numbering: {len(rows)} entries are unique and contiguous "
-        f"0001..{len(rows):04d} ---"
+    line = _numbering_line(rows, number_rows)
+    if line:
+        print(line)
+
+
+def cmd_check_series(args) -> int:
+    rows = _series_format_rows(args.repo)
+    number_rows = _series_numbering_rows(rows)
+    bad = [r for r in rows if r[1] != "clean"]
+    if any(status in _SERIES_FATAL for _, status, _ in rows):
+        print(f"=== musa_sync check-series: {SERIES_DIR} cannot be gated ===")
+    else:
+        print(f"=== musa_sync check-series: {len(rows)} entries in series/ ===")
+    _print_series_section(rows, number_rows)
+    verdict = (
+        "PASS"
+        if not (bad or number_rows)
+        else f"FAIL (series-format={len(bad)}, numbering={len(number_rows)})"
     )
+    print(f"=== musa_sync check-series: {verdict} ===")
     return 1 if (bad or number_rows) else 0
 
 
@@ -437,34 +710,39 @@ def cmd_verify(args) -> int:
     clone, temp = _ensure_clone(target, args.repo)
     try:
         rows = _verify_rows(clone)
+        # The divergence rows are build-side only; also gate the series'
+        # *generation* form, which they cannot see (see _series_format_rows).
+        # Computed while the clone exists: --repo (or the fresh clone) resolves
+        # the blobs the series' `index` lines declare.
+        fmt_rows = _series_format_rows(clone)
     finally:
         if temp:
             shutil.rmtree(clone.parent, ignore_errors=True)
+    number_rows = _series_numbering_rows(fmt_rows)
+    fmt_bad = [r for r in fmt_rows if r[1] != "clean"]
+    bad = [r for r in rows if r[2] in _BAD]
+    n_clean = sum(1 for r in rows if r[2] == "clean")
     print(f"=== musa_sync verify: {len(rows)} divergences vs vllm@{target} ===")
+    # Series format comes first, and the divergence summary stays last of the
+    # summaries: the documented success line is the one a reader checks, so a
+    # red series run must not end on `0 need attention`.
+    _print_series_section(fmt_rows, number_rows, label="series format: ", limit=10)
     for did, cat, status, detail in rows:
         line = f"  [{cat:>2}] {status:<14} {did}"
         if detail:
             line += f"   ({detail})"
         print(line)
-    bad = [r for r in rows if r[2] in _BAD]
-    n_clean = sum(1 for r in rows if r[2] == "clean")
     print(
         f"--- {n_clean} clean / {len(rows)} total / {len(bad)} need attention "
         f"({', '.join(sorted({r[2] for r in bad})) or 'none'}) ---"
     )
-    # The rows above are build-side only; also gate the series' *generation*
-    # form, which they cannot see (see _series_format_rows).
-    fmt_rows = _series_format_rows()
-    fmt_bad = [r for r in fmt_rows if r[1] != "clean"]
-    number_rows = _series_numbering_rows(fmt_rows)
-    print(
-        f"--- series format: {len(fmt_rows) - len(fmt_bad)} clean / "
-        f"{len(fmt_rows)} total / {len(fmt_bad)} need attention ---"
+    verdict = (
+        "PASS"
+        if not (bad or fmt_bad or number_rows)
+        else f"FAIL (divergence={len(bad)}, series-format={len(fmt_bad)}, "
+        f"numbering={len(number_rows)})"
     )
-    for name, status, detail in fmt_bad[:10]:
-        print(f"  {status:<14} {name}")
-    for name, status, detail in number_rows:
-        print(f"  {status:<14} {name}")
+    print(f"=== musa_sync verify: {verdict} ===")
     return 1 if (bad or fmt_bad or number_rows) else 0
 
 
@@ -637,7 +915,7 @@ def cmd_report(args) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="musa_sync", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -667,6 +945,12 @@ def main(argv: list[str] | None = None) -> int:
         "check-series",
         help="gate the series' generation form: every entry must be a git am mailbox",
     )
+    p.add_argument(
+        "--repo",
+        default=None,
+        help="also resolve every `index` blob in that checkout (no repo: format "
+        "half only)",
+    )
     p.set_defaults(func=cmd_check_series)
 
     p = sub.add_parser(
@@ -685,8 +969,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.set_defaults(func=cmd_report)
 
-    args = ap.parse_args(argv)
-    return args.func(args)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except GitMissing as exc:
+        print(f"ERROR: {exc}")
+        return 1
 
 
 if __name__ == "__main__":

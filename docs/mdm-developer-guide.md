@@ -36,9 +36,9 @@ is fine for running but not for `regen`.
 | `vllm_musa/patches/build_apply.py` | applies the series at build time (`git apply`, idempotent) |
 | `vllm_musa/patches/*.patch.py` | cat-6 object/monkey-patches (each has a `def apply()`) |
 | `vllm_musa/patches/module-drift/*.diff` | cat-4a drift tripwires (never applied; `verify` reports drift) |
-| `tools/musa_sync.py` | maintenance driver: `apply` / `verify` / `rebase` / `regen` / `report` |
+| `tools/musa_sync.py` | maintenance driver: `apply` / `verify` / `check-series` / `rebase` / `regen` / `report` |
 | `Makefile.sync` | thin make wrapper over `musa_sync` |
-| `tools/patch_validate.py` | offline verify gate |
+| `tools/patch_validate.py` | offline verify gate (any known subcommand passes through) |
 | `tools/musa_verify/` | on-hardware verify harness (model smokes + unit tests) |
 
 ## 1. Build & install
@@ -165,12 +165,33 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
 
 - **Offline gate (no GPU):** `python tools/musa_sync.py verify` (alias:
   `python tools/patch_validate.py`). Clones upstream, `git apply --check`s every
-  series diff, existence-probes cat-5/6 seams, checks cat-4a tripwires. Run before
-  every bump / PR. A passing run reports every divergence as clean / `0 need attention`.
+  series diff, existence-probes cat-5/6 seams, checks cat-4a tripwires, and gates
+  the series' generation form (`check-series`). Run before every bump / PR. A
+  passing run reports every divergence as clean / `0 need attention` and ends with
+  `=== musa_sync verify: PASS ===`.
+- **Series form gate (no repo needed):** `python tools/musa_sync.py check-series`
+  (add `--repo <checkout>` to also resolve the blobs the series' `index` lines
+  declare). Every entry must be a `regen` fixed point — the all-zero
+  `From 000…` separator, a `From:` author ident, at least one `index` line, and a
+  diff `git apply --stat` can parse — because the build-side gate (`git apply
+  --recount`) repairs all four silently and only the next `git am -3` bump
+  notices. It fails closed on a missing or empty `series/`, and a red series makes
+  `verify` exit 1 even when every divergence is clean.
 - **On-hardware:** `tools/musa_verify/verify.sh` (configured via env vars
   `MUSA_HOST`, `MUSA_CONTAINER`, `MUSA_VENV`, … — never commit real values) runs the
   patch unit tests plus one functional server smoke per model, each pinned to its
   own MUSA device. `tools/musa_verify/unit_tests.sh` runs `tests/test_patches.py`.
+
+### Exit codes and verdicts
+
+Every `musa_sync` subcommand ends with one explicit verdict line, and the process
+verdict is unambiguous:
+
+| code | meaning |
+|---|---|
+| 0 | `=== musa_sync <cmd>: PASS ===` — nothing needs attention |
+| 1 | `=== musa_sync <cmd>: FAIL (<counters>) ===` — see the rows above; `verify` prints the series-format section *before* the divergence summary so the last line always agrees with the exit code |
+| 2 | usage/config error, not a verdict (e.g. `verify` with no resolvable `--target` and no `VLLM_COMMIT`/`VLLM_TAG` in `third_party/PINS`) |
 
 ## 7. Command reference
 
@@ -179,7 +200,8 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
 | cmd | what it does |
 |---|---|
 | `apply` | build-time: `git apply` the series to a cloned vLLM |
-| `verify` | offline pre-bump gate: status of every divergence |
+| `verify` | offline pre-bump gate: status of every divergence (+ the series-format gate) |
+| `check-series [--repo PATH]` | gate the series' generation form: every entry must be a canonical `git am` mailbox; `--repo` also resolves the `index` blobs against that checkout |
 | `rebase <tag>` | `git am -3` the series onto `vllm@<tag>` (sets up commits for `regen`) |
 | `regen` | regenerate `series/` from the clone's commits (`git format-patch`) |
 | `report` | print the manifest census |
