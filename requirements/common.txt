@@ -4,6 +4,10 @@ mthreads-ml-py>=2.4.2
 numpy==1.26
 openai>=2.24.0
 transformers==5.5.3
+# transformers 5.5.3 requires huggingface-hub<2.0, while upstream's vendored
+# requirements only set a floor (>=1.27.0) for it. Pin the pair together here; the
+# image applies this file to that install with --constraint.
+huggingface_hub>=1.27.0,<2.0
 einops
 ray>=2.47.1,<=2.48.0
 click==8.2.0

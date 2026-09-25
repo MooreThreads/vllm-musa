@@ -293,9 +293,18 @@ RUN python -m pip install \
         -e . --no-build-isolation -v && \
     python -m pip install numpy==1.26
 
+# Upstream's requirements are upstream's opinion, not this image's. They ask for
+# `huggingface_hub >= 1.27.0` with no upper bound, and this install runs with
+# --no-deps, so without a constraint that line resolves to the newest release (2.0.0)
+# even though this image's own pins require `huggingface-hub<2.0` (transformers
+# 5.5.3 metadata) - the image then cannot import transformers at all (measured in
+# `vllm-musa:pr250-final-8b4cbc997`). Keep our requirement files the source of truth
+# for the public packages they own by constraining this install with them, so the
+# versions belong in requirements/ rather than in this Dockerfile.
 RUN python -m pip install \
         --no-cache-dir \
         --no-deps \
+        --constraint requirements/common.txt \
         -r third_party/vllm/requirements/common.txt && \
     python -m pip install \
         --no-cache-dir \
@@ -348,9 +357,9 @@ RUN printf '%s\n' \
         ')' \
         '' \
         'for dist_name, module_name, prefix in expected:' \
-        '    installed = version(dist_name)' \
         '    skip_import = (dist_name in {"flashinfer-python", "flash_mla", "tilelang_musa"} and version("tilelang_musa") == "0.1.12+musa.2")' \
         '    if not skip_import: importlib.import_module(module_name)' \
+        '    installed = version(dist_name)' \
         '    if dist_name in exact_version_dists and installed != prefix:' \
         '        raise RuntimeError(f"{dist_name} expected exactly {prefix}, got {installed}")' \
         '    if dist_name not in exact_version_dists and prefix and not installed.startswith(prefix):' \
@@ -358,7 +367,9 @@ RUN printf '%s\n' \
         '    action = "skip import" if skip_import else "import"' \
         '    print(f"PASS {action} {module_name} version={installed}")' \
         '' \
-        'for module_name in ("vllm", "vllm_musa"):' \
+        '# A mismatched huggingface_hub breaks the transformers import first, and' \
+        '# that distribution metadata declares the <2.0 bound this image caps.' \
+        'for module_name in ("vllm", "vllm_musa", "transformers", "huggingface_hub"):' \
         '    module = importlib.import_module(module_name)' \
         '    print("PASS import %s version=%s" % (module_name, getattr(module, "__version__", "unknown")))' \
         > /tmp/vllm_musa_import_check.py && \
