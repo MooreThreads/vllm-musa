@@ -59,6 +59,8 @@ the physical FlashAttention layout. The upstream Mooncake Mamba-pool patch
 keeps the dedicated-pool eligibility scoped to MooncakeConnector, and the
 following MUSA adaptation preserves Mamba pool ownership through prefix-cache
 lookup/store, pin, CoW/deferred-free, reset, and eviction paths.
+FusedInputNorm identity detection compares CPU coefficients as Python floats so
+ones_like/zeros_like cannot follow the accelerator default device.
 The unified attention kernel takes its per-token-head scale strides as
 `tl.int64` zeros rather than `int | None`, which Triton 3.2 rejects as a
 kernel-signature annotation.
