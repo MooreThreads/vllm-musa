@@ -1,9 +1,21 @@
 # Runtime Python dependencies that are portable across MUSA images.
+# Public-package versions follow what the pinned upstream vLLM (third_party/PINS) itself
+# resolves - see its requirements/test/*.txt - so the image and upstream agree, and the
+# Dockerfile applies this file as a constraint to the vendored requirements so these pins
+# stay authoritative for that install too. numpy is the one deliberate exception:
+# torch_musa needs numpy 1.x.
 torchada==0.1.83
 mthreads-ml-py>=2.4.2
 numpy==1.26
 openai>=2.24.0
-transformers==5.5.3
+transformers==5.15.0
+# transformers 5.15.0 requires huggingface-hub<2.0 while upstream's vendored requirement
+# for it only sets a floor (>=1.27.0), and every huggingface-hub >= 1.27 needs
+# click>=8.4.2 - which is why click moves with them instead of staying at 8.2.0.
+huggingface_hub>=1.27.0,<2.0
+# upstream only floors tokenizers (>=0.21.1), and a cold resolve otherwise takes the newest
+# release (0.23.2) instead of the 0.22.2 upstream's own environment resolves.
+tokenizers==0.22.2
 einops
 ray>=2.47.1,<=2.48.0
-click==8.2.0
+click==8.4.2

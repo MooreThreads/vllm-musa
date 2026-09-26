@@ -105,22 +105,27 @@ def _dockerfile_run_commands(dockerfile: str) -> list[str]:
 
 
 def test_musa_image_caps_huggingface_hub(dockerfile=None):
-    """The vendored install must re-pin huggingface_hub, and the self-check import it.
+    """Our own pins must govern the vendored install, and the self-check import the pair.
 
-    The pinned upstream file asks for `huggingface_hub >= 1.27.0` with no upper bound;
-    docker/musa.Dockerfile installs it with `--no-deps`, so that line resolves to the
-    newest release (2.0.0) while the image pins `transformers==5.5.3`, whose metadata
-    requires `huggingface-hub<2.0`. The image then cannot import transformers (measured
-    in `vllm-musa:pr250-final-8b4cbc997`). Dropping the re-pin, or a module from the
-    self-check loop, must fail here.
+    The pinned upstream file asks for `huggingface_hub >= 1.27.0` with no upper bound,
+    while this image pins `transformers==5.5.3` (requirements/common.txt), whose metadata
+    requires `huggingface-hub<2.0`. docker/musa.Dockerfile installs that upstream file
+    with `--no-deps`, so nothing else would stop that one line resolving to the newest
+    release (2.0.0) and the image could not import transformers (measured in
+    `vllm-musa:pr250-final-8b4cbc997`). The version belongs in requirements/common.txt;
+    this Dockerfile only applies it. Dropping the constraint, the pin, or a module from
+    the self-check loop must fail here.
     """
     if dockerfile is None:
         dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
+    pinned = (ROOT / "requirements" / "common.txt").read_text()
+    assert "huggingface_hub>=1.27.0,<2.0" in pinned, "the pin belongs in requirements/"
+    assert "huggingface_hub>=1.27.0" not in dockerfile, "no version belongs in the Dockerfile"
     for module in ("transformers", "huggingface_hub"):
         assert f'"{module}"' in dockerfile, module
 
     # Per pip *invocation*: the vendored install and the transitive install share one
-    # RUN line, so a check on the RUN would pass even with the re-pin moved off the
+    # RUN line, so a check on the RUN would pass even with the constraint moved off the
     # invocation that resolves the uncapped line.
     invocations = []
     for command in _dockerfile_run_commands(dockerfile):
@@ -129,7 +134,7 @@ def test_musa_image_caps_huggingface_hub(dockerfile=None):
     vendored = [argv for argv in invocations if "third_party/vllm/requirements/common.txt" in argv]
     assert vendored, "no pip invocation installs the vendored requirements"
     for argv in vendored:
-        assert "huggingface_hub>=1.27.0,<2.0" in argv, argv
+        assert "--constraint requirements/common.txt" in argv, argv
 
 
 def test_musa_image_runtime_dependency_contract():
