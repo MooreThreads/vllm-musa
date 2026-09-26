@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **171 patches**. This branch includes the Qwen3.6 patches for common
+Currently **186 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -69,3 +69,51 @@ object/registration patches (which patch live objects at import) are kept
 separately in `vllm_musa/patches/`, not in this build-time series. Run
 `python3 tools/musa_sync.py verify` to replay and verify the complete manifest
 against that exact pinned commit.
+
+The DiffusionGemma structured-read port (upstream vllm#57250) adds the per-request canvas
+fields — `diffusion_seed_canvas`, `diffusion_pinned`, `diffusion_read_only`,
+`diffusion_max_steps` and `diffusion_canvas_length` — checked at admission by the ported
+`vllm/utils/diffusion.py` helper, plus the async diffusion scheduler tier and the
+sampler/input-processor plumbing that carries a seeded canvas and its logprob token ids, so
+one denoise step can be read as a distribution.
+
+Upstream's own tests come with it: the state-level read suite in
+`tests/v1/sample/test_diffusion_gemma_reads.py` (entry 0181) and the diffusion cases in
+`tests/test_sampling_params.py` (entry 0182), gated on the platform's GPU device type rather
+than CUDA so they run on MUSA instead of skipping; entry 0182 also adds
+`MockModelConfig.return_sampling_mask` because this base's `InputProcessor._validate_params`
+reads it. Entries 0183/0184 carry upstream's one-line
+`MODEL_ARCH_CONFIG_CONVERTORS["diffusion_gemma"]` registration and its head-dim case — not
+cosmetic here, because the served checkpoint has `head_dim=256` against
+`global_head_dim=512`. Entries 0185/0186 add the `create_scheduler` diffusion hook and the
+canvas-width, selection and narrowing cases for the async tier; three further upstream
+scheduler cases are not carried: the two deferral cases are what drive entry 0174's
+`or 1` throttle (an uncapped read loses a scheduling slot on alternate calls here, where
+upstream leaves it unthrottled), and they drive the tier through a step loop that does not
+terminate at this pin without a model; the trimmed-worker-draft case exercises
+`update_draft_token_ids_in_output` and needs `_RecordingGrammar`, which this pin lacks; and
+`test_diffusion_scheduler_is_selected_by_default` did not complete in an hour-long budget on a
+leased S5000 container, where the same run against the unpatched image parks 195 of 196 threads in
+`futex_wait_queue_me` at 0% CPU, so it is carried as upstream wrote it rather than claimed as
+passing. This port
+therefore claims the tier is selected and width-aware, not that it is exercised end to end.
+
+Read-only emission stays where upstream put it — inside the compiled step: it grows the same
+`read_only` argument, emits at convergence instead of being scheduled for the commit forward,
+clears `is_encoder_phase` for that slot, and stashes and hands out logprobs off
+`num_sampled`, so upstream's four
+`test_read_emits_at_convergence_while_generation_waits_for_commit` cases run unmodified. The
+step also carries upstream's `@torch._dynamo.config.patch(recompile_limit=64)` guard, which
+this fork needs because the per-width tile loop adds specializations on top of upstream's set.
+
+Fork-local glue that upstream does not carry is confined to entries 0174, 0177 and 0178: the
+per-request draft-token width hook (`ModelState.num_draft_tokens_per_req`,
+`DraftTokensHandler.set_draft_tokens`), which a canvas narrower than the served one needs
+under spec decode. Diffusion models are pinned to `TRITON_ATTN`. Three upstream changes are
+deliberately not carried: the example interposer under
+`examples/features/structured_diffusion/` (this fork ships it as an image layer instead, since
+`/v1/systemone` is a front end for the API rather than an engine feature), the
+comment-and-log rewording in `vllm/model_executor/models/config.py` (no behaviour change), and
+the two mock fields in `tests/v1/engine/test_input_processor_trace_replay.py` (that file does
+not exist at this pin).
+

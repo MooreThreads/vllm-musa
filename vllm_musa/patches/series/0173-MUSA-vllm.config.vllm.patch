@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 24 Sep 2026 22:27:21 +0800
+Subject: [PATCH] MUSA: vllm.config.vllm
+
+---
+ vllm/config/vllm.py | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
+index b2078c1..8b29f3c 100644
+--- a/vllm/config/vllm.py
++++ b/vllm/config/vllm.py
+@@ -1595,6 +1595,16 @@ class VllmConfig:
+             )
+         current_platform.check_and_update_config(self)
+ 
++        # After the platform hook, which has the last word on async scheduling.
++        if (
++            self.diffusion_config is not None
++            and self.scheduler_config.async_scheduling
++            and self.scheduler_config.scheduler_cls is None
++        ):
++            self.scheduler_config.scheduler_cls = (
++                "vllm.v1.core.sched.diffusion_scheduler.DiffusionAsyncScheduler"
++            )
++
+         self._resolve_allow_missing_mm_embeddings()
+         self._resolve_mm_processor_device()
+         self._validate_mm_processor_device()
+-- 
+2.34.1
+
