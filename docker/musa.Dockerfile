@@ -293,19 +293,16 @@ RUN python -m pip install \
         -e . --no-build-isolation -v && \
     python -m pip install numpy==1.26
 
-# Upstream's requirements are upstream's opinion, not this image's. They ask for
-# `huggingface_hub >= 1.27.0` with no upper bound, and this install runs with
-# --no-deps, so without a constraint that line resolves to the newest release (2.0.0)
-# even though this image's own pins require `huggingface-hub<2.0` (transformers
-# 5.5.3 metadata) - the image then cannot import transformers at all (measured in
-# `vllm-musa:pr250-final-8b4cbc997`). Keep our requirement files the source of truth
-# for the public packages they own by constraining this install with them, so the
-# versions belong in requirements/ rather than in this Dockerfile.
+# The vendored file pins `huggingface_hub >= 1.27.0` with no upper bound, and this
+# install runs with --no-deps, so pip takes the newest release for that one line
+# without seeing that the image's `transformers==5.5.3` (requirements/common.txt,
+# installed above) requires `huggingface-hub<2.0`; transformers then refuses to
+# import. Re-pin it in the same install, the way numpy is re-pinned above.
 RUN python -m pip install \
         --no-cache-dir \
         --no-deps \
-        --constraint requirements/common.txt \
-        -r third_party/vllm/requirements/common.txt && \
+        -r third_party/vllm/requirements/common.txt \
+        'huggingface_hub>=1.27.0,<2.0' && \
     python -m pip install \
         --no-cache-dir \
         -r requirements/vllm_runtime_transitive.txt
