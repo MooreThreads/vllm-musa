@@ -359,8 +359,6 @@ RUN printf '%s\n' \
         '    action = "skip import" if skip_import else "import"' \
         '    print(f"PASS {action} {module_name} version={installed}")' \
         '' \
-        '# A mismatched huggingface_hub breaks the transformers import first, and' \
-        '# that distribution metadata declares the <2.0 bound this image caps.' \
         'for module_name in ("vllm", "vllm_musa", "transformers", "huggingface_hub"):' \
         '    module = importlib.import_module(module_name)' \
         '    print("PASS import %s version=%s" % (module_name, getattr(module, "__version__", "unknown")))' \
