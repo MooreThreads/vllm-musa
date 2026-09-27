@@ -19,6 +19,7 @@ MODULE = ROOT / "vllm_musa" / "_inductor" / "musa_allreduce_rms_fusion.py"
 
 REWRITER = "_manual_rewrite_residual_musa_jit_car_rmsnorm"
 INSERT_HELPER = "_insert_fused_ar_rmsnorm"
+GATE = "_manual_residual_inputs_supported"
 
 
 def _tree() -> ast.Module:
@@ -113,6 +114,41 @@ def test_helper_derives_meta_from_fakes_and_never_from_real_tensors():
     # Inputs are fakes owned by the ambient mode; nesting a mode raises
     # "Mixing fake modes NYI".
     assert "FakeTensorMode()" not in body
+
+
+def test_helper_rejects_before_it_touches_the_graph():
+    body = _find(_tree(), INSERT_HELPER)
+    raises = [node for node in ast.walk(body) if isinstance(node, ast.Raise)]
+    insertions = [
+        node
+        for node in ast.walk(body)
+        if isinstance(node, ast.With)
+        and any(
+            isinstance(item.context_expr, ast.Call)
+            and isinstance(item.context_expr.func, ast.Attribute)
+            and item.context_expr.func.attr == "inserting_before"
+            for item in node.items
+        )
+    ]
+    assert raises, f"{INSERT_HELPER} no longer rejects non-fake inputs"
+    assert insertions, f"{INSERT_HELPER} no longer inserts nodes"
+
+    if min(node.lineno for node in raises) > min(node.lineno for node in insertions):
+        raise AssertionError(
+            "the fake-tensor precondition must be checked before the nodes are "
+            "inserted, otherwise a rejected call leaves the graph partially "
+            "rewritten instead of making it a no-op"
+        )
+
+
+def test_the_gate_the_helper_names_really_implies_the_precondition():
+    body = ast.get_source_segment(MODULE.read_text(), _find(_tree(), GATE))
+    assert body is not None
+    assert "isinstance(value, FakeTensor)" in body, (
+        f"{GATE} accepts any torch.Tensor, so the gate the helper's precondition "
+        "names does not imply it: a graph carrying a real tensor would abort "
+        "compilation in the helper instead of skipping the rewrite"
+    )
 
 
 def test_the_silent_module_level_helper_is_gone():

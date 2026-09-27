@@ -506,10 +506,29 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
         taken from the fused ops' own ``register_fake`` implementations. Both
         rewrite arms insert through this method so the invariant cannot drift.
 
-        Callers must gate on ``_manual_residual_inputs_supported`` first: the
-        fake implementations are evaluated on the input nodes' own fake tensors,
-        and metadata is never derived from real tensors.
+        Callers gate on ``_manual_residual_inputs_supported`` first, which
+        rejects inputs whose ``meta["val"]`` is not a fake, so metadata is never
+        derived from real tensors. Everything that can fail here runs before the
+        graph is touched, and a rejected call leaves the graph unmodified.
         """
+        fakes = [
+            self._node_tensor_meta(node) for node in (car.args[0], residual, weight)
+        ]
+        if not all(isinstance(fake, FakeTensor) for fake in fakes):
+            raise AssertionError(
+                "fused AR+RMSNorm rewrite requires fake tensors in meta['val']; "
+                "_manual_residual_inputs_supported should have rejected these inputs"
+            )
+
+        if use_raw:
+            out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default(
+                fakes[0], fakes[1], fakes[2], float(eps), self.comm_id
+            )
+        else:
+            out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default(
+                fakes[0], fakes[1], fakes[2], float(eps), self.comm_id
+            )
+
         with graph.inserting_before(before):
             if use_raw:
                 fused = graph.call_function(
@@ -537,24 +556,6 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                     operator.getitem, args=(fused, 1)
                 )
                 fused_raw = None
-
-        fakes = [
-            self._node_tensor_meta(node) for node in (car.args[0], residual, weight)
-        ]
-        if not all(isinstance(fake, FakeTensor) for fake in fakes):
-            raise AssertionError(
-                "fused AR+RMSNorm rewrite requires fake tensors in meta['val']; "
-                "gate on _manual_residual_inputs_supported before calling"
-            )
-
-        if use_raw:
-            out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default(
-                fakes[0], fakes[1], fakes[2], float(eps), self.comm_id
-            )
-        else:
-            out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default(
-                fakes[0], fakes[1], fakes[2], float(eps), self.comm_id
-            )
         fused.meta["val"] = out
         fused_rms.meta["val"] = out[0]
         fused_residual.meta["val"] = out[1]
@@ -576,6 +577,16 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
         weight_value = self._node_tensor_meta(weight)
         if any(
             value is None
+            for value in (input_value, car_value, residual_value, weight_value)
+        ):
+            return False
+
+        # The rewrite derives metadata by evaluating the fused ops' fake
+        # implementations on these values, so a real tensor would execute an
+        # actual fused all-reduce during compilation. Require fakes here, where
+        # the decision to rewrite is made, and otherwise skip the rewrite.
+        if not all(
+            isinstance(value, FakeTensor)
             for value in (input_value, car_value, residual_value, weight_value)
         ):
             return False
