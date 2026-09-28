@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 24 Sep 2026 22:27:21 +0800
+Subject: [PATCH] MUSA: vllm.transformers_utils.model_arch_config_convertor
+
+---
+ vllm/transformers_utils/model_arch_config_convertor.py | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/vllm/transformers_utils/model_arch_config_convertor.py b/vllm/transformers_utils/model_arch_config_convertor.py
+index 4b65e25..201b093 100644
+--- a/vllm/transformers_utils/model_arch_config_convertor.py
++++ b/vllm/transformers_utils/model_arch_config_convertor.py
+@@ -772,6 +772,7 @@ MODEL_ARCH_CONFIG_CONVERTORS = {
+     "cohere_asr": CohereAsrModelArchConfigConvertor,
+     "dbrx": DbrxModelArchConfigConvertor,
+     "deepseek_mtp": DeepSeekMTPModelArchConfigConvertor,
++    "diffusion_gemma": Gemma4ModelArchConfigConvertor,
+     "diffusion_gemma_text": Gemma4ModelArchConfigConvertor,
+     "ernie_mtp": ErnieMTPModelArchConfigConvertor,
+     "falcon": FalconModelArchConfigConvertor,
+-- 
+2.34.1
+

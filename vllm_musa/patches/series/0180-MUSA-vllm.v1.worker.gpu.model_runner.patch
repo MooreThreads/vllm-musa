@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 24 Sep 2026 22:27:21 +0800
+Subject: [PATCH] MUSA: vllm.v1.worker.gpu.model_runner
+
+---
+ vllm/v1/worker/gpu/model_runner.py | 17 +++++++++++------
+ 1 file changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 79953a7..5ab9542 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1133,7 +1133,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         # Get the number of draft tokens for each request.
+         draft_tokens = scheduler_output.scheduled_spec_decode_tokens
+         num_draft_tokens_per_req = None
+-        if not draft_tokens:
++        if not draft_tokens and self.model_state.num_new_sampled_tokens_per_step == 1:
+             # No draft token scheduled (common case).
+             total_num_draft_tokens = 0
+             total_num_logits = num_reqs
+@@ -1160,9 +1160,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             np.cumsum(num_logits, out=cu_num_logits_np[1:])
+             cu_num_logits = async_copy_to_gpu(cu_num_logits_np, device=self.device)
+ 
+-        adaptive_verification = (
+-            self.adaptive_verification if num_draft_tokens_per_req is not None else None
+-        )
++        # The general branch also serves a no-draft batch with k != 1, and
++        # compact_batch's budget is only primed when drafts are scheduled.
++        adaptive_verification = self.adaptive_verification if draft_tokens else None
+         num_scheduled_tokens_upper_bound = num_scheduled_tokens_np
+         if adaptive_verification is not None:
+             # num_scheduled_tokens represents the draft budget evenly distributed across
+@@ -1192,7 +1192,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 adaptive_verification.reallocate_drafts(req_ids, idx_mapping)
+             )
+             total_num_logits = num_reqs * num_bonus_tokens + total_num_draft_tokens
+-        if draft_tokens:
++        if num_draft_tokens_per_req is not None:
+             expanded_idx_mapping, expanded_local_pos = expand_idx_mapping(
+                 idx_mapping, total_num_logits, cu_num_logits, self.decode_query_len
+             )
+@@ -1369,7 +1369,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         if sample_hidden_states is None:
+             sample_hidden_states = hidden_states[input_batch.logits_indices]
+         logits = self.model.compute_logits(sample_hidden_states)
+-        if grammar_output is not None:
++        # A diffusion prefill has no logit rows even when a bitmask row
++        # arrived for it.
++        if grammar_output is not None and logits.shape[0] > 0:
+             # Apply grammar bitmask to the logits in-place.
+             assert self.structured_outputs_worker is not None
+             self.structured_outputs_worker.apply_grammar_bitmask(
+@@ -1885,6 +1887,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             self.draft_tokens_handler.set_draft_tokens(
+                 input_batch,
+                 self.req_states.draft_tokens[input_batch.idx_mapping],
++                num_draft_tokens_per_req=self.model_state.num_draft_tokens_per_req(
++                    input_batch
++                ),
+             )
+ 
+         # Post-step KV connector related operations.
+-- 
+2.34.1
+
