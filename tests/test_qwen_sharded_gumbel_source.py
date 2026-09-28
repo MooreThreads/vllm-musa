@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH = ROOT / "vllm_musa/patches/series/0100-perf-musa-sharded-qwen-gumbel.patch"
+PATCH = ROOT / "vllm_musa/patches/series/0102-perf-add-gated-sharded-Qwen-Gumbel-logits-path.patch"
 SAMPLER = ROOT / "vllm_musa/v1/sample/topk_topp_sampler.py"
 
 

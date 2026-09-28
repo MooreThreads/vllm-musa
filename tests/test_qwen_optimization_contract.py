@@ -210,6 +210,7 @@ def test_future_distinct_qwen36_schema_fails_closed() -> None:
     "architecture",
     [
         "Qwen3VLForConditionalGeneration",
+        "Qwen3VLMoeForConditionalGeneration",
         "Qwen3OmniMoeForConditionalGeneration",
         "LlamaForCausalLM",
     ],

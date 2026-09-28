@@ -15,9 +15,9 @@ index 5f7a38bc6e..a3396c2775 100644
  
  logger = init_logger(__name__)
  
-+# Triton 3.2 does not expose the tensor-descriptor builtin. Keep descriptor
-+# creation behind a module-level symbol so the JIT dependency walker can hash
-+# this kernel even when USE_TD is false (as it is for quantized MUSA MoE).
++# Keep descriptor creation behind a module-level symbol so the JIT hasher
++# can walk this kernel when the builtin is missing. On MUSA, USE_TD stays
++# off because tt.make_tensor_descriptor still fails to lower.
 +if hasattr(tl, "make_tensor_descriptor"):
 +    make_tensor_descriptor = tl.make_tensor_descriptor
 +elif hasattr(tl, "_experimental_make_tensor_descriptor"):

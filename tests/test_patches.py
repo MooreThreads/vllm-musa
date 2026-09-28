@@ -105,12 +105,12 @@ class TestModelOptFp8CapabilityPatch:
     def test_modelopt_fp8_uses_musa_capability_floor(self):
         patch_path = (
             Path(__file__).parent.parent
-            / "vllm_musa/patches/series/0099-MUSA-allow-ModelOpt-FP8-on-MUSA-capability.patch"
+            / "vllm_musa/patches/series/0100-MUSA-allow-ModelOpt-FP8-on-MUSA-capability.patch"
         )
         source = patch_path.read_text()
 
         assert "vllm/model_executor/layers/quantization/modelopt.py" in source
-        assert "-        return 89" in source
+        assert "-        return 80" in source
         assert "+        return 31" in source
 
 
@@ -1158,6 +1158,7 @@ class TestMUSAPlatformDefaults:
                     user_specified_block_size=user_specified,
                     mamba_cache_mode=mamba_cache_mode,
                     mamba_page_size_padded=1056,
+                    kv_cache_dtype_skip_layers=None,
                 ),
             )
 
@@ -1725,12 +1726,20 @@ class TestBuildTimeSeries:
         assert self._SERIES_DIR.is_dir(), "build-time series/ dir is missing"
         assert sorted(self._SERIES_DIR.glob("*.patch")), "no .patch files in series/"
 
-    def test_series_files_are_wellformed_format_patches(self):
+    def test_series_files_are_wellformed_patches(self):
         for p in sorted(self._SERIES_DIR.glob("*.patch")):
             text = self._read_patch(p)
-            assert text.startswith("From "), f"{p.name}: not a git format-patch"
-            assert "Subject:" in text, f"{p.name}: missing Subject line"
-            assert "diff --git" in text, f"{p.name}: no diff hunk"
+            if text.startswith("From "):
+                assert "Subject:" in text, f"{p.name}: missing Subject line"
+                assert "diff --git" in text, f"{p.name}: no diff hunk"
+            else:
+                # Recent upstream MUSA patches are raw unified diffs.  They
+                # are valid inputs to build_apply.py and must retain the same
+                # basic hunk contract as format-patch files.
+                assert text.startswith(("--- ", "diff --git ")), f"{p.name}: not a patch"
+                if text.startswith("--- "):
+                    assert "\n+++ " in text, f"{p.name}: missing new-file hunk"
+                assert "\n@@ " in text, f"{p.name}: no diff hunk"
 
     def test_build_apply_exposes_contract(self):
         ba = self._load_build_apply()
@@ -1747,7 +1756,7 @@ class TestBuildTimeSeries:
 
     def test_gemma_norm_series_patch_uses_generic_inplace_ir_contract(self):
         series = (
-            self._SERIES_DIR / "0079-MUSA-allow-Gemma-RMSNorm-residual-donation.patch"
+            self._SERIES_DIR / "0078-MUSA-allow-Gemma-RMSNorm-residual-donation.patch"
         )
         series = self._read_patch(series)
 
@@ -1757,7 +1766,7 @@ class TestBuildTimeSeries:
         assert "vllm/model_executor/models/qwen3_5_mtp.py" not in series
 
     def test_gated_qkv_series_patch_uses_generic_ir_contract(self):
-        series = self._SERIES_DIR / "0080-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch"
+        series = self._SERIES_DIR / "0079-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch"
         series = self._read_patch(series)
 
         assert '@register_op(activations=["packed_qkv"])' in series

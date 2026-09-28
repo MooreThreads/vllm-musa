@@ -35,8 +35,9 @@ vLLM-MUSA is the Moore Threads backend for [vLLM](https://github.com/vllm-projec
 providing an OpenAI-compatible inference and serving engine for MUSA GPUs.
 
 - v0.28.0-dev development line with the vLLM V1 engine.
-- Uses the pinned MUSA stack: PyTorch/torch_musa 2.11.0.post1 (MUSA 5.2.0),
-  MATE 0.2.6, and torchada 0.1.83; this branch remains an upgrade candidate.
+- Uses the pinned MUSA stack: PyTorch/torch_musa 2.11.0.post2 (MUSA 5.2.0),
+  Triton 3.6.0, MATE 0.2.6, and torchada 0.1.83. The published base image
+  may carry post1; install the exact post2 wheels from requirements for parity.
 - MUSA-native attention, communication, custom ops, and compilation support.
 - Per-checkpoint recipes for Qwen and DeepSeek-V4-Flash on S5000.
 

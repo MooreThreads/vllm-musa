@@ -9,7 +9,7 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0101-perf-specialize-qwen36-bf16-w1-c25.patch"
+    / "0105-perf-specialize-Qwen3.6-BF16-W1-tile-at-C25.patch"
 )
 
 

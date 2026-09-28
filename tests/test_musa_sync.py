@@ -59,8 +59,8 @@ def test_report(ms, capsys):
     rc = ms.main(["report"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "174 divergences" in out
-    assert "'1': 112" in out and "'2': 23" in out and "'3': 1" in out
+    assert "210 divergences" in out
+    assert "'1': 148" in out and "'2': 23" in out and "'3': 1" in out
     assert "'4a': 2" in out and "'5': 28" in out and "'6': 8" in out
 
 
@@ -119,8 +119,10 @@ def test_series_uses_documented_prefixes_and_canonical_metadata():
     zero_commit_header = (
         b"From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001"
     )
-    assert all(lines[0] == zero_commit_header for lines in headers)
-    assert {lines[1] for lines in headers} == {b"From: musa <musa@local>"}
+    format_headers = [lines for lines in headers if lines[0] == zero_commit_header]
+    raw_headers = [lines for lines in headers if lines[0].startswith(b"diff --git ")]
+    assert format_headers and raw_headers
+    assert all(lines[1] == b"From: musa <musa@local>" for lines in format_headers)
 
 
 def test_normalize_patch_author_preserves_non_utf8_bytes(ms, tmp_path):

@@ -3,6 +3,7 @@ From: musa <musa@local>
 Date: Mon, 24 Aug 2026 11:00:00 +0000
 Subject: [PATCH] MUSA: make DeepEP Buffer shutdown cleanup compatible
 
+diff --git a/vllm/distributed/device_communicators/all2all.py b/vllm/distributed/device_communicators/all2all.py
 --- a/vllm/distributed/device_communicators/all2all.py
 +++ b/vllm/distributed/device_communicators/all2all.py
 @@ -189,11 +189,23 @@

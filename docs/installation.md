@@ -10,8 +10,9 @@ model-specific launch command, start with the [serving cookbook](cookbook/README
 - A Moore Threads GPU with a compatible MUSA driver and toolkit.
 - vLLM-MUSA v0.28.0-dev and its matching PyTorch/MUSA wheels.
 
-The v0.28.0-dev dependency stack uses PyTorch 2.11.x. Keep the driver, toolkit,
-and wheel versions from the same release family.
+The validated post2 dependency stack uses PyTorch/torch_musa 2.11.0.post2,
+Triton 3.6.0, and MUSA 5.2.0. Keep the driver, toolkit, and wheel versions
+from the same release family.
 
 ## Package indexes
 
@@ -35,10 +36,10 @@ export VLLM_MUSA_IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-opena
 docker pull "${VLLM_MUSA_IMAGE}"
 ```
 
-The registry tag is published independently of this branch and can carry a
-different dependency revision. Verify the installed package versions against
-the branch pins; build and use the local image below when exact parity is
-required.
+The registry tag is published independently of this branch and may carry the
+post1 base dependency revision. Verify installed versions against
+`requirements/musa_private.txt`; install the post2 wheels before claiming
+exact parity, or build the local image below.
 At the time of this backport, the published tag reports MATE/Flash 0.2.4 and
 tilelang_musa 0.1.8, while this branch pins 0.2.6 and 0.1.12 respectively.
 
