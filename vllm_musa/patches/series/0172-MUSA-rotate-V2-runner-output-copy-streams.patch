@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 28 Sep 2026 12:00:00 +0800
+Subject: [PATCH] MUSA: rotate V2 runner output copy streams
+
+On MUSA, once step N+1's copy-stream wait is queued, step N's output copy
+event completes only after step N+1 finishes, so each sampled token is
+published one step late and the host launches every other step after the
+GPU has drained. Give each in-flight step its own output copy stream.
+
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -192,6 +192,13 @@
+         self.is_encoder_decoder = self.model_config.is_encoder_decoder
+ 
+         self.output_copy_stream = torch.cuda.Stream(self.device)
++        # MUSA: a copy-stream wait queued for step N+1 delays step N's copy event
++        # until step N+1 finishes, so each in-flight step gets its own stream.
++        self._output_copy_streams = [
++            self.output_copy_stream,
++            torch.cuda.Stream(self.device),
++        ]
++        self._output_copy_stream_idx = 0
+ 
+         # Pipeline parallelism.
+         self.use_pp = self.parallel_config.pipeline_parallel_size > 1
+@@ -1818,7 +1825,7 @@
+             sampler_output=sampler_output,
+             num_sampled_tokens=num_sampled,
+             main_stream=self.main_stream,
+-            copy_stream=self.output_copy_stream,
++            copy_stream=self._next_output_copy_stream(),
+             check_ep_fault=self.check_ep_fault,
+             routed_experts=routed_experts,
+         )
+@@ -1894,6 +1901,11 @@
+ 
+         return async_output
+ 
++    def _next_output_copy_stream(self) -> torch.cuda.Stream:
++        streams = self._output_copy_streams
++        self._output_copy_stream_idx = (self._output_copy_stream_idx + 1) % len(streams)
++        return streams[self._output_copy_stream_idx]
++
+     def take_draft_token_ids(self) -> DraftTokenIds | None:
+         return self.draft_tokens_handler.get_draft_tokens()
+ 
