@@ -1,8 +1,6 @@
 import ast
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -218,24 +216,36 @@ MUSA_MLA_COMMON = (
 _METADATA_RECEIVERS = frozenset(
     {"prefill", "prefill_metadata", "_prefill_metadata", "chunked_context", "chunk"}
 )
+# The pinned class each receiver name is bound to (`chunk` is an element of
+# `chunked_context.chunks`). Binding a type per receiver is what makes this guard
+# strict: `query_start_loc` and `max_query_len` are declared by BOTH
+# `ContextChunk` and `MLACommonPrefillMetadata`, so testing membership in the
+# union of the three classes lets a relocation of one of them pass silently --
+# the exact MUSA-100055 failure shape.
+_RECEIVER_TYPES = {
+    "prefill": "MLACommonPrefillMetadata",
+    "prefill_metadata": "MLACommonPrefillMetadata",
+    "_prefill_metadata": "MLACommonPrefillMetadata",
+    "chunked_context": "ChunkedContextMetadata",
+    "chunk": "ContextChunk",
+}
 # Reads past these attributes stay inside a different object, not metadata fields.
 _OPAQUE_ATTRIBUTES = frozenset({"dcp_manager"})
 
 
-def _declared_metadata_attributes(source: str) -> set[str]:
-    """Every field, property and method of the MLA prefill metadata tree."""
-    wanted = {"MLACommonPrefillMetadata", "ContextChunk", "ChunkedContextMetadata"}
-    declared: set[str] = set()
+def _pinned_metadata_fields(source: str) -> dict[str, set[str]]:
+    """Field, property and method names declared by each metadata class."""
+    declared: dict[str, set[str]] = {name: set() for name in _RECEIVER_TYPES.values()}
     for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.ClassDef) or node.name not in wanted:
+        if not isinstance(node, ast.ClassDef) or node.name not in declared:
             continue
         for statement in node.body:
             if isinstance(statement, ast.AnnAssign) and isinstance(
                 statement.target, ast.Name
             ):
-                declared.add(statement.target.id)
+                declared[node.name].add(statement.target.id)
             elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                declared.add(statement.name)
+                declared[node.name].add(statement.name)
     return declared
 
 
@@ -266,27 +276,34 @@ def test_musa_mla_chunked_context_reads_only_pinned_upstream_fields() -> None:
     chunked-prefill branch, which no smoke without a cached prefix reaches
     (MUSA-100055). Check every metadata read against the pinned upstream
     declarations instead of waiting for that branch to run.
-    """
-    if not UPSTREAM_MLA_ATTENTION.exists():
-        pytest.skip(
-            "pinned upstream vLLM source is not present at "
-            f"{UPSTREAM_MLA_ATTENTION}; third_party/vllm is cloned during the "
-            "image build, so this field-contract guard did NOT run"
-        )
 
-    declared = _declared_metadata_attributes(UPSTREAM_MLA_ATTENTION.read_text())
-    assert "seq_tot" not in declared, "the pin still carries the pre-v0.28 layout"
-    assert "chunks" in declared
-    assert "num_context_tokens" in declared
+    Rebase-time guard: it needs the upstream source that `make sync` / the image
+    build places in `third_party/vllm`, so run it after a sync rather than in a
+    bare checkout. The repository has no CI workflow, so nothing runs it
+    automatically yet.
+    """
+    assert UPSTREAM_MLA_ATTENTION.exists(), (
+        f"pinned upstream vLLM source is missing at {UPSTREAM_MLA_ATTENTION}; run "
+        "`make sync` (or the image build) first, otherwise this field-contract "
+        "guard cannot check anything"
+    )
+
+    declared = _pinned_metadata_fields(UPSTREAM_MLA_ATTENTION.read_text())
+    every_field = set().union(*declared.values())
+    assert "seq_tot" not in every_field, "the pin still carries the pre-v0.28 layout"
+    assert "chunks" in declared["ChunkedContextMetadata"]
+    assert "num_context_tokens" in declared["ContextChunk"]
 
     unknown: list[str] = []
     for lineno, receiver, path in _metadata_reads(MUSA_MLA_COMMON.read_text()):
+        expected = _RECEIVER_TYPES[receiver]
         for depth, attribute in enumerate(path):
             if attribute in _OPAQUE_ATTRIBUTES:
                 break
-            if attribute not in declared:
+            if attribute not in declared[expected]:
                 unknown.append(
-                    f"common.py:{lineno}: {receiver}.{'.'.join(path[: depth + 1])}"
+                    f"common.py:{lineno}: {receiver}.{'.'.join(path[: depth + 1])} is "
+                    f"not declared by {expected} at the pin"
                 )
                 break
 
@@ -297,8 +314,22 @@ def test_musa_mla_chunked_context_reads_only_pinned_upstream_fields() -> None:
     )
 
     # Both the non-DCP and the DCP context path must iterate the v0.28 layout.
+    # Counted over the AST so a renamed loop variable or a reformat cannot break
+    # the guard on its own.
     source = MUSA_MLA_COMMON.read_text()
-    assert source.count("for chunk in chunked_context.chunks:") == 2
+    chunk_loops = [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, (ast.For, ast.AsyncFor))
+        and isinstance(node.iter, ast.Attribute)
+        and node.iter.attr == "chunks"
+        and isinstance(node.iter.value, ast.Name)
+        and node.iter.value.id == "chunked_context"
+    ]
+    assert len(chunk_loops) == 2, (
+        "expected the non-DCP and DCP context paths to iterate "
+        f"`chunked_context.chunks`, found {len(chunk_loops)} at lines {chunk_loops}"
+    )
     assert "chunk.token_slice" in source
     assert "empty_token_slices" in source
 
@@ -311,12 +342,11 @@ def test_musa_mla_helpers_match_pinned_upstream_signatures() -> None:
     which is the DCP path's second, independent break: a stale keyword is a
     TypeError that mid-batch prefix-cache traffic alone reveals (MUSA-100055).
     """
-    if not UPSTREAM_MLA_ATTENTION.exists():
-        pytest.skip(
-            "pinned upstream vLLM source is not present at "
-            f"{UPSTREAM_MLA_ATTENTION}; third_party/vllm is cloned during the "
-            "image build, so this signature guard did NOT run"
-        )
+    assert UPSTREAM_MLA_ATTENTION.exists(), (
+        f"pinned upstream vLLM source is missing at {UPSTREAM_MLA_ATTENTION}; run "
+        "`make sync` (or the image build) first, otherwise this signature guard "
+        "cannot check anything"
+    )
 
     upstream = ast.parse(UPSTREAM_MLA_ATTENTION.read_text())
     fork = ast.parse(MUSA_MLA_COMMON.read_text())

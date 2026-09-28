@@ -3,6 +3,7 @@
 
 import functools
 from abc import abstractmethod
+from types import ModuleType
 from typing import Generic, TypeVar
 
 import torch
@@ -13,7 +14,6 @@ from vllm._aiter_ops import rocm_aiter_ops
 from vllm.config import get_current_vllm_config
 from vllm.distributed.parallel_state import is_global_first_rank
 from vllm.logger import init_logger
-from vllm.model_executor.layers.attention import mla_attention as _mla_attention
 from vllm.model_executor.layers.attention.mla_attention import (
     MLAAttentionImpl,
     MLACommonMetadata,
@@ -31,6 +31,7 @@ from vllm.model_executor.layers.linear import (
     UnquantizedLinearMethod,
 )
 from vllm.platforms import current_platform
+from vllm.utils.torch_utils import is_quantized_kv_cache
 from vllm.v1.attention.backend import AttentionLayer
 from vllm.v1.attention.backends.mla.prefill.base import MLAPrefillBackend
 from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
@@ -51,21 +52,6 @@ logger = init_logger(__name__)
 
 M = TypeVar("M", bound=MLACommonMetadata)
 A = TypeVar("A")
-
-def _disabled_prefill_backend() -> bool:
-    return False
-
-
-use_cudnn_prefill = getattr(
-    _mla_attention, "use_cudnn_prefill", _disabled_prefill_backend
-)
-use_flashinfer_prefill = getattr(
-    _mla_attention, "use_flashinfer_prefill", _disabled_prefill_backend
-)
-use_trtllm_ragged_deepseek_prefill = getattr(
-    _mla_attention, "use_trtllm_ragged_deepseek_prefill", _disabled_prefill_backend
-)
-
 
 class MUSAMLAPrefillBackend(MLAPrefillBackend):
     """Compatibility backend for vLLM v0.22 MLA prefill selection.
@@ -133,6 +119,24 @@ class MUSAMLAPrefillBackend(MLAPrefillBackend):
 
 def _get_musa_mla_prefill_backend(vllm_config):
     return MUSAMLAPrefillBackend
+
+
+def _install_prefill_backend_hook(module: ModuleType) -> None:
+    """Point `module`'s MLA prefill backend selection at MUSA's own backend.
+
+    MUSA MLA executes its own prefill (`MUSAMLAPrefillBackend` wraps
+    `MLACommonImpl`), so upstream's selector answer is discarded. Guard the
+    replacement itself: if a future bump renames or moves
+    `get_mla_prefill_backend`, a plain assignment would *create* an attribute
+    instead of overriding anything, and MUSA would silently serve with
+    upstream's backend selection (MUSA-100055).
+    """
+    if not hasattr(module, "get_mla_prefill_backend"):
+        raise RuntimeError(
+            f"{module.__name__} no longer exports get_mla_prefill_backend; MUSA MLA "
+            "cannot route prefill to MUSAMLAPrefillBackend (MUSA-100055)."
+        )
+    module.get_mla_prefill_backend = _get_musa_mla_prefill_backend
 
 
 def _v_up_proj(self, x: torch.Tensor, out: torch.Tensor):
@@ -215,22 +219,11 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             and (self.qk_rope_head_dim == 64)
         )
 
-        # MUSA MLA prefill runs on MATE's FlashAttention. The FlashInfer, cuDNN
-        # and TRT-LLM prefill backends are unreachable here: upstream deleted
-        # their prefill metadata in the v0.28 chunked-context rework, and MATE's
-        # FlashAttention interface differs from upstream CUDA FA anyway. Fail
-        # loudly if a future bump ever reports one of them as selectable instead
-        # of silently falling back to FlashAttention.
-        if (
-            use_flashinfer_prefill()
-            or use_trtllm_ragged_deepseek_prefill()
-            or use_cudnn_prefill()
-        ):
-            raise RuntimeError(
-                "MUSA MLA supports only the FlashAttention prefill backend; the "
-                "FlashInfer/cuDNN/TRT-LLM prefill backends are unavailable since "
-                "the vLLM v0.28 chunked-context rework (MUSA-100055)."
-            )
+        # MUSA MLA prefill always runs on MATE's FlashAttention: upstream deleted
+        # the FlashInfer/cuDNN/TRT-LLM prefill metadata in the v0.28
+        # chunked-context rework, and its selector is not consulted at all because
+        # this module replaces `get_mla_prefill_backend` at the bottom of the file
+        # (MUSA-100055).
         logger.debug_once("Using FlashAttention prefill for MLA")
         self._run_prefill_context_chunk = self._run_prefill_context_chunk_fa
         self._run_prefill_new_tokens = self._run_prefill_new_tokens_fa
@@ -545,6 +538,11 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         dcp_world_size: int,
     ):
         assert k_scale is None, "DCP not support scaled kvcache now."
+        assert not is_quantized_kv_cache(self.kv_cache_dtype), (
+            "MUSA DCP MLA does not support a quantized KV cache: ops.cp_gather_cache "
+            "below gathers without dequantizing, and upstream's dtype branch "
+            "(fp8_ds_mla -> cp_gather_and_upconvert_fp8_kv_cache) is not ported"
+        )
         assert attn_metadata.prefill is not None
         prefill_metadata = attn_metadata.prefill
         chunked_context = prefill_metadata.chunked_context
@@ -718,12 +716,6 @@ import vllm.v1.attention.backends.mla.prefill.selector
 
 vllm.model_executor.layers.attention.mla_attention.MLAAttention._v_up_proj = _v_up_proj
 vllm.model_executor.layers.attention.mla_attention.MLACommonImpl = MLACommonImpl
-vllm.model_executor.layers.attention.mla_attention.get_mla_prefill_backend = (
-    _get_musa_mla_prefill_backend
-)
-vllm.v1.attention.backends.mla.prefill.get_mla_prefill_backend = (
-    _get_musa_mla_prefill_backend
-)
-vllm.v1.attention.backends.mla.prefill.selector.get_mla_prefill_backend = (
-    _get_musa_mla_prefill_backend
-)
+_install_prefill_backend_hook(vllm.model_executor.layers.attention.mla_attention)
+_install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill)
+_install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill.selector)
