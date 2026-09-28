@@ -1,4 +1,5 @@
 import ast
+import importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -220,14 +221,21 @@ _METADATA_RECEIVERS = frozenset(
 # `chunked_context.chunks`). Binding a type per receiver is what makes this guard
 # strict: `query_start_loc` and `max_query_len` are declared by BOTH
 # `ContextChunk` and `MLACommonPrefillMetadata`, so testing membership in the
-# union of the three classes lets a relocation of one of them pass silently --
-# the exact MUSA-100055 failure shape.
+# union of the three classes lets a relocation of one of them pass silently.
 _RECEIVER_TYPES = {
     "prefill": "MLACommonPrefillMetadata",
     "prefill_metadata": "MLACommonPrefillMetadata",
     "_prefill_metadata": "MLACommonPrefillMetadata",
     "chunked_context": "ChunkedContextMetadata",
     "chunk": "ContextChunk",
+}
+# A hop that descends into a different metadata object re-targets the expected
+# class, so a nested read is checked against its own owner: `chunked_context` is
+# declared by `MLACommonPrefillMetadata` while its fields belong to
+# `ChunkedContextMetadata`, and `chunks` holds `ContextChunk` elements.
+_NESTED_RECEIVERS = {
+    "chunked_context": "ChunkedContextMetadata",
+    "chunks": "ContextChunk",
 }
 # Reads past these attributes stay inside a different object, not metadata fields.
 _OPAQUE_ATTRIBUTES = frozenset({"dcp_manager"})
@@ -273,9 +281,9 @@ def test_musa_mla_chunked_context_reads_only_pinned_upstream_fields() -> None:
     `max_seq_lens`, ...) with per-request `chunks: list[ContextChunk]`. This
     module vendors its own MLA prefill execution, so a stale read of a removed
     field does not fail at import or construction: it only raises on the
-    chunked-prefill branch, which no smoke without a cached prefix reaches
-    (MUSA-100055). Check every metadata read against the pinned upstream
-    declarations instead of waiting for that branch to run.
+    chunked-prefill branch, which no smoke without a cached prefix reaches.
+    Check every metadata read against the pinned upstream declarations instead
+    of waiting for that branch to run.
 
     Rebase-time guard: it needs the upstream source that `make sync` / the image
     build places in `third_party/vllm`, so run it after a sync rather than in a
@@ -306,6 +314,8 @@ def test_musa_mla_chunked_context_reads_only_pinned_upstream_fields() -> None:
                     f"not declared by {expected} at the pin"
                 )
                 break
+            if attribute in _NESTED_RECEIVERS:
+                expected = _NESTED_RECEIVERS[attribute]
 
     assert not unknown, (
         "MUSA MLA reads metadata fields the pinned upstream vLLM no longer "
@@ -340,7 +350,7 @@ def test_musa_mla_helpers_match_pinned_upstream_signatures() -> None:
     The same v0.28 rework that reshaped the chunked-context metadata also
     changed `reorg_kvcache` (`local_starts` in, `chunk_size`/`chunk_idx` out),
     which is the DCP path's second, independent break: a stale keyword is a
-    TypeError that mid-batch prefix-cache traffic alone reveals (MUSA-100055).
+    TypeError that mid-batch prefix-cache traffic alone reveals.
     """
     assert UPSTREAM_MLA_ATTENTION.exists(), (
         f"pinned upstream vLLM source is missing at {UPSTREAM_MLA_ATTENTION}; run "
@@ -374,3 +384,43 @@ def test_musa_mla_helpers_match_pinned_upstream_signatures() -> None:
         break
 
     assert checked == 1, f"expected one reorg_kvcache call site, found {checked}"
+
+
+MUSA_SYNC_TOOL = ROOT / "tools" / "musa_sync.py"
+MODULE_DRIFT_DIR = ROOT / "vllm_musa" / "patches" / "module-drift"
+
+
+def test_mla_drift_tripwire_matches_its_two_sources() -> None:
+    """The stored cat-4a tripwire must equal the diff of its two pinned inputs.
+
+    `tools/musa_sync.py verify` marks the row `drifted-copy` whenever the stored
+    file differs from `difflib.unified_diff(upstream, shadow)`, and that status
+    fails the command. A stale artifact therefore reports the opposite of what
+    happened ("upstream changed under the copy") and hides a real relocation of
+    the fields this module reads. Recomputed through the tool's own function so
+    the guard cannot drift from the tool itself.
+    """
+    assert UPSTREAM_MLA_ATTENTION.exists(), (
+        f"pinned upstream vLLM source is missing at {UPSTREAM_MLA_ATTENTION}; run "
+        "`make sync` (or the image build) first, otherwise this artifact guard "
+        "cannot check anything"
+    )
+
+    spec = importlib.util.spec_from_file_location("_musa_sync_tool", MUSA_SYNC_TOOL)
+    assert spec is not None and spec.loader is not None
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+
+    shadow = MUSA_MLA_COMMON.relative_to(ROOT).as_posix()
+    entries = [entry for entry in tool.manifest.ENTRIES if entry.path == shadow]
+    assert len(entries) == 1, f"expected one manifest row for {shadow}, got {len(entries)}"
+    entry = entries[0]
+
+    stored = (MODULE_DRIFT_DIR / f"{entry.id}.diff").read_text()
+    recomputed = tool._module_tripwire(ROOT / "third_party" / "vllm", entry)
+    assert recomputed is not None, f"cannot recompute the {entry.id} tripwire"
+    assert stored == recomputed, (
+        f"{MODULE_DRIFT_DIR.name}/{entry.id}.diff is stale: it is not the diff of "
+        f"{shadow} against its pinned upstream file. Regenerate it after the last "
+        "edit to either file."
+    )

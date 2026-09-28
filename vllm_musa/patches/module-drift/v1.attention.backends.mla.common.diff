@@ -1,6 +1,6 @@
 --- upstream
 +++ musa
-@@ -1,2926 +1,169 @@
+@@ -1,2926 +1,168 @@
  # SPDX-License-Identifier: Apache-2.0
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 -"""
@@ -233,7 +233,6 @@
 +from vllm.config import get_current_vllm_config
 +from vllm.distributed.parallel_state import is_global_first_rank
 +from vllm.logger import init_logger
-+from vllm.utils.torch_utils import is_quantized_kv_cache
 +from vllm.model_executor.layers.attention.mla_attention import (
 +    MLAAttentionImpl,
 +    MLACommonMetadata,
@@ -317,6 +316,7 @@
 -    split_decodes_and_prefills,
 -)
 -from vllm.v1.attention.ops.dcp_utils import MLADCPManager
++from vllm.utils.torch_utils import is_quantized_kv_cache
 +from vllm.v1.attention.backend import AttentionLayer
 +from vllm.v1.attention.backends.mla.prefill.base import MLAPrefillBackend
  from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
@@ -1591,12 +1591,11 @@
 +def _install_prefill_backend_hook(module: ModuleType) -> None:
 +    """Point `module`'s MLA prefill backend selection at MUSA's own backend.
 +
-+    MUSA MLA executes its own prefill (`MUSAMLAPrefillBackend` wraps
-+    `MLACommonImpl`), so upstream's selector answer is discarded. Guard the
-+    replacement itself: if a future bump renames or moves
-+    `get_mla_prefill_backend`, a plain assignment would *create* an attribute
-+    instead of overriding anything, and MUSA would silently serve with
-+    upstream's backend selection (MUSA-100055).
++    MUSA MLA always runs MATE FlashAttention prefill (`MUSAMLAPrefillBackend` wraps
++    `MLACommonImpl`), so the selector's answer is discarded. Guard the
++    replacement itself: against a name upstream does not export, a plain
++    assignment would *create* an attribute instead of overriding one, and MUSA
++    would silently serve with upstream's backend selection.
      """
 -
 -    # NOTE(sang): Definition of context_len, query_len, and seq_len.
@@ -1898,8 +1897,8 @@
 -            return cdiv(rows, dcp_virtual_block_size) * dcp_local_block_size
 +    if not hasattr(module, "get_mla_prefill_backend"):
 +        raise RuntimeError(
-+            f"{module.__name__} no longer exports get_mla_prefill_backend; MUSA MLA "
-+            "cannot route prefill to MUSAMLAPrefillBackend (MUSA-100055)."
++            f"{module.__name__} does not export get_mla_prefill_backend; MUSA MLA "
++            "cannot route prefill to MUSAMLAPrefillBackend."
 +        )
 +    module.get_mla_prefill_backend = _get_musa_mla_prefill_backend
 +
@@ -3051,7 +3050,7 @@
 
      def __init__(
          self,
-@@ -2942,31 +185,29 @@
+@@ -2942,31 +184,29 @@
          qk_head_dim: int,
          v_head_dim: int,
          kv_b_proj: ColumnParallelLinear,
@@ -3096,15 +3095,13 @@
 
          # Use flashinfer's optimized concat_mla_k kernel when available.
          # The kernel is optimized for DeepSeek V3 dimensions:
-@@ -2978,12 +219,485 @@
+@@ -2978,12 +218,486 @@
              and (self.qk_rope_head_dim == 64)
          )
 
-+        # MUSA MLA prefill always runs on MATE's FlashAttention: upstream deleted
-+        # the FlashInfer/cuDNN/TRT-LLM prefill metadata in the v0.28
-+        # chunked-context rework, and its selector is not consulted at all because
-+        # this module replaces `get_mla_prefill_backend` at the bottom of the file
-+        # (MUSA-100055).
++        # MUSA MLA prefill always runs on MATE's FlashAttention, so the selector's
++        # answer is discarded: this module replaces `get_mla_prefill_backend` at
++        # the bottom of the file.
 +        logger.debug_once("Using FlashAttention prefill for MLA")
 +        self._run_prefill_context_chunk = self._run_prefill_context_chunk_fa
 +        self._run_prefill_new_tokens = self._run_prefill_new_tokens_fa
@@ -3140,6 +3137,14 @@
 +        # Avoid requiring an initialized DCP group in tests and match the
 +        # vLLM v0.28 MLA initialization contract.
          self.dcp_world_size: int = parallel_config.decode_context_parallel_size
++
++        if self.dcp_world_size > 1 and is_quantized_kv_cache(self.kv_cache_dtype):
++            raise ValueError(
++                "MUSA MLA does not support a quantized KV cache with decode context "
++                f"parallelism (kv_cache_dtype={self.kv_cache_dtype!r}, "
++                f"decode_context_parallel_size={self.dcp_world_size}); the DCP "
++                "gather would read un-dequantized rows."
++            )
 +
 +        self.chunked_prefill_workspace_size = (
 +            MLACommonMetadataBuilder.determine_chunked_prefill_workspace_size(
@@ -3420,11 +3425,6 @@
 +        dcp_world_size: int,
 +    ):
 +        assert k_scale is None, "DCP not support scaled kvcache now."
-+        assert not is_quantized_kv_cache(self.kv_cache_dtype), (
-+            "MUSA DCP MLA does not support a quantized KV cache: ops.cp_gather_cache "
-+            "below gathers without dequantizing, and upstream's dtype branch "
-+            "(fp8_ds_mla -> cp_gather_and_upconvert_fp8_kv_cache) is not ported"
-+        )
 +        assert attn_metadata.prefill is not None
 +        prefill_metadata = attn_metadata.prefill
 +        chunked_context = prefill_metadata.chunked_context

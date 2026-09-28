@@ -353,7 +353,7 @@ _SHADOW_MODULES = [
         "4a",
         "vllm_musa/v1/attention/backends/mla/common.py",
         "vllm/model_executor/layers/attention/mla_attention.py",
-        "partial shadow of upstream mla_attention.py — drift tripwire",
+        "partial shadow of upstream mla_attention.py (sim 0.11) — drift tripwire",
     ),
     (
         "5",
