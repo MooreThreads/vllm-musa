@@ -46,9 +46,9 @@ shape fallback. On that same native path the compressor also writes
 packed kv/score+ape into the state cache so Triton `save_partial_states`
 is skipped. Interleaved MRoPE rebuilds the T/H/W frequency layout with a
 strided copy rather than per-channel index arithmetic, which keeps the
-per-layer launch count off the eager prefill path. Model Runner V2 rotates two
-output copy streams so a step's sampled tokens are not held back by the next
-step's copy-stream wait. The fused TileLang `hc_head` is
+per-layer launch count off the eager prefill path. Model Runner V2 gives each
+in-flight step its own output copy stream so a step's sampled tokens are not
+held back by a later step's copy-stream wait. The fused TileLang `hc_head` is
 enabled on MUSA by importing TileLang before the eager JIT decorators capture
 their module globals. DeepEP shutdown now drops cached handles before native
 teardown and supports both explicit `destroy()` and legacy destructor-only

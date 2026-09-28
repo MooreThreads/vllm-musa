@@ -10,11 +10,11 @@ step after the GPU has drained. Give each in-flight step its own output copy
 stream, sized by max_concurrent_batches, for both the sampling and pooling
 outputs.
 ---
- vllm/v1/worker/gpu/model_runner.py | 18 ++++++++++++++++--
- 1 file changed, 16 insertions(+), 2 deletions(-)
+ vllm/v1/worker/gpu/model_runner.py | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index 79953a7..02ae53a 100644
+index 79953a7..aa11c25 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -192,6 +192,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
@@ -42,19 +42,20 @@ index 79953a7..02ae53a 100644
              check_ep_fault=self.check_ep_fault,
              routed_experts=routed_experts,
          )
-@@ -1894,6 +1903,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1894,6 +1903,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
  
          return async_output
  
 +    def _next_output_copy_stream(self) -> torch.cuda.Stream:
 +        streams = self._output_copy_streams
++        stream = streams[self._output_copy_stream_idx]
 +        self._output_copy_stream_idx = (self._output_copy_stream_idx + 1) % len(streams)
-+        return streams[self._output_copy_stream_idx]
++        return stream
 +
      def take_draft_token_ids(self) -> DraftTokenIds | None:
          return self.draft_tokens_handler.get_draft_tokens()
  
-@@ -1935,7 +1949,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1935,7 +1950,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              pooler_output=pooler_output,
              finished_mask=finished_mask,
              main_stream=self.main_stream,
