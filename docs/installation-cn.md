@@ -9,7 +9,8 @@
 - 配备兼容 MUSA 驱动和工具包的摩尔线程（Moore Threads）GPU。
 - vLLM-MUSA v0.28.0-dev 及对应的 PyTorch/MUSA wheel。
 
-v0.28.0-dev 依赖栈使用 PyTorch 2.11.x。驱动、工具包和 wheel 应来自同一版本系列。
+已验证的 post2 依赖栈使用 PyTorch/torch_musa 2.11.0.post2、Triton 3.6.0 和 MUSA 5.2.0。
+驱动、工具包和 wheel 应来自同一版本系列。
 
 ## 软件包索引
 
@@ -32,8 +33,9 @@ export VLLM_MUSA_IMAGE=registry.mthreads.com/mcconline/inference/vllm/vllm-opena
 docker pull "${VLLM_MUSA_IMAGE}"
 ```
 
-该 registry tag 独立于当前分支发布，可能使用不同的依赖版本。请将镜像内已安装的
-软件包版本与分支固定版本核对；需要完全一致时，请使用下文构建的本地镜像。
+该 registry tag 独立于当前分支发布，基础镜像可能仍携带 post1 依赖。请将镜像内已安装的
+软件包版本与 `requirements/musa_private.txt` 核对；在声称完全一致前先安装 post2 wheel，
+或使用下文构建的本地镜像。
 在本次 backport 时，已发布标签中的 MATE/Flash 为 0.2.4、tilelang_musa 为 0.1.8，
 而当前分支分别固定为 0.2.6 和 0.1.12。
 

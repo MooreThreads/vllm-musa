@@ -3,14 +3,23 @@ From: musa <musa@local>
 Date: Mon, 29 Jun 2026 16:00:00 +0800
 Subject: [PATCH] MUSA: keep DeepSeek-V4 MTP RMSNorm branch dtypes stable
 
----
- vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py | 4 +++-
- 1 file changed, 3 insertions(+), 1 deletion(-)
+Triton 3.6 preserves the input dtype through tl.where. Convert both
+branches to FP32 so the merged x variable has one consistent type.
 
+---
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py b/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
-index 874b4f6079..5680eaebaf 100644
+index 874b4f6..28a28e8 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
+@@ -70,7 +70,7 @@ def _fused_mtp_input_rmsnorm_kernel(
+         keep = pos != 0
+         x = tl.load(
+             inputs_embeds_ptr + token_idx * HIDDEN + block, mask=mask, other=0.0
+-        )
++        ).to(tl.float32)
+         x = tl.where(keep, x, 0.0)
+         _rmsnorm_row(
+             x,
 @@ -85,7 +85,9 @@ def _fused_mtp_input_rmsnorm_kernel(
          # hnorm path: load prev_hidden[token, slot, :].
          slot = pid_task - 1

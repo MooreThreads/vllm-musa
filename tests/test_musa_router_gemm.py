@@ -60,9 +60,24 @@ def test_guard_declines_non_musa_tensors() -> None:
 
 
 def test_guard_respects_env_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert router_gate_enabled()
     monkeypatch.setenv("VLLM_MUSA_ROUTER_GATE_FP32", "0")
     assert not router_gate_enabled()
+    monkeypatch.setenv("VLLM_MUSA_ROUTER_GATE_FP32", "1")
+    assert router_gate_enabled()
+
+
+def test_post2_triton36_uses_retuned_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VLLM_MUSA_ROUTER_GATE_FP32", raising=False)
+    monkeypatch.setattr(rg, "_TORCH_MUSA_POST2_OR_NEWER", True)
+    monkeypatch.setattr(rg, "_POST2_TRITON36", True)
+    assert router_gate_enabled()
+    assert rg._pick_cfg(4) == (4, 32, 128, 4, 1)
+    assert rg._pick_cfg(256) == (16, 64, 64, 4, 1)
+    monkeypatch.setattr(rg, "_POST2_TRITON36", False)
+    assert not router_gate_enabled()
+    monkeypatch.setattr(rg, "_TORCH_MUSA_POST2_OR_NEWER", False)
+    assert router_gate_enabled()
+    assert rg._pick_cfg(4) == (16, 32, 128, 4, 3)
 
 
 @requires_musa

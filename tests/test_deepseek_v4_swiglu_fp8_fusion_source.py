@@ -123,7 +123,7 @@ def test_deepseek_model_patch_uses_optional_hook_before_activation() -> None:
         / "vllm_musa"
         / "patches"
         / "series"
-        / "0094-MUSA-DeepSeek-V4-fuse-clamp-SwiGLU-FP8-down-proj.patch"
+        / "0094-MUSA-DeepSeek-V4-fuse-clamp-SwiGLU-FP8-down-projecti.patch"
     ).read_text()
 
     assert "isinstance(self.act_fn, SiluAndMulWithClamp)" in patch

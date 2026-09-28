@@ -1130,7 +1130,7 @@ class _MusaJitCustomAllreduceImpl:
 
     def _use_registered_graph_input(self, tensor: torch.Tensor) -> bool:
         return (
-            self._use_graph_registered_inputs
+            getattr(self, "_use_graph_registered_inputs", False)
             and self._graph_registered_input_eligible(tensor)
             and self._IS_CAPTURING
             and self._is_current_stream_capturing()
@@ -1142,14 +1142,15 @@ class _MusaJitCustomAllreduceImpl:
             return False
         if (
             self._IS_CAPTURING
-            and (self._use_graph_collective_fallback or self._use_graph_staging_arena)
+            and (getattr(self, "_use_graph_collective_fallback", False)
+                 or getattr(self, "_use_graph_staging_arena", False))
             and self._graph_capture_requires_standard_collective()
         ):
             return False
         if (
             self._IS_CAPTURING
             and self._dsv4_mtp_graph_guard
-            and self._use_graph_registered_inputs
+            and getattr(self, "_use_graph_registered_inputs", False)
             and not self._graph_registered_input_eligible(inp)
         ):
             return False
@@ -1176,7 +1177,8 @@ class _MusaJitCustomAllreduceImpl:
             return False
         if (
             self._IS_CAPTURING
-            and (self._use_graph_collective_fallback or self._use_graph_staging_arena)
+            and (getattr(self, "_use_graph_collective_fallback", False)
+                 or getattr(self, "_use_graph_staging_arena", False))
             and self._graph_capture_requires_standard_collective()
         ):
             return False
@@ -1232,7 +1234,8 @@ class _MusaJitCustomAllreduceImpl:
             return "communicator is disabled"
         if (
             self._IS_CAPTURING
-            and (self._use_graph_collective_fallback or self._use_graph_staging_arena)
+            and (getattr(self, "_use_graph_collective_fallback", False)
+                 or getattr(self, "_use_graph_staging_arena", False))
             and self._graph_capture_requires_standard_collective()
         ):
             return "active graph capture requires the standard collective"

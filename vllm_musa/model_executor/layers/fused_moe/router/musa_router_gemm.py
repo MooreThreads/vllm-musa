@@ -76,10 +76,12 @@ Two notes for reviewers
 from __future__ import annotations
 
 import os
+from importlib.metadata import version
 
 import torch
 import triton
 import triton.language as tl
+from packaging.version import Version
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.utils.torch_utils import direct_register_custom_op
@@ -93,13 +95,12 @@ logger = init_logger(__name__)
 _HIDDEN, _EXPERTS = 2688, 128
 _SUPPORTED_WEIGHT_SHAPE = (_EXPERTS, _HIDDEN)
 
-# (BLOCK_M, BLOCK_N, BLOCK_K, num_warps, num_stages) from a cold-cache sweep over
-# BLOCK_M in {16, 32}, BLOCK_N in {32, 64, 128}, BLOCK_K in {64, 128, 256} and
-# num_stages in {1, 2, 3}.  The sweep is flat within ~3% on the stage axis, so the
-# kernel is not pipelining limited; the M > 128 bucket is the measured best there and
-# is still only at parity with the vendor kernel.
+# (BLOCK_M, BLOCK_N, BLOCK_K, num_warps, num_stages). Preserve the measured
+# post1 tiles; post2/Triton 3.6 needs a smaller decode tile and one stage.
 _CFG_SMALL = (16, 32, 128, 4, 3)
 _CFG_LARGE = (16, 64, 64, 4, 3)
+_CFG_SMALL_POST2_TRITON36 = (4, 32, 128, 4, 1)
+_CFG_LARGE_POST2_TRITON36 = (16, 64, 64, 4, 1)
 _CFG_MAX_TOKENS = 128
 
 # Evaluated once, at import: a per-call ``x.device.type == "musa"`` test would read
@@ -116,10 +117,20 @@ _ACCEPTED_DEVICES = ("musa", "meta")
 # makes the difference observable without a profiler.
 _ACTIVATIONS = 0
 
+_TORCH_MUSA_POST2_OR_NEWER = Version(
+    version("torch_musa").split("+", 1)[0]
+) >= Version("2.11.0.post2")
+_POST2_TRITON36 = _TORCH_MUSA_POST2_OR_NEWER and Version(
+    triton.__version__
+) >= Version("3.6.0")
+
 
 def router_gate_enabled() -> bool:
-    """Kill switch, read per call so tests and operators can flip it."""
-    return os.environ.get("VLLM_MUSA_ROUTER_GATE_FP32", "1") != "0"
+    """Select the router kernel for the runtime where it is faster."""
+    override = os.environ.get("VLLM_MUSA_ROUTER_GATE_FP32")
+    if override is not None:
+        return override != "0"
+    return not _TORCH_MUSA_POST2_OR_NEWER or _POST2_TRITON36
 
 
 def activation_count() -> int:
@@ -136,6 +147,12 @@ def activation_count() -> int:
 
 
 def _pick_cfg(m: int) -> tuple[int, int, int, int, int]:
+    if _POST2_TRITON36:
+        return (
+            _CFG_SMALL_POST2_TRITON36
+            if m <= _CFG_MAX_TOKENS
+            else _CFG_LARGE_POST2_TRITON36
+        )
     return _CFG_SMALL if m <= _CFG_MAX_TOKENS else _CFG_LARGE
 
 

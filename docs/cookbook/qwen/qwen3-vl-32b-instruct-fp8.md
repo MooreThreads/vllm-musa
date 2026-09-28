@@ -43,7 +43,7 @@ vllm serve /models/Qwen3-VL-32B-Instruct-FP8 \
   --enable-chunked-prefill \
   --generation-config vllm \
   --attention-config '{"backend":"FLASH_ATTN"}' \
-  --compilation-config '{"cudagraph_capture_sizes":[1,4,16,64],"cudagraph_mode":"FULL_AND_PIECEWISE"}'
+  --compilation-config '{"mode":"NONE","cudagraph_capture_sizes":[1,4,16,64],"cudagraph_mode":"FULL_DECODE_ONLY"}'
 ```
 
 ## Configuration notes

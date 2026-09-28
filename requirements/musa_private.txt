@@ -12,10 +12,10 @@
 # projects on public PyPI, so they must resolve from the Moore Threads index
 # only. Versions below track the MUSA release_5.2.0 Python Wheel guide.
 
-torch==2.11.0.post1+musa5.2.0
-torch_musa==2.11.0.post1+musa5.2.0
-torchvision==0.26.0.post1+musa5.2.0
-torchaudio==2.11.0+musa5.2.0
+torch==2.11.0.post2+musa5.2.0
+torch_musa==2.11.0.post2+musa5.2.0
+torchvision==0.26.0.post2+musa5.2.0
+torchaudio==2.11.0.post2+musa5.2.0
 mate==0.2.7
 mate-mubin==0.2.7
 flash_attn_3==0.2.7+musa
@@ -23,10 +23,13 @@ flash_mla==0.2.7+musa
 deep-gemm==0.2.7+musa
 flashinfer-python==0.2.7+musa
 sageattention==0.2.7+musa
+# No torch2.11.0.post2 DeepEP wheel is published on the private index yet.
+# Keep the available post1 build until the post2 artifact is released; model
+# paths that require DeepEP remain outside the post2 readiness claim.
 deep_ep==1.1.0+musa5.2.0torch2.11.0.post1
 tilelang_musa==0.1.12+musa.2
-# The MUSA 5.2.0 Triton backend remains pinned independently of the PyTorch
-# release; verify this pin in the 2.11 image before changing it.
-triton==3.2.0
+# Triton 3.6.0 is the MUSA private wheel paired with the torch 2.11 post2
+# stack; its backend is exposed as triton/backends/musa in the target wheel.
+triton==3.6.0
 apache-tvm-ffi==0.1.11.post1+musa.1
 torch-c-dlpack-ext==0.1.5

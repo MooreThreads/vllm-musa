@@ -17,12 +17,6 @@ def _quant_v2_module():
         extra_musa_cflags=(
             "-fmusa-flush-denormals-to-zero",
             "-fno-signed-zeros",
-            "-mllvm",
-            "-mtgpu-opt-level=1",
-            "-mllvm",
-            "-mtgpu-load-store-opt=1",
-            "-mllvm",
-            "-mtgpu-fold-global-ldst=1",
         ),
     )
 
