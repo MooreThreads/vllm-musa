@@ -39,12 +39,14 @@ vllm serve /models/Qwen3-8B-FP8 \
   --generation-config vllm \
   --async-scheduling \
   --attention-config '{"backend":"FLASH_ATTN"}' \
-  --compilation-config '{"cudagraph_capture_sizes":[1,4,16,64],"cudagraph_mode":"FULL_AND_PIECEWISE"}'
+  --compilation-config '{"mode":"NONE","cudagraph_capture_sizes":[1,4,16,64],"cudagraph_mode":"FULL_DECODE_ONLY"}'
 ```
 
 ## Configuration notes
 
-- Chunked prefill and asynchronous scheduling are enabled.
+- Chunked prefill and asynchronous scheduling are enabled. On the validated
+  torch 2.11.0.post2/Triton 3.6 stack, use `mode=NONE` with
+  `FULL_DECODE_ONLY`; the piecewise replay path has a measured decode stall.
 - Prefix caching is disabled.
 - Replace `/models/Qwen3-8B-FP8` if the checkpoint is mounted elsewhere.
 

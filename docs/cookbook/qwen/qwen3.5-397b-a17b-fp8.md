@@ -43,7 +43,7 @@ vllm serve /models/Qwen3.5-397B-A17B-FP8 \
   --generation-config vllm \
   --async-scheduling \
   --attention-config '{"backend":"FLASH_ATTN"}' \
-  --compilation-config '{"cudagraph_capture_sizes":[1,4,16,64],"cudagraph_mode":"FULL_AND_PIECEWISE"}'
+  --compilation-config '{"mode":"NONE","cudagraph_capture_sizes":[1,4,16,64],"cudagraph_mode":"FULL_DECODE_ONLY"}'
 ```
 
 ## Configuration notes
