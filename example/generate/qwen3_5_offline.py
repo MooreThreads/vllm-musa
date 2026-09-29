@@ -3,10 +3,14 @@
 """Offline chat inference for Qwen3.5-35B-A3B-FP8 on four S5000 cards.
 
 Uses the cookbook profile (TP4, MTP3) with at most four concurrent requests.
+The model is downloaded from Hugging Face unless --model points at a local
+checkpoint.
 
     MUSA_VISIBLE_DEVICES=0,1,2,3 python qwen3_5_offline.py
+    MUSA_VISIBLE_DEVICES=0,1,2,3 python qwen3_5_offline.py --model /path/to/model
 """
 
+import argparse
 import os
 
 # MUSA plugins and runtime settings; must be set before vllm is imported.
@@ -16,8 +20,6 @@ os.environ.setdefault("SAFETENSORS_FAST_GPU", "1")
 
 from vllm import LLM, SamplingParams  # noqa: E402
 
-MODEL = "/home/dist/models/Qwen3.5-35B-A3B-FP8"
-
 PROMPTS = [
     "What is the capital of France? Answer in one sentence.",
     "Write a Python function that checks whether a number is prime.",
@@ -26,9 +28,9 @@ PROMPTS = [
 ]
 
 
-def initialize_engine() -> LLM:
+def initialize_engine(model: str) -> LLM:
     return LLM(
-        model=MODEL,
+        model=model,
         trust_remote_code=True,
         tensor_parallel_size=4,
         max_model_len=8192,
@@ -51,7 +53,11 @@ def initialize_engine() -> LLM:
 
 
 def main() -> None:
-    llm = initialize_engine()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default="Qwen/Qwen3.5-35B-A3B-FP8")
+    args = parser.parse_args()
+
+    llm = initialize_engine(args.model)
     # Model card sampling for general tasks without thinking.
     sampling_params = SamplingParams(
         temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1.5, max_tokens=256

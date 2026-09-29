@@ -188,7 +188,7 @@ store. The proxy answers 503 until it has queried the prefill bootstrap server;
 the script waits for `All prefiller instances are ready` in `proxy.log`.
 
 Running `MooncakeConnector` inside `MultiConnector` requires the vLLM series
-patch `0172-MUSA-skip-Prometheus-observe-for-connectors-without-.patch`.
+patch `0173-MUSA-skip-Prometheus-observe-for-connectors-without-.patch`.
 Without it, the first P2P transfer stops the API server with
 `MooncakeConnector is not contained in the list of registered connectors with
 Prometheus metrics support`.

@@ -2,12 +2,13 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Chat with a Qwen3.5-35B-A3B-FP8 server through the OpenAI API.
 
-Start the server first (cookbook profile, at most four concurrent requests):
+Start the server first (cookbook profile, at most four concurrent requests;
+replace the model ID with a local path to skip the Hugging Face download):
 
     export VLLM_PLUGINS=musa,musa_custom_ops
     export VLLM_WORKER_MULTIPROC_METHOD=spawn
     export SAFETENSORS_FAST_GPU=1
-    MUSA_VISIBLE_DEVICES=0,1,2,3 vllm serve /home/dist/models/Qwen3.5-35B-A3B-FP8 \\
+    MUSA_VISIBLE_DEVICES=0,1,2,3 vllm serve Qwen/Qwen3.5-35B-A3B-FP8 \\
         --served-model-name Qwen3.5-35B-A3B-FP8 \\
         --trust-remote-code \\
         --tensor-parallel-size 4 \\

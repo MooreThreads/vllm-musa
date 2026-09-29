@@ -13,10 +13,10 @@ decode step, so the CUDA graphs cover 4, 8, 12 and 16 tokens.
 Thinking is disabled, and sampling follows the model card for general tasks:
 `temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1.5`.
 
-The checkpoint path is `/home/dist/models/Qwen3.5-35B-A3B-FP8`; edit `MODEL`
-in the offline script or the `vllm serve` argument if yours differs. With
-fewer cards, lower the tensor parallelism to match (the FP8 weights fit on
-two).
+The examples load `Qwen/Qwen3.5-35B-A3B-FP8` from Hugging Face. To use a local
+checkpoint, pass `--model /path/to/model` to the offline script, or put the
+path in place of the model ID in `vllm serve`. With fewer cards, lower the
+tensor parallelism to match (the FP8 weights fit on two).
 
 ### Offline
 
@@ -25,6 +25,10 @@ and prints the answers.
 
 ```bash
 MUSA_VISIBLE_DEVICES=0,1,2,3 python example/generate/qwen3_5_offline.py
+
+# Local checkpoint
+MUSA_VISIBLE_DEVICES=0,1,2,3 python example/generate/qwen3_5_offline.py \
+    --model /path/to/Qwen3.5-35B-A3B-FP8
 ```
 
 ### Online
@@ -35,7 +39,7 @@ Start the server:
 export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export SAFETENSORS_FAST_GPU=1
-MUSA_VISIBLE_DEVICES=0,1,2,3 vllm serve /home/dist/models/Qwen3.5-35B-A3B-FP8 \
+MUSA_VISIBLE_DEVICES=0,1,2,3 vllm serve Qwen/Qwen3.5-35B-A3B-FP8 \
     --served-model-name Qwen3.5-35B-A3B-FP8 \
     --trust-remote-code \
     --tensor-parallel-size 4 \
