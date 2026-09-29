@@ -21,7 +21,7 @@ SUPPORTED_MUSA_STACKS = {
             "torch_musa==2.11.0.post2+musa5.2.0",
             "torchvision==0.26.0.post2+musa5.2.0",
             "torchaudio==2.11.0.post2+musa5.2.0",
-            "deep_ep==1.1.0+musa5.2.0torch2.11.0.post1",
+            "deep_ep==1.1.0+musa5.2.0torch2.11.0.post2",
         ),
         "torchada": "torchada==0.1.90",
     },

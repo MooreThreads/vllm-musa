@@ -23,10 +23,7 @@ flash_mla==0.2.7+musa
 deep-gemm==0.2.7+musa
 flashinfer-python==0.2.7+musa
 sageattention==0.2.7+musa
-# No 2.11.0.post2 build of deep_ep is published yet; this is the newest one on
-# the index and it declares no torch requirement, so it installs beside the
-# post2 torch. Move it to the post2 build as soon as that wheel exists.
-deep_ep==1.1.0+musa5.2.0torch2.11.0.post1
+deep_ep==1.1.0+musa5.2.0torch2.11.0.post2
 tilelang_musa==0.1.12+musa.2
 # The MUSA 5.2.0 Triton backend remains pinned independently of the PyTorch
 # release; verify this pin in the 2.11 image before changing it.
