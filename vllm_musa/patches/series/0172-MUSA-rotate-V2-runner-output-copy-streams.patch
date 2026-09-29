@@ -14,7 +14,7 @@ outputs.
  1 file changed, 17 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index 79953a7..aa11c25 100644
+index 79953a7558..aa11c25d50 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -192,6 +192,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):

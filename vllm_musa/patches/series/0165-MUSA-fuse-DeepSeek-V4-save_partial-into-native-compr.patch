@@ -4,18 +4,17 @@ Date: Thu, 17 Sep 2026 04:50:00 +0000
 Subject: [PATCH] MUSA: fuse DeepSeek-V4 save_partial into native compressor
 
 ---
- vllm/models/deepseek_v4/compressor.py | 59 +++++++++++++++++++++++++++++++++++
- 1 file changed, 59 insertions(+)
+ vllm/models/deepseek_v4/compressor.py | 41 +++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
 
 diff --git a/vllm/models/deepseek_v4/compressor.py b/vllm/models/deepseek_v4/compressor.py
-index 7c3d1a2b0c..9e4f8a1b2d 100644
+index 93ae1e89c9..412d268d07 100644
 --- a/vllm/models/deepseek_v4/compressor.py
 +++ b/vllm/models/deepseek_v4/compressor.py
-@@ -364,7 +364,48 @@
-             if current_platform.is_rocm() or current_platform.is_xpu()
+@@ -365,6 +365,47 @@ class DeepseekCompressor(nn.Module):
              else {"launch_pdl": False}
          )
-
+ 
 +        if (
 +            self.head_dim == 512
 +            and not self.use_fp4_cache

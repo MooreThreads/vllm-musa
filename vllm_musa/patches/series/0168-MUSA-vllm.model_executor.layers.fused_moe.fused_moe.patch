@@ -1,17 +1,17 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Sat, 20 Sep 2026 08:30:00 +0800
+Date: Sun, 20 Sep 2026 08:30:00 +0800
 Subject: [PATCH] MUSA: vllm.model_executor.layers.fused_moe.fused_moe
 
 ---
- vllm/model_executor/layers/fused_moe/fused_moe.py | 15 ++++++++++++++
- 1 file changed, 14 insertions(+), 1 deletions(-)
+ vllm/model_executor/layers/fused_moe/fused_moe.py | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index be4930052a..03d1d9b8a1 100644
+index 0570345bb8..93de572b3d 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
-@@ -1397,7 +1397,20 @@ def get_default_config(
+@@ -1446,7 +1446,20 @@ def get_default_config(
          if current_platform.is_rocm():
              num_stages = num_stages_rocm
          elif M <= 32:

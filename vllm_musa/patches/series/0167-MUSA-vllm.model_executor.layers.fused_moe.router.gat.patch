@@ -1,14 +1,14 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Fri, 19 Sep 2026 12:40:00 +0800
+Date: Sat, 19 Sep 2026 12:40:00 +0800
 Subject: [PATCH] MUSA: vllm.model_executor.layers.fused_moe.router.gate_linear
 
 ---
- .../layers/fused_moe/router/gate_linear.py         | 22 ++++++++++++++++++++++
+ .../layers/fused_moe/router/gate_linear.py    | 22 +++++++++++++++++++
  1 file changed, 22 insertions(+)
 
 diff --git a/vllm/model_executor/layers/fused_moe/router/gate_linear.py b/vllm/model_executor/layers/fused_moe/router/gate_linear.py
-index ba46c1d..48ad1f0 100644
+index ba46c1de65..48ad1f0ad6 100644
 --- a/vllm/model_executor/layers/fused_moe/router/gate_linear.py
 +++ b/vllm/model_executor/layers/fused_moe/router/gate_linear.py
 @@ -179,6 +179,28 @@ class GateLinear(ReplicatedLinear):

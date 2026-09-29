@@ -1,20 +1,20 @@
-From bfedd84bd763808ee3c0a7727c1d4292ebbc299d Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Thu, 3 Sep 2026 12:05:24 +0800
 Subject: [PATCH] MUSA: complete Mamba prefix-cache pool ownership
 
 ---
- tests/v1/core/test_prefix_caching.py         | 105 +++++++++++++++++++++
- vllm/v1/core/block_pool.py                   |  23 +++--
- vllm/v1/core/kv_cache_coordinator.py         | 125 ++++++++++++++++++++++++++-
- vllm/v1/core/kv_cache_manager.py             |  82 ++++++++++++++----
- vllm/v1/core/kv_cache_utils.py               |  15 ++--
+ tests/v1/core/test_prefix_caching.py         | 105 ++++++++++++++++
+ vllm/v1/core/block_pool.py                   |  12 +-
+ vllm/v1/core/kv_cache_coordinator.py         | 122 ++++++++++++++++++-
+ vllm/v1/core/kv_cache_manager.py             |  82 ++++++++++---
+ vllm/v1/core/kv_cache_utils.py               |  13 +-
  vllm/v1/core/sched/scheduler.py              |   4 +-
- vllm/v1/core/single_type_kv_cache_manager.py |  33 +++++++
-  7 files changed, 339 insertions(+), 38 deletions(-)
+ vllm/v1/core/single_type_kv_cache_manager.py |  38 +++++-
+ 7 files changed, 339 insertions(+), 37 deletions(-)
 
 diff --git a/tests/v1/core/test_prefix_caching.py b/tests/v1/core/test_prefix_caching.py
-index 13ed7c7b9..4a7febf7b 100644
+index 13ed7c7b9d..ece9b776fa 100644
 --- a/tests/v1/core/test_prefix_caching.py
 +++ b/tests/v1/core/test_prefix_caching.py
 @@ -4120,6 +4120,111 @@ def test_mamba_reachable_block_mask_pins_shared_prefix():
@@ -130,10 +130,10 @@ index 13ed7c7b9..4a7febf7b 100644
      """Manager-level check of the full wiring: a pinned shared-prefix boundary
      (``Request.shared_prefix_boundary``, set by the scheduler on Marconi-style
 diff --git a/vllm/v1/core/block_pool.py b/vllm/v1/core/block_pool.py
-index a8a6c1ca94dabfb8d432fdcfe0b3b21ca6f26d03..71c17639e0ddc534b86ccd7d3da2adda6a4787eb 100644
+index a8a6c1ca94..71c17639e0 100644
 --- a/vllm/v1/core/block_pool.py
 +++ b/vllm/v1/core/block_pool.py
-@@ -282,12 +282,12 @@
+@@ -282,12 +282,12 @@ class BlockPool:
                  block_hash, kv_cache_group_id
              )
              if blk.block_hash is not None:
@@ -153,7 +153,7 @@ index a8a6c1ca94dabfb8d432fdcfe0b3b21ca6f26d03..71c17639e0ddc534b86ccd7d3da2adda
                  self._emit_block_removed_events(removed_hashes)
              self._insert_block_hash(
 diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
-index bf9c8d5ac546bc0f16fd7f0bd8cc11d6395ab12e..efc3a2bf225ac4558b7c0168502b11bd10b7ce9f 100644
+index bf9c8d5ac5..4cee2663dd 100644
 --- a/vllm/v1/core/kv_cache_coordinator.py
 +++ b/vllm/v1/core/kv_cache_coordinator.py
 @@ -1,7 +1,7 @@
@@ -312,7 +312,7 @@ index bf9c8d5ac546bc0f16fd7f0bd8cc11d6395ab12e..efc3a2bf225ac4558b7c0168502b11bd
          self,
          request_id: str,
 diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
-index 44097c3da2768540691ec87b94dc8229fd583750..c64f40e15fc3e2dd88d6e715e66784daa2cd04cb 100644
+index 44097c3da2..c64f40e15f 100644
 --- a/vllm/v1/core/kv_cache_manager.py
 +++ b/vllm/v1/core/kv_cache_manager.py
 @@ -2,7 +2,7 @@
@@ -474,7 +474,7 @@ index 44097c3da2768540691ec87b94dc8229fd583750..c64f40e15fc3e2dd88d6e715e66784da
                  offloads.setdefault(req_id, []).append(
                      (group_id, block.block_id, boundary_tokens)
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index ea87e17bdb42e5b2b49cd32320f0c9642beb9ade..f52be11fb03dbe056aaad1f6837843cf89667925 100644
+index ea87e17bdb..265c42f90f 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
 @@ -1440,12 +1440,9 @@ def _musa_separated_mamba_attn_tensors(vllm_config, kv_cache_groups, available_m
@@ -502,7 +502,7 @@ index ea87e17bdb42e5b2b49cd32320f0c9642beb9ade..f52be11fb03dbe056aaad1f6837843cf
      mamba_num_blocks = max_num_seqs * mamba_blocks_per_request + 1
      mamba_layers = [ln for g in mamba_groups for ln in g.layer_names]
      mamba_bytes = mamba_page * mamba_num_blocks * len(mamba_layers)
-@@ -2144,6 +2144,8 @@ def _max_memory_usage_bytes_from_groups(
+@@ -2144,6 +2143,8 @@ def _max_memory_usage_bytes_from_groups(
          mamba_page = get_uniform_page_size(
              [group.kv_cache_spec for group in mamba_groups]
          )
@@ -512,7 +512,7 @@ index ea87e17bdb42e5b2b49cd32320f0c9642beb9ade..f52be11fb03dbe056aaad1f6837843cf
              cdiv(group.kv_cache_spec.max_memory_usage_bytes(vllm_config), mamba_page)
              for group in mamba_groups
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index e4a21328660a40f1b3640536565fd99c8dff1945..f4aa2d26f70caa0a5c7a820a7783940c35f5f7eb 100644
+index e4a2132866..f4aa2d26f7 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
 @@ -2448,7 +2448,7 @@ class Scheduler(SchedulerInterface):
@@ -534,7 +534,7 @@ index e4a21328660a40f1b3640536565fd99c8dff1945..f4aa2d26f70caa0a5c7a820a7783940c
      def get_num_unfinished_requests(self) -> int:
          if self._pause_state == PauseState.PAUSED_ALL:
 diff --git a/vllm/v1/core/single_type_kv_cache_manager.py b/vllm/v1/core/single_type_kv_cache_manager.py
-index 75acb7f4973e83a2cf5464e789d5fa61618ea045..9528a5d643ec1c4273b30a1ef3f3e443ddb96c55 100644
+index 75acb7f497..9528a5d643 100644
 --- a/vllm/v1/core/single_type_kv_cache_manager.py
 +++ b/vllm/v1/core/single_type_kv_cache_manager.py
 @@ -1283,6 +1283,7 @@ class MambaManager(SingleTypeKVCacheManager):
@@ -577,9 +577,7 @@ index 75acb7f4973e83a2cf5464e789d5fa61618ea045..9528a5d643ec1c4273b30a1ef3f3e443
      def remove_skipped_blocks(
          self,
          request_id: str,
-@@ -1453,8 +1478,9 @@ class MambaManager(SingleTypeKVCacheManager):
-                 and last_state_block_idx
-                 < cdiv(processed_computed_tokens, self.block_size) - 1
+@@ -1455,8 +1481,9 @@ class MambaManager(SingleTypeKVCacheManager):
              ):
                  blocks = self.req_to_blocks[request_id]
                  if blocks[last_state_block_idx] != self._null_block:
@@ -589,6 +587,8 @@ index 75acb7f4973e83a2cf5464e789d5fa61618ea045..9528a5d643ec1c4273b30a1ef3f3e443
 +                        self.block_pool.free_blocks([blocks[last_state_block_idx]])
 +                        blocks[last_state_block_idx] = self._null_block
  
+     def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
+         """
 @@ -1670,6 +1697,7 @@ class MambaManager(SingleTypeKVCacheManager):
          if self.mamba_cache_mode == "align":
              self._allocated_block_reqs.discard(request_id)
@@ -610,6 +610,3 @@ index 75acb7f4973e83a2cf5464e789d5fa61618ea045..9528a5d643ec1c4273b30a1ef3f3e443
          num_cached_blocks_before = self.num_cached_block.get(request.request_id, 0)
          super().cache_blocks(request, num_tokens, retention_interval=retention_interval)
          num_cached_blocks_after = self.num_cached_block.get(request.request_id, 0)
- 
--- 
-2.34.1

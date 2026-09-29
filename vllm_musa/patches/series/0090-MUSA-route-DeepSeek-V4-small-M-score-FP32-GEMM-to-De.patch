@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: route DeepSeek-V4 small-M score FP32 GEMM to DeepGEMM
  1 file changed, 38 insertions(+)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 680dbe091a..b217132b23 100644
+index 511f8d33ca..12ded6f8c1 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
 @@ -90,11 +90,49 @@ def _fill_short_context_topk_indices(

@@ -8,7 +8,7 @@ Subject: [PATCH] fix(musa): serialize DSV4 long-prefill attention overlap
  1 file changed, 17 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 0b80883196..0c7dd09282 100644
+index 034d073dab..9628020587 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
 @@ -93,6 +93,10 @@ def _fill_short_context_topk_indices(
@@ -22,7 +22,7 @@ index 0b80883196..0c7dd09282 100644
  def _musa_deepseek_v4_use_score_fp32_deepgemm(
      a: torch.Tensor,
      weight: torch.Tensor,
-@@ -555,6 +559,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -553,6 +557,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          indexer = self.indexer
          compressor = self.compressor
          aux_streams = self.aux_stream_list
@@ -31,7 +31,7 @@ index 0b80883196..0c7dd09282 100644
  
          def project_query_and_cache_kv() -> torch.Tensor:
              q = self.wq_b(qr).view(-1, self.n_local_heads, self.head_dim)
-@@ -701,8 +707,13 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -699,8 +705,13 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
              self.ln_events[0],
              self.ln_events[1:4],
              aux_streams,
@@ -47,7 +47,7 @@ index 0b80883196..0c7dd09282 100644
          )
  
          return qr_kv, kv_score, indexer_kv_score, indexer_weights
-@@ -1127,12 +1138,15 @@ class DeepseekV4Indexer(nn.Module):
+@@ -1125,12 +1136,15 @@ class DeepseekV4Indexer(nn.Module):
  
          # compressor returns None and writes K to the indexer KV cache; the
          # join orders that write before indexer_op (skip_k_cache_insert=True).

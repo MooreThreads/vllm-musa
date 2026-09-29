@@ -28,6 +28,7 @@ MDM phases; ``musa_sync`` and the census doc both read ENTRIES.
 # Real annotations + ``typing.Optional`` (not ``X | None``) keep both the 3.9
 # floor and the by-path load working.
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -78,8 +79,28 @@ class DivSpec:
 
 
 def _patch_target(patch_path: Path) -> str:
-    """The first ``diff --git a/<path>`` target of a .patch (the file it edits)."""
-    m = _DIFF_RE.search(patch_path.read_text(errors="replace"))
+    """The first ``diff --git a/<path>`` target of a .patch (the file it edits).
+
+    An entry that cannot be read — chmod-000 (``PermissionError``), a dangling
+    symlink (``FileNotFoundError``), a directory (``IsADirectoryError``) — or
+    that is not a regular file at all (a fifo, which ``read_text`` would block
+    on forever) yields "" instead of raising or hanging: ENTRIES is built at
+    import time, so either one kills ``tools/musa_sync.py`` (and every other
+    by-path importer) before it can print a single verdict line. The series gate
+    turns those entries into rows instead, which it can only do if this module
+    survives long enough to be loaded.
+    """
+    try:
+        mode = patch_path.lstat().st_mode
+    except OSError:
+        return ""
+    if not stat.S_ISREG(mode):
+        return ""
+    try:
+        text = patch_path.read_text(errors="replace")
+    except OSError:
+        return ""
+    m = _DIFF_RE.search(text)
     return m.group(1) if m else ""
 
 

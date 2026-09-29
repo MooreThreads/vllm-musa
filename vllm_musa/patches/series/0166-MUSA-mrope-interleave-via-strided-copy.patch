@@ -1,3 +1,14 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 21 Sep 2026 14:46:28 +0800
+Subject: [PATCH] MUSA: mrope-interleave-via-strided-copy
+
+---
+ vllm/model_executor/layers/rotary_embedding/mrope.py | 11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/layers/rotary_embedding/mrope.py b/vllm/model_executor/layers/rotary_embedding/mrope.py
+index 4da8350171..23c7fde006 100644
 --- a/vllm/model_executor/layers/rotary_embedding/mrope.py
 +++ b/vllm/model_executor/layers/rotary_embedding/mrope.py
 @@ -228,12 +228,11 @@ def apply_interleaved_rope(x: torch.Tensor, mrope_section: list[int]) -> torch.T

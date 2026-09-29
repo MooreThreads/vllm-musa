@@ -9,7 +9,7 @@ Subject: [PATCH] MUSA: enable DSV4 learned paged-MQA decode
  2 files changed, 20 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index d1dc184..e0c08eb 100644
+index d1dc184868..e0c08ebdf3 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -217,12 +217,22 @@ def _musa_try_fill_decode_topk_from_materialized_logits(
@@ -50,7 +50,7 @@ index d1dc184..e0c08eb 100644
          return True
      if materialized_width <= topk:
 diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
-index 480e71f..03f79b5 100644
+index 480e71fe20..03f79b5320 100644
 --- a/vllm/v1/attention/backends/mla/indexer.py
 +++ b/vllm/v1/attention/backends/mla/indexer.py
 @@ -1036,8 +1036,11 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):

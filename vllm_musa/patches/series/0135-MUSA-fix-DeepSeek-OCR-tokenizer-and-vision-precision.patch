@@ -1,8 +1,13 @@
-From ebb830d6a7936965ae1fabd512b85c608f1993c8 Mon Sep 17 00:00:00 2001
-From: codex-local <codex-local@invalid>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
 Date: Mon, 31 Aug 2026 20:38:14 +0800
 Subject: [PATCH] MUSA: fix DeepSeek-OCR tokenizer and vision precision
 
+---
+ tests/tokenizers_/test_registry.py         | 30 +++++++++++++++++++++-
+ vllm/model_executor/models/deepseek_ocr.py | 19 ++++++++++++++
+ vllm/tokenizers/registry.py                | 10 ++++++++
+ 3 files changed, 58 insertions(+), 1 deletion(-)
 
 diff --git a/tests/tokenizers_/test_registry.py b/tests/tokenizers_/test_registry.py
 index 0a47426dc9..8a5851ab51 100644

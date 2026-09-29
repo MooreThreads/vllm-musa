@@ -9,14 +9,16 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 KERNEL = ROOT / "csrc/musa/attention/deepseek_v4_sparse_compressor.mu"
 WRAPPER = ROOT / "vllm_musa/kernels/deepseek_v4_sparse_compressor.py"
-SERIES_PATCH = (
-    ROOT
-    / "vllm_musa/patches/series/0164-MUSA-dispatch-DeepSeek-V4-sparse-compressor-to-nativ.patch"
-)
-FUSED_SAVE_PATCH = (
-    ROOT
-    / "vllm_musa/patches/series/0165-MUSA-fuse-DeepSeek-V4-save-partial-into-native-compre.patch"
-)
+def _series_patch(number: str) -> Path:
+    # Entries are addressed by number: `musa_sync regen` owns the slug part of
+    # the file name, so a rename must not break a source assertion.
+    matches = sorted((ROOT / "vllm_musa/patches/series").glob(f"{number}-*.patch"))
+    assert len(matches) == 1, f"series entry {number} resolves to {matches}"
+    return matches[0]
+
+
+SERIES_PATCH = _series_patch("0164")
+FUSED_SAVE_PATCH = _series_patch("0165")
 
 
 def _bf16_roundtrip(value: float) -> float:

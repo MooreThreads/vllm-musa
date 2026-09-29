@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: keep DSV4 learned indexer on graph capture
  1 file changed, 7 insertions(+)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 5f41c86..7f65da5 100644
+index 5f41c86307..7f65da56ca 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
-@@ -2137,6 +2137,13 @@
+@@ -2137,6 +2137,13 @@ class SparseAttnIndexer(CustomOp):
  
      def uses_musa_recent_indices(self) -> bool:
          """Whether this capture uses the MUSA recent-window approximation."""

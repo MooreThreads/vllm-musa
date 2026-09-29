@@ -118,10 +118,10 @@ index 98d034242f..5f41c86307 100644
              and not _musa_sparse_indexer_graph_exact_decode_enabled()
          )
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 38eba76ae4..0b80883196 100644
+index 1fd71cb5a0..034d073dab 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
-@@ -1018,6 +1018,22 @@ class DeepseekV4Indexer(nn.Module):
+@@ -1016,6 +1016,22 @@ class DeepseekV4Indexer(nn.Module):
              eager_scratch_pool=eager_scratch_pool,
          )
  
@@ -144,7 +144,7 @@ index 38eba76ae4..0b80883196 100644
          self.indexer_op = SparseAttnIndexer(
              self.k_cache,
              self.quant_block_size,
-@@ -1029,7 +1045,8 @@ class DeepseekV4Indexer(nn.Module):
+@@ -1027,7 +1043,8 @@ class DeepseekV4Indexer(nn.Module):
              self.topk_indices_buffer,
              skip_k_cache_insert=True,
              use_fp4_cache=self.use_fp4_kv,

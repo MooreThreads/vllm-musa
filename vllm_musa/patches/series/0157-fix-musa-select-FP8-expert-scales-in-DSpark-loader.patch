@@ -5,16 +5,15 @@ Subject: [PATCH] fix(musa): select FP8 expert scales in DSpark loader
 
 The DSpark draft loader has its own expert scale mapping. Honor the resolved
 DeepSeek quantization dtype when the HF config exposes the FP4 default.
-
 ---
- vllm/models/deepseek_v4/nvidia/dspark.py | 9 ++++++---
- 1 file changed, 6 insertions(+), 3 deletions(-)
+ vllm/models/deepseek_v4/nvidia/dspark.py | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/dspark.py b/vllm/models/deepseek_v4/nvidia/dspark.py
-index dsv4dspark..dsv4dspark2 100644
+index 2810ed4e5b..c2faf05a00 100644
 --- a/vllm/models/deepseek_v4/nvidia/dspark.py
 +++ b/vllm/models/deepseek_v4/nvidia/dspark.py
-@@ -423,10 +423,15 @@
+@@ -423,10 +423,15 @@ class DSparkDeepseekV4ForCausalLM(nn.Module):
                  ckpt_up_proj_name="w3",
                  num_experts=self.config.n_routed_experts,
              )

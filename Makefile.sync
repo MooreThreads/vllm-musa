@@ -5,7 +5,9 @@
 # merge), so trivial upstream drift auto-merges and only real conflicts need
 # hand-resolution.
 #
-# This is the *maintenance/generation* tool (developer + CI). The *build-time*
+# This is the *maintenance/generation* tool (developer-run; nothing in this
+# repository — no CI workflow, no git hook — invokes it automatically). The
+# *build-time*
 # application of the resulting series to third_party/vllm lives in
 # vllm_musa/patches/build_apply.py. There is no runtime source-patching fallback.
 #
