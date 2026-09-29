@@ -9,8 +9,9 @@
 #                      P2P transfer + MooncakeStoreConnector (kv_both)
 #   decode vllm      - MultiConnector: MooncakeConnector (kv_consumer) +
 #                      MooncakeStoreConnector (kv_consumer)
-#   toy proxy        - sends each request to prefill (max_tokens=1), then to
-#                      decode with the kv_transfer_params prefill returns
+#   mooncake proxy   - tags each request with a transfer_id, runs it on
+#                      prefill, then on decode, which pulls the KV from
+#                      prefill over RDMA via the prefill bootstrap server
 #
 # Usage: [VAR=value ...] mooncake_store_pd_serving.sh [MODEL_PATH]
 # Every setting below is an environment variable; logs go to LOG_DIR.
@@ -19,7 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-PROXY_SCRIPT="${REPO_ROOT}/third_party/vllm/tests/v1/kv_connector/nixl_integration/toy_proxy_server.py"
+PROXY_SCRIPT="${REPO_ROOT}/third_party/vllm/examples/disaggregated/mooncake_connector/mooncake_connector_proxy.py"
 
 # Model and devices. MUSA_VISIBLE_DEVICES lists two cards: prefill runs on
 # the first, decode on the second.
@@ -73,8 +74,8 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
 
-# VERIFY_KV=1 reports whether decode received a long prompt's KV from prefill
-# or recomputed it.
+# VERIFY_KV=1 checks that decode receives a long prompt's KV from prefill
+# instead of recomputing it.
 VERIFY_KV="${VERIFY_KV:-1}"
 LOG_DIR="${LOG_DIR:-/tmp/vllm-musa-mooncake-store-pd-example-$$}"
 
@@ -90,7 +91,7 @@ if [[ -z "${HOST_IP}" ]]; then
     exit 1
 fi
 if [[ ! -f "${PROXY_SCRIPT}" ]]; then
-    echo "Missing the pinned upstream toy proxy: ${PROXY_SCRIPT}" >&2
+    echo "Missing the pinned upstream Mooncake proxy: ${PROXY_SCRIPT}" >&2
     exit 1
 fi
 case "${VERIFY_KV}" in
@@ -342,18 +343,17 @@ wait_until "prefill vllm" "${PREFILL_PID}" \
 wait_until "decode vllm" "${DECODE_PID}" \
     curl --fail --silent "http://${HOST_IP}:${DECODE_PORT}/health"
 
-echo "Starting toy proxy on ${HOST_IP}:${PROXY_PORT}"
+# The proxy answers 503 until it has queried the prefill bootstrap server.
+echo "Starting Mooncake proxy on ${HOST_IP}:${PROXY_PORT}"
 setsid python3 "${PROXY_SCRIPT}" \
     --host "${HOST_IP}" \
     --port "${PROXY_PORT}" \
-    --prefiller-host "${HOST_IP}" \
-    --prefiller-port "${PREFILL_PORT}" \
-    --decoder-host "${HOST_IP}" \
-    --decoder-port "${DECODE_PORT}" \
+    --prefill "http://${HOST_IP}:${PREFILL_PORT}" "${BOOTSTRAP_PORT}" \
+    --decode "http://${HOST_IP}:${DECODE_PORT}" \
     >"${LOG_DIR}/proxy.log" 2>&1 &
 PIDS+=("$!")
 wait_until "proxy" "${PIDS[-1]}" \
-    curl --fail --silent "http://${HOST_IP}:${PROXY_PORT}/healthcheck"
+    grep -q "All prefiller instances are ready" "${LOG_DIR}/proxy.log"
 
 # Send one greedy completion through the proxy and print its text; fail on an
 # empty reply.
@@ -383,22 +383,19 @@ for prompt in "San Francisco is a" "Santa Clara is a"; do
 done
 
 if [[ "${VERIFY_KV}" == 1 ]]; then
-    # A unique multi-block prompt the decoder has never seen. The toy proxy
-    # sends no transfer_id, so the P2P MooncakeConnector stays idle and decode
-    # can only load prefill's KV from the store. Prefill writes the store
-    # asynchronously, so decode may look up before the write lands and
-    # recompute instead; that is reported, not treated as a failure.
+    # A unique multi-block prompt the decoder has never seen: its KV must come
+    # from prefill through the connectors, not from a decode-side recompute.
     long_prompt="$(python3 -c \
         'import sys; print(f"Run {sys.argv[1]}: " + " ".join(f"Record {i} is stored." for i in range(200)))' \
         "$$-${RANDOM}-$(date +%s)")"
     hits_before="$(decode_external_hits)"
     complete "${long_prompt}" >/dev/null
     hits_after="$(decode_external_hits)"
-    if ((hits_after > hits_before)); then
-        echo "Decode loaded $((hits_after - hits_before)) prompt tokens of KV from the Mooncake store"
-    else
-        echo "WARNING: decode recomputed the prompt; prefill's store write had not landed yet" >&2
+    if ((hits_after <= hits_before)); then
+        echo "Decode recomputed the prompt instead of loading its KV; see ${LOG_DIR}" >&2
+        exit 1
     fi
+    echo "Decode loaded $((hits_after - hits_before)) prompt tokens of KV from prefill"
 fi
 
 echo "PASS vllm-musa-mooncake-store-pd logs=${LOG_DIR}"

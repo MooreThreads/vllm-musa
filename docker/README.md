@@ -236,7 +236,7 @@ On a MUSA GPU you should see `musa available: True`.
 
 Mooncake over RoCE also requires host networking and explicit RDMA device
 access. See the
-[container and RDMA prerequisites](../docs/example/README.md#container-and-rdma-prerequisites)
+[container and RDMA prerequisites](../example/disaggregated_serving/README.md#container-and-rdma-prerequisites)
 for the documented container shape and host-runtime prerequisite.
 
 ## How it works (build stages)
