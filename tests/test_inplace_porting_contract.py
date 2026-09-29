@@ -324,7 +324,9 @@ def test_mooncake_example_uses_current_proxy_and_scoped_cleanup():
 
 
 def test_mooncake_rdma_container_contract_is_explicit():
-    example_readme = (ROOT / "docs" / "example" / "README.md").read_text()
+    example_readme = (
+        ROOT / "example" / "disaggregated_serving" / "README.md"
+    ).read_text()
     for token in (
         "--detach",
         "--entrypoint /bin/bash",

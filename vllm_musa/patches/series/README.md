@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **172 patches**. This branch includes the Qwen3.6 patches for common
+Currently **173 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -61,6 +61,9 @@ the physical FlashAttention layout. The upstream Mooncake Mamba-pool patch
 keeps the dedicated-pool eligibility scoped to MooncakeConnector, and the
 following MUSA adaptation preserves Mamba pool ownership through prefix-cache
 lookup/store, pin, CoW/deferred-free, reset, and eviction paths.
+`MultiConnector` skips Prometheus observation for a sub-connector that
+reports transfer stats without registering metrics, so `MooncakeConnector`
+can run alongside `MooncakeStoreConnector`.
 The unified attention kernel takes its per-token-head scale strides as
 `tl.int64` zeros rather than `int | None`, which Triton 3.2 rejects as a
 kernel-signature annotation.

@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 29 Sep 2026 09:31:19 +0000
+Subject: [PATCH] MUSA: skip Prometheus observe for connectors without metrics
+
+---
+ .../kv_transfer/kv_connector/v1/multi_connector.py     | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py b/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py
+index 957b15ea40..eac8d4a703 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py
+@@ -118,11 +118,11 @@ class MultiKVConnectorPromMetrics(KVConnectorPromMetrics):
+ 
+     def observe(self, transfer_stats_data: dict[str, Any], engine_idx: int = 0):
+         for connector_id, stats_data in transfer_stats_data.items():
+-            assert connector_id in self._prom_metrics, (
+-                f"{connector_id} is not contained in the list of registered connectors "
+-                f"with Prometheus metrics support: {self._prom_metrics.keys()}"
+-            )
+-            self._prom_metrics[connector_id].observe(stats_data["data"], engine_idx)
++            # A connector may report transfer stats for logging without
++            # registering Prometheus metrics (e.g. MooncakeConnector).
++            prom_metrics = self._prom_metrics.get(connector_id)
++            if prom_metrics is not None:
++                prom_metrics.observe(stats_data["data"], engine_idx)
+ 
+ 
+ class MultiConnector(KVConnectorBase_V1, SupportsHMA):
