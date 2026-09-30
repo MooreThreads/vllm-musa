@@ -1,0 +1,277 @@
+From 9e69c86877ec587f41e5859a978c7658fb225778 Mon Sep 17 00:00:00 2001
+From: Elon-yf <309721831+Elon-yf@users.noreply.github.com>
+Date: Tue, 22 Sep 2026 19:03:15 +0800
+Subject: [PATCH] MUSA: reuse PaddleOCR-VL rotary kernels locally
+
+
+diff --git a/tests/model_executor/paddleocr_vl_musa_fast_path_gpu.py b/tests/model_executor/paddleocr_vl_musa_fast_path_gpu.py
+new file mode 100644
+index 0000000..93fcdeb
+--- /dev/null
++++ b/tests/model_executor/paddleocr_vl_musa_fast_path_gpu.py
+@@ -0,0 +1,34 @@
++"""Broker-container correctness smoke for Paddle's model-local MUSA path."""
++
++import torchada  # noqa: F401
++import torch
++
++from vllm.model_executor.models.paddleocr_vl_musa import paddle_apply_rotary
++
++
++def main() -> None:
++    device = torch.device("cuda")
++    shape = (2, 4888, 16, 72)
++    base = torch.randn((2, 4888, 72, 16), device=device, dtype=torch.bfloat16)
++    x = base.permute(0, 1, 3, 2)
++    cos = torch.randn((4888, 36), device=device, dtype=torch.float32)
++    sin = torch.randn((4888, 36), device=device, dtype=torch.float32)
++    before = x.clone()
++    got = paddle_apply_rotary(x, cos, sin)
++    x_float = x.float()
++    x1, x2 = x_float.chunk(2, dim=-1)
++    expected = torch.cat(
++        (x1 * cos[None, :, None, :] - x2 * sin[None, :, None, :],
++         x2 * cos[None, :, None, :] + x1 * sin[None, :, None, :]),
++        dim=-1,
++    ).to(torch.bfloat16)
++    torch.testing.assert_close(got, expected, rtol=0, atol=0)
++    torch.testing.assert_close(x, before, rtol=0, atol=0)
++    assert got.shape == shape
++    assert got.dtype == torch.bfloat16
++    assert got.data_ptr() != x.data_ptr()
++    print("PASS paddle_musa_rotary_d72_stride_noninplace")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/model_executor/test_paddleocr_vl_musa_fast_path.py b/tests/model_executor/test_paddleocr_vl_musa_fast_path.py
+new file mode 100644
+index 0000000..2ea5209
+--- /dev/null
++++ b/tests/model_executor/test_paddleocr_vl_musa_fast_path.py
+@@ -0,0 +1,34 @@
++from pathlib import Path
++
++
++MODEL = Path(__file__).parents[2] / "vllm/model_executor/models/paddleocr_vl.py"
++HELPER = Path(__file__).parents[2] / "vllm/model_executor/models/paddleocr_vl_musa.py"
++
++
++def test_paddle_fast_path_is_model_local_and_narrow():
++    source = MODEL.read_text(encoding="utf-8")
++    helper = HELPER.read_text(encoding="utf-8")
++    assert "paddle_musa_fast_path(vllm_config)" in source
++    assert "register_attention_backends" in source
++    assert "@ApplyRotaryEmb.register_oot" not in source
++    assert "model_type\", None) != \"paddleocr_vl\"" in helper
++    assert "list((rope_parameters or {}).get(\"mrope_section\", ())) == [16, 24, 24]" in helper
++    assert "get_default_ir_op_priority" not in source + helper
++
++
++def test_paddle_path_reuses_existing_kernels_and_keeps_fp32_contract():
++    helper = HELPER.read_text(encoding="utf-8")
++    assert "vllm_musa.jit_kernel.csrc.rope" in helper
++    assert "forward_cuda(positions, query, key)" in helper
++    assert "enable_fp32_compute=True" in MODEL.read_text(encoding="utf-8")
++    assert "x_work = x if x.dtype == torch.float32 else x.float()" in helper
++    assert "output = x_work.clone()" in helper
++    assert "rotary_dim = cos.shape[-1] * 2" in helper
++
++
++def test_paddle_patch_does_not_register_global_rotary_ops():
++    source = MODEL.read_text(encoding="utf-8")
++    helper = HELPER.read_text(encoding="utf-8")
++    assert "register_oot" not in source + helper
++    assert "direct_register_custom_op" not in source + helper
++    assert "get_default_ir_op_priority" not in source + helper
+diff --git a/vllm/model_executor/models/paddleocr_vl.py b/vllm/model_executor/models/paddleocr_vl.py
+index bd635aa..439f369 100644
+--- a/vllm/model_executor/models/paddleocr_vl.py
++++ b/vllm/model_executor/models/paddleocr_vl.py
+@@ -81,6 +81,10 @@ from .utils import (
+     maybe_prefix,
+ )
+ from .vision import get_vit_attn_backend
++from .paddleocr_vl_musa import (
++    install_paddle_musa_rotary,
++    paddle_musa_fast_path,
++)
+
+
+ def smart_resize(
+@@ -971,6 +975,11 @@ class PaddleOCRVLForConditionalGeneration(nn.Module, SupportsMultiModal, Support
+
+     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+         super().__init__()
++        musa_fast_path = paddle_musa_fast_path(vllm_config)
++        if musa_fast_path:
++            from vllm_musa.platform import register_attention_backends
++
++            register_attention_backends()
+         config = vllm_config.model_config.hf_config
+         if hasattr(config, "text_config"):
+             text_config = config.text_config.to_dict()
+@@ -1001,6 +1010,12 @@ class PaddleOCRVLForConditionalGeneration(nn.Module, SupportsMultiModal, Support
+                 if not isinstance(layer, PPMissingLayer):
+                     layer.self_attn.rotary_emb.is_neox_style = True
+
++            install_paddle_musa_rotary(
++                self.visual,
++                self.language_model,
++                fast=musa_fast_path,
++            )
++
+         self.make_empty_intermediate_tensors = (
+             self.language_model.make_empty_intermediate_tensors
+         )
+diff --git a/vllm/model_executor/models/paddleocr_vl_musa.py b/vllm/model_executor/models/paddleocr_vl_musa.py
+new file mode 100644
+index 0000000..0af76d8
+--- /dev/null
++++ b/vllm/model_executor/models/paddleocr_vl_musa.py
+@@ -0,0 +1,145 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++"""PaddleOCR-VL-only MUSA rotary adapters.
++
++The visual path reuses vllm-musa's existing strided rotary kernel. The
++language path delegates to the pinned vLLM MRoPE implementation. Nothing here
++registers a global CustomOp or changes platform defaults.
++"""
++
++from __future__ import annotations
++
++import torch
++
++
++def paddle_musa_fast_path(vllm_config: object) -> bool:
++    """Narrow PaddleOCR-VL-1.6 MUSA scope; return false for other models."""
++    if getattr(torch.version, "musa", None) is None:
++        return False
++    model_config = getattr(vllm_config, "model_config", None)
++    hf_config = getattr(model_config, "hf_config", None)
++    if getattr(hf_config, "model_type", None) != "paddleocr_vl":
++        return False
++    vision = getattr(hf_config, "vision_config", None)
++    text = getattr(hf_config, "text_config", hf_config)
++    rope_parameters = getattr(text, "rope_parameters", None) or getattr(
++        hf_config, "rope_parameters", None
++    )
++    return (
++        getattr(vision, "hidden_size", None) == 1152
++        and (
++            getattr(vision, "num_hidden_layers", None) == 27
++            or getattr(vision, "depth", None) == 27
++        )
++        and getattr(vision, "num_attention_heads", None) == 16
++        and getattr(vision, "patch_size", None) == 14
++        and getattr(vision, "image_size", None) == 384
++        and getattr(text, "hidden_size", None) == 1024
++        and getattr(text, "num_attention_heads", None) == 16
++        and getattr(text, "num_key_value_heads", None) == 2
++        and list((rope_parameters or {}).get("mrope_section", ())) == [16, 24, 24]
++    )
++
++
++def paddle_apply_rotary(
++    x: torch.Tensor,
++    cos: torch.Tensor,
++    sin: torch.Tensor,
++) -> torch.Tensor:
++    """Use the existing MUSA rotary kernel with Paddle's FP32 contract."""
++    if x.ndim == 3:
++        x = x.unsqueeze(0)
++        squeeze = True
++    elif x.ndim == 4:
++        squeeze = False
++    else:
++        raise ValueError(f"Paddle rotary expects rank 3 or 4, got {x.ndim}")
++    if cos.shape != sin.shape or cos.ndim != 2:
++        raise ValueError("cos and sin must have shape [seqlen, rotary_dim // 2]")
++    rotary_dim = cos.shape[-1] * 2
++    if rotary_dim > x.shape[-1] or rotary_dim % 2:
++        raise ValueError("rotary_dim must be even and no larger than head_dim")
++    x_work = x if x.dtype == torch.float32 else x.float()
++    cache = torch.cat((cos.float(), sin.float()), dim=-1).to(x_work.dtype)
++    cache = cache.contiguous()
++    positions = torch.arange(
++        x_work.shape[1], device=x_work.device, dtype=torch.long
++    ).expand(x_work.shape[0], -1)
++    output = x_work.clone()
++    from vllm_musa.jit_kernel.csrc.rope import rotary_embedding
++
++    rotary_embedding(positions, output, None, x_work.shape[-1], cache, True)
++    if squeeze:
++        output = output.squeeze(0)
++    return output.to(dtype=x.dtype) if x.dtype != torch.float32 else output
++
++
++class PaddleMusaApplyRotary(torch.nn.Module):
++    """Model-local ApplyRotary adapter; no global CustomOp registration."""
++
++    def __init__(self, inner: torch.nn.Module, fast: bool) -> None:
++        super().__init__()
++        self.inner = inner
++        self.fast = fast
++
++    def forward(
++        self,
++        x: torch.Tensor,
++        cos: torch.Tensor,
++        sin: torch.Tensor,
++    ) -> torch.Tensor:
++        if not self.fast:
++            return self.inner(x, cos, sin)
++        x, cos, sin, origin_shape, origin_dtype = self.inner._pre_process(
++            x, cos, sin
++        )
++        output = paddle_apply_rotary(x, cos, sin)
++        return self.inner._post_process(output, origin_shape, origin_dtype)
++
++
++class PaddleMusaRotaryWrapper(torch.nn.Module):
++    """Keep the original language MRoPE module and its caches."""
++
++    def __init__(self, inner: torch.nn.Module, fast: bool) -> None:
++        super().__init__()
++        self.inner = inner
++        self.fast = fast
++
++    def __getattr__(self, name: str):
++        try:
++            return super().__getattr__(name)
++        except AttributeError:
++            return getattr(self.inner, name)
++
++    def forward(
++        self,
++        positions: torch.Tensor,
++        query: torch.Tensor,
++        key: torch.Tensor,
++    ):
++        if not self.fast or positions.ndim != 2:
++            return self.inner(positions, query, key)
++        return self.inner.forward_cuda(positions, query, key)
++
++
++def install_paddle_musa_rotary(
++    visual: torch.nn.Module,
++    language: torch.nn.Module,
++    fast: bool,
++) -> None:
++    """Replace only Paddle's visual Apply and language MRoPE instances."""
++    if not fast:
++        return
++    for module in list(visual.modules()):
++        if module.__class__.__name__ == "SiglipAttention":
++            module.apply_rotary_emb = PaddleMusaApplyRotary(
++                module.apply_rotary_emb, fast=True
++            )
++    for module in list(language.modules()):
++        self_attn = getattr(module, "self_attn", None)
++        rotary_emb = getattr(self_attn, "rotary_emb", None)
++        if rotary_emb is not None and hasattr(rotary_emb, "mrope_section"):
++            module.self_attn.rotary_emb = PaddleMusaRotaryWrapper(
++                rotary_emb, fast=True
++            )
