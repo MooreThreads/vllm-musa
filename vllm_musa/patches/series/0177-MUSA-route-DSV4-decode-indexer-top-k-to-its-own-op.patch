@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 29 Sep 2026 13:44:25 +0800
+Subject: [PATCH] MUSA: route DSV4 decode indexer top-k to its own op
+
+DeepSeek-V4 rows of the materialized decode indexer path select their
+top-k with deepseek_v4_sparse_indexer_topk_decode; GLM-5.2 rows keep
+sparse_indexer_topk_decode.
+---
+ vllm/model_executor/layers/sparse_attn_indexer.py | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 482d7186e2..a02193cd96 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -287,10 +287,16 @@ def _musa_try_fill_decode_topk_from_materialized_logits(
+     )
+     kv_paged = kv_cache.unsqueeze(-2)
+ 
++    select_topk = (
++        _musa_custom_ops.deepseek_v4_sparse_indexer_topk_decode
++        if is_deepseek_v4
++        else _musa_custom_ops.sparse_indexer_topk_decode
++    )
++
+     def _select(logits: torch.Tensor) -> bool:
+         if logits.shape[0] < rows or logits.shape[1] < materialized_width:
+             return False
+-        _musa_custom_ops.sparse_indexer_topk_decode(
++        select_topk(
+             logits[:rows, :materialized_width],
+             seq_lens,
+             topk_indices[:rows, :topk],

@@ -771,6 +771,251 @@ def mhc_pre_big_fuse_decode_split_kernel(
 
 
 @lru_cache(maxsize=None)
+def mhc_pre_decode_norm_fuse_kernel(
+    hidden_size: int,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+    n_splits: int,
+    hc_mult: int = 4,
+    pass_config: str = "aggressive_index32",
+):
+    """Decode MHC pre fused with the weighted RMSNorm of the layer input.
+
+    Block ``(token, 0)`` writes the normalized layer input and block
+    ``(token, 1)`` writes the post/comb mixes. Both reduce the split-K
+    partials cooperatively in split order and follow the operation order of
+    ``mhc_pre_big_fuse_decode_split_kernel`` plus
+    ``mhc_weighted_rmsnorm_mudnn_like_kernel``.
+    """
+    num_tokens = T.dynamic("num_tokens")
+    hc_mult3 = hc_mult * (2 + hc_mult)
+    n_cols = hc_mult3 + 1
+    threads = 128
+    elements_per_thread = 8
+    chunks = hidden_size // (threads * elements_per_thread)
+    n_partials = n_splits * n_cols
+    load_iters = (n_partials + threads - 1) // threads
+    assert hc_mult == 4
+    assert n_splits > 0
+    assert sinkhorn_repeat > 0
+    assert hidden_size % (threads * elements_per_thread) == 0
+
+    @tilelang.jit(
+        target="musa",
+        pass_configs=_mhc_pre_big_fuse_pass_configs(tilelang, pass_config),
+    )
+    def _mhc_pre_decode_norm_fuse_kernel():
+        @T.prim_func
+        def _kernel(
+            gemm_out_mul: T.Tensor((n_splits, num_tokens, hc_mult3), T.float32),
+            gemm_out_sqrsum: T.Tensor((n_splits, num_tokens), T.float32),
+            hc_scale: T.Tensor((3,), T.float32),
+            hc_base: T.Tensor((hc_mult3,), T.float32),
+            residual: T.Tensor((num_tokens, hc_mult, hidden_size), T.bfloat16),
+            norm_weight: T.Tensor((hidden_size,), T.bfloat16),
+            post_mix: T.Tensor((num_tokens, hc_mult), T.float32),
+            comb_mix: T.Tensor((num_tokens, hc_mult * hc_mult), T.float32),
+            layer_input: T.Tensor((num_tokens, hidden_size), T.bfloat16),
+            norm_eps: T.float32,
+        ):
+            with T.Kernel(num_tokens, 2, threads=threads) as (token_id, role):
+                tx = T.get_thread_binding()
+                partials = T.alloc_shared((n_partials,), T.float32)
+                col_sums = T.alloc_shared((n_cols,), T.float32)
+                pre_shared = T.alloc_shared((hc_mult,), T.float32)
+                mixes_shared = T.alloc_shared((hc_mult3,), T.float32)
+                norm_shared = T.alloc_shared((threads,), T.float32)
+
+                for load_iter in T.unroll(load_iters):
+                    idx = load_iter * threads + tx
+                    if idx < n_partials:
+                        split_id = idx // n_cols
+                        col = idx % n_cols
+                        partials[idx] = T.if_then_else(
+                            col < hc_mult3,
+                            gemm_out_mul[
+                                split_id,
+                                token_id,
+                                T.min(col, hc_mult3 - 1),
+                            ],
+                            gemm_out_sqrsum[split_id, token_id],
+                        )
+                T.sync_threads()
+
+                if tx < n_cols:
+                    col_sum = T.alloc_var(T.float32, init=0.0)
+                    for split_id in T.serial(n_splits):
+                        col_sum += partials[split_id * n_cols + tx]
+                    col_sums[tx] = col_sum
+                T.sync_threads()
+
+                if role == 0:
+                    if tx < hc_mult:
+                        rms_for_layer = T.rsqrt(
+                            col_sums[hc_mult3] / float(hc_mult * hidden_size) + rms_eps
+                        )
+                        pre_shared[tx] = (
+                            T.sigmoid(
+                                col_sums[tx] * rms_for_layer * hc_scale[0] + hc_base[tx]
+                            )
+                            + hc_pre_eps
+                        )
+                    T.sync_threads()
+
+                    pre_local = T.alloc_local((hc_mult,), T.float32)
+                    values = T.alloc_local((chunks * elements_per_thread,), T.float32)
+                    sumsq = T.alloc_local((1,), T.float32)
+                    rrms = T.alloc_local((1,), T.float32)
+                    rsqrt_estimate = T.alloc_local((1,), T.float32)
+                    for hc_id in T.unroll(hc_mult):
+                        pre_local[hc_id] = pre_shared[hc_id]
+
+                    sumsq[0] = 0.0
+                    for chunk in T.unroll(chunks):
+                        base = (
+                            chunk * threads * elements_per_thread
+                            + tx * elements_per_thread
+                        )
+                        for elem in T.unroll(elements_per_thread):
+                            value_id = chunk * elements_per_thread + elem
+                            values[value_id] = 0.0
+                            for hc_id in T.unroll(hc_mult):
+                                values[value_id] += pre_local[hc_id] * T.cast(
+                                    residual[token_id, hc_id, base + elem],
+                                    T.float32,
+                                )
+                            # The unfused path stores the layer input as bf16
+                            # before normalizing it.
+                            values[value_id] = T.cast(
+                                T.cast(values[value_id], T.bfloat16),
+                                T.float32,
+                            )
+                            sumsq[0] += values[value_id] * values[value_id]
+
+                    if tx >= 64:
+                        norm_shared[tx] = sumsq[0]
+                    T.sync_threads()
+                    if tx < 64:
+                        sumsq[0] += norm_shared[tx + 64]
+                    T.sync_threads()
+                    if tx >= 32:
+                        norm_shared[tx] = sumsq[0]
+                    T.sync_threads()
+                    if tx < 32:
+                        sumsq[0] += norm_shared[tx + 32]
+                    if tx < 32:
+                        sumsq[0] += T.shfl_down(sumsq[0], 16)
+                        sumsq[0] += T.shfl_down(sumsq[0], 8)
+                        sumsq[0] += T.shfl_down(sumsq[0], 4)
+                        sumsq[0] += T.shfl_down(sumsq[0], 2)
+                        sumsq[0] += T.shfl_down(sumsq[0], 1)
+                    if tx == 0:
+                        norm_shared[0] = sumsq[0]
+                    T.sync_threads()
+
+                    sumsq[0] = norm_shared[0] / float(hidden_size) + norm_eps
+                    rsqrt_estimate[0] = T.ieee_frsqrt(sumsq[0])
+                    rrms[0] = rsqrt_estimate[0] * (
+                        T.cast(1.5, T.float32)
+                        - T.cast(0.5, T.float32)
+                        * sumsq[0]
+                        * rsqrt_estimate[0]
+                        * rsqrt_estimate[0]
+                    )
+
+                    for chunk in T.unroll(chunks):
+                        base = (
+                            chunk * threads * elements_per_thread
+                            + tx * elements_per_thread
+                        )
+                        for elem in T.unroll(elements_per_thread):
+                            value_id = chunk * elements_per_thread + elem
+                            layer_input[token_id, base + elem] = T.cast(
+                                (values[value_id] * rrms[0])
+                                * T.cast(norm_weight[base + elem], T.float32),
+                                T.bfloat16,
+                            )
+                else:
+                    if tx < 32:
+                        rms = T.alloc_fragment((1,), T.float32)
+                        mixes = T.alloc_fragment((hc_mult3,), T.float32)
+                        T.clear(mixes)
+                        if n_splits == 1:
+                            rms[0] = partials[hc_mult3]
+                        else:
+                            rms_part = T.alloc_fragment((1,), T.float32)
+                            rms_part[0] = 0.0
+                            for split_base in T.serial(T.ceildiv(n_splits, 32)):
+                                split_id = split_base * 32 + tx
+                                rms_part[0] += T.if_then_else(
+                                    split_id < n_splits,
+                                    partials[
+                                        T.min(split_id, n_splits - 1) * n_cols
+                                        + hc_mult3
+                                    ],
+                                    0.0,
+                                )
+                            rms[0] = T.warp_reduce_sum(rms_part[0])
+                        rms[0] = T.rsqrt(
+                            rms[0] / float(hc_mult * hidden_size) + rms_eps
+                        )
+                        for j in T.Parallel(hc_mult3):
+                            mixes[j] = col_sums[j] * rms[0]
+                        T.copy(mixes, mixes_shared, disable_tma=True)
+
+                    T.sync_threads()
+
+                    if tx < 32:
+                        cm = T.alloc_fragment((hc_mult, hc_mult), T.float32)
+                        for j in T.Parallel(hc_mult):
+                            post_mix[token_id, j] = (
+                                T.sigmoid(
+                                    mixes_shared[j + hc_mult] * hc_scale[1]
+                                    + hc_base[j + hc_mult]
+                                )
+                                * hc_post_mult_value
+                            )
+                        for j, k in T.Parallel(hc_mult, hc_mult):
+                            cm[j, k] = (
+                                mixes_shared[j * hc_mult + k + hc_mult * 2]
+                                * hc_scale[2]
+                                + hc_base[j * hc_mult + k + hc_mult * 2]
+                            )
+
+                        row_sum = T.alloc_fragment((hc_mult,), T.float32)
+                        col_sum_cm = T.alloc_fragment((hc_mult,), T.float32)
+                        row_max = T.alloc_fragment((hc_mult,), T.float32)
+                        T.reduce_max(cm, row_max, dim=1)
+                        for j, k in T.Parallel(hc_mult, hc_mult):
+                            cm[j, k] = T.exp(cm[j, k] - row_max[j])
+                        T.reduce_sum(cm, row_sum, dim=1)
+                        for j, k in T.Parallel(hc_mult, hc_mult):
+                            cm[j, k] = cm[j, k] / row_sum[j] + hc_sinkhorn_eps
+
+                        T.reduce_sum(cm, col_sum_cm, dim=0)
+                        for j, k in T.Parallel(hc_mult, hc_mult):
+                            cm[j, k] = cm[j, k] / (col_sum_cm[k] + hc_sinkhorn_eps)
+
+                        for _ in T.serial(sinkhorn_repeat - 1):
+                            T.reduce_sum(cm, row_sum, dim=1)
+                            for j, k in T.Parallel(hc_mult, hc_mult):
+                                cm[j, k] = cm[j, k] / (row_sum[j] + hc_sinkhorn_eps)
+                            T.reduce_sum(cm, col_sum_cm, dim=0)
+                            for j, k in T.Parallel(hc_mult, hc_mult):
+                                cm[j, k] = cm[j, k] / (col_sum_cm[k] + hc_sinkhorn_eps)
+
+                        for j, k in T.Parallel(hc_mult, hc_mult):
+                            comb_mix[token_id, j * hc_mult + k] = cm[j, k]
+
+        return _kernel
+
+    return _mhc_pre_decode_norm_fuse_kernel()
+
+
+@lru_cache(maxsize=None)
 def mhc_weighted_rmsnorm_kernel(
     hidden_size: int,
     threads: int = 128,

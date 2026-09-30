@@ -6,7 +6,9 @@ from __future__ import annotations
 import torch
 
 _GROUP_SIZE = 128
-_DEEPGEMM_MIN_TOKENS = 128
+# The fused GEMV re-reads the weight per token row while DeepGEMM stays
+# weight-bound; keep the GEMV only for single-request verify shapes.
+_DEEPGEMM_MIN_TOKENS = 8
 
 
 def _is_musa_tensor(tensor: torch.Tensor) -> bool:
@@ -80,7 +82,7 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
     out: torch.Tensor,
     equation: str,
 ) -> tuple[bool, str]:
-    """Dispatch ``bhr,hdr->bhd`` to DeepGEMM or GEMV based on token count."""
+    """Dispatch ``bhr,hdr->bhd`` to DeepGEMM or, for small M, the fused GEMV."""
     if equation != "bhr,hdr->bhd":
         return False, f"unsupported equation {equation!r}"
     if activation.dim() != 3 or out.dim() != 3:

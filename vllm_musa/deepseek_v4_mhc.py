@@ -182,6 +182,27 @@ def mhc_pre_musa_with_norm(
     norm_weight: torch.Tensor | None = None,
     norm_eps: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if norm_weight is not None and (
+        _select_mhc_pre_auto_impl(residual) == "deepgemm_big_fuse"
+    ):
+        try:
+            fused_result = _mhc_pre_deepgemm_norm_fuse_provider(
+                residual,
+                fn,
+                hc_scale,
+                hc_base,
+                rms_eps,
+                hc_pre_eps,
+                hc_sinkhorn_eps,
+                hc_post_mult_value,
+                sinkhorn_repeat,
+                norm_weight,
+                norm_eps,
+            )
+        except (ImportError, OSError, NotImplementedError, RuntimeError):
+            fused_result = None
+        if fused_result is not None:
+            return fused_result
     post_mix, comb_mix, layer_input = mhc_pre_musa(
         residual,
         fn,
@@ -236,18 +257,14 @@ def mhc_fused_post_pre_musa(
         hc_sinkhorn_eps,
         hc_post_mult_value,
         sinkhorn_repeat,
+        norm_weight,
+        norm_eps,
     )
     if fused_result is not None:
-        residual_cur, post_mix_cur, comb_mix_cur, layer_input_cur = fused_result
-        layer_input_cur = _apply_optional_rms_norm(
-            layer_input_cur,
-            norm_weight,
-            norm_eps,
-        )
-        return residual_cur, post_mix_cur, comb_mix_cur, layer_input_cur
+        return fused_result
 
     residual_cur = mhc_post_musa(x, residual, post_layer_mix, comb_res_mix)
-    post_mix_cur, comb_mix_cur, layer_input_cur = mhc_pre_musa(
+    post_mix_cur, comb_mix_cur, layer_input_cur = mhc_pre_musa_with_norm(
         residual_cur,
         fn,
         hc_scale,
@@ -257,9 +274,6 @@ def mhc_fused_post_pre_musa(
         hc_sinkhorn_eps,
         hc_post_mult_value,
         sinkhorn_repeat,
-    )
-    layer_input_cur = _apply_optional_rms_norm(
-        layer_input_cur,
         norm_weight,
         norm_eps,
     )
@@ -279,6 +293,8 @@ def _try_mhc_fused_post_prenorm_musa(
     hc_sinkhorn_eps: float,
     hc_post_mult_value: float,
     sinkhorn_repeat: int,
+    norm_weight: torch.Tensor | None = None,
+    norm_eps: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None:
     hc_mult = residual.shape[-2]
     hidden_size = residual.shape[-1]
@@ -369,6 +385,34 @@ def _try_mhc_fused_post_prenorm_musa(
         residual_cur,
     )
 
+    fused_result = None
+    if _mhc_pre_decode_norm_fuse_supported(residual_cur, norm_weight):
+        try:
+            fused_result = _mhc_pre_decode_norm_fuse(
+                gemm_out_mul,
+                gemm_out_sqrsum,
+                hc_scale,
+                hc_base,
+                residual_cur,
+                norm_weight,
+                norm_eps,
+                rms_eps,
+                hc_pre_eps,
+                hc_sinkhorn_eps,
+                hc_post_mult_value,
+                sinkhorn_repeat,
+            )
+        except (ImportError, OSError, NotImplementedError, RuntimeError):
+            fused_result = None
+    if fused_result is not None:
+        post_mix_cur, comb_mix_cur, layer_input_cur = fused_result
+        return (
+            residual_cur.view(*outer_shape, hc_mult, hidden_size),
+            post_mix_cur.view(*outer_shape, hc_mult, 1),
+            comb_mix_cur.view(*outer_shape, hc_mult, hc_mult),
+            layer_input_cur.view(*outer_shape, hidden_size),
+        )
+
     post_mix_cur = torch.empty(
         num_tokens,
         hc_mult,
@@ -412,6 +456,11 @@ def _try_mhc_fused_post_prenorm_musa(
         post_mix_cur,
         comb_mix_cur,
         layer_input_cur,
+    )
+    layer_input_cur = _apply_optional_rms_norm(
+        layer_input_cur,
+        norm_weight,
+        norm_eps,
     )
 
     return (
@@ -901,6 +950,154 @@ def _mhc_pre_deepgemm_big_fuse_provider(
         layer_input,
     )
 
+    return (
+        post_mix.view(*outer_shape, hc_mult, 1),
+        comb_mix.view(*outer_shape, hc_mult, hc_mult),
+        layer_input.view(*outer_shape, hidden_size),
+    )
+
+
+_MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS = 64
+
+
+def _mhc_pre_decode_norm_fuse_supported(
+    residual_flat: torch.Tensor,
+    norm_weight: torch.Tensor | None,
+) -> bool:
+    num_tokens, hc_mult, hidden_size = residual_flat.shape
+    return (
+        norm_weight is not None
+        and residual_flat.device.type == "musa"
+        and residual_flat.dtype == torch.bfloat16
+        and residual_flat.is_contiguous()
+        and 0 < num_tokens <= _MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS
+        and hc_mult == 4
+        and hidden_size == 4096
+        and norm_weight.shape == (hidden_size,)
+        and norm_weight.dtype == torch.bfloat16
+        and norm_weight.device == residual_flat.device
+        and norm_weight.is_contiguous()
+    )
+
+
+def _mhc_pre_decode_norm_fuse(
+    gemm_out_mul: torch.Tensor,
+    gemm_out_sqrsum: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    residual_flat: torch.Tensor,
+    norm_weight: torch.Tensor,
+    norm_eps: float,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    num_tokens, hc_mult, hidden_size = residual_flat.shape
+    post_mix = torch.empty(
+        (num_tokens, hc_mult),
+        dtype=torch.float32,
+        device=residual_flat.device,
+    )
+    comb_mix = torch.empty(
+        (num_tokens, hc_mult * hc_mult),
+        dtype=torch.float32,
+        device=residual_flat.device,
+    )
+    layer_input = torch.empty(
+        (num_tokens, hidden_size),
+        dtype=torch.bfloat16,
+        device=residual_flat.device,
+    )
+
+    from vllm_musa.deepseek_v4_jit.tilelang_kernels import (
+        mhc_pre_decode_norm_fuse_kernel,
+    )
+
+    mhc_pre_decode_norm_fuse_kernel(
+        hidden_size,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+        n_splits=gemm_out_mul.shape[0],
+        hc_mult=hc_mult,
+    )(
+        gemm_out_mul,
+        gemm_out_sqrsum,
+        hc_scale,
+        hc_base,
+        residual_flat,
+        norm_weight,
+        post_mix,
+        comb_mix,
+        layer_input,
+        float(norm_eps),
+    )
+    return post_mix, comb_mix, layer_input
+
+
+def _mhc_pre_deepgemm_norm_fuse_provider(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+    norm_weight: torch.Tensor,
+    norm_eps: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+    hc_mult = residual.shape[-2]
+    hidden_size = residual.shape[-1]
+    hc_mult3 = hc_mult * (2 + hc_mult)
+    supported = (
+        residual.dtype == torch.bfloat16
+        and residual.is_contiguous()
+        and fn.dtype == torch.float32
+        and fn.is_contiguous()
+        and fn.shape == (hc_mult3, hc_mult * hidden_size)
+        and hc_scale.dtype == torch.float32
+        and hc_scale.is_contiguous()
+        and hc_scale.shape == (3,)
+        and hc_base.dtype == torch.float32
+        and hc_base.is_contiguous()
+        and hc_base.shape == (hc_mult3,)
+    )
+    if not supported:
+        return None
+    outer_shape = residual.shape[:-2]
+    residual_flat = residual.view(-1, hc_mult, hidden_size)
+    if not _mhc_pre_decode_norm_fuse_supported(residual_flat, norm_weight):
+        return None
+
+    split_k = _get_mhc_pre_deepgemm_split_k(
+        residual_flat.shape[0],
+        hc_mult * hidden_size,
+    )
+    gemm_out_mul, gemm_out_sqrsum = _mhc_prenorm_gemm_sqrsum_deepgemm(
+        residual_flat,
+        fn,
+        split_k=split_k,
+    )
+    post_mix, comb_mix, layer_input = _mhc_pre_decode_norm_fuse(
+        gemm_out_mul,
+        gemm_out_sqrsum,
+        hc_scale,
+        hc_base,
+        residual_flat,
+        norm_weight,
+        norm_eps,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+    )
     return (
         post_mix.view(*outer_shape, hc_mult, 1),
         comb_mix.view(*outer_shape, hc_mult, hc_mult),

@@ -111,7 +111,7 @@ def test_mp48_dsv4_native_gemv_boundary_and_shape_isolation():
             assert thresholds_for_shape(unrelated).source == "uncalibrated-shape"
 
 
-def test_mp56_dsv4_native_gemv_boundary_matches_mp48_mp60():
+def test_mp56_dsv4_native_gemv_boundary():
     for graph_mode in ("eager", "capture"):
         shape = _shape(
             multiprocessor_count=56,
@@ -124,8 +124,8 @@ def test_mp56_dsv4_native_gemv_boundary_matches_mp48_mp60():
             gemv_block="16x8",
             graph_mode=graph_mode,
         )
-        assert thresholds_for_shape(shape).gemv_max_tokens == 12
-        for num_tokens in (1, 2, 8, 11, 12, 13, 16):
+        assert thresholds_for_shape(shape).gemv_max_tokens == 8
+        for num_tokens in (1, 2, 5, 8, 9, 10, 12, 13, 16):
             backend = select_fused_moe_backend(
                 shape=shape,
                 num_tokens=num_tokens,
@@ -135,10 +135,85 @@ def test_mp56_dsv4_native_gemv_boundary_matches_mp48_mp60():
             )
             expected = (
                 MusaFusedMoeBackend.GEMV
-                if num_tokens <= 12
+                if num_tokens <= 8
                 else MusaFusedMoeBackend.UPSTREAM
             )
             assert backend == expected
+
+
+def _dsv4_tp8_shape(multiprocessor_count, graph_mode):
+    return _shape(
+        multiprocessor_count=multiprocessor_count,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+        graph_mode=graph_mode,
+    )
+
+
+def test_mp56_dsv4_triton_configs_cover_the_upstream_decode_ladder():
+    for graph_mode in ("eager", "capture"):
+        shape = _dsv4_tp8_shape(56, graph_mode)
+        # Every calibrated target (5R) and draft (4R) decode shape.
+        for num_tokens in sorted(POLICY._DSV4_TP8_MP56_TRITON_CONFIGS):
+            config = POLICY.triton_config_for_shape(shape, num_tokens)
+            assert config is not None, num_tokens
+            assert config["BLOCK_SIZE_M"] == 16
+            assert config["BLOCK_SIZE_K"] == 128
+            assert config["GROUP_SIZE_M"] == 1
+            assert config["num_stages"] == 1
+        # Outside the calibrated range the tuned-folder lookup is kept.
+        for num_tokens in (1, 8, 9, 81, 128, 4096):
+            assert POLICY.triton_config_for_shape(shape, num_tokens) is None
+
+
+def test_triton_config_lookup_uses_nearest_entry_and_returns_a_copy():
+    shape = _dsv4_tp8_shape(56, "capture")
+    table = POLICY._CALIBRATED_TRITON_CONFIGS[shape]
+    assert POLICY.triton_config_for_shape(shape, 30) == table[28]
+    assert POLICY.triton_config_for_shape(shape, 70) == table[65]
+    config = POLICY.triton_config_for_shape(shape, 25)
+    config["BLOCK_SIZE_M"] = 64
+    assert table[25]["BLOCK_SIZE_M"] == 16
+
+
+def test_triton_configs_are_isolated_to_the_calibrated_mp56_shape():
+    for multiprocessor_count in (48, 60):
+        for graph_mode in ("eager", "capture"):
+            shape = _dsv4_tp8_shape(multiprocessor_count, graph_mode)
+            assert POLICY.triton_config_for_shape(shape, 25) is None
+    unrelated = _shape(**{**_dsv4_tp8_shape(56, "eager").__dict__, "top_k": 8})
+    assert POLICY.triton_config_for_shape(unrelated, 25) is None
+
+
+def test_upstream_fallback_applies_calibrated_triton_config_only():
+    source = FUSED_MOE_PATH.read_text()
+    assert "triton_config_for_shape(shape, hidden_states.shape[0])" in source
+    assert "if backend == MusaFusedMoeBackend.UPSTREAM and shape is not None" in source
+    assert "with _upstream_triton_config_scope(triton_config):" in source
+    tree = ast.parse(source)
+    scope = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_upstream_triton_config_scope"
+    )
+    # The previous config is restored even when the fused-experts call raises.
+    tries = [node for node in ast.walk(scope) if isinstance(node, ast.Try)]
+    assert tries and any(
+        "_config = previous" in ast.unparse(stmt)
+        for node in tries
+        for stmt in node.finalbody
+    )
+
+
+def test_fused_experts_dispatch_rejects_non_positive_clamp_limit():
+    source = FUSED_MOE_PATH.read_text()
+    assert "if gemm1_clamp_limit is not None and gemm1_clamp_limit <= 0:" in source
 
 
 def test_grouped_gemm_is_never_selected_during_capture():
@@ -295,7 +370,7 @@ def test_s5000_calibrated_shapes_use_route_worst_boundaries():
         w2_scale_shape=(256, 32, 2),
         gemv_block="16x8",
     )
-    assert thresholds_for_shape(dsv4_block16_mp56).gemv_max_tokens == 12
+    assert thresholds_for_shape(dsv4_block16_mp56).gemv_max_tokens == 8
     dsv4_block16_mp56_capture = _shape(
         multiprocessor_count=56,
         local_experts=256,
@@ -308,7 +383,7 @@ def test_s5000_calibrated_shapes_use_route_worst_boundaries():
         gemv_block="16x8",
         graph_mode="capture",
     )
-    assert thresholds_for_shape(dsv4_block16_mp56_capture).gemv_max_tokens == 12
+    assert thresholds_for_shape(dsv4_block16_mp56_capture).gemv_max_tokens == 8
     assert thresholds_for_shape(dsv4).grouped_gemm_min_tokens is None
     assert thresholds_for_shape(dsv2).gemv_max_tokens == 3
     assert thresholds_for_shape(dsv2).grouped_gemm_min_tokens is None

@@ -38,7 +38,7 @@ using namespace musa::dnn;
                 static_cast<_SCALE_DTYPE*>(a_scale_ptr), \
                 static_cast<_SCALE_DTYPE*>(b_scale_ptr), \
                 topk, expert_offset_stride, nr_n, hidden_size, num_experts, half_n_idx, scale_k_len, \
-                static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps); \
+                static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps, swiglu_limit); \
     } else { \
         musa_gemv_kernel<_ADTYPE, _BDTYPE, _CDTYPE, _TOPK_WEIGHT_DTYPE, _SCALE_DTYPE, block_n, block_k, iobit, _IS_MUL_ROUTED_WEIGHT, _IS_SWGELU, false, false, _IS_FP8, 64, _IS_RMSNORM> \
             <<<grid_size, block_size, shmem_size, stream>>>( \
@@ -50,7 +50,7 @@ using namespace musa::dnn;
                 static_cast<_SCALE_DTYPE*>(a_scale_ptr), \
                 static_cast<_SCALE_DTYPE*>(b_scale_ptr), \
                 topk, expert_offset_stride, nr_n, hidden_size, num_experts, half_n_idx, scale_k_len, \
-                static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps); \
+                static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps, swiglu_limit); \
     } \
     return;
 
@@ -86,7 +86,7 @@ using namespace musa::dnn;
                     static_cast<_SCALE_DTYPE*>(a_scale_ptr), \
                     static_cast<_SCALE_DTYPE*>(b_scale_ptr), \
                     topk, expert_offset_stride, nr_n, hidden_size, num_experts, half_n_idx, scale_k_len, \
-                    static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps); \
+                    static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps, swiglu_limit); \
             return; \
         } else { \
             musa_gemv_kernel<_ADTYPE, _BDTYPE, _ADTYPE, _TOPK_WEIGHT_DTYPE, _SCALE_DTYPE, block_n, block_k, iobit, _IS_MUL_ROUTED_WEIGHT, _IS_SWGELU, true, true, false, 64, _IS_RMS_NROM> \
@@ -99,7 +99,7 @@ using namespace musa::dnn;
                     static_cast<_SCALE_DTYPE*>(a_scale_ptr), \
                     static_cast<_SCALE_DTYPE*>(b_scale_ptr), \
                     topk, expert_offset_stride, nr_n, hidden_size, num_experts, half_n_idx, scale_k_len, \
-                    static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps); \
+                    static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps, swiglu_limit); \
             return; \
         } \
     } else { \
@@ -113,7 +113,7 @@ using namespace musa::dnn;
                 static_cast<_SCALE_DTYPE*>(a_scale_ptr), \
                 static_cast<_SCALE_DTYPE*>(b_scale_ptr), \
                 topk, expert_offset_stride, nr_n, hidden_size, num_experts, half_n_idx, scale_k_len, \
-                static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps); \
+                static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps, swiglu_limit); \
         return; \
     }
 
@@ -128,7 +128,7 @@ using namespace musa::dnn;
             nullptr, \
             nullptr, \
             topk, expert_offset_stride, nr_n, hidden_size, num_experts, half_n_idx, scale_k_len, \
-            static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps); \
+            static_cast<bfloat16_t*>(rms_gamma_ptr), static_cast<float*>(rms_sum_out_ptr), static_cast<int*>(rms_count_ptr), eps, swiglu_limit); \
     return;
 
 #define RUN_SCALE_ROUTE(_ADTYPE, _BDTYPE, _TOPK_WEIGHT_DTYPE, _SCALE_DTYPE, _CAL_FUNC) \
@@ -263,7 +263,8 @@ __global__ void musa_gemv_kernel(
     bfloat16_t *gamma,
     float* sum_out,
     volatile int *count,
-    float eps) {
+    float eps,
+    float swiglu_limit) {
 
     constexpr int bits_of_byte = 8;
     constexpr int half_blockn = BLOCK_N / 2;
@@ -477,6 +478,10 @@ __global__ void musa_gemv_kernel(
             shared_array[threadIdx.x] = rst;
             if (threadIdx.x < half_blockn) {
                 float b = shared_array[threadIdx.x + half_blockn];
+                if (swiglu_limit > 0.f) {
+                    rst = fminf(rst, swiglu_limit);
+                    b = fminf(fmaxf(b, -swiglu_limit), swiglu_limit);
+                }
                 rst = rst * sigmoid(rst) * b;
                 c_ptr[token_idx * topk * n + expert_idx * n + dst_n_idx] = rst;
             }
@@ -656,15 +661,20 @@ bool SelectDeepSeekV4Fp8OProjTile(
 
     // DeepSeek-V4 TP8 O-proj is [M,4096] x [1024,4096]^T.  The platform's
     // VLLM_MUSA_GEMV_MOE_BLOCK=16x8 default belongs to routed MoE, but the
-    // non-MoE GEMV historically consumed it too.  Cold-L2 calibration on an
-    // S5000 mp60 shows that the production graph-capture ladder needs more N
-    // tiles at small M and different K reductions as M grows.  Match only the
-    // exact O-proj contract; unsupported/eager sizes retain the generic path.
+    // non-MoE GEMV historically consumed it too.  MP56/MP60 calibration shows
+    // that the DSpark-4 graph ladder needs the 8x16 reduction for M=20/40/80.
+    // Match only the exact O-proj contract; unsupported/eager sizes retain the
+    // generic path.
     switch (bseqlen) {
         case 1:
         case 2:
         case 8:
             *config = BlockConfig{4, 32, 0.f, true};
+            break;
+        case 20:
+        case 40:
+        case 80:
+            *config = BlockConfig{8, 16, 0.f, true};
             break;
         case 4:
         case 32:
@@ -695,14 +705,18 @@ bool SelectDeepSeekV4Fp8SharedGateUpTile(
     BlockConfig* config) {
     if (current_arch < 300 || !is_fp8 || use_swigelu || use_rms_norm ||
         use_int4_w4a16 || reduce_size != 512 || hidden_size != 4096 ||
-        nr_n != 512 || scale_k_group_tile != 128 || bseqlen != 1) {
+        nr_n != 512 || scale_k_group_tile != 128 ||
+        (bseqlen != 1 && bseqlen != 20 && bseqlen != 40 && bseqlen != 80)) {
         return false;
     }
 
     // Python dispatch already limits this exact contract to the DeepSeek-V4
     // TP8 shared-expert gate-up layer.  Select the cold-L2 winner here before
     // the routed-MoE 16x8 environment default can leak into the dense GEMV.
-    *config = BlockConfig{4, 32, 0.f, true};
+    *config = bseqlen == 80
+        ? BlockConfig{16, 8, 0.f, true}
+        : (bseqlen == 1 ? BlockConfig{4, 32, 0.f, true}
+                        : BlockConfig{8, 16, 0.f, true});
     return IsForcedBlockConfigValid(*config, nr_n, hidden_size, vlen);
 }
 
@@ -718,6 +732,7 @@ void musa_fused_gemv(
     const c10::optional<torch::Tensor> &gamma,
     double eps) {
 
+    const float swiglu_limit = 0.f;
     TORCH_CHECK(A.dim() == 2, "A must be dim 2.")
     TORCH_CHECK(B.dim() == 2, "B must be dim 2.")
 
@@ -922,7 +937,8 @@ void musa_fused_gemv_moe(
     bool use_int4_w4a16,
     bool use_swigelu,
     int64_t requested_block_n,
-    int64_t requested_block_k) {
+    int64_t requested_block_k,
+    double swiglu_limit) {
 
     TORCH_CHECK(A.dim() == 2, "A must be dim 2.")
     TORCH_CHECK(B.dim() == 3, "B must be dim 3.")

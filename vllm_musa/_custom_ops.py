@@ -33,6 +33,7 @@ def musa_fused_gemv_moe(
     use_swigelu: bool,
     block_n: int = 0,
     block_k: int = 0,
+    swiglu_limit: float = 0.0,
 ) -> None:
     return torch.ops._C_musa_ops.musa_fused_gemv_moe(
         A,
@@ -48,6 +49,7 @@ def musa_fused_gemv_moe(
         use_swigelu,
         block_n,
         block_k,
+        swiglu_limit,
     )
 
 
@@ -799,6 +801,20 @@ def sparse_indexer_topk_decode(
     topk: int,
 ) -> None:
     return torch.ops._C_musa_ops.sparse_indexer_topk_decode(
+        logits,
+        seq_lens,
+        topk_indices,
+        topk,
+    )
+
+
+def deepseek_v4_sparse_indexer_topk_decode(
+    logits: torch.Tensor,
+    seq_lens: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_sparse_indexer_topk_decode(
         logits,
         seq_lens,
         topk_indices,

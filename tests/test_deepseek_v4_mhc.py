@@ -125,7 +125,10 @@ def test_mhc_fused_post_pre_composes_musa_post_pre_and_norm():
 
     assert "def mhc_fused_post_pre_musa(" in source
     assert "residual_cur = mhc_post_musa(" in source
-    assert "post_mix_cur, comb_mix_cur, layer_input_cur = mhc_pre_musa(" in source
+    assert (
+        "post_mix_cur, comb_mix_cur, layer_input_cur = mhc_pre_musa_with_norm("
+        in source
+    )
     assert "def _apply_optional_rms_norm(" in source
     assert "def _try_mhc_weighted_rms_norm_musa(" in source
     assert "VLLM_MUSA_DEEPSEEK_V4_MHC_WEIGHTED_RMSNORM_IMPL" not in source
@@ -148,6 +151,33 @@ def test_mhc_fused_post_pre_composes_musa_post_pre_and_norm():
     _, mudnn_weight_arg, mudnn_out_arg, _ = mudnn_like_args
     assert _loads_name(mudnn_like_inner, mudnn_weight_arg)
     assert _stores_subscript(mudnn_like_inner, mudnn_out_arg)
+
+
+def test_mhc_pre_decode_norm_fuse_is_shape_bounded_and_wired():
+    source = _read("vllm_musa/deepseek_v4_mhc.py")
+    kernels = _read("vllm_musa/deepseek_v4_jit/tilelang_kernels.py")
+    source_tree = ast.parse(source)
+    kernels_tree = ast.parse(kernels)
+    supported = _function_node(source_tree, "_mhc_pre_decode_norm_fuse_supported")
+    with_norm = _function_node(source_tree, "mhc_pre_musa_with_norm")
+    fused_post_prenorm = _function_node(source_tree, "_try_mhc_fused_post_prenorm_musa")
+    factory = _function_node(kernels_tree, "mhc_pre_decode_norm_fuse_kernel")
+    supported_source = ast.unparse(supported)
+
+    assert "_MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS = 64" in source
+    assert "num_tokens <= _MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS" in supported_source
+    assert "hidden_size == 4096" in supported_source
+    assert "norm_weight.dtype == torch.bfloat16" in supported_source
+    assert _calls(with_norm, "_mhc_pre_deepgemm_norm_fuse_provider")
+    assert _calls(with_norm, "_apply_optional_rms_norm")
+    assert _calls(fused_post_prenorm, "_mhc_pre_decode_norm_fuse")
+    assert _calls(fused_post_prenorm, "_apply_optional_rms_norm")
+    # Split-ordered partial sums and the MuDNN-style RMSNorm sequence follow
+    # the unfused decode path.
+    assert _calls(factory, "T.ieee_frsqrt")
+    assert _calls(factory, "T.shfl_down")
+    assert _calls(factory, "T.warp_reduce_sum")
+    assert "col_sum += partials[split_id * n_cols + tx]" in kernels
 
 
 def test_mhc_fused_post_prenorm_small_m_path_is_shape_bounded():

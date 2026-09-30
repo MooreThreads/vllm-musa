@@ -19,7 +19,8 @@ void musa_fused_gemv_moe(
     bool use_int4_w4a16,
     bool use_swigelu,
     int64_t block_n,
-    int64_t block_k);
+    int64_t block_k,
+    double swiglu_limit);
 
 void musa_fused_gemv(
     torch::Tensor &A,
@@ -199,6 +200,10 @@ void deepseek_v4_indexer_rerank_prefill(
     const torch::Tensor &cu_seqlen_ks, const torch::Tensor &cu_seqlen_ke,
     const torch::Tensor &candidate_abs_indices, torch::Tensor &topk_indices,
     int64_t topk);
+void deepseek_v4_sparse_indexer_topk_decode(const torch::Tensor &logits,
+                                            const torch::Tensor &seq_lens,
+                                            torch::Tensor &topk_indices,
+                                            int64_t topk);
 void sparse_indexer_fill_all(const torch::Tensor &lengths,
                              torch::Tensor &topk_indices, int64_t topk);
 void sparse_indexer_topk(const torch::Tensor &logits,

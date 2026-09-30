@@ -24,6 +24,8 @@ constexpr int64_t kTokenValueBytes = kNopeDim + kRopeDim * 2;
 constexpr int64_t kTokenScaleBytes = kScaleDim;
 constexpr int64_t kThreadsPerBlock = 128;
 constexpr int64_t kWarpsPerBlock = 4;
+// Non-overlap compression pools its rows with this many thread groups.
+constexpr int kRowGroups = 4;
 constexpr int64_t kMaxDecodeRows = 128;
 constexpr float kFp8Max = 448.0f;
 constexpr float kLog2E = 1.4426950408889634f;
@@ -174,7 +176,7 @@ deepseek_v4_sparse_save_partial_kernel(
 
 template <typename WeightT, int kCompressRatio, bool kOverlap,
           int kStateBlockSize>
-__global__ __launch_bounds__(kThreadsPerBlock, 4) void
+__global__ __launch_bounds__(kThreadsPerBlock * kRowGroups) void
 deepseek_v4_sparse_compressor_kernel(
     const float* __restrict__ state_cache, int64_t state_stride0,
     int64_t state_stride1, const void* __restrict__ token_to_req_indices,
@@ -262,39 +264,62 @@ deepseek_v4_sparse_compressor_kernel(
     compressed[2] = num2 / den2;
     compressed[3] = num3 / den3;
   } else {
+    // Each row group pools a strided row subset with an online softmax; the
+    // partials merge in shared memory.  Group 0 owns the epilogue.
+    const int group = tid / kThreadsPerBlock;
+    const int dim_tid = tid % kThreadsPerBlock;
     float maxv[4] = {-FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX};
-    const int64_t first_position = position - kCompressRows + 1;
-    for (int row = 0; row < kCompressRows; ++row) {
-      float kv4[4];
-      float score4[4];
-      load_state_row(state_cache, state_stride0, state_stride1, block_table,
-                     block_table_kind, block_table_stride, req_idx,
-                     first_position + row, 0, state_width, kStateBlockSize,
-                     num_state_blocks, max_blocks_per_req, tid, kv4, score4);
-      maxv[0] = fmaxf(maxv[0], score4[0]);
-      maxv[1] = fmaxf(maxv[1], score4[1]);
-      maxv[2] = fmaxf(maxv[2], score4[2]);
-      maxv[3] = fmaxf(maxv[3], score4[3]);
-    }
     float den[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float num[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    for (int row = 0; row < kCompressRows; ++row) {
+    const int64_t first_position = position - kCompressRows + 1;
+    for (int row = group; row < kCompressRows; row += kRowGroups) {
       float kv4[4];
       float score4[4];
       load_state_row(state_cache, state_stride0, state_stride1, block_table,
                      block_table_kind, block_table_stride, req_idx,
                      first_position + row, 0, state_width, kStateBlockSize,
-                     num_state_blocks, max_blocks_per_req, tid, kv4, score4);
+                     num_state_blocks, max_blocks_per_req, dim_tid, kv4,
+                     score4);
 #pragma unroll
       for (int elem = 0; elem < 4; ++elem) {
+        if (score4[elem] > maxv[elem]) {
+          const float rescale = exp2f((maxv[elem] - score4[elem]) * kLog2E);
+          num[elem] *= rescale;
+          den[elem] *= rescale;
+          maxv[elem] = score4[elem];
+        }
         const float e = exp2f((score4[elem] - maxv[elem]) * kLog2E);
         num[elem] += kv4[elem] * e;
         den[elem] += e;
       }
     }
+    __shared__ float partial_max[kRowGroups][kThreadsPerBlock * 4];
+    __shared__ float partial_num[kRowGroups][kThreadsPerBlock * 4];
+    __shared__ float partial_den[kRowGroups][kThreadsPerBlock * 4];
 #pragma unroll
     for (int elem = 0; elem < 4; ++elem) {
-      compressed[elem] = num[elem] / den[elem];
+      partial_max[group][dim_tid * 4 + elem] = maxv[elem];
+      partial_num[group][dim_tid * 4 + elem] = num[elem];
+      partial_den[group][dim_tid * 4 + elem] = den[elem];
+    }
+    __syncthreads();
+#pragma unroll
+    for (int elem = 0; elem < 4; ++elem) {
+      const int idx = dim_tid * 4 + elem;
+      float merged_max = partial_max[0][idx];
+#pragma unroll
+      for (int g = 1; g < kRowGroups; ++g) {
+        merged_max = fmaxf(merged_max, partial_max[g][idx]);
+      }
+      float merged_num = 0.0f;
+      float merged_den = 0.0f;
+#pragma unroll
+      for (int g = 0; g < kRowGroups; ++g) {
+        const float scale = exp2f((partial_max[g][idx] - merged_max) * kLog2E);
+        merged_num += partial_num[g][idx] * scale;
+        merged_den += partial_den[g][idx] * scale;
+      }
+      compressed[elem] = merged_num / merged_den;
     }
   }
 
@@ -306,7 +331,7 @@ deepseek_v4_sparse_compressor_kernel(
   sum_of_squares = warp_reduce_sum(sum_of_squares);
 
   __shared__ float warp_sums[kWarpsPerBlock];
-  if (lane == 0) {
+  if (lane == 0 && warp < kWarpsPerBlock) {
     warp_sums[warp] = sum_of_squares;
   }
   __syncthreads();
@@ -320,6 +345,9 @@ deepseek_v4_sparse_compressor_kernel(
   }
   __syncthreads();
   const float norm_factor = warp_sums[0];
+  if (tid >= kThreadsPerBlock) {
+    return;
+  }
 
   float output[4];
 #pragma unroll
@@ -456,7 +484,7 @@ void launch_sparse_compressor(const torch::Tensor& state_cache,
                               float rms_eps, int64_t state_width,
                               musaStream_t stream) {
   const int64_t num_tokens = state_slot_mapping.numel();
-  const dim3 block(kThreadsPerBlock);
+  const dim3 block(kOverlap ? kThreadsPerBlock : kThreadsPerBlock * kRowGroups);
   const dim3 grid(static_cast<unsigned int>(num_tokens));
   deepseek_v4_sparse_compressor_kernel<WeightT, kCompressRatio, kOverlap,
                                        kStateBlockSize>

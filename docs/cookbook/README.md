@@ -53,6 +53,7 @@ release line are intentionally not carried over.
 | Model | Hardware | Recommended profile | Alternative |
 |---|---|---|---|
 | [DeepSeek-V4-Flash](deepseek/deepseek-v4-flash.md) | 8x S5000, TP8 | Fixed MTP4 | MTP-off |
+| [DeepSeek-V4-Flash-0731](deepseek/deepseek-v4-flash-731.md) | 8x S5000 per node, TP8 | Single node, DSpark4 | 1P1D with Mooncake store |
 
 ## GLM
 

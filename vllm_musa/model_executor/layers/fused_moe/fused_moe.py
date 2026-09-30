@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import contextlib
 import json
 import os
 import time
@@ -35,6 +36,7 @@ from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     parse_dispatch_backend,
     select_fused_moe_backend,
     thresholds_for_shape,
+    triton_config_for_shape,
 )
 from vllm_musa.optimization_contract import (
     matches_qwen35_moe_bf16_decode_gemv_layer,
@@ -586,6 +588,7 @@ def _silu_mul_per_token_group_fp8_quant_musa_large(
     input_tensor: torch.Tensor,
     output: torch.Tensor,
     group_size: int,
+    swiglu_limit: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     assert input_tensor.dim() == 2
     assert input_tensor.is_contiguous()
@@ -602,6 +605,18 @@ def _silu_mul_per_token_group_fp8_quant_musa_large(
     from vllm_musa.jit_kernel.csrc.quant import per_token_group_quant_8bit
 
     fp8_min, fp8_max = get_fp8_min_max()
+    if swiglu_limit is not None:
+        torch.ops._C_musa_ops.silu_and_mul_clamp_per_token_group_fp8_quant(
+            input_tensor,
+            output,
+            output_s,
+            group_size,
+            1e-10,
+            fp8_min,
+            fp8_max,
+            swiglu_limit,
+        )
+        return output, output_s
     per_token_group_quant_8bit(
         input_tensor,
         output,
@@ -627,6 +642,7 @@ def _musa_fp8_moe_grouped_gemm_impl(
     expert_map: torch.Tensor | None,
     inplace: bool,
     log_selection: bool = True,
+    swiglu_limit: float | None = None,
 ) -> torch.Tensor:
     from vllm.model_executor.layers.fused_moe.deep_gemm_utils import (
         deepgemm_moe_permute,
@@ -686,6 +702,7 @@ def _musa_fp8_moe_grouped_gemm_impl(
             mm1_out.view(-1, N),
             a2q,
             group_size=128,
+            swiglu_limit=swiglu_limit,
         )
 
         mm2_out = torch.empty(
@@ -743,6 +760,7 @@ def _maybe_musa_fp8_moe_grouped_gemm(
     block_shape: list[int] | None,
     w1_bias: torch.Tensor | None,
     w2_bias: torch.Tensor | None,
+    swiglu_limit: float | None = None,
 ) -> torch.Tensor | None:
     global _DEEPGEMM_PREFILL_WARNED, _MUSA_GROUPED_GEMM_AVAILABLE
 
@@ -787,6 +805,7 @@ def _maybe_musa_fp8_moe_grouped_gemm(
             w2_scale=w2_scale,
             expert_map=expert_map,
             inplace=inplace,
+            swiglu_limit=swiglu_limit,
         )
     except Exception as exc:
         _MUSA_GROUPED_GEMM_AVAILABLE = False
@@ -811,6 +830,7 @@ def _musa_fp8_moe_deepgemm_prefill_impl(
     w1_scale: torch.Tensor,
     w2_scale: torch.Tensor,
     inplace: bool,
+    swiglu_limit: float | None = None,
 ) -> torch.Tensor:
     """Run the fused-glue contiguous DeepGEMM prefill implementation."""
 
@@ -841,6 +861,7 @@ def _musa_fp8_moe_deepgemm_prefill_impl(
             expert_map=None,
             inplace=inplace,
             log_selection=False,
+            swiglu_limit=swiglu_limit,
         )
 
     from vllm.utils.deep_gemm import (
@@ -900,7 +921,7 @@ def _musa_fp8_moe_deepgemm_prefill_impl(
             (all_tokens, N // 2), device=device, dtype=torch.float8_e4m3fn
         )
         a2q, a2q_scale = _silu_mul_per_token_group_fp8_quant_musa_large(
-            mm1_out.view(-1, N), a2q, group_size=128
+            mm1_out.view(-1, N), a2q, group_size=128, swiglu_limit=swiglu_limit
         )
 
         mm2_out = torch.empty((all_tokens, K), device=device, dtype=hidden_states.dtype)
@@ -1051,6 +1072,7 @@ def _maybe_moe_deepgemm_prefill(
     block_shape: list[int] | None,
     w1_bias: torch.Tensor | None,
     w2_bias: torch.Tensor | None,
+    swiglu_limit: float | None = None,
 ) -> torch.Tensor | None:
     global _DEEPGEMM_PREFILL_WARNED
 
@@ -1090,6 +1112,7 @@ def _maybe_moe_deepgemm_prefill(
             w1_scale=w1_scale,
             w2_scale=w2_scale,
             inplace=inplace,
+            swiglu_limit=swiglu_limit,
         )
     except Exception as exc:
         if not _DEEPGEMM_PREFILL_WARNED:
@@ -1648,6 +1671,7 @@ def fused_experts_impl(
     inplace: bool = False,
     _allow_deepgemm_prefill: bool = True,
     _gemv_block: tuple[int, int] = (0, 0),
+    _swiglu_limit: float | None = None,
 ) -> torch.Tensor:
     # Check constraints.
     if use_int4_w4a16:
@@ -1744,6 +1768,7 @@ def fused_experts_impl(
             block_shape=block_shape,
             w1_bias=w1_bias,
             w2_bias=w2_bias,
+            swiglu_limit=_swiglu_limit,
         )
         if deepgemm_prefill_output is not None:
             return deepgemm_prefill_output
@@ -1844,6 +1869,7 @@ def fused_experts_impl(
             use_swigelu=True,
             block_n=gemv_block_n,
             block_k=gemv_block_k,
+            swiglu_limit=_swiglu_limit or 0.0,
         )
         musa_ops.musa_fused_gemv_moe(
             curr_intermediate_cache2,
@@ -1877,6 +1903,24 @@ if not hasattr(_upstream_fused_moe, "_musa_original_fused_experts_impl"):
     )
 
 
+@contextlib.contextmanager
+def _upstream_triton_config_scope(config: dict[str, int] | None):
+    """Override the upstream fused-MoE Triton config for one call."""
+    if config is None:
+        yield
+        return
+    # MUSA: upstream override_config() leaves the override in place when the
+    # body raises, so restore the previous config explicitly.
+    from vllm.model_executor.layers import fused_moe as upstream_fused_moe_pkg
+
+    previous = upstream_fused_moe_pkg.get_config()
+    upstream_fused_moe_pkg._config = config
+    try:
+        yield
+    finally:
+        upstream_fused_moe_pkg._config = previous
+
+
 def _musa_fused_experts_impl_dispatch(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -1902,7 +1946,10 @@ def _musa_fused_experts_impl_dispatch(
     block_shape: list[int] | None = None,
     w1_bias: torch.Tensor | None = None,
     w2_bias: torch.Tensor | None = None,
+    gemm1_clamp_limit: float | None = None,
 ) -> torch.Tensor:
+    if gemm1_clamp_limit is not None and gemm1_clamp_limit <= 0:
+        raise ValueError(f"gemm1_clamp_limit must be positive, got {gemm1_clamp_limit}")
     backend = MusaFusedMoeBackend.UPSTREAM
     policy = None
     shape = None
@@ -2168,6 +2215,7 @@ def _musa_fused_experts_impl_dispatch(
             block_shape=block_shape,
             w1_bias=w1_bias,
             w2_bias=w2_bias,
+            swiglu_limit=gemm1_clamp_limit,
         )
         if grouped_output is not None:
             return grouped_output
@@ -2175,6 +2223,7 @@ def _musa_fused_experts_impl_dispatch(
         gemv_kwargs = {
             "inplace": False,
             "_allow_deepgemm_prefill": False,
+            "_swiglu_limit": gemm1_clamp_limit,
         }
         if requested_gemv_block != (0, 0):
             gemv_kwargs["_gemv_block"] = requested_gemv_block
@@ -2247,6 +2296,7 @@ def _musa_fused_experts_impl_dispatch(
 
     bf16_prefill_candidate = (
         _MUSA_FUSED_MOE_REQUESTED_BACKEND == MusaFusedMoeBackend.AUTO
+        and gemm1_clamp_limit is None
         and not prefer_upstream_qwen_prefill
         and not use_fp8_w8a8
         and hidden_states.shape[0] >= _DEEPGEMM_BF16_PREFILL_MIN_TOKENS
@@ -2327,36 +2377,44 @@ def _musa_fused_experts_impl_dispatch(
             block_shape=block_shape,
             w1_bias=w1_bias,
             w2_bias=w2_bias,
+            swiglu_limit=gemm1_clamp_limit,
         )
         if deepgemm_prefill_output is not None:
             return deepgemm_prefill_output
 
-    return _upstream_fused_moe._musa_original_fused_experts_impl(
-        hidden_states,
-        w1,
-        w2,
-        topk_weights,
-        topk_ids,
-        activation,
-        apply_router_weight_on_input,
-        use_fp8_w8a8,
-        use_int8_w8a8,
-        use_int8_w8a16,
-        use_int4_w4a16,
-        ocp_mx_scheme,
-        per_channel_quant,
-        global_num_experts,
-        expert_map,
-        w1_scale,
-        w2_scale,
-        w1_zp,
-        w2_zp,
-        a1_scale,
-        a2_scale,
-        block_shape,
-        w1_bias,
-        w2_bias,
+    triton_config = (
+        triton_config_for_shape(shape, hidden_states.shape[0])
+        if backend == MusaFusedMoeBackend.UPSTREAM and shape is not None
+        else None
     )
+    with _upstream_triton_config_scope(triton_config):
+        return _upstream_fused_moe._musa_original_fused_experts_impl(
+            hidden_states,
+            w1,
+            w2,
+            topk_weights,
+            topk_ids,
+            activation,
+            apply_router_weight_on_input,
+            use_fp8_w8a8,
+            use_int8_w8a8,
+            use_int8_w8a16,
+            use_int4_w4a16,
+            ocp_mx_scheme,
+            per_channel_quant,
+            global_num_experts,
+            expert_map,
+            w1_scale,
+            w2_scale,
+            w1_zp,
+            w2_zp,
+            a1_scale,
+            a2_scale,
+            block_shape,
+            w1_bias,
+            w2_bias,
+            gemm1_clamp_limit=gemm1_clamp_limit,
+        )
 
 
 _upstream_fused_moe.fused_experts_impl = _musa_fused_experts_impl_dispatch

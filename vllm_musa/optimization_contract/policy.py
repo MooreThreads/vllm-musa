@@ -88,6 +88,14 @@ def prefers_feature(vllm_config: Any, feature: OptimizationFeature) -> bool:
     return resolve_optimization_contract(vllm_config).prefers(feature)
 
 
+def deepseek_v4_final_prompt_token_decode_graph_enabled(vllm_config: Any) -> bool:
+    """Return whether a padded final prompt token may replay the decode graph."""
+    return prefers_feature(
+        vllm_config,
+        OptimizationFeature.DEEPSEEK_V4_FINAL_PROMPT_TOKEN_DECODE_GRAPH,
+    )
+
+
 def deepseek_v4_mtp_car_graph_guard_enabled(vllm_config: Any) -> bool:
     """Guard eligible DSV4 MTP graph CAR even when no arena plan exists."""
     return resolve_optimization_contract(vllm_config).supports(

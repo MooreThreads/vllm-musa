@@ -257,14 +257,12 @@ _CALIBRATED_THRESHOLDS.update(
             gemv_block="16x8",
             graph_mode=graph_mode,
         ): _thresholds(
-            # Same DSV4 TP8 per-rank shape as MP48/MP60. Native W1/W2
-            # split-tile covers target M=12; M>=13 stays on upstream.
-            gemv_max_tokens=12,
+            # Same DSV4 TP8 per-rank shape as MP48/MP60. On MP56 the native
+            # W1/W2 GEMV serves up to 8 tokens; larger batches take the
+            # upstream Triton path with the per-M decode configs below.
+            gemv_max_tokens=8,
             grouped_gemm_min_tokens=None,
-            source=(
-                f"s5000-mp56-e256-n512-k4096-{graph_mode}-"
-                "block16-split32-m12"
-            ),
+            source=f"s5000-mp56-e256-n512-k4096-{graph_mode}-block16-split32-m8",
         )
         for graph_mode in ("eager", "capture")
     }
@@ -361,6 +359,63 @@ _CALIBRATED_THRESHOLDS.update(
     }
 )
 
+
+def _triton_config(block_n: int, num_warps: int) -> dict[str, int]:
+    return {
+        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_N": block_n,
+        "BLOCK_SIZE_K": 128,
+        "GROUP_SIZE_M": 1,
+        "num_warps": num_warps,
+        "num_stages": 1,
+    }
+
+
+# Per-M Triton configs for the DSV4 TP8 decode ladder on MP56 (target M=5R,
+# DSpark draft M=4R). BLOCK_M=16 keeps these batches off the generic table's
+# BLOCK_M=64/BLOCK_K=32 configs.
+_DSV4_TP8_MP56_TRITON_CONFIGS: Final = {
+    10: _triton_config(128, 8),
+    12: _triton_config(64, 4),
+    15: _triton_config(64, 4),
+    16: _triton_config(128, 8),
+    20: _triton_config(128, 8),
+    24: _triton_config(64, 4),
+    25: _triton_config(128, 8),
+    28: _triton_config(128, 8),
+    32: _triton_config(64, 4),
+    35: _triton_config(128, 8),
+    40: _triton_config(64, 4),
+    48: _triton_config(64, 4),
+    50: _triton_config(128, 8),
+    52: _triton_config(64, 4),
+    60: _triton_config(128, 8),
+    64: _triton_config(64, 4),
+    65: _triton_config(64, 4),
+    80: _triton_config(64, 4),
+}
+
+# Exact-shape upstream Triton launch configs, keyed by token count. They
+# replace the tuned-folder lookup only inside the recorded token range; other
+# shapes and token counts keep the established lookup.
+_CALIBRATED_TRITON_CONFIGS: Final[
+    dict[MusaFusedMoeShape, dict[int, dict[str, int]]]
+] = {
+    _s5000_fp8_shape(
+        multiprocessor_count=56,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+        graph_mode=graph_mode,
+    ): _DSV4_TP8_MP56_TRITON_CONFIGS
+    for graph_mode in ("eager", "capture")
+}
+
 _CALIBRATED_DIMENSIONS: Final = frozenset(
     (
         shape.local_experts,
@@ -399,6 +454,18 @@ def parse_dispatch_backend(value: str | None = None) -> MusaFusedMoeBackend:
 
 def thresholds_for_shape(shape: MusaFusedMoeShape) -> MusaFusedMoeThresholds:
     return _CALIBRATED_THRESHOLDS.get(shape, _DEFAULT_THRESHOLDS)
+
+
+def triton_config_for_shape(
+    shape: MusaFusedMoeShape, num_tokens: int
+) -> dict[str, int] | None:
+    """Return the calibrated Triton config nearest ``num_tokens``, if any."""
+
+    table = _CALIBRATED_TRITON_CONFIGS.get(shape)
+    if not table or not min(table) <= num_tokens <= max(table):
+        return None
+    key = min(table, key=lambda tokens: (abs(tokens - num_tokens), tokens))
+    return dict(table[key])
 
 
 def has_calibrated_dimensions(

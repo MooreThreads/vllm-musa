@@ -13,7 +13,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.def(
       "musa_fused_gemv_moe(Tensor! A, Tensor! B, Tensor! C, Tensor? A_scale, Tensor? B_scale,"
       "Tensor! topk_weights, Tensor! topk_ids, bool mul_routed_weight, int topk, bool use_int4_w4a16,"
-      "bool use_swigelu, int block_n=0, int block_k=0) -> ()");
+      "bool use_swigelu, int block_n=0, int block_k=0, float swiglu_limit=0.0) -> ()");
   musa_ops.impl("musa_fused_gemv_moe", torch::kMUSA, &musa_fused_gemv_moe);
 
   musa_ops.def(
@@ -185,6 +185,12 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
       "candidate_abs_indices, Tensor! topk_indices, int topk) -> ()");
   musa_ops.impl("deepseek_v4_indexer_rerank_prefill", torch::kMUSA,
                 &deepseek_v4_indexer_rerank_prefill);
+
+  musa_ops.def(
+      "deepseek_v4_sparse_indexer_topk_decode(Tensor logits, Tensor seq_lens, "
+      "Tensor! topk_indices, int topk) -> ()");
+  musa_ops.impl("deepseek_v4_sparse_indexer_topk_decode", torch::kMUSA,
+                &deepseek_v4_sparse_indexer_topk_decode);
 
   musa_ops.def(
       "sparse_indexer_fill_all(Tensor lengths, Tensor! topk_indices, int topk) "

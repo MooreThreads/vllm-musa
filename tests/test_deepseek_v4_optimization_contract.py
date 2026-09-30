@@ -13,6 +13,7 @@ from vllm_musa.optimization_contract import (
     resolve_optimization_contract,
 )
 from vllm_musa.optimization_contract.policy import (
+    deepseek_v4_final_prompt_token_decode_graph_enabled,
     deepseek_v4_mtp_async_prefill_queue_fence_enabled,
     deepseek_v4_mtp_car_graph_guard_enabled,
     deepseek_v4_mtp_car_graph_staging_plan,
@@ -610,3 +611,39 @@ def test_contract_binds_to_runtime_owner_once_resolved() -> None:
 
     assert owner._musa_optimization_contract is contract
     assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
+
+
+def test_dspark_multibatch_prefers_final_prompt_token_decode_graph() -> None:
+    config = _flash_base_config(
+        speculative=True, speculative_method="dspark", max_num_seqs=64
+    )
+
+    contract = resolve_optimization_contract(config)
+
+    assert contract.profile == "deepseek_v4.tp8_flash_base_dspark"
+    assert contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_FINAL_PROMPT_TOKEN_DECODE_GRAPH
+    )
+    assert deepseek_v4_final_prompt_token_decode_graph_enabled(config)
+    assert not contract.supports(
+        OptimizationFeature.DEEPSEEK_V4_MTP_CAR_GRAPH_STAGING_ARENA
+    )
+
+
+@pytest.mark.parametrize(
+    ("speculative", "method", "cudagraph_mode"),
+    [
+        (False, "mtp", "FULL_DECODE_ONLY"),
+        (True, "mtp", "FULL_DECODE_ONLY"),
+        (True, "dspark", "NONE"),
+    ],
+)
+def test_final_prompt_token_decode_graph_requires_dspark_decode_graphs(
+    speculative: bool, method: str, cudagraph_mode: str
+) -> None:
+    config = _flash_base_config(
+        speculative=speculative, speculative_method=method, max_num_seqs=64
+    )
+    config.compilation_config.cudagraph_mode = cudagraph_mode
+
+    assert not deepseek_v4_final_prompt_token_decode_graph_enabled(config)

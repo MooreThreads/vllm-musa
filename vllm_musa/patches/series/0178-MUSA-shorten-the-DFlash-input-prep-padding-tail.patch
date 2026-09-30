@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 29 Sep 2026 14:30:21 +0800
+Subject: [PATCH] MUSA: shorten the DFlash input-prep padding tail
+
+The last request's program pads the per-request and query-slot buffers up to
+max_num_reqs and max_num_tokens. The padding loops use a fixed 1024-wide
+block, independent of the per-request token span, so padding max_num_tokens
+takes a few iterations per draft step. The stored values are unchanged.
+---
+ .../gpu/spec_decode/dflash/speculator.py      | 19 +++++++++++--------
+ 1 file changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+index eb5dc470b2..69d196f9f9 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+@@ -510,6 +510,7 @@ def _prepare_dflash_inputs_kernel(
+     SAMPLE_FROM_ANCHOR: tl.constexpr,
+     PAD_SLOT_ID: tl.constexpr,
+     BLOCK_SIZE: tl.constexpr,
++    PAD_BLOCK: tl.constexpr,
+ ):
+     req_idx = tl.program_id(0)
+     block_idx = tl.program_id(1)
+@@ -624,13 +625,14 @@ def _prepare_dflash_inputs_kernel(
+         tl.store(out_seeds_ptr + req_state_idx, tl.load(seeds_ptr + req_state_idx))
+         if req_idx == num_reqs - 1:
+             # Pad per-request buffers to max_num_reqs for CUDA graph safety.
++            # The wide PAD_BLOCK keeps this single-program tail short.
+             last_query_end = num_reqs * num_query_per_req
+-            for i in range(num_reqs, max_num_reqs + 1, BLOCK_SIZE):
+-                block = i + tl.arange(0, BLOCK_SIZE)
++            for i in range(num_reqs, max_num_reqs + 1, PAD_BLOCK):
++                block = i + tl.arange(0, PAD_BLOCK)
+                 mask = block < max_num_reqs + 1
+                 tl.store(out_query_start_loc_ptr + block, last_query_end, mask=mask)
+-            for i in range(num_reqs, max_num_reqs, BLOCK_SIZE):
+-                block = i + tl.arange(0, BLOCK_SIZE)
++            for i in range(num_reqs, max_num_reqs, PAD_BLOCK):
++                block = i + tl.arange(0, PAD_BLOCK)
+                 mask = block < max_num_reqs
+                 tl.store(out_seq_lens_ptr + block, 0, mask=mask)
+             # Padded sample slots point at query index 0 (a valid row in
+@@ -639,8 +641,8 @@ def _prepare_dflash_inputs_kernel(
+             # sampling to prevent writing stale values to draft logits.
+             pad_start = num_reqs * num_speculative_steps
+             pad_end = max_num_reqs * num_speculative_steps
+-            for i in range(pad_start, pad_end, BLOCK_SIZE):
+-                block = i + tl.arange(0, BLOCK_SIZE)
++            for i in range(pad_start, pad_end, PAD_BLOCK):
++                block = i + tl.arange(0, PAD_BLOCK)
+                 mask = block < pad_end
+                 tl.store(out_sample_indices_ptr + block, 0, mask=mask)
+                 tl.store(out_sample_pos_ptr + block, 0, mask=mask)
+@@ -649,8 +651,8 @@ def _prepare_dflash_inputs_kernel(
+             # captured CG sees PAD slots (no K/V write) for replay sizes
+             # larger than the current request count.
+             q_pad_start = num_reqs * num_query_per_req
+-            for i in range(q_pad_start, max_num_tokens, BLOCK_SIZE):
+-                block = i + tl.arange(0, BLOCK_SIZE)
++            for i in range(q_pad_start, max_num_tokens, PAD_BLOCK):
++                block = i + tl.arange(0, PAD_BLOCK)
+                 mask = block < max_num_tokens
+                 tl.store(out_query_slot_mapping_ptr + block, PAD_SLOT_ID, mask=mask)
+ 
+@@ -731,4 +733,5 @@ def prepare_dflash_inputs(
+         SAMPLE_FROM_ANCHOR=sample_from_anchor,
+         PAD_SLOT_ID=PAD_SLOT_ID,
+         BLOCK_SIZE=BLOCK_SIZE,
++        PAD_BLOCK=1024,
+     )

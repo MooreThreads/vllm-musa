@@ -118,6 +118,17 @@ def _matches_tp8_mtp_car(execution: ExecutionSignature) -> bool:
     )
 
 
+def _matches_tp8_dspark(execution: ExecutionSignature) -> bool:
+    if not execution.has_speculative_config:
+        return False
+    if execution.speculative_method != "dspark":
+        return False
+    return _matches_tp8_reference(
+        replace(execution, has_speculative_config=False),
+        allow_multi_batch=True,
+    )
+
+
 def _matches_tp8_mtp_draft(execution: ExecutionSignature) -> bool:
     # The draft-local VllmConfig no longer contains the outer
     # speculative_config. Its exact DeepSeek-V4 MTP model role is the MTP
@@ -222,6 +233,17 @@ def resolve_deepseek_v4_contract(
                 }
             )
 
+        if _matches_tp8_dspark(execution):
+            # The scheduler pads a remote-prefilled request's final prompt
+            # token to the verify shape; the DSV4 sparse backends classify
+            # it as a decode, so it can replay the uniform decode graph.
+            supported.add(
+                OptimizationFeature.DEEPSEEK_V4_FINAL_PROMPT_TOKEN_DECODE_GRAPH
+            )
+            preferred.add(
+                OptimizationFeature.DEEPSEEK_V4_FINAL_PROMPT_TOKEN_DECODE_GRAPH
+            )
+
     if _matches_mtp_draft_flash_base(model):
         mtp_draft_features = {
             OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT,
@@ -237,6 +259,8 @@ def resolve_deepseek_v4_contract(
         profile = "deepseek_v4.tp8_flash_base_mtp"
     elif _matches_flash_base(model) and _matches_tp8_reference(execution):
         profile = "deepseek_v4.tp8_flash_base"
+    elif _matches_flash_base(model) and _matches_tp8_dspark(execution):
+        profile = "deepseek_v4.tp8_flash_base_dspark"
     else:
         profile = "deepseek_v4.unvalidated"
     return MusaOptimizationContract(

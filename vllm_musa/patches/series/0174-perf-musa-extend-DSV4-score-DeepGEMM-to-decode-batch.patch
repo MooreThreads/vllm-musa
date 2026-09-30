@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 28 Sep 2026 14:00:00 +0800
+Subject: [PATCH] perf(musa): extend DSV4 score DeepGEMM to decode batches
+
+The existing M<=16 guard only covered the single-request DSpark graph
+shapes.  DSpark-4 FULL_DECODE_ONLY captures use M=20, 40, and 80 for
+concurrency 4, 8, and 16.  MP56 measurements keep the BF16-to-FP32
+DeepGEMM score projection faster than the fallback through M=80, so retain
+the fast path for the production decode ladder while leaving long-prefill
+shapes outside the guard.
+---
+ vllm/models/deepseek_v4/attention.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index f87dc0b5b9..897fcdc7b2 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -90,7 +90,7 @@ def _fill_short_context_topk_indices(
+ 
+ 
+ # MUSA: the DeepSeek-V4 attention helpers below branch on the active platform.
+-_MUSA_DEEPSEEK_V4_SCORE_FP32_DEEPGEMM_MAX_TOKENS = 16
++_MUSA_DEEPSEEK_V4_SCORE_FP32_DEEPGEMM_MAX_TOKENS = 80
+ 
+ 
+ def _musa_deepseek_v4_serialize_long_prefill(num_tokens: int) -> bool:

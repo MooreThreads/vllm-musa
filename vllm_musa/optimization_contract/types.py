@@ -44,6 +44,9 @@ class OptimizationFeature(str, Enum):
         "deepseek_v4.mtp_car_graph_registered_inputs"
     )
     DEEPSEEK_V4_MTP_CAR_GRAPH_STAGING_ARENA = "deepseek_v4.mtp_car_graph_staging_arena"
+    DEEPSEEK_V4_FINAL_PROMPT_TOKEN_DECODE_GRAPH = (
+        "deepseek_v4.final_prompt_token_decode_graph"
+    )
     QWEN_V2_SAMPLING = "qwen.v2_sampling"
     QWEN_LEGACY_SAMPLING = "qwen.legacy_sampling"
     QWEN_FA3_SCHEDULER = "qwen.fa3_scheduler"

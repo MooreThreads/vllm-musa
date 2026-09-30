@@ -35,7 +35,8 @@ def test_o_proj_uses_fixed_deepgemm_threshold() -> None:
     )
 
     assert isinstance(threshold.value, ast.Constant)
-    assert threshold.value.value == 128
+    # Multi-request decode batches (M >= 8) must not stay on the per-row GEMV.
+    assert threshold.value.value == 8
     assert "VLLM_MUSA_DEEPSEEK_V4_FP8_EINSUM_IMPL" not in source
     assert "VLLM_MUSA_DEEPSEEK_V4_FP8_EINSUM_DEEPGEMM_MIN_TOKENS" not in source
 
@@ -87,8 +88,11 @@ def test_o_proj_gemv_uses_calibrated_capture_ladder_tiles() -> None:
     assert "case 1:" in helper and "case 2:" in helper and "case 8:" in helper
     assert "BlockConfig{4, 32" in helper
     assert "case 4:" in helper and "case 32:" in helper and "case 64:" in helper
+    assert "case 20:" in helper and "case 40:" in helper and "case 80:" in helper
     assert "BlockConfig{8, 16" in helper
     assert "case 16:" in helper and "BlockConfig{32, 4" in helper
+    assert "bseqlen != 20" in source and "bseqlen != 40" in source
+    assert "bseqlen == 80" in source
 
     dispatch = generic[
         generic.index("BlockConfig forced_config") : generic.index("switch (")

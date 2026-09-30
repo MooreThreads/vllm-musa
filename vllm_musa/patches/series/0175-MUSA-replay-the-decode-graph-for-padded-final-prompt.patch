@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 29 Sep 2026 11:28:25 +0800
+Subject: [PATCH] MUSA: replay the decode graph for padded final prompt tokens
+
+The scheduler pads a remote-prefilled request's final prompt token with
+placeholder drafts to the uniform verify shape. For contract-matched
+DeepSeek-V4 DSpark deployments, schedule such a request with the uniform
+decode batch while keeping its prompt input preparation, so the step replays
+the captured decode graph.
+---
+ vllm/v1/worker/gpu/model_runner.py | 34 ++++++++++++++++++++++++++++--
+ 1 file changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index aa11c25d50..d6698aafc7 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -401,6 +401,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             self.num_speculative_steps
+             + self.model_state.num_new_sampled_tokens_per_step
+         )
++        # MUSA: contract-gated decode-graph replay for a final prompt token
++        # that the scheduler padded to the verify shape.
++        from vllm_musa.optimization_contract.policy import (
++            deepseek_v4_final_prompt_token_decode_graph_enabled,
++        )
++
++        self._final_prompt_token_decode_graph = (
++            deepseek_v4_final_prompt_token_decode_graph_enabled(self.vllm_config)
++        )
+ 
+         # Initialize samplers. Model states may override via custom_sampler().
+         if self.is_last_pp_rank and not self.is_pooling_model:
+@@ -1097,6 +1106,27 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             idx_mapping_np
+         ]
+         is_prefilling_np = num_computed_prefill_tokens_np < prefill_len_np
++        has_prefill = bool(is_prefilling_np.any())
++        graph_has_prefill = has_prefill
++        if (
++            has_prefill
++            and draft_tokens
++            and getattr(self, "_final_prompt_token_decode_graph", False)
++        ):
++            # A final prompt token scheduled with placeholder drafts has the
++            # token and logits layout of a verify step. Its input token is
++            # still written by prepare_prefill_inputs (has_prefill stays set).
++            has_drafts = np.fromiter(
++                (bool(draft_tokens.get(req_id)) for req_id in req_ids),
++                dtype=np.bool_,
++                count=num_reqs,
++            )
++            final_prompt_token = (
++                (prefill_len_np - num_computed_prefill_tokens_np == 1)
++                & (num_scheduled_tokens == self.decode_query_len)
++                & has_drafts
++            )
++            graph_has_prefill = bool((is_prefilling_np & ~final_prompt_token).any())
+ 
+         if self.adaptive_verification is not None and draft_tokens:
+             num_toks = self.adaptive_verification.get_num_tokens(
+@@ -1111,10 +1141,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             prefill_len_np=prefill_len_np,
+             num_computed_prefill_tokens_np=num_computed_prefill_tokens_np,
+             is_prefilling_np=is_prefilling_np,
+-            has_prefill=bool(is_prefilling_np.any()),
++            has_prefill=has_prefill,
+         )
+         return batch_state, get_uniform_decode_token_count(
+-            num_reqs, num_toks, max_query_len, batch_state.has_prefill
++            num_reqs, num_toks, max_query_len, graph_has_prefill
+         )
+ 
+     def prepare_inputs(
