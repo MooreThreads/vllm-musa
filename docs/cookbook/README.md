@@ -66,6 +66,20 @@ no-thinking request handling is different: GLM-5.3 needs the documented
 template workaround, while GLM-5.2 uses its checkpoint template with
 `chat_template_kwargs: {"enable_thinking": false}`.
 
+## DiffusionGemma
+
+These recipes use the model's own diffusion canvas (`canvas_length 256`,
+`max_denoising_steps 48`) and additionally expose the structured-read interposer
+on port 18011. That interposer only works with the structured-read port from
+[MooreThreads/vllm-musa#249](https://github.com/MooreThreads/vllm-musa/pull/249):
+the published `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev`
+image below carries it, while an install built from this branch alone (or from
+`:v0.28.0` in "Before you start") does not.
+
+| Model | Hardware | Endpoints | Recipe |
+|---|---|---|---|
+| [DiffusionGemma-26B-A4B-it](diffusiongemma/diffusiongemma-26b-a4b-it.md) | 1x S5000, TP1 | `/v1/chat/completions` and `/v1/systemone` | [Open recipe](diffusiongemma/diffusiongemma-26b-a4b-it.md) |
+
 ## Verify a server
 
 The recipes expose an OpenAI-compatible endpoint on port 8000.
