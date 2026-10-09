@@ -11,6 +11,7 @@ class ModelFamily(str, Enum):
     QWEN2 = "qwen2"
     QWEN3 = "qwen3"
     QWEN35_36 = "qwen3.5_3.6"
+    MINERU_QWEN2_VL = "mineru_qwen2_vl"
 
 
 class ModelRole(str, Enum):
@@ -52,6 +53,7 @@ class OptimizationFeature(str, Enum):
     QWEN_FA3_SCHEDULER = "qwen.fa3_scheduler"
     QWEN_FA3_SINGLE_REQUEST_METADATA = "qwen.fa3_single_request_metadata"
     QWEN2_ROPE_KV_PRESPLIT = "qwen2.rope_kv_presplit"
+    MINERU_QWEN2_VL_ROTARY = "mineru_qwen2_vl.rotary"
     QWEN3_QK_ROPE_KV_PRESPLIT = "qwen3.qk_rope_kv_presplit"
     QWEN3_DENSE_FP8_POST_GRAD_FUSIONS = "qwen3.dense_fp8_post_grad_fusions"
     QWEN35_GDN_WIDTH4_PREFILL = "qwen3.5_3.6.gdn_width4_prefill"
@@ -103,6 +105,13 @@ class ModelSignature:
     index_topk: int | None = None
     quant_block_shape: tuple[int, ...] | None = None
     is_hybrid: bool | None = None
+    vision_hidden_size: int | None = None
+    vision_depth: int | None = None
+    vision_num_hidden_layers: int | None = None
+    vision_num_attention_heads: int | None = None
+    vision_head_dim: int | None = None
+    mrope_section: tuple[int, ...] | None = None
+    mineru_qwen2_vl_config_match: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from .mineru import is_mineru_qwen2_vl_config
 from .providers import CONTRACT_PROVIDERS
 from .types import (
     ExecutionSignature,
@@ -136,8 +137,55 @@ def _gdn_conv_signature(text_config: Any) -> tuple[int | None, int | None]:
     return width, 2 * key_heads * key_dim + value_heads * value_dim
 
 
+def _mrope_section(hf_config: Any) -> tuple[int, ...] | None:
+    # Match the MinerU adapter's outer-before-text search order. A present
+    # section takes precedence even if it is empty or has the wrong geometry.
+    for owner in (hf_config, getattr(hf_config, "text_config", None)):
+        value = getattr(owner, "mrope_section", None)
+        if value is not None:
+            try:
+                return tuple(int(item) for item in value)
+            except (TypeError, ValueError):
+                return None
+        for name in ("rope_parameters", "rope_scaling"):
+            rope = getattr(owner, name, None)
+            if isinstance(rope, dict) and rope.get("mrope_section") is not None:
+                try:
+                    return tuple(int(item) for item in rope["mrope_section"])
+                except (TypeError, ValueError):
+                    return None
+    return None
+
+
 def _model_signature(model_config: Any, vllm_config: Any | None) -> ModelSignature:
     text_config = _text_config(model_config)
+    hf_config = getattr(model_config, "hf_config", None)
+    is_qwen2_vl = getattr(hf_config, "model_type", None) == "qwen2_vl"
+    mineru_config_match = False
+    if is_qwen2_vl:
+        try:
+            mineru_config_match = is_mineru_qwen2_vl_config(hf_config)
+        except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+            # An incomplete Qwen2-VL config must not activate the MinerU path.
+            pass
+    vision_config = getattr(hf_config, "vision_config", None) if is_qwen2_vl else None
+    vision_hidden = (
+        getattr(vision_config, "embed_dim", None)
+        or getattr(vision_config, "hidden_size", None)
+    )
+    vision_heads = (
+        getattr(vision_config, "num_heads", None)
+        or getattr(vision_config, "num_attention_heads", None)
+    )
+    vision_head_dim = (
+        vision_hidden // vision_heads
+        if isinstance(vision_hidden, int)
+        and isinstance(vision_heads, int)
+        and not isinstance(vision_hidden, bool)
+        and not isinstance(vision_heads, bool)
+        and vision_heads > 0
+        else None
+    )
     gdn_width, gdn_dim = _gdn_conv_signature(text_config)
     architectures = _architectures(model_config, text_config)
     quant_config = getattr(vllm_config, "quant_config", None)
@@ -208,6 +256,13 @@ def _model_signature(model_config: Any, vllm_config: Any | None) -> ModelSignatu
         index_topk=_int_attr(text_config, "index_topk"),
         quant_block_shape=quant_block_shape,
         is_hybrid=is_hybrid if isinstance(is_hybrid, bool) else None,
+        vision_hidden_size=vision_hidden,
+        vision_depth=_int_attr(vision_config, "depth"),
+        vision_num_hidden_layers=_int_attr(vision_config, "num_hidden_layers"),
+        vision_num_attention_heads=vision_heads,
+        vision_head_dim=vision_head_dim,
+        mrope_section=_mrope_section(hf_config) if is_qwen2_vl else None,
+        mineru_qwen2_vl_config_match=mineru_config_match,
     )
 
 

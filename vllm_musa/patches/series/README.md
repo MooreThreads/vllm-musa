@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **179 patches**. This branch includes the Qwen3.6 patches for common
+Currently **180 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -77,6 +77,9 @@ The unified attention kernel takes its per-token-head scale strides as
 kernel-signature annotation.
 DeepSeek-V4 score GEMMs above the multi-stream token threshold run through
 DeepGEMM instead of an FP32 SIMT sgemm.
+The MinerU Qwen2-VL rotary patch only edits the existing model entry point;
+its adapter is packaged in `vllm_musa/models/mineru_qwen2_vl.py`, and its tests
+are ordinary repository files under `tests/`.
 The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime

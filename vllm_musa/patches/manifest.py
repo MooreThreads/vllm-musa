@@ -246,6 +246,12 @@ _CAT6: list[DivSpec] = [
 _SHADOW_MODULES = [
     (
         "5",
+        "vllm_musa/models/mineru_qwen2_vl.py",
+        None,
+        "MinerU-scoped adapters for existing vision rotary and language MRoPE",
+    ),
+    (
+        "5",
         "vllm_musa/compilation/passes/pass_manager.py",
         "vllm/compilation/passes/pass_manager.py",
         "OOT post-grad pass manager with MUSA-only fusion registration",
