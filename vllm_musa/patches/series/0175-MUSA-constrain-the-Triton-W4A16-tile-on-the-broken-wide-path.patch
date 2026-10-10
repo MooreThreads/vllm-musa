@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 10:07:20 +0000
+Subject: [PATCH] MUSA: constrain the Triton W4A16 tile on the broken wide path
+
+---
+ vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
+index d11935f..53aa446 100644
+--- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
++++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
+@@ -208,7 +208,10 @@ def triton_w4a16_gemm(
+     # Provide a dummy pointer when HAS_ZP=False (Triton requires a valid ptr)
+     zeros_ptr = qzeros if has_zp else b_q
+ 
+-    if current_platform.is_rocm():
++    if current_platform.is_musa() and M > 64:
++        # MUSA-100075: the BLOCK_N=128 tile is wrong and non-deterministic here.
++        BLOCK_M, BLOCK_N, BLOCK_K = 128, 64, 32
++    elif current_platform.is_rocm():
+         from vllm.platforms.rocm import on_gfx1x
+ 
+         if on_gfx1x():

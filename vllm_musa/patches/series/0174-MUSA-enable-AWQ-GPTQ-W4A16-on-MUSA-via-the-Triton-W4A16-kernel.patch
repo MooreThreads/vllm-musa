@@ -1,0 +1,155 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 07:48:39 +0000
+Subject: [PATCH] MUSA: enable AWQ/GPTQ W4A16 via the Triton W4A16 kernel
+
+---
+ vllm/model_executor/kernels/linear/__init__.py     | 10 +++++++-
+ .../kernels/linear/mixed_precision/triton_w4a16.py |  9 +++++--
+ .../model_executor/layers/quantization/auto_awq.py | 30 +++++++++++++++++-----
+ .../layers/quantization/auto_gptq.py               | 19 +++++++++-----
+ 4 files changed, 52 insertions(+), 16 deletions(-)
+
+diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
+index 0129876..485ee7a 100644
+--- a/vllm/model_executor/kernels/linear/__init__.py
++++ b/vllm/model_executor/kernels/linear/__init__.py
+@@ -826,7 +826,15 @@ def choose_mp_linear_kernel(
+         if _cc is not None:
+             compute_capability = _cc[0] * 10 + _cc[1]
+ 
+-    platform_kernels = _POSSIBLE_KERNELS.get(current_platform._enum, [])
++    platform_kernels = _POSSIBLE_KERNELS.get(current_platform._enum)
++    if platform_kernels is None:
++        # MUSA is an out-of-tree platform (PlatformEnum.OOT), so it has no
++        # dedicated entry above. Its W4A16 weight-only dequant GEMM is the
++        # Triton kernel: no PTX, no mcc build, and no Marlin port required.
++        _is_musa = getattr(current_platform, "is_musa", None)
++        platform_kernels = (
++            [TritonW4A16LinearKernel] if callable(_is_musa) and _is_musa() else []
++        )
+ 
+     # Apply --linear-backend filtering when set.
+     platform_kernels = _resolve_backend_kernels(platform_kernels, "mixed-precision")
+diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
+index bc0a587..d11935f 100644
+--- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
++++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
+@@ -288,8 +288,13 @@ class TritonW4A16LinearKernel(MPLinearKernel):
+ 
+     @classmethod
+     def can_implement(cls, c: MPLinearLayerConfig) -> tuple[bool, str | None]:
+-        if not (current_platform.is_rocm() or current_platform.is_cuda()):
+-            return False, "TritonW4A16LinearKernel requires CUDA or ROCm"
++        _is_musa = getattr(current_platform, "is_musa", None)
++        if not (
++            current_platform.is_rocm()
++            or current_platform.is_cuda()
++            or (callable(_is_musa) and _is_musa())
++        ):
++            return False, "TritonW4A16LinearKernel requires CUDA, ROCm or MUSA"
+ 
+         if c.weight_type not in cls.SUPPORTED_QUANT_TYPES:
+             return (
+diff --git a/vllm/model_executor/layers/quantization/auto_awq.py b/vllm/model_executor/layers/quantization/auto_awq.py
+index 713bd7b..ba79b8b 100644
+--- a/vllm/model_executor/layers/quantization/auto_awq.py
++++ b/vllm/model_executor/layers/quantization/auto_awq.py
+@@ -228,7 +228,11 @@ class AutoAWQConfig(QuantizationConfig):
+ 
+     @classmethod
+     def get_min_capability(cls) -> int:
+-        return 75
++        # MUSA reports capability (3, 1) and serves 4-bit AWQ through the Triton
++        # W4A16 kernel, which has no CUDA-architecture requirement: the kernel's
++        # own can_implement() is the real validator. Same treatment as the FP8
++        # configs in patches 0011/0100.
++        return 31 if current_platform.is_musa() else 75
+ 
+     @classmethod
+     def get_config_filenames(cls) -> list[str]:
+@@ -296,12 +300,18 @@ class AutoAWQConfig(QuantizationConfig):
+             ):
+                 return UnquantizedLinearMethod()
+ 
+-            # On CPU and XPU, use the Marlin linear method which uses
++            # On CPU, XPU and MUSA, use the Marlin linear method which uses
+             # choose_mp_linear_kernel to select the best available kernel
+-            # (CPUWNA16LinearKernel on CPU, XPUwNa16LinearKernel on XPU).
++            # (CPUWNA16LinearKernel on CPU, XPUwNa16LinearKernel on XPU,
++            # TritonW4A16LinearKernel on MUSA).
+             # The AWQ checkpoint is converted to the standard GPTQ-like format
+             # in process_weights_after_loading before being handed to the kernel.
+-            if current_platform.is_cpu() or current_platform.is_xpu():
++            _is_musa = getattr(current_platform, "is_musa", None)
++            if (
++                current_platform.is_cpu()
++                or current_platform.is_xpu()
++                or (callable(_is_musa) and _is_musa())
++            ):
+                 return AutoAWQMarlinLinearMethod(self)
+ 
+             # Check if Marlin is supported and not using batch invariant mode
+@@ -402,9 +412,15 @@ class AutoAWQMarlinLinearMethod(LinearMethodBase):
+         self.quant_type = scalar_types.uint4
+         self.input_dtype = None
+ 
+-        # Skip Marlin verification on CPU/XPU - they use dedicated WNA16
+-        # kernels (CPUWNA16LinearKernel / XPUwNa16LinearKernel) instead.
+-        if not (current_platform.is_cpu() or current_platform.is_xpu()):
++        # Skip Marlin verification on CPU/XPU/MUSA - they use dedicated WNA16
++        # kernels (CPUWNA16LinearKernel / XPUwNa16LinearKernel /
++        # TritonW4A16LinearKernel) instead.
++        _is_musa = getattr(current_platform, "is_musa", None)
++        if not (
++            current_platform.is_cpu()
++            or current_platform.is_xpu()
++            or (callable(_is_musa) and _is_musa())
++        ):
+             verify_marlin_supported(
+                 quant_type=self.quant_config.quant_type,
+                 group_size=self.quant_config.group_size,
+diff --git a/vllm/model_executor/layers/quantization/auto_gptq.py b/vllm/model_executor/layers/quantization/auto_gptq.py
+index 1e6570a..1f4fffb 100644
+--- a/vllm/model_executor/layers/quantization/auto_gptq.py
++++ b/vllm/model_executor/layers/quantization/auto_gptq.py
+@@ -61,6 +61,7 @@ from vllm.model_executor.parameter import (
+     PackedvLLMParameter,
+     RowvLLMParameter,
+ )
++from vllm.platforms import current_platform
+ from vllm.scalar_type import scalar_types
+ from vllm.transformers_utils.config import get_safetensors_params_metadata
+ from vllm.utils.collection_utils import is_list_of
+@@ -185,7 +186,9 @@ class AutoGPTQConfig(QuantizationConfig):
+ 
+     @classmethod
+     def get_min_capability(cls) -> int:
+-        return 60
++        # See AutoAWQConfig.get_min_capability: on MUSA the WNA16 path is the
++        # Triton W4A16 kernel, whose can_implement() validates the checkpoint.
++        return 31 if current_platform.is_musa() else 60
+ 
+     @classmethod
+     def get_config_filenames(cls) -> list[str]:
+@@ -317,11 +320,15 @@ class AutoGPTQLinearMethod(LinearMethodBase):
+         self.input_dtype = None
+         self.quant_type = self.quant_config.quant_type
+ 
+-        # Verify supported on platform.
+-        verify_marlin_supported(
+-            quant_type=self.quant_config.quant_type,
+-            group_size=self.quant_config.group_size,
+-        )
++        # Verify supported on platform. MUSA has no Marlin kernel: the WNA16
++        # kernel selector picks the Triton W4A16 kernel, which validates the
++        # quant type, group size and shapes in its own can_implement().
++        _is_musa = getattr(current_platform, "is_musa", None)
++        if not (callable(_is_musa) and _is_musa()):
++            verify_marlin_supported(
++                quant_type=self.quant_config.quant_type,
++                group_size=self.quant_config.group_size,
++            )
+ 
+     def create_weights(
+         self,
