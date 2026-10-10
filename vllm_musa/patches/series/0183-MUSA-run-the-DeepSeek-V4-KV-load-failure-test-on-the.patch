@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 15:59:26 +0800
+Subject: [PATCH] MUSA: run the DeepSeek-V4 KV load-failure test on the pinned
+ KV spec
+
+The pinned MLAAttentionSpec still names the tokens-per-state field
+compress_ratio; the backported scheduler test uses the later tokens_per_state
+name.
+---
+ tests/v1/kv_connector/unit/test_kv_load_failure_recovery.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/tests/v1/kv_connector/unit/test_kv_load_failure_recovery.py b/tests/v1/kv_connector/unit/test_kv_load_failure_recovery.py
+index 74bac55598..418c396816 100644
+--- a/tests/v1/kv_connector/unit/test_kv_load_failure_recovery.py
++++ b/tests/v1/kv_connector/unit/test_kv_load_failure_recovery.py
+@@ -461,7 +461,8 @@ def _make_deepseek_v4_five_group_config(num_blocks: int) -> KVCacheConfig:
+             num_kv_heads=1,
+             head_size=512,
+             dtype=torch.bfloat16,
+-            tokens_per_state=4,
++            # MUSA: the pinned MLAAttentionSpec names tokens_per_state compress_ratio.
++            compress_ratio=4,
+             model_version="deepseek_v4",
+         )
+ 

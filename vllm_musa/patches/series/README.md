@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **180 patches**. This branch includes the Qwen3.6 patches for common
+Currently **183 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -80,6 +80,17 @@ DeepGEMM instead of an FP32 SIMT sgemm.
 A sparse-indexer prefill chunk that holds several long requests is split
 into single-request chunks, which the MUSA top-k kernels accept, before the
 per-row PyTorch fallback.
+A KV load failure on a hybrid KV cache, whose groups disagree on block
+size, recomputes or fails the whole request instead of raising in the
+scheduler. The Mooncake connector reports a failed remote KV load (a
+P-side timeout, transfer error or unknown remote engine) to the scheduler
+as finished receiving with load-error blocks, so the request fails or
+recomputes and its KV blocks are freed. These two entries are the
+unmodified upstream vLLM commits `c351fd3c6495` and `2c7ee87223f0`, which
+the pinned `VLLM_COMMIT` predates; the Mooncake entry needs the scheduler
+one. The next MUSA entry only renames the backported DeepSeek-V4 test spec
+field to the pin's `compress_ratio`. Drop all three once the pin includes
+both commits.
 The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime
