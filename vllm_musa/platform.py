@@ -40,6 +40,12 @@ from vllm_musa.optimization_contract import policy as contract_policy
 from vllm_musa.optimization_contract import (
     resolve_optimization_contract,
 )
+from vllm_musa.optimization_contract.car_rmsnorm import (
+    fused_allreduce_rmsnorm_compile_endpoints,
+    can_enable_fused_allreduce_rmsnorm,
+    car_rmsnorm_default_on,
+    infer_car_rmsnorm_model_family,
+)
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
@@ -249,6 +255,72 @@ def force_triton_attn_for_diffusion(vllm_config: "VllmConfig") -> bool:
     return False
 
 
+def _configure_fused_allreduce_rmsnorm_compile_range(
+    vllm_config: Any, *, native_custom_ops: bool
+) -> bool:
+    """Install the range cuts required by the shared CAR-RMSNorm contract.
+
+    vLLM endpoints are inclusive upper bounds.  The endpoint set comes from
+    the contract's union of TP/hidden deny rows, so BF16 and FP8-weight models
+    share a deterministic graph partition while the pass still applies the
+    quantization-specific decision inside each range.
+    """
+    compilation_config = getattr(vllm_config, "compilation_config", None)
+    pass_config = getattr(compilation_config, "pass_config", None)
+    if getattr(pass_config, "fuse_allreduce_rms", None) is not True:
+        return False
+    if native_custom_ops:
+        return False
+    model_config = getattr(vllm_config, "model_config", None)
+    get_hidden_size = getattr(model_config, "get_hidden_size", None)
+    if model_config is None or not callable(get_hidden_size):
+        return False
+    if getattr(model_config, "enforce_eager", False):
+        return False
+    parallel_config = getattr(vllm_config, "parallel_config", None)
+    tp_size = getattr(parallel_config, "tensor_parallel_size", None)
+    pp_size = getattr(parallel_config, "pipeline_parallel_size", 1)
+    hidden_size = get_hidden_size()
+    model_family = infer_car_rmsnorm_model_family(vllm_config)
+    if not can_enable_fused_allreduce_rmsnorm(
+        tp_size=tp_size,
+        pp_size=pp_size,
+        dtype=getattr(model_config, "dtype", None),
+        hidden_size=hidden_size,
+        model_family=model_family,
+    ):
+        return False
+
+    required_endpoints = list(
+        fused_allreduce_rmsnorm_compile_endpoints(
+            tp_size=tp_size, hidden_size=hidden_size
+        )
+    )
+    max_tokens = getattr(
+        getattr(vllm_config, "scheduler_config", None),
+        "max_num_batched_tokens",
+        None,
+    )
+    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool):
+        required_endpoints = [
+            endpoint for endpoint in required_endpoints if endpoint <= max_tokens
+        ]
+    if not required_endpoints:
+        return False
+
+    if max_tokens is None:
+        return False
+    comp = compilation_config
+    if comp is None:
+        return False
+    endpoints = list(getattr(comp, "compile_ranges_endpoints", None) or [])
+    missing = [endpoint for endpoint in required_endpoints if endpoint not in endpoints]
+    if not missing:
+        return False
+    comp.compile_ranges_endpoints = sorted([*endpoints, *missing])
+    return True
+
+
 class MUSAPlatformBase(Platform):
     _enum = PlatformEnum.OOT  # Out-of-tree platform
     device_name: str = "musa"
@@ -452,6 +524,20 @@ class MUSAPlatformBase(Platform):
         if all(s not in compilation_config.custom_ops for s in ("all", "none")):
             compilation_config.custom_ops.append("all")
 
+        # Install the pass default only when the shared contract accepts the
+        # serving configuration. An explicit pass setting remains authoritative.
+        # The rule itself lives in the contract, so no second copy can drift.
+        pass_config = getattr(compilation_config, "pass_config", None)
+        if (
+            pass_config is not None
+            and getattr(pass_config, "fuse_allreduce_rms", None) is None
+            and car_rmsnorm_default_on(vllm_config)
+        ):
+            pass_config.fuse_allreduce_rms = True
+            logger.info(
+                "Enabling MUSA CAR-RMSNorm from the shared optimization contract"
+            )
+
         # torch 2.11's Inductor tiling heuristic turns Qwen3-VL's decode-time
         # clone/index-select/split kernel into a slower 2D grid on MUSA. The
         # torch 2.9 1D grid is restored by limiting this model's pointwise
@@ -592,6 +678,16 @@ class MUSAPlatformBase(Platform):
             logger.info(
                 "Splitting MUSA fused-add RMSNorm compile ranges at %d rows",
                 FUSED_ADD_RMSNORM_MIN_ROWS - 1,
+            )
+
+        if _configure_fused_allreduce_rmsnorm_compile_range(
+            vllm_config,
+            native_custom_ops=musa_envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get(),
+        ):
+            logger.info(
+                "Splitting MUSA CAR-RMSNorm compile ranges for TP=%s hidden=%s",
+                parallel_config.tensor_parallel_size,
+                model_config.get_hidden_size() if model_config is not None else None,
             )
 
         if parallel_config.worker_cls == "auto":

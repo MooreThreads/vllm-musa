@@ -263,6 +263,7 @@ def _execution_signature(
         async_scheduling=bool(
             getattr(scheduler_config, "async_scheduling", False)
         ),
+        optimization_level=_int_attr(vllm_config, "optimization_level"),
     )
 
 

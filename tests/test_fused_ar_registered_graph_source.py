@@ -17,6 +17,9 @@ KERNEL = ROOT / (
 ENVIRON = ROOT / "vllm_musa/utils/environ.py"
 FUSED_OPS = ROOT / "vllm_musa/fused_allreduce_rmsnorm_ops.py"
 FUSION_PASS = ROOT / "vllm_musa/_inductor/musa_allreduce_rms_fusion.py"
+PROVIDER = ROOT / "vllm_musa/kernels/musa_ops.py"
+PLATFORM = ROOT / "vllm_musa/platform.py"
+LAYERNORM = ROOT / "vllm_musa/model_executor/layers/layernorm.py"
 PASS_MANAGER_PATCH = ROOT / (
     "vllm_musa/patches/series/"
     "0003-MUSA-vllm.compilation.passes.pass_manager.patch"
@@ -95,7 +98,14 @@ def _isolated_fusion_helpers(torch_namespace: object, fx_namespace: object) -> t
     helper_class.end_lineno = fusion_class.end_lineno
     helper_class.end_col_offset = fusion_class.end_col_offset
     module = ast.fix_missing_locations(ast.Module(body=[helper_class], type_ignores=[]))
-    namespace = {"torch": torch_namespace, "fx": fx_namespace}
+    namespace = {
+        "torch": torch_namespace,
+        "fx": fx_namespace,
+        # The manual rewrite derives output metadata by evaluating the fused ops'
+        # fake implementations, so it accepts fake tensors only. The isolated
+        # helper source therefore needs the fake-tensor type in scope.
+        "FakeTensor": _FakeTensor,
+    }
     exec(compile(module, str(FUSION_PASS), "exec"), namespace)
     return namespace["_IsolatedFusionHelpers"]
 
@@ -113,7 +123,9 @@ class _FakeDevice:
         )
 
 
-class _FakeTensor:
+class _TensorStub:
+    """Tensor stand-in that satisfies the fused ABI but is not a fake tensor."""
+
     def __init__(
         self,
         shape: tuple[int, ...],
@@ -137,6 +149,14 @@ class _FakeTensor:
 
     def is_contiguous(self) -> bool:
         return self._contiguous
+
+
+class _FakeTensor(_TensorStub):
+    """ABI-complete stand-in that also carries the fake-tensor identity."""
+
+
+class _RealTensorStandIn(_TensorStub):
+    """ABI-complete stand-in for a real tensor: a tensor, but not a fake one."""
 
 
 _MISSING = object()
@@ -174,7 +194,7 @@ def _fake_fusion_namespaces() -> tuple[
         "_FakeTorch",
         (),
         {
-            "Tensor": _FakeTensor,
+            "Tensor": _TensorStub,
             "float16": "float16",
             "bfloat16": "bfloat16",
             "float32": "float32",
@@ -237,24 +257,43 @@ def _cpp_braced_block(source: str, marker: str, start: int = 0) -> tuple[str, in
     raise AssertionError(f"unterminated C++ block after: {marker}")
 
 
-def test_fused_path_has_no_process_environment_gate() -> None:
-    sources = (ENVIRON.read_text(), COMM.read_text(), FUSION_PASS.read_text())
-    assert all("VLLM_MUSA_FUSED_AR_RMSNORM" not in source for source in sources)
-    assert all(
-        "VLLM_MUSA_FUSED_AR_RMSNORM_GRAPH_REGISTERED_INPUT" not in source
-        for source in sources
+def test_fused_path_uses_standard_pass_config_only() -> None:
+    environ_source = ENVIRON.read_text()
+    comm_source = COMM.read_text()
+    provider_source = PROVIDER.read_text()
+    runtime_sources = (
+        PLATFORM.read_text(),
+        FUSION_PASS.read_text(),
+        comm_source,
+        LAYERNORM.read_text(),
     )
+    removed_gate = "VLLM_MUSA_FUSED_AR_RMSNORM"
+
+    assert removed_gate not in environ_source
+    assert removed_gate not in provider_source
+    assert all(removed_gate not in source for source in runtime_sources)
+    assert 'getattr(pass_config, "fuse_allreduce_rms", None) is None' in runtime_sources[0]
+    assert 'getattr(self.pass_config, "fuse_allreduce_rms", None) is not True' in runtime_sources[1]
+    assert "_car_rmsnorm_pass_enabled_for_current_model" in comm_source
 
 
 def test_fusion_uses_standard_pass_and_runtime_capability_gates() -> None:
     comm_source = COMM.read_text()
     fusion_source = FUSION_PASS.read_text()
+    provider_source = PROVIDER.read_text()
+    platform_source = PLATFORM.read_text()
     pass_manager_source = PASS_MANAGER_PATCH.read_text()
 
     assert "self.pass_config.fuse_allreduce_rms" in pass_manager_source
     assert "if self.disabled:" in comm_source
     assert "if self.tp_size <= 1:" in fusion_source
     assert "_graph_registered_input_eligible" in comm_source
+    assert "can_enable_fused_allreduce_rmsnorm(" in platform_source
+    assert "FUSED_ALLREDUCE_RMSNORM_TARGET_HIDDEN_SIZE" not in platform_source
+    assert "FUSED_ALLREDUCE_RMSNORM_TP4_HIDDEN_SIZE" not in platform_source
+    for source in (comm_source, fusion_source, provider_source):
+        assert "can_use_fused_allreduce_rmsnorm(" in source
+        assert "vllm_musa.optimization_contract.car_rmsnorm" in source
 
 
 def test_python_registered_path_uses_shared_graph_lifecycle() -> None:
@@ -308,6 +347,42 @@ def test_python_registered_path_uses_shared_graph_lifecycle() -> None:
     assert "self._graph_registered_input_eligible(tensor)" in eligibility_source
     assert "self._IS_CAPTURING" in eligibility_source
     assert "self._is_current_stream_capturing()" in eligibility_source
+
+    init_source = _python_function_source(comm_source, "__init__", comm_class)
+    assert "self._graph_registered_input_enabled" in init_source
+    assert "self._fused_allreduce_rmsnorm_enabled" in init_source
+    assert "if self._graph_registered_input_enabled:" in init_source
+    assert "self._generic_graph_registered_input_enabled" in init_source
+    assert (
+        "can_use_registered_graph_input_for_generic_car("
+        in init_source
+    )
+    assert "fused_registered_input_enabled=%s" in init_source
+    assert "generic_registered_input_enabled=%s" in init_source
+    consensus = init_source.index("self._validate_graph_staging_plan_consensus()")
+    allocation = init_source.index("_make_shared_buffer(")
+    assert consensus < allocation
+
+    fingerprint_source = _python_function_source(
+        comm_source, "_graph_staging_plan_fingerprint", comm_class
+    )
+    assert "self._graph_registered_input_enabled" in fingerprint_source
+    assert "self._generic_graph_registered_input_enabled" in fingerprint_source
+    assert "_fused_allreduce_rmsnorm_enabled" in fingerprint_source
+
+    generic_source = _python_function_source(
+        comm_source, "_custom_all_reduce_impl", comm_class
+    )
+    assert "self._can_use_registered_graph_input_for_generic_ar(" in generic_source
+
+    for function_name in (
+        "_fused_allreduce_rmsnorm_impl",
+        "_fused_allreduce_residual_rmsnorm_impl",
+        "_fused_allreduce_residual_rmsnorm_no_raw_impl",
+    ):
+        fused_source = _python_function_source(comm_source, function_name, comm_class)
+        assert "self._use_registered_graph_input(input)" in fused_source
+        assert "_can_use_registered_graph_input_for_generic_ar" not in fused_source
 
     graph_ar_source = _python_function_source(
         comm_source, "_graph_custom_all_reduce_impl", comm_class
@@ -430,6 +505,38 @@ def test_manual_rewrite_is_scoped_to_comm_and_full_variance() -> None:
     assert rewrite_source.count("self._manual_residual_inputs_supported(") == 2
 
 
+def test_qwen_fused_add_provider_shape_is_registered() -> None:
+    source = FUSION_PASS.read_text()
+    assert '"musa_csrc_fused_add_rmsnorm.default" in target' in source
+    assert '"musa_fused_add_rms_norm.default" in target' in source
+    assert '"musa_csrc_rmsnorm.default" in target' in source
+    register_source = _python_function_source(
+        source,
+        "register",
+        "MusaAllReduceResidualRMSNormPattern",
+    )
+    assert "def fused_add_pattern(" in register_source
+    assert "vllm.ir.ops.fused_add_rms_norm(" in register_source
+    assert "first_two_returns(fused_add_pattern)" in register_source
+    assert "fused_add_pattern,\n            replacement," in register_source
+    assert "fused_add_inputs = self.get_fused_add_inputs()" in register_source
+
+
+def test_gemma_residual_path_materializes_effective_weight_for_car() -> None:
+    source = LAYERNORM.read_text()
+    assert "def _car_rmsnorm_ir_fusion_enabled(config=None)" in source
+    # The layer holds no default-on rule of its own: it must not touch the pass
+    # config nor re-derive capability. Both live in the shared contract.
+    assert "pass_config.fuse_allreduce_rms" not in source
+    assert "can_enable_fused_allreduce_rmsnorm(" not in source
+    assert "infer_car_rmsnorm_model_family" not in source
+    assert "resolve_car_rmsnorm_enabled(" in source
+    gemma_source = _python_function_source(source, "forward_oot", "MusaGemmaRMSNorm")
+    assert "getattr(self, \"_car_rmsnorm_ir_enabled\", False)" in gemma_source
+    assert "_car_rmsnorm_ir_fusion_enabled()" in gemma_source
+    assert "return self.forward_native(x, residual)" in gemma_source
+
+
 def test_manual_add_rewrite_accepts_only_tensor_overload_with_unit_alpha() -> None:
     (
         torch_namespace,
@@ -521,6 +628,77 @@ def test_manual_residual_metadata_gate_is_positive_and_fail_closed() -> None:
     )
     helpers.hidden_dim = 8
     assert not helpers._manual_residual_inputs_supported(car, residual, weight)
+
+
+def test_manual_residual_gate_rejects_real_tensors() -> None:
+    """A real tensor satisfies the ABI but must never drive the rewrite.
+
+    Derived output metadata comes from the fused ops' fake implementations, so a
+    real tensor would execute a real all-reduce during compilation. The gate has
+    to reject it before the insertion runs.
+    """
+    (
+        torch_namespace,
+        fx_namespace,
+        _,
+        _,
+        _,
+        input_dtype,
+    ) = _fake_fusion_namespaces()
+    helpers = _isolated_fusion_helpers(torch_namespace, fx_namespace)()
+    helpers.hidden_dim = 16
+    device = _FakeDevice("musa", 0)
+
+    def real_node(shape: tuple[int, ...], dtype: object = input_dtype) -> _FakeNode:
+        return _FakeNode(
+            op="placeholder", value=_RealTensorStandIn(shape, dtype, device)
+        )
+
+    real_input = real_node((4, 16))
+    real_car = _FakeNode(
+        args=(real_input,), value=_RealTensorStandIn((4, 16), input_dtype, device)
+    )
+    real_residual = real_node((4, 16))
+    real_weight = real_node((16,), torch_namespace.float32)
+
+    fake_input = _FakeNode(
+        op="placeholder", value=_FakeTensor((4, 16), input_dtype, device)
+    )
+    fake_car = _FakeNode(
+        args=(fake_input,), value=_FakeTensor((4, 16), input_dtype, device)
+    )
+    fake_residual = _FakeNode(
+        op="placeholder", value=_FakeTensor((4, 16), input_dtype, device)
+    )
+    fake_weight = _FakeNode(
+        op="placeholder", value=_FakeTensor((16,), torch_namespace.float32, device)
+    )
+
+    # The all-fake triple still passes, so the identity check is not over-broad.
+    assert helpers._manual_residual_inputs_supported(
+        fake_car, fake_residual, fake_weight
+    )
+    # Every ABI condition passes; only the fake-tensor identity is missing.
+    assert not helpers._manual_residual_inputs_supported(
+        real_car, real_residual, real_weight
+    )
+    # A single real operand is enough to disqualify the rewrite, wherever it sits.
+    assert not helpers._manual_residual_inputs_supported(
+        real_car, real_residual, fake_weight
+    )
+    assert not helpers._manual_residual_inputs_supported(
+        fake_car, real_residual, fake_weight
+    )
+    assert not helpers._manual_residual_inputs_supported(
+        fake_car, fake_residual, real_weight
+    )
+    # The car's own input operand counts as well.
+    real_input_car = _FakeNode(
+        args=(real_input,), value=_FakeTensor((4, 16), input_dtype, device)
+    )
+    assert not helpers._manual_residual_inputs_supported(
+        real_input_car, fake_residual, fake_weight
+    )
 
 
 def test_fusion_runtime_state_participates_in_cache_uuid() -> None:

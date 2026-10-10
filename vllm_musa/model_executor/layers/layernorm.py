@@ -11,6 +11,9 @@ from vllm_musa.optimization_contract import (
     OptimizationFeature,
     bind_optimization_contract,
 )
+from vllm_musa.optimization_contract.car_rmsnorm import (
+    resolve_car_rmsnorm_enabled,
+)
 from vllm_musa.utils.environ import envs
 
 
@@ -32,6 +35,19 @@ def _can_use_musa_jit_rmsnorm(
         and x.is_contiguous()
         and weight.is_contiguous()
     )
+
+
+def _car_rmsnorm_ir_fusion_enabled(config=None) -> bool:
+    """Keep effective Gemma weights visible to the enabled CAR fusion pass.
+
+    The default-on rule lives in the contract; this reads the settled value so
+    the layer cannot disagree with the platform's pass default.
+    """
+    if config is None:
+        config = get_current_vllm_config_or_none()
+    if config is None:
+        return False
+    return resolve_car_rmsnorm_enabled(config)
 
 
 @RMSNorm.register_oot
@@ -102,6 +118,12 @@ class MusaRMSNorm(RMSNorm):
 
 @GemmaRMSNorm.register_oot
 class MusaGemmaRMSNorm(GemmaRMSNorm):
+    def __init__(self, hidden_size: int, eps: float = 1e-6) -> None:
+        super().__init__(hidden_size, eps)
+        config = get_current_vllm_config_or_none()
+        bind_optimization_contract(self, config)
+        self._car_rmsnorm_ir_enabled = _car_rmsnorm_ir_fusion_enabled(config)
+
     def forward_oot(
         self,
         x: torch.Tensor,
@@ -114,6 +136,13 @@ class MusaGemmaRMSNorm(GemmaRMSNorm):
             return self.forward_native(x, residual)
 
         if residual is not None:
+            if getattr(self, "_car_rmsnorm_ir_enabled", False) or (
+                _car_rmsnorm_ir_fusion_enabled()
+            ):
+                # GemmaRMSNorm.forward_native materializes weight.float() + 1
+                # before entering fused_add_rms_norm. The CAR kernel consumes
+                # that effective scale and must not see the raw Gemma weight.
+                return self.forward_native(x, residual)
             weight = self.weight.data
             if (
                 _can_use_musa_jit_rmsnorm(x, weight)

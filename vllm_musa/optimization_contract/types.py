@@ -124,6 +124,17 @@ class ExecutionSignature:
     batch_invariant_enabled: bool = False
     speculative_method: str | None = None
     async_scheduling: bool = False
+    optimization_level: int | None = None
+    """``VllmConfig.optimization_level`` as a plain int.
+
+    A real config always carries one: the field is an ``IntEnum`` defaulting to
+    ``O2`` (== 2), and validation rejects ``None``. ``None`` here therefore means
+    "no vLLM config was supplied", which stays distinct from ``O0``.
+
+    Upstream also derives ``pass_config.fuse_allreduce_rms`` from this level via
+    ``OPTIMIZATION_LEVEL_TO_CONFIG``, so a feature that overrides that pass
+    default needs the level visible in the signature that justifies it.
+    """
 
 
 @dataclass(frozen=True, slots=True)
