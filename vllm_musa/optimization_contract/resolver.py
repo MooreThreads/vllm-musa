@@ -4,6 +4,7 @@ from dataclasses import replace
 from typing import Any
 
 from .providers import CONTRACT_PROVIDERS
+from .qwen import with_qwen35_vision_rotary_feature
 from .types import (
     ExecutionSignature,
     ModelFamily,
@@ -333,6 +334,9 @@ def resolve_optimization_contract(
             supported_features=frozenset(),
             preferred_features=frozenset(),
         )
+
+    if model_config is not None:
+        contract = with_qwen35_vision_rotary_feature(contract, model_config)
 
     if model.is_hybrid is True:
         feature = OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL

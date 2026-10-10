@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 from .types import (
     ExecutionSignature,
@@ -52,6 +53,64 @@ _QWEN35_36_MODEL_TYPES = frozenset(
         "qwen3_5_moe_text",
     }
 )
+
+
+def with_qwen35_vision_rotary_feature(
+    contract: MusaOptimizationContract, model_config: Any
+) -> MusaOptimizationContract:
+    """Select the tested vision geometry from the unflattened HF config."""
+    if contract.model.family is not ModelFamily.QWEN35_36:
+        return contract
+    hf = getattr(model_config, "hf_config", None)
+    text = getattr(hf, "text_config", None)
+    vision = getattr(hf, "vision_config", None)
+    if (
+        tuple(getattr(hf, "architectures", ()) or ())
+        != ("Qwen3_5ForConditionalGeneration",)
+        or getattr(hf, "model_type", None) != "qwen3_5"
+        or getattr(text, "model_type", None) != "qwen3_5_text"
+        or str(getattr(model_config, "dtype", None))
+        not in ("bfloat16", "torch.bfloat16")
+        or tuple(
+            getattr(text, name, None)
+            for name in (
+                "hidden_size", "intermediate_size", "num_hidden_layers",
+                "num_attention_heads", "num_key_value_heads", "head_dim", "vocab_size",
+            )
+        ) != (1024, 3584, 24, 8, 2, 256, 248320)
+        or tuple(
+            getattr(vision, name, None)
+            for name in (
+                "hidden_size", "depth", "num_heads", "out_hidden_size",
+                "patch_size", "spatial_merge_size", "temporal_patch_size",
+            )
+        ) != (768, 12, 12, 1024, 16, 2, 2)
+    ):
+        return contract
+    feature = OptimizationFeature.QWEN35_VISION_ROTARY_BF16
+    return replace(
+        contract,
+        supported_features=contract.supported_features | {feature},
+        preferred_features=contract.preferred_features | {feature},
+    )
+
+
+def install_qwen35_vision_rotary(visual: Any) -> bool:
+    """Route the selected Qwen3.5 visual blocks through the shared adapter."""
+    blocks = getattr(visual, "blocks", ())
+    if len(blocks) != 12 or any(
+        getattr(block, "attn", None) is None for block in blocks
+    ):
+        return False
+    from .rotary import install_vision_rotary
+
+    return install_vision_rotary(
+        (block.attn for block in blocks),
+        expected_blocks=12,
+        inplace=True,
+        flatten=True,
+        required_bf16_neox_shape=(64, 32),
+    )
 
 
 def matches_qwen35_moe_bf16_prefill_layer(

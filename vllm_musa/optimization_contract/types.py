@@ -65,6 +65,7 @@ class OptimizationFeature(str, Enum):
     QWEN_TP4_SHARDED_GUMBEL = "qwen.tp4_sharded_gumbel"
     QWEN35_SHARED_EXPERT_FOLD = "qwen3.5_3.6.shared_expert_fold"
     QWEN35_INTERLEAVED_MROPE_QK = "qwen3.5_3.6.interleaved_mrope_qk"
+    QWEN35_VISION_ROTARY_BF16 = "qwen3.5_3.6.vision_rotary_bf16"
     GLM5_SPARSE_MLA_MATE_PREFILL = "glm5.sparse_mla_mate_prefill"
     GLM5_EAGER_MCCL_INIT = "glm5.eager_mccl_init"
     HYBRID_SEPARATE_MAMBA_POOL = "hybrid.separate_mamba_pool"

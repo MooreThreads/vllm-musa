@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Elon-yf <309721831+Elon-yf@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 10:00:00 +0800
+Subject: [PATCH] MUSA: OvisOCR2 model-local rotary route
+
+Select the tested BF16 Qwen3.5 vision route through the MUSA optimization
+contract and reuse the shared vision rotary adapter.
+
+Assisted-by: OpenAI Codex
+
+diff --git a/vllm/model_executor/models/qwen3_5.py b/vllm/model_executor/models/qwen3_5.py
+index 28c6a11..e60a2a4 100644
+--- a/vllm/model_executor/models/qwen3_5.py
++++ b/vllm/model_executor/models/qwen3_5.py
+@@ -102,6 +102,24 @@
+ logger = init_logger(__name__)
+ 
+ 
++def _enable_musa_qwen35_vision_rope(model_config, visual) -> None:
++    from vllm.platforms import current_platform
++
++    if not current_platform.is_musa():
++        return
++    from vllm_musa.optimization_contract import (
++        OptimizationFeature,
++        resolve_optimization_contract,
++    )
++
++    if resolve_optimization_contract(model_config=model_config).prefers(
++        OptimizationFeature.QWEN35_VISION_ROTARY_BF16
++    ):
++        from vllm_musa.optimization_contract.qwen import install_qwen35_vision_rotary
++
++        install_qwen35_vision_rotary(visual)
++
++
+ class Qwen3_5ProcessingInfo(Qwen3VLProcessingInfo):
+     def get_hf_config(self):
+         return self.ctx.get_hf_config(Qwen3_5Config)
+@@ -499,6 +517,8 @@
+                 quant_config=quant_config,
+                 prefix=maybe_prefix(prefix, "visual"),
+             )
++
++        _enable_musa_qwen35_vision_rope(self.model_config, self.visual)
+ 
+         with self._mark_language_model(vllm_config):
+             self.language_model = Qwen3_5ForCausalLM(
