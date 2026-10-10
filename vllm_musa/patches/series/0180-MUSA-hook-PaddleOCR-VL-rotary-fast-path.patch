@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Elon-yf <309721831+Elon-yf@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 15:23:15 +0800
+Subject: [PATCH] MUSA: hook PaddleOCR-VL rotary fast path
+
+diff --git a/vllm/model_executor/models/paddleocr_vl.py b/vllm/model_executor/models/paddleocr_vl.py
+index bd635aa..9eef14a 100644
+--- a/vllm/model_executor/models/paddleocr_vl.py
++++ b/vllm/model_executor/models/paddleocr_vl.py
+@@ -83,6 +83,41 @@
+ from .vision import get_vit_attn_backend
+-
++
+-
++
++def _musa_paddle_rotary_enabled(config: PretrainedConfig) -> bool:
++    if (
++        getattr(torch.version, "musa", None) is None
++        or getattr(config, "model_type", None) != "paddleocr_vl"
++    ):
++        return False
++    vision = getattr(config, "vision_config", None)
++    text = getattr(config, "text_config", config)
++    section = None
++    for rope in (
++        getattr(text, "rope_parameters", None),
++        getattr(text, "rope_scaling", None),
++        getattr(config, "rope_parameters", None),
++        getattr(config, "rope_scaling", None),
++    ):
++        if isinstance(rope, dict) and rope.get("mrope_section") is not None:
++            section = rope["mrope_section"]
++            break
++    return (
++        getattr(vision, "hidden_size", None) == 1152
++        and (
++            getattr(vision, "num_hidden_layers", None) == 27
++            or getattr(vision, "depth", None) == 27
++        )
++        and getattr(vision, "num_attention_heads", None) == 16
++        and getattr(vision, "patch_size", None) == 14
++        and getattr(vision, "image_size", None) == 384
++        and getattr(text, "hidden_size", None) == 1024
++        and getattr(text, "num_attention_heads", None) == 16
++        and getattr(text, "num_key_value_heads", None) == 2
++        and isinstance(section, (list, tuple))
++        and tuple(section) == (16, 24, 24)
++    )
++
++
+ def smart_resize(
+     height: int,
+     width: int,
+@@ -972,6 +1007,12 @@
+     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+         super().__init__()
+         config = vllm_config.model_config.hf_config
++        musa_rotary = _musa_paddle_rotary_enabled(config)
++        if musa_rotary:
++            from vllm_musa.model_executor.layers.rotary_embedding.base import (
++                MusaMRotaryEmbedding,
++                MusaVisionApplyRotaryEmb,
++            )
+         if hasattr(config, "text_config"):
+             text_config = config.text_config.to_dict()
+             unsafe_keys = ["model_type", "architectures", "tie_word_embeddings"]
+@@ -990,6 +1031,14 @@
+                 prefix=maybe_prefix(prefix, "visual"),
+             )
+             self.mlp_AR = Projector(config, config.vision_config)
++            if musa_rotary and isinstance(self.visual, SiglipVisionModel):
++                for layer in self.visual.vision_model.encoder.layers:
++                    attention = layer.self_attn
++                    rotary = attention.apply_rotary_emb
++                    attention.apply_rotary_emb = MusaVisionApplyRotaryEmb(
++                        is_neox_style=rotary.is_neox_style,
++                        enable_fp32_compute=rotary.enable_fp32_compute,
++                    )
+-
++
+         with self._mark_language_model(vllm_config):
+             self.language_model = Ernie4_5ForCausalLM(
+@@ -999,7 +1048,10 @@
+-
++
+             for layer in self.language_model.model.layers:
+                 if not isinstance(layer, PPMissingLayer):
+-                    layer.self_attn.rotary_emb.is_neox_style = True
++                    rotary = layer.self_attn.rotary_emb
++                    rotary.is_neox_style = True
++                    if musa_rotary:
++                        layer.self_attn.rotary_emb = MusaMRotaryEmbedding(rotary)
+-
++
+         self.make_empty_intermediate_tensors = (
+             self.language_model.make_empty_intermediate_tensors
