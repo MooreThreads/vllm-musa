@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 12:30:12 +0000
+Subject: [PATCH] MUSA: use a block size the MUSA attention backend supports
+
+MUSA-100075.
+
+The MUSA attention backend advertises a kernel block size that must be a
+multiple of 64, so the upstream VllmRunner default of 16 cannot start an
+engine on MUSA.  Any test that relies on that default fails with
+
+    ValueError: No common block size for 16.
+
+which is unrelated to the feature under test; enforce_eager=True with
+block_size 32 and 16 both fail, 64 works.  Before MUSA supported W4A16 the
+quantization tests skipped on MUSA, so the default was never exercised.
+
+Keep the upstream XPU branch and add MUSA to it.
+---
+ tests/conftest.py | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/tests/conftest.py b/tests/conftest.py
+index e277b35..0d00ee8 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -940,8 +940,9 @@
+     - `trust_remote_code`: Set to `True` instead of `False` for convenience.
+     - `seed`: Set to `0` instead of `None` for test reproducibility.
+     - `max_model_len`: Set to `1024` instead of `None` to reduce memory usage.
+     - `block_size`: To reduce memory usage, set default to `64` if on XPU
+-        devices, otherwise default to `16`.
++        devices, otherwise default to `16`. MUSA also uses `64`: its attention
++        backend requires a kernel block size that is a multiple of 64.
+     - `enable_chunked_prefill`: Set to `False` instead of `None` for
+       test reproducibility.
+     - `enforce_eager`: Set to `False` to test CUDA graph.
+@@ -960,7 +961,9 @@
+         dtype: str = "auto",
+         disable_log_stats: bool = True,
+         tensor_parallel_size: int = 1,
+-        block_size: int = 16 if not torch.xpu.is_available() else 64,
++        block_size: int = (
++            64 if torch.xpu.is_available() or current_platform.is_musa() else 16
++        ),
+         enable_chunked_prefill: bool | None = False,
+         enforce_eager: bool | None = False,
+         # Set this to avoid hanging issue
