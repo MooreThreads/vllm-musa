@@ -1,0 +1,143 @@
+diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
+index 4e0f8c9..9cbaac8 100644
+--- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
++++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
+@@ -36,6 +36,93 @@ TRITON_W4A16_SUPPORTED_QUANT_TYPES = [
+ ]
+ 
+ 
++@triton.jit
++def triton_w4a16_gemm_split_kernel(
++    a_ptr, b_ptr, scales_ptr, zeros_ptr, c_ptr,
++    M, N, K,
++    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
++    group_size, SPLIT,
++    HAS_ZP: tl.constexpr, ZP_BIAS: tl.constexpr,
++    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
++):
++    """W4A16 GEMM over one K-slice, accumulating into an fp32 partial buffer."""
++    pid_n = tl.program_id(0)
++    pid_m = tl.program_id(1)
++    pid_s = tl.program_id(2)
++
++    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
++    offs_bn = pid_n * (BLOCK_N // 8) + tl.arange(0, BLOCK_N // 8)
++    n_mask = offs_n < N
++    bn_mask = offs_bn < (N // 8)
++    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
++    m_mask = offs_m < M
++    shifts = tl.arange(0, 8) * 4
++
++    # Keep every tile inside one quantization group: the group index is derived from
++    # the tile start, so a tile straddling a group boundary would use the wrong scale.
++    k_per_split = tl.cdiv(tl.cdiv(K, SPLIT), group_size) * group_size
++    k_lo = pid_s * k_per_split
++    k_hi = tl.minimum(k_lo + k_per_split, K)
++
++    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
++    for k0 in range(0, tl.cdiv(k_per_split, BLOCK_K)):
++        k_base = k_lo + k0 * BLOCK_K
++        offs_k = k_base + tl.arange(0, BLOCK_K)
++        k_mask = offs_k < k_hi
++
++        a = tl.load(
++            a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak,
++            mask=m_mask[:, None] & k_mask[None, :], other=0.0,
++        )
++        b_q = tl.load(
++            b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn,
++            mask=k_mask[:, None] & bn_mask[None, :], other=0,
++        )
++
++        # Unpack the packed nibbles: nibble j of word nb is output column 8*nb + j.
++        b_3d = (b_q[:, :, None] >> shifts[None, None, :]) & 0xF
++        b_unpacked = tl.reshape(b_3d, (BLOCK_K, BLOCK_N))
++
++        g_idx = k_base // group_size
++        g_valid = g_idx < tl.cdiv(K, group_size)
++        scales = tl.load(scales_ptr + g_idx * N + offs_n, mask=n_mask & g_valid, other=1.0)
++        if HAS_ZP:
++            z_q = tl.load(
++                zeros_ptr + g_idx * (N // 8) + offs_bn,
++                mask=bn_mask & g_valid, other=0,
++            )
++            z = tl.reshape((z_q[:, None] >> shifts[None, :]) & 0xF, (BLOCK_N,))
++        else:
++            z = tl.full((BLOCK_N,), ZP_BIAS, dtype=tl.int32)
++
++        b_fp = (b_unpacked - z[None, :]).to(a.dtype) * scales[None, :]
++        acc += tl.dot(a, b_fp)
++
++    tl.store(
++        c_ptr + pid_s * M * N + offs_m[:, None] * N + offs_n[None, :],
++        acc, mask=m_mask[:, None] & n_mask[None, :],
++    )
++
++
++@triton.jit
++def triton_w4a16_reduce_kernel(
++    p_ptr, c_ptr, M, N, SPLIT, stride_cm, stride_cn,
++    BLOCK_N: tl.constexpr,
++):
++    """Sum SPLIT fp32 partials into the fp16 output."""
++    pid_n = tl.program_id(0)
++    pid_m = tl.program_id(1)
++    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
++    n_mask = offs_n < N
++    acc = tl.zeros((BLOCK_N,), dtype=tl.float32)
++    for s in range(0, SPLIT):
++        acc += tl.load(p_ptr + s * M * N + pid_m * N + offs_n, mask=n_mask, other=0.0)
++    tl.store(
++        c_ptr + pid_m * stride_cm + offs_n * stride_cn,
++        acc.to(c_ptr.type.element_ty), mask=n_mask,
++    )
++
++
+ @triton.jit
+ def triton_w4a16_gemm_kernel(
+     # Pointers
+@@ -250,6 +337,44 @@ def triton_w4a16_gemm(
+     if group_size < BLOCK_K:
+         BLOCK_K = group_size
+ 
++    if current_platform.is_musa():
++        # Decode is parallelism-starved on the narrow projections: o_proj and down_proj
++        # expose 24-64 programs, so the k-chain is serial and they stream at 7-13 GB/s.
++        # Splitting K raises the program count and shortens each chain. SPLIT is derived
++        # from the static shape only (never from data), and the M boundary matches the
++        # tile table below, so capture behaviour is unchanged.
++        if M <= 32:
++            BLOCK_M, BLOCK_N, BLOCK_K = 32, 32, 64
++        elif M <= 64:
++            BLOCK_M, BLOCK_N, BLOCK_K = 64, 32, 64
++        else:
++            BLOCK_M, BLOCK_N, BLOCK_K = 128, 64, 32
++        if group_size < BLOCK_K:
++            BLOCK_K = group_size
++
++        SPLIT = 1
++        if M <= 64:
++            tiles_n = triton.cdiv(N, BLOCK_N)
++            while SPLIT < 8 and tiles_n * SPLIT < 256:
++                SPLIT *= 2
++
++        if SPLIT > 1:
++            partials = torch.empty((SPLIT, M, N), dtype=torch.float32, device=a.device)
++            grid = (triton.cdiv(N, BLOCK_N), triton.cdiv(M, BLOCK_M), SPLIT)
++            triton_w4a16_gemm_split_kernel[grid](
++                a, b_q, scales, zeros_ptr, partials,
++                M, N, K,
++                a.stride(0), a.stride(1), b_q.stride(0), b_q.stride(1),
++                c.stride(0), c.stride(1),
++                group_size, SPLIT,
++                HAS_ZP=has_zp, ZP_BIAS=zp_bias,
++                BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
++            )
++            triton_w4a16_reduce_kernel[(triton.cdiv(N, 1024), M)](
++                partials, c, M, N, SPLIT, c.stride(0), c.stride(1), 1024,
++            )
++            return c
++
+     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+ 
+     triton_w4a16_gemm_kernel[grid](
