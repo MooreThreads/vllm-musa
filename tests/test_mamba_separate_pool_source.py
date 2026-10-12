@@ -41,3 +41,14 @@ def test_mamba_pool_count_is_documented_as_per_group_address_space():
 
     assert "The count is per Mamba group" in source
     assert "each group owns a separate BlockPool/address space" in source
+
+
+def test_both_mamba_pool_sizing_sites_hold_align_snapshots():
+    (patch,) = SERIES.glob("*-MUSA-complete-Mamba-prefix-cache-pool-ownership.patch")
+    source = patch.read_text()
+    helper = "_musa_mamba_blocks_per_request"
+
+    assert f"+def {helper}(vllm_config, kv_cache_groups) -> int:" in source
+    assert source.count(f"mamba_blocks_per_request = {helper}(") == 2
+    assert "spec.max_num_blocks_per_req(vllm_config, max_model_len)" in source
+    assert "num_blocks + 3 + vllm_config.max_concurrent_batches - 1" in source
