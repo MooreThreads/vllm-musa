@@ -1,8 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 12 Oct 2026 13:20:12 +0800
+Subject: [PATCH] MUSA: decode tile for the widest W4A16 projection
+
+At BLOCK_M=32/BLOCK_N=32 the A tile is four times the B tile per program, so
+gate_up's 560 programs spend their issue slots re-reading activations: 100 GB/s, half of
+the decode budget, for a shape that is pure streaming.
+
+A 16x64 tile with BLOCK_K=64 rebalances A against B and measures 240 GB/s. The other three
+projections already sit at their swept optimum - a 16-row tile makes down_proj worse,
+85 us against 59 us - so only N >= 8192 changes.
+---
+ .../kernels/linear/mixed_precision/triton_w4a16.py          | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 8c4ef85..d0ff3f2 100644
+index a0c3ef3..abbd5a3 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-@@ -354,6 +354,12 @@ def _w4a16_launch(
+@@ -351,6 +351,12 @@ def _w4a16_launch(
              BLOCK_M, BLOCK_N, BLOCK_K = 64, 32, 64
          else:
              BLOCK_M, BLOCK_N, BLOCK_K = 128, 64, 32
@@ -15,3 +31,6 @@ index 8c4ef85..d0ff3f2 100644
          if group_size < BLOCK_K:
              BLOCK_K = group_size
  
+-- 
+2.34.1
+

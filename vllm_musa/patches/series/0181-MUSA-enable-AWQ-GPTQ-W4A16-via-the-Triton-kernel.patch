@@ -1,20 +1,20 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Sat, 10 Oct 2026 07:48:39 +0000
-Subject: [PATCH] MUSA: enable AWQ/GPTQ W4A16 via the Triton W4A16 kernel
+Date: Mon, 12 Oct 2026 13:20:12 +0800
+Subject: [PATCH] MUSA: enable AWQ/GPTQ W4A16 via the Triton kernel
 
 ---
- vllm/model_executor/kernels/linear/__init__.py     | 10 +++++++-
- .../kernels/linear/mixed_precision/triton_w4a16.py |  9 +++++--
- .../model_executor/layers/quantization/auto_awq.py | 30 +++++++++++++++++-----
- .../layers/quantization/auto_gptq.py               | 19 +++++++++-----
- 4 files changed, 52 insertions(+), 16 deletions(-)
+ .../model_executor/kernels/linear/__init__.py | 10 +++++-
+ .../linear/mixed_precision/triton_w4a16.py    |  9 ++++--
+ .../layers/quantization/auto_awq.py           | 31 ++++++++++++++-----
+ .../layers/quantization/auto_gptq.py          | 20 ++++++++----
+ 4 files changed, 54 insertions(+), 16 deletions(-)
 
 diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
-index 0129876..485ee7a 100644
+index 3413d4a..ad0b5da 100644
 --- a/vllm/model_executor/kernels/linear/__init__.py
 +++ b/vllm/model_executor/kernels/linear/__init__.py
-@@ -826,7 +826,15 @@ def choose_mp_linear_kernel(
+@@ -799,7 +799,15 @@ def choose_mp_linear_kernel(
          if _cc is not None:
              compute_capability = _cc[0] * 10 + _cc[1]
  
@@ -52,23 +52,24 @@ index bc0a587..d11935f 100644
          if c.weight_type not in cls.SUPPORTED_QUANT_TYPES:
              return (
 diff --git a/vllm/model_executor/layers/quantization/auto_awq.py b/vllm/model_executor/layers/quantization/auto_awq.py
-index 713bd7b..ba79b8b 100644
+index 713bd7b..ff8b7b5 100644
 --- a/vllm/model_executor/layers/quantization/auto_awq.py
 +++ b/vllm/model_executor/layers/quantization/auto_awq.py
-@@ -228,7 +228,11 @@ class AutoAWQConfig(QuantizationConfig):
+@@ -228,7 +228,12 @@ class AutoAWQConfig(QuantizationConfig):
  
      @classmethod
      def get_min_capability(cls) -> int:
 -        return 75
 +        # MUSA reports capability (3, 1) and serves 4-bit AWQ through the Triton
 +        # W4A16 kernel, which has no CUDA-architecture requirement: the kernel's
-+        # own can_implement() is the real validator. Same treatment as the FP8
-+        # configs in patches 0011/0100.
-+        return 31 if current_platform.is_musa() else 75
++        # own can_implement() is the real validator, and the capability tuple is a
++        # vendor number rather than an ISA requirement.
++        _is_musa = getattr(current_platform, "is_musa", None)
++        return 31 if callable(_is_musa) and _is_musa() else 75
  
      @classmethod
      def get_config_filenames(cls) -> list[str]:
-@@ -296,12 +300,18 @@ class AutoAWQConfig(QuantizationConfig):
+@@ -296,12 +301,18 @@ class AutoAWQConfig(QuantizationConfig):
              ):
                  return UnquantizedLinearMethod()
  
@@ -90,7 +91,7 @@ index 713bd7b..ba79b8b 100644
                  return AutoAWQMarlinLinearMethod(self)
  
              # Check if Marlin is supported and not using batch invariant mode
-@@ -402,9 +412,15 @@ class AutoAWQMarlinLinearMethod(LinearMethodBase):
+@@ -402,9 +413,15 @@ class AutoAWQMarlinLinearMethod(LinearMethodBase):
          self.quant_type = scalar_types.uint4
          self.input_dtype = None
  
@@ -110,7 +111,7 @@ index 713bd7b..ba79b8b 100644
                  quant_type=self.quant_config.quant_type,
                  group_size=self.quant_config.group_size,
 diff --git a/vllm/model_executor/layers/quantization/auto_gptq.py b/vllm/model_executor/layers/quantization/auto_gptq.py
-index 1e6570a..1f4fffb 100644
+index 1e6570a..6644730 100644
 --- a/vllm/model_executor/layers/quantization/auto_gptq.py
 +++ b/vllm/model_executor/layers/quantization/auto_gptq.py
 @@ -61,6 +61,7 @@ from vllm.model_executor.parameter import (
@@ -121,18 +122,19 @@ index 1e6570a..1f4fffb 100644
  from vllm.scalar_type import scalar_types
  from vllm.transformers_utils.config import get_safetensors_params_metadata
  from vllm.utils.collection_utils import is_list_of
-@@ -185,7 +186,9 @@ class AutoGPTQConfig(QuantizationConfig):
+@@ -185,7 +186,10 @@ class AutoGPTQConfig(QuantizationConfig):
  
      @classmethod
      def get_min_capability(cls) -> int:
 -        return 60
 +        # See AutoAWQConfig.get_min_capability: on MUSA the WNA16 path is the
 +        # Triton W4A16 kernel, whose can_implement() validates the checkpoint.
-+        return 31 if current_platform.is_musa() else 60
++        _is_musa = getattr(current_platform, "is_musa", None)
++        return 31 if callable(_is_musa) and _is_musa() else 60
  
      @classmethod
      def get_config_filenames(cls) -> list[str]:
-@@ -317,11 +320,15 @@ class AutoGPTQLinearMethod(LinearMethodBase):
+@@ -317,11 +321,15 @@ class AutoGPTQLinearMethod(LinearMethodBase):
          self.input_dtype = None
          self.quant_type = self.quant_config.quant_type
  
@@ -153,3 +155,6 @@ index 1e6570a..1f4fffb 100644
  
      def create_weights(
          self,
+-- 
+2.34.1
+

@@ -1,8 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 12 Oct 2026 13:20:12 +0800
+Subject: [PATCH] MUSA: route small-M W4A16 GEMMs to the cheap unpack
+
+The split kernel unpacks packed nibbles with a 3-D reshape; the main kernel needs
+three tl.interleave calls for the same work. That is why gate_up - the one shape whose
+tile count kept SPLIT at 1 - streamed at 75 GB/s and took 52 % of the decode step.
+
+Route every small-M GEMM through the split kernel. With SPLIT == 1 it writes the output
+directly, so no reduction is launched and the output layout is unchanged.
+---
+ .../linear/mixed_precision/triton_w4a16.py    | 19 +++++++++++++------
+ 1 file changed, 13 insertions(+), 6 deletions(-)
+
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 968cecd..8c4ef85 100644
+index 95d076a..a0c3ef3 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-@@ -363,11 +363,17 @@ def _w4a16_launch(
+@@ -360,11 +360,17 @@ def _w4a16_launch(
              while SPLIT < 8 and tiles_n * SPLIT < 256:
                  SPLIT *= 2
  
@@ -12,7 +27,7 @@ index 968cecd..8c4ef85 100644
 +            # The split kernel's 3-D reshape unpack is ~2.5x cheaper than the main
 +            # kernel's tl.interleave expansion, so decode uses it even when the shape
 +            # already exposes enough programs (SPLIT == 1) - then it writes the output
-+            # directly and no reduce kernel is launched. MUSA-100076.
++            # directly and no reduce kernel is launched.
 +            partials = None
 +            if SPLIT > 1:
 +                partials = torch.empty((SPLIT, M, N), dtype=torch.float32, device=a.device)
@@ -23,7 +38,7 @@ index 968cecd..8c4ef85 100644
                  M, N, K,
                  a.stride(0), a.stride(1), b_q.stride(0), b_q.stride(1),
                  c.stride(0), c.stride(1),
-@@ -375,9 +381,10 @@ def _w4a16_launch(
+@@ -372,9 +378,10 @@ def _w4a16_launch(
                  HAS_ZP=has_zp, ZP_BIAS=zp_bias,
                  BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
              )
@@ -37,3 +52,6 @@ index 968cecd..8c4ef85 100644
              return c
  
      grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+-- 
+2.34.1
+

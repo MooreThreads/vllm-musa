@@ -1,5 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 12 Oct 2026 13:20:12 +0800
+Subject: [PATCH] MUSA: split K on the W4A16 kernel for decode speed
+
+Decode is parallelism-starved on the narrow projections: at M=1, o_proj and
+down_proj expose only 24-64 programs, so the k-chain is serial and they stream at
+7-13 GB/s against a 1570 GB/s peak. Split K into 2-8 pieces to raise the program count
+and shorten each chain, reduce the pieces in fp32, and keep every piece inside one
+quantization group so per-group scales and zero points are still applied exactly once.
+
+The split is derived from the static shape only, never from data, so capture behaviour is
+unchanged, and the unpack uses a 3-D reshape instead of three tl.interleave calls.
+---
+ .../linear/mixed_precision/triton_w4a16.py    | 126 ++++++++++++++++++
+ 1 file changed, 126 insertions(+)
+
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 4e0f8c9..9cbaac8 100644
+index 0d0c87a..5b1e1c8 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 @@ -36,6 +36,93 @@ TRITON_W4A16_SUPPORTED_QUANT_TYPES = [
@@ -96,11 +113,12 @@ index 4e0f8c9..9cbaac8 100644
  @triton.jit
  def triton_w4a16_gemm_kernel(
      # Pointers
-@@ -250,6 +337,44 @@ def triton_w4a16_gemm(
+@@ -251,6 +338,45 @@ def triton_w4a16_gemm(
      if group_size < BLOCK_K:
          BLOCK_K = group_size
  
-+    if current_platform.is_musa():
++    _is_musa = getattr(current_platform, "is_musa", None)
++    if callable(_is_musa) and _is_musa():
 +        # Decode is parallelism-starved on the narrow projections: o_proj and down_proj
 +        # expose 24-64 programs, so the k-chain is serial and they stream at 7-13 GB/s.
 +        # Splitting K raises the program count and shortens each chain. SPLIT is derived
@@ -141,3 +159,6 @@ index 4e0f8c9..9cbaac8 100644
      grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
  
      triton_w4a16_gemm_kernel[grid](
+-- 
+2.34.1
+

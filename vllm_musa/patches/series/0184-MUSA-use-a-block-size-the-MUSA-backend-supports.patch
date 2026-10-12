@@ -1,21 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Sat, 10 Oct 2026 12:30:12 +0000
-Subject: [PATCH] MUSA: use a block size the MUSA attention backend supports
-
-MUSA-100075.
+Date: Mon, 12 Oct 2026 13:20:12 +0800
+Subject: [PATCH] MUSA: use a block size the MUSA backend supports
 
 The MUSA attention backend advertises a kernel block size that must be a
-multiple of 64, so the upstream VllmRunner default of 16 cannot start an
-engine on MUSA.  Any test that relies on that default fails with
+multiple of 64, so the upstream VllmRunner default of 16 cannot start an engine on MUSA.
+Any test that relies on that default fails with
 
     ValueError: No common block size for 16.
 
-which is unrelated to the feature under test; enforce_eager=True with
-block_size 32 and 16 both fail, 64 works.  Before MUSA supported W4A16 the
-quantization tests skipped on MUSA, so the default was never exercised.
-
-Keep the upstream XPU branch and add MUSA to it.
+which is unrelated to the feature under test; enforce_eager=True with block_size 32 and 16
+both fail, 64 works. Keep the upstream XPU branch and add MUSA to it.
 ---
  tests/conftest.py | 7 +++++--
  1 file changed, 5 insertions(+), 2 deletions(-)
@@ -24,8 +19,7 @@ diff --git a/tests/conftest.py b/tests/conftest.py
 index e277b35..0d00ee8 100644
 --- a/tests/conftest.py
 +++ b/tests/conftest.py
-@@ -940,8 +940,9 @@
-     - `trust_remote_code`: Set to `True` instead of `False` for convenience.
+@@ -941,7 +941,8 @@ class VllmRunner:
      - `seed`: Set to `0` instead of `None` for test reproducibility.
      - `max_model_len`: Set to `1024` instead of `None` to reduce memory usage.
      - `block_size`: To reduce memory usage, set default to `64` if on XPU
@@ -35,7 +29,7 @@ index e277b35..0d00ee8 100644
      - `enable_chunked_prefill`: Set to `False` instead of `None` for
        test reproducibility.
      - `enforce_eager`: Set to `False` to test CUDA graph.
-@@ -960,7 +961,9 @@
+@@ -960,7 +961,9 @@ class VllmRunner:
          dtype: str = "auto",
          disable_log_stats: bool = True,
          tensor_parallel_size: int = 1,
@@ -46,3 +40,6 @@ index e277b35..0d00ee8 100644
          enable_chunked_prefill: bool | None = False,
          enforce_eager: bool | None = False,
          # Set this to avoid hanging issue
+-- 
+2.34.1
+
