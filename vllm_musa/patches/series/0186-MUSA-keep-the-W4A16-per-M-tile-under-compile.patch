@@ -16,11 +16,11 @@ keeps exporting the plain launcher under the original name.
 qzeros is optional in the launcher but custom-op schemas need a real Tensor, so an empty
 int32 tensor carries the symmetric case.
 ---
- .../linear/mixed_precision/triton_w4a16.py    | 40 ++++++++++++++++++-
- 1 file changed, 39 insertions(+), 1 deletion(-)
+ .../linear/mixed_precision/triton_w4a16.py    | 38 ++++++++++++++++++-
+ 1 file changed, 37 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 5b1e1c8..95d076a 100644
+index 36d9a72..8d70f09 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 @@ -248,7 +248,7 @@ def triton_w4a16_gemm_kernel(
@@ -32,13 +32,12 @@ index 5b1e1c8..95d076a 100644
      a: torch.Tensor,  # [M, K] fp16/bf16
      b_q: torch.Tensor,  # [K, N//8] int32
      scales: torch.Tensor,  # [K//G, N] fp16/bf16
-@@ -595,3 +595,41 @@ class TritonW4A16LinearKernel(MPLinearKernel):
+@@ -592,3 +592,39 @@ class TritonW4A16LinearKernel(MPLinearKernel):
              output.add_(bias)
  
          return output.reshape(out_shape)
 +
 +
-+# --- MUSA runtime dispatch ------------------------------------------------
 +_musa_check = getattr(current_platform, "is_musa", None)
 +_is_musa = callable(_musa_check) and _musa_check()
 +if _is_musa:
@@ -72,7 +71,6 @@ index 5b1e1c8..95d076a 100644
 +    # Other platforms (ROCm) keep the plain Triton launcher: apply_weights()
 +    # calls triton_w4a16_gemm by name either way.
 +    triton_w4a16_gemm = _w4a16_launch
-+# --- end MUSA runtime dispatch --------------------------------------------
 +
 -- 
 2.34.1

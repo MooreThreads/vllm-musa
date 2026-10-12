@@ -12,11 +12,11 @@ quantization group so per-group scales and zero points are still applied exactly
 The split is derived from the static shape only, never from data, so capture behaviour is
 unchanged, and the unpack uses a 3-D reshape instead of three tl.interleave calls.
 ---
- .../linear/mixed_precision/triton_w4a16.py    | 126 ++++++++++++++++++
- 1 file changed, 126 insertions(+)
+ .../linear/mixed_precision/triton_w4a16.py    | 123 ++++++++++++++++++
+ 1 file changed, 123 insertions(+)
 
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 0d0c87a..5b1e1c8 100644
+index 0d0c87a..36d9a72 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 @@ -36,6 +36,93 @@ TRITON_W4A16_SUPPORTED_QUANT_TYPES = [
@@ -113,31 +113,28 @@ index 0d0c87a..5b1e1c8 100644
  @triton.jit
  def triton_w4a16_gemm_kernel(
      # Pointers
-@@ -251,6 +338,45 @@ def triton_w4a16_gemm(
+@@ -251,6 +338,42 @@ def triton_w4a16_gemm(
      if group_size < BLOCK_K:
          BLOCK_K = group_size
  
-+    _is_musa = getattr(current_platform, "is_musa", None)
-+    if callable(_is_musa) and _is_musa():
++    if callable(_is_musa) and _is_musa() and M <= 64:
 +        # Decode is parallelism-starved on the narrow projections: o_proj and down_proj
 +        # expose 24-64 programs, so the k-chain is serial and they stream at 7-13 GB/s.
 +        # Splitting K raises the program count and shortens each chain. SPLIT is derived
 +        # from the static shape only (never from data), and the M boundary matches the
-+        # tile table below, so capture behaviour is unchanged.
++        # tile table below, so capture behaviour is unchanged. Larger M keeps the wide
++        # tile that the entry above this one selects.
 +        if M <= 32:
 +            BLOCK_M, BLOCK_N, BLOCK_K = 32, 32, 64
-+        elif M <= 64:
-+            BLOCK_M, BLOCK_N, BLOCK_K = 64, 32, 64
 +        else:
-+            BLOCK_M, BLOCK_N, BLOCK_K = 128, 64, 32
++            BLOCK_M, BLOCK_N, BLOCK_K = 64, 32, 64
 +        if group_size < BLOCK_K:
 +            BLOCK_K = group_size
 +
 +        SPLIT = 1
-+        if M <= 64:
-+            tiles_n = triton.cdiv(N, BLOCK_N)
-+            while SPLIT < 8 and tiles_n * SPLIT < 256:
-+                SPLIT *= 2
++        tiles_n = triton.cdiv(N, BLOCK_N)
++        while SPLIT < 8 and tiles_n * SPLIT < 256:
++            SPLIT *= 2
 +
 +        if SPLIT > 1:
 +            partials = torch.empty((SPLIT, M, N), dtype=torch.float32, device=a.device)

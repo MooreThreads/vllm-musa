@@ -10,48 +10,64 @@ tile count kept SPLIT at 1 - streamed at 75 GB/s and took 52 % of the decode ste
 Route every small-M GEMM through the split kernel. With SPLIT == 1 it writes the output
 directly, so no reduction is launched and the output layout is unchanged.
 ---
- .../linear/mixed_precision/triton_w4a16.py    | 19 +++++++++++++------
- 1 file changed, 13 insertions(+), 6 deletions(-)
+ .../linear/mixed_precision/triton_w4a16.py    | 32 +++++++++++--------
+ 1 file changed, 19 insertions(+), 13 deletions(-)
 
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 95d076a..a0c3ef3 100644
+index 8d70f09..9a8a542 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-@@ -360,11 +360,17 @@ def _w4a16_launch(
-             while SPLIT < 8 and tiles_n * SPLIT < 256:
-                 SPLIT *= 2
+@@ -343,8 +343,7 @@ def _w4a16_launch(
+         # expose 24-64 programs, so the k-chain is serial and they stream at 7-13 GB/s.
+         # Splitting K raises the program count and shortens each chain. SPLIT is derived
+         # from the static shape only (never from data), and the M boundary matches the
+-        # tile table below, so capture behaviour is unchanged. Larger M keeps the wide
+-        # tile that the entry above this one selects.
++        # tile table below, so capture behaviour is unchanged.
+         if M <= 32:
+             BLOCK_M, BLOCK_N, BLOCK_K = 32, 32, 64
+         else:
+@@ -357,22 +356,29 @@ def _w4a16_launch(
+         while SPLIT < 8 and tiles_n * SPLIT < 256:
+             SPLIT *= 2
  
--        if SPLIT > 1:
--            partials = torch.empty((SPLIT, M, N), dtype=torch.float32, device=a.device)
-+        if M <= 64:
-+            # The split kernel's 3-D reshape unpack is ~2.5x cheaper than the main
-+            # kernel's tl.interleave expansion, so decode uses it even when the shape
-+            # already exposes enough programs (SPLIT == 1) - then it writes the output
-+            # directly and no reduce kernel is launched.
-+            partials = None
-+            if SPLIT > 1:
-+                partials = torch.empty((SPLIT, M, N), dtype=torch.float32, device=a.device)
-             grid = (triton.cdiv(N, BLOCK_N), triton.cdiv(M, BLOCK_M), SPLIT)
-             triton_w4a16_gemm_split_kernel[grid](
++    if M <= 64:
++        # The split kernel's 3-D reshape unpack is ~2.5x cheaper than the main
++        # kernel's tl.interleave expansion, so decode uses it even when the shape
++        # already exposes enough programs (SPLIT == 1) - then it writes the output
++        # directly and no reduce kernel is launched.
++        partials = None
+         if SPLIT > 1:
+             partials = torch.empty((SPLIT, M, N), dtype=torch.float32, device=a.device)
+-            grid = (triton.cdiv(N, BLOCK_N), triton.cdiv(M, BLOCK_M), SPLIT)
+-            triton_w4a16_gemm_split_kernel[grid](
 -                a, b_q, scales, zeros_ptr, partials,
-+                a, b_q, scales, zeros_ptr, partials if SPLIT > 1 else c,
-                 M, N, K,
-                 a.stride(0), a.stride(1), b_q.stride(0), b_q.stride(1),
-                 c.stride(0), c.stride(1),
-@@ -372,9 +378,10 @@ def _w4a16_launch(
-                 HAS_ZP=has_zp, ZP_BIAS=zp_bias,
-                 BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
-             )
--            triton_w4a16_reduce_kernel[(triton.cdiv(N, 1024), M)](
--                partials, c, M, N, SPLIT, c.stride(0), c.stride(1), 1024,
+-                M, N, K,
+-                a.stride(0), a.stride(1), b_q.stride(0), b_q.stride(1),
+-                c.stride(0), c.stride(1),
+-                group_size, SPLIT,
+-                HAS_ZP=has_zp, ZP_BIAS=zp_bias,
+-                BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
 -            )
-+            if SPLIT > 1:
-+                triton_w4a16_reduce_kernel[(triton.cdiv(N, 1024), M)](
-+                    partials, c, M, N, SPLIT, c.stride(0), c.stride(1), 1024,
-+                )
-             return c
++        grid = (triton.cdiv(N, BLOCK_N), triton.cdiv(M, BLOCK_M), SPLIT)
++        triton_w4a16_gemm_split_kernel[grid](
++            a, b_q, scales, zeros_ptr, partials if SPLIT > 1 else c,
++            M, N, K,
++            a.stride(0), a.stride(1), b_q.stride(0), b_q.stride(1),
++            c.stride(0), c.stride(1),
++            group_size, SPLIT,
++            HAS_ZP=has_zp, ZP_BIAS=zp_bias,
++            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
++        )
++        if SPLIT > 1:
+             triton_w4a16_reduce_kernel[(triton.cdiv(N, 1024), M)](
+                 partials, c, M, N, SPLIT, c.stride(0), c.stride(1), 1024,
+             )
+-            return c
++        return c
  
      grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+ 
 -- 
 2.34.1
 

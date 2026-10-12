@@ -12,14 +12,27 @@ Any test that relies on that default fails with
 which is unrelated to the feature under test; enforce_eager=True with block_size 32 and 16
 both fail, 64 works. Keep the upstream XPU branch and add MUSA to it.
 ---
- tests/conftest.py | 7 +++++--
- 1 file changed, 5 insertions(+), 2 deletions(-)
+ tests/conftest.py | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
 
 diff --git a/tests/conftest.py b/tests/conftest.py
-index e277b35..0d00ee8 100644
+index e277b35..5d39048 100644
 --- a/tests/conftest.py
 +++ b/tests/conftest.py
-@@ -941,7 +941,8 @@ class VllmRunner:
+@@ -932,6 +932,12 @@ def hf_runner():
+     return HfRunner
+ 
+ 
++def _on_musa() -> bool:
++    # Platform has no is_musa(); only the MUSA subclass defines it.
++    _check = getattr(current_platform, "is_musa", None)
++    return callable(_check) and _check()
++
++
+ class VllmRunner:
+     """
+     The default value of some arguments have been modified from
+@@ -941,7 +947,8 @@ class VllmRunner:
      - `seed`: Set to `0` instead of `None` for test reproducibility.
      - `max_model_len`: Set to `1024` instead of `None` to reduce memory usage.
      - `block_size`: To reduce memory usage, set default to `64` if on XPU
@@ -29,13 +42,13 @@ index e277b35..0d00ee8 100644
      - `enable_chunked_prefill`: Set to `False` instead of `None` for
        test reproducibility.
      - `enforce_eager`: Set to `False` to test CUDA graph.
-@@ -960,7 +961,9 @@ class VllmRunner:
+@@ -960,7 +967,9 @@ class VllmRunner:
          dtype: str = "auto",
          disable_log_stats: bool = True,
          tensor_parallel_size: int = 1,
 -        block_size: int = 16 if not torch.xpu.is_available() else 64,
 +        block_size: int = (
-+            64 if torch.xpu.is_available() or current_platform.is_musa() else 16
++            64 if torch.xpu.is_available() or _on_musa() else 16
 +        ),
          enable_chunked_prefill: bool | None = False,
          enforce_eager: bool | None = False,

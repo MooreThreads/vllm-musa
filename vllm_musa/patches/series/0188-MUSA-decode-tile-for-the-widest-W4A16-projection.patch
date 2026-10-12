@@ -15,13 +15,13 @@ projections already sit at their swept optimum - a 16-row tile makes down_proj w
  1 file changed, 6 insertions(+)
 
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index a0c3ef3..abbd5a3 100644
+index 9a8a542..ffd781a 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-@@ -351,6 +351,12 @@ def _w4a16_launch(
-             BLOCK_M, BLOCK_N, BLOCK_K = 64, 32, 64
+@@ -348,6 +348,12 @@ def _w4a16_launch(
+             BLOCK_M, BLOCK_N, BLOCK_K = 32, 32, 64
          else:
-             BLOCK_M, BLOCK_N, BLOCK_K = 128, 64, 32
+             BLOCK_M, BLOCK_N, BLOCK_K = 64, 32, 64
 +        if M <= 16 and N >= 8192:
 +            # The widest projection (gate_up, N=17920) has 560 N-programs at BLOCK_N=32,
 +            # and with BLOCK_M=32 each of them re-reads an A tile 4x the size of its B
