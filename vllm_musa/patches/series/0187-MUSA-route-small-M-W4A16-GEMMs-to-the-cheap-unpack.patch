@@ -10,11 +10,11 @@ tile count kept SPLIT at 1 - streamed at 75 GB/s and took 52 % of the decode ste
 Route every small-M GEMM through the split kernel. With SPLIT == 1 it writes the output
 directly, so no reduction is launched and the output layout is unchanged.
 ---
- .../linear/mixed_precision/triton_w4a16.py    | 32 +++++++++++--------
- 1 file changed, 19 insertions(+), 13 deletions(-)
+ .../linear/mixed_precision/triton_w4a16.py    | 33 +++++++++++--------
+ 1 file changed, 20 insertions(+), 13 deletions(-)
 
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 8d70f09..9a8a542 100644
+index d131b8c..755235c 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 @@ -343,8 +343,7 @@ def _w4a16_launch(
@@ -27,11 +27,11 @@ index 8d70f09..9a8a542 100644
          if M <= 32:
              BLOCK_M, BLOCK_N, BLOCK_K = 32, 32, 64
          else:
-@@ -357,22 +356,29 @@ def _w4a16_launch(
+@@ -357,22 +356,30 @@ def _w4a16_launch(
          while SPLIT < 8 and tiles_n * SPLIT < 256:
              SPLIT *= 2
  
-+    if M <= 64:
++    if callable(_is_musa) and _is_musa() and M <= 64:
 +        # The split kernel's 3-D reshape unpack is ~2.5x cheaper than the main
 +        # kernel's tl.interleave expansion, so decode uses it even when the shape
 +        # already exposes enough programs (SPLIT == 1) - then it writes the output
@@ -49,12 +49,13 @@ index 8d70f09..9a8a542 100644
 -                HAS_ZP=has_zp, ZP_BIAS=zp_bias,
 -                BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
 -            )
++        out = partials if SPLIT > 1 else c
 +        grid = (triton.cdiv(N, BLOCK_N), triton.cdiv(M, BLOCK_M), SPLIT)
 +        triton_w4a16_gemm_split_kernel[grid](
-+            a, b_q, scales, zeros_ptr, partials if SPLIT > 1 else c,
++            a, b_q, scales, zeros_ptr, out,
 +            M, N, K,
 +            a.stride(0), a.stride(1), b_q.stride(0), b_q.stride(1),
-+            c.stride(0), c.stride(1),
++            out.stride(0), out.stride(1),
 +            group_size, SPLIT,
 +            HAS_ZP=has_zp, ZP_BIAS=zp_bias,
 +            BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
