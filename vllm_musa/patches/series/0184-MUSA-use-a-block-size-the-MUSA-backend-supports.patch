@@ -16,7 +16,7 @@ both fail, 64 works. Keep the upstream XPU branch and add MUSA to it.
  1 file changed, 11 insertions(+), 2 deletions(-)
 
 diff --git a/tests/conftest.py b/tests/conftest.py
-index e277b35..5d39048 100644
+index e277b35dd4..5d39048c8a 100644
 --- a/tests/conftest.py
 +++ b/tests/conftest.py
 @@ -932,6 +932,12 @@ def hf_runner():
@@ -53,6 +53,3 @@ index e277b35..5d39048 100644
          enable_chunked_prefill: bool | None = False,
          enforce_eager: bool | None = False,
          # Set this to avoid hanging issue
--- 
-2.34.1
-

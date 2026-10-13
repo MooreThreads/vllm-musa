@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: constrain the Triton W4A16 wide tile
  1 file changed, 9 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index d11935f..739a56e 100644
+index d11935f25a..739a56ed5c 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 @@ -208,7 +208,15 @@ def triton_w4a16_gemm(
@@ -28,6 +28,3 @@ index d11935f..739a56e 100644
          from vllm.platforms.rocm import on_gfx1x
  
          if on_gfx1x():
--- 
-2.34.1
-

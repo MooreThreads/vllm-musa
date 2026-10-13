@@ -20,7 +20,7 @@ int32 tensor carries the symmetric case.
  1 file changed, 37 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 1840715..2db66ce 100644
+index 18407152ad..2db66ceb1d 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 @@ -248,7 +248,7 @@ def triton_w4a16_gemm_kernel(
@@ -72,6 +72,3 @@ index 1840715..2db66ce 100644
 +    # calls triton_w4a16_gemm by name either way.
 +    triton_w4a16_gemm = _w4a16_launch
 +
--- 
-2.34.1
-

@@ -15,7 +15,7 @@ projections already sit at their swept optimum - a 16-row tile makes down_proj w
  1 file changed, 6 insertions(+)
 
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 2ae866f..42e606f 100644
+index 2ae866f7c0..42e606fa15 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 @@ -348,6 +348,12 @@ def _w4a16_launch(
@@ -31,6 +31,3 @@ index 2ae866f..42e606f 100644
          if group_size < BLOCK_K:
              BLOCK_K = group_size
  
--- 
-2.34.1
-

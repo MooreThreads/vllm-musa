@@ -16,7 +16,7 @@ unchanged, and the unpack uses a 3-D reshape instead of three tl.interleave call
  1 file changed, 123 insertions(+)
 
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 739a56e..1840715 100644
+index 739a56ed5c..18407152ad 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 @@ -36,6 +36,93 @@ TRITON_W4A16_SUPPORTED_QUANT_TYPES = [
@@ -156,6 +156,3 @@ index 739a56e..1840715 100644
      grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
  
      triton_w4a16_gemm_kernel[grid](
--- 
-2.34.1
-

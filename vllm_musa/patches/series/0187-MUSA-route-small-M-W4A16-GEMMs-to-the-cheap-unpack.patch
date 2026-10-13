@@ -14,7 +14,7 @@ directly, so no reduction is launched and the output layout is unchanged.
  1 file changed, 20 insertions(+), 13 deletions(-)
 
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index 2db66ce..2ae866f 100644
+index 2db66ceb1d..2ae866f7c0 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 @@ -343,8 +343,7 @@ def _w4a16_launch(
@@ -69,6 +69,3 @@ index 2db66ce..2ae866f 100644
  
      grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
  
--- 
-2.34.1
-

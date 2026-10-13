@@ -11,7 +11,7 @@ Subject: [PATCH] MUSA: enable AWQ/GPTQ W4A16 via the Triton kernel
  4 files changed, 54 insertions(+), 16 deletions(-)
 
 diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
-index 0129876..485ee7a 100644
+index 01298768cf..485ee7a422 100644
 --- a/vllm/model_executor/kernels/linear/__init__.py
 +++ b/vllm/model_executor/kernels/linear/__init__.py
 @@ -826,7 +826,15 @@ def choose_mp_linear_kernel(
@@ -32,7 +32,7 @@ index 0129876..485ee7a 100644
      # Apply --linear-backend filtering when set.
      platform_kernels = _resolve_backend_kernels(platform_kernels, "mixed-precision")
 diff --git a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
-index bc0a587..d11935f 100644
+index bc0a587b67..d11935f25a 100644
 --- a/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 +++ b/vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py
 @@ -288,8 +288,13 @@ class TritonW4A16LinearKernel(MPLinearKernel):
@@ -52,7 +52,7 @@ index bc0a587..d11935f 100644
          if c.weight_type not in cls.SUPPORTED_QUANT_TYPES:
              return (
 diff --git a/vllm/model_executor/layers/quantization/auto_awq.py b/vllm/model_executor/layers/quantization/auto_awq.py
-index 713bd7b..ff8b7b5 100644
+index 713bd7bd5e..ff8b7b5881 100644
 --- a/vllm/model_executor/layers/quantization/auto_awq.py
 +++ b/vllm/model_executor/layers/quantization/auto_awq.py
 @@ -228,7 +228,12 @@ class AutoAWQConfig(QuantizationConfig):
@@ -111,7 +111,7 @@ index 713bd7b..ff8b7b5 100644
                  quant_type=self.quant_config.quant_type,
                  group_size=self.quant_config.group_size,
 diff --git a/vllm/model_executor/layers/quantization/auto_gptq.py b/vllm/model_executor/layers/quantization/auto_gptq.py
-index 1e6570a..6644730 100644
+index 1e6570abee..6644730a00 100644
 --- a/vllm/model_executor/layers/quantization/auto_gptq.py
 +++ b/vllm/model_executor/layers/quantization/auto_gptq.py
 @@ -61,6 +61,7 @@ from vllm.model_executor.parameter import (
@@ -155,6 +155,3 @@ index 1e6570a..6644730 100644
  
      def create_weights(
          self,
--- 
-2.34.1
-
