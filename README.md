@@ -38,7 +38,7 @@ providing an OpenAI-compatible inference and serving engine for MUSA GPUs.
 - Uses the pinned MUSA stack: PyTorch/torch_musa 2.11.0.post2 (MUSA 5.2.0),
   MATE 0.2.7, and torchada 0.1.95; this branch remains an upgrade candidate.
 - MUSA-native attention, communication, custom ops, and compilation support.
-- Per-checkpoint recipes for Qwen and DeepSeek-V4-Flash on S5000.
+- Per-checkpoint recipes for Qwen, DeepSeek-V4-Flash, and Nemotron-3.5 on S5000.
 
 ## Getting started
 

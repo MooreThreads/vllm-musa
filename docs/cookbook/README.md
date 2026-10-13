@@ -67,6 +67,15 @@ no-thinking request handling is different: GLM-5.3 needs the documented
 template workaround, while GLM-5.2 uses its checkpoint template with
 `chat_template_kwargs: {"enable_thinking": false}`.
 
+## Nemotron
+
+| Model | Precision | Hardware | Speculative decoding | Recipe |
+|---|---|---|---|---|
+| NVIDIA-Nemotron-3.5-Lightning-30B-A3B | BF16 | 1x S5000, TP1 | MTP6 | [Open recipe](nemotron/nemotron-3.5-lightning-30b-a3b-bf16.md) |
+
+The Nemotron profile serves one request at a time and targets per-token decode
+latency.
+
 ## Verify a server
 
 The recipes expose an OpenAI-compatible endpoint on port 8000.
