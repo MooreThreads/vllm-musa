@@ -12,6 +12,13 @@ SOURCE = Path(os.environ.get(
     "MUSA_BLOCK_TABLE_SOURCE",
     str(Path(__file__).resolve().parents[1] / "third_party/vllm/vllm/v1/worker/block_table.py"),
 ))
+if not SOURCE.is_file():
+    pytest.skip(
+        "vllm/v1/worker/block_table.py not found at "
+        f"{SOURCE}; set MUSA_BLOCK_TABLE_SOURCE to point at it",
+        allow_module_level=True,
+    )
+
 METHODS = {"append_row", "add_row", "clear_row", "move_row", "swap_row",
            "commit_block_table", "clear"}
 

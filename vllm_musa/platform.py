@@ -691,7 +691,24 @@ class MUSAPlatformBase(Platform):
 
                     with set_current_vllm_config(vllm_config):
                         supports_64 = backend_cls.supports_block_size(64)
-                    if supports_64:
+                    if (
+                        cache_config.user_specified_block_size
+                        and cache_config.block_size != 64
+                    ):
+                        # An explicit --block-size wins, but the align fastpath
+                        # assumes the common 64-token scheduling unit: a different
+                        # page size splits align-mode prefill and can break the
+                        # one-cacheable-state-per-boundary sharing below.
+                        logger.warning_once(
+                            "[MUSA]--block-size=%d was set explicitly together with "
+                            "align-mode Mamba paging; the 64-token fastpath is "
+                            "disabled for %s, so align prefill may split and Mamba "
+                            "state sharing may regress. Drop --block-size to use the "
+                            "64-token page.",
+                            cache_config.block_size,
+                            backend_cls.get_name(),
+                        )
+                    elif supports_64:
                         # Dedicated pools make attention and recurrent pages
                         # physically independent. Using the common 64-token
                         # scheduling unit avoids align-mode prefill splits while

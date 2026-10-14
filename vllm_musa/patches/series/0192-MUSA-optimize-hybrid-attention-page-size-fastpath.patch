@@ -133,29 +133,42 @@ index 295c66b36..f7be74821 100644
 diff --git a/tests/v1/core/test_kv_cache_utils.py b/tests/v1/core/test_kv_cache_utils.py
 --- a/tests/v1/core/test_kv_cache_utils.py
 +++ b/tests/v1/core/test_kv_cache_utils.py
-@@ -195,6 +195,41 @@
+@@ -195,6 +195,54 @@
      )
  
  
 +@pytest.mark.parametrize(
-+    ("mode", "speculative_blocks", "expected_pool_blocks"),
-+    [("none", 0, 9), ("align", 0, 25), ("align", 6, 81)],
++    ("mode", "speculative_blocks", "max_concurrent_batches", "expected_pool_blocks"),
++    [
++        ("none", 0, 2, 9),
++        ("align", 0, 1, 25),
++        ("align", 6, 2, 81),
++    ],
 +)
 +def test_musa_dedicated_mamba_pool_capacity_by_mode(
-+    mode, speculative_blocks, expected_pool_blocks
++    mode, speculative_blocks, max_concurrent_batches, expected_pool_blocks
 +):
-+    """Pin the experimental no-spec and conservative speculative pool sizes."""
++    """Pin the mamba-pool block count for none/align pool ownership."""
 +    mamba = new_mamba_spec(
 +        block_size=64,
 +        num_speculative_blocks=speculative_blocks,
 +        mamba_cache_mode=mode,
 +    )
 +    attention = new_kv_cache_spec(block_size=64)
++    # The align sizing path reads all of these; a missing attribute raises
++    # AttributeError instead of pinning a block count.
 +    config = SimpleNamespace(
 +        cache_config=SimpleNamespace(
-+            mamba_cache_mode=mode, num_gpu_blocks_override=None
++            mamba_cache_mode=mode,
++            num_gpu_blocks_override=None,
++            enable_prefix_caching=False,
++            prefix_match_unit=None,
 +        ),
 +        scheduler_config=SimpleNamespace(max_num_seqs=8),
++        model_config=SimpleNamespace(max_model_len=131072),
++        parallel_config=SimpleNamespace(decode_context_parallel_size=1),
++        kv_transfer_config=None,
++        max_concurrent_batches=max_concurrent_batches,
 +    )
 +    groups = [
 +        KVCacheGroupSpec(["mamba"], mamba),
