@@ -19,7 +19,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **191 patches**, plus **3 upstream entries** in `upstream/`.
+Currently **192 patches**, plus **3 upstream entries** in `upstream/`.
 This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
@@ -99,6 +99,10 @@ unmodified upstream vLLM commits `c351fd3c6495` and `2c7ee87223f0` in
 `upstream/`, which the pinned `VLLM_COMMIT` predates; the Mooncake entry
 needs the scheduler one. The MUSA fix after them only renames the
 backported DeepSeek-V4 test spec field to the pin's `compress_ratio`.
+
+The attention page-size fastpath patch keeps Mamba pool admission and GDN
+metadata; see `0192-MUSA-optimize-hybrid-attention-page-size-fastpath.patch`
+for the aligned block-table updates.
 The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime

@@ -1119,7 +1119,8 @@ class TestMUSAPlatformDefaults:
         # The MUSA platform seeds a 64-element KV page for non-hybrid,
         # non-user-specified configs so paged FMHA/MLA decode takes the TME
         # bulk-gather path. Fixed-page kernels and explicit user overrides are
-        # preserved; hybrid models defer to the upstream mamba-aligned selection.
+        # preserved. Hybrid models with separate physical Mamba pools keep the
+        # attention page independent in both none and align cache modes.
         from types import SimpleNamespace
 
         from vllm.v1.attention.backend import AttentionBackend, MultipleOf
@@ -1157,7 +1158,9 @@ class TestMUSAPlatformDefaults:
                     block_size=block_size,
                     user_specified_block_size=user_specified,
                     mamba_cache_mode=mamba_cache_mode,
+                    mamba_block_size=None,
                     mamba_page_size_padded=1056,
+                    kv_cache_dtype_skip_layers=[],
                 ),
             )
 
@@ -1193,16 +1196,12 @@ class TestMUSAPlatformDefaults:
         assert cfg.cache_config.block_size == 64
         assert cfg.cache_config.mamba_page_size_padded is None
 
-        # The legacy aligned-cache mode still follows the upstream page size.
-        monkeypatch.setattr(
-            MUSAPlatformBase,
-            "_align_hybrid_block_size",
-            classmethod(lambda cls, vllm_config, backend_cls: None),
-        )
+        # Prefix-cached align mode keeps the same independent attention page.
         cfg = _cfg(is_hybrid=True, mamba_cache_mode="align")
         MUSAPlatformBase.update_block_size_for_backend(cfg)
-        assert cfg.cache_config.block_size == 16
-        assert cfg.cache_config.mamba_page_size_padded == 1056
+        assert cfg.cache_config.block_size == 64
+        assert cfg.cache_config.mamba_block_size == 64
+        assert cfg.cache_config.mamba_page_size_padded is None
 
     def test_dense_fp8_does_not_cap_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase

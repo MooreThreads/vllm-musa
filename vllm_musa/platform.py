@@ -679,12 +679,34 @@ class MUSAPlatformBase(Platform):
             model_config is not None
             and cache_config is not None
             and model_config.is_hybrid
-            and cache_config.mamba_cache_mode == "none"
             and resolve_optimization_contract(vllm_config).prefers(
                 OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
             )
         )
         if separate_mamba_pages:
+            if cache_config.mamba_cache_mode == "align":
+                backend_cls = cls._find_non_ssm_backend(vllm_config)
+                if backend_cls is not None:
+                    from vllm.config.vllm import set_current_vllm_config
+
+                    with set_current_vllm_config(vllm_config):
+                        supports_64 = backend_cls.supports_block_size(64)
+                    if supports_64:
+                        # Dedicated pools make attention and recurrent pages
+                        # physically independent. Using the common 64-token
+                        # scheduling unit avoids align-mode prefill splits while
+                        # preserving one cacheable Mamba state per boundary.
+                        cache_config.block_size = 64
+                        cache_config.mamba_block_size = 64
+                        cache_config.mamba_page_size_padded = None
+                        logger.info(
+                            "[MUSA]Using independent align-mode attention and "
+                            "Mamba scheduler blocks at 64 tokens for %s.",
+                            backend_cls.get_name(),
+                        )
+                        return
+                super().update_block_size_for_backend(vllm_config)
+                return
             backend_cls = cls._find_non_ssm_backend(vllm_config)
             if backend_cls is not None:
                 from vllm.config.vllm import set_current_vllm_config
