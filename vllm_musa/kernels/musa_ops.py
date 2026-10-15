@@ -47,6 +47,33 @@ def _has_C_rms_norm() -> bool:
 MUSA_RMS_NORM_SUPPORTED = current_platform.is_musa() and _has_C_rms_norm()
 
 
+def _fused_add_rms_norm_hidden_dim_is_concrete(x: Tensor) -> bool:
+    """Reject a symbolic hidden dimension before the provider predicates run.
+
+    The predicates below compare ``x.shape[1]`` against ``weight.numel()`` and
+    apply ``% 8`` to it, which is only meaningful for a concrete dimension; a
+    symbolic one has no truthful answer under vLLM's shape-guard-free compile.
+
+    This guard is not part of the CAR-RMSNorm contract, and cannot be. Inductor
+    lowers this op through ``fx.map_arg(node.args, lambda arg: arg.meta["val"])``
+    in the IR lowering pass, outside any ``set_current_vllm_config`` scope, so no
+    ``VllmConfig`` is current and the contract would report "no config" rather
+    than a decision. The contract's native-row routing is enforced where the
+    config is bound: by the CAR pass over the compile range, and by the platform
+    pass default.
+
+    ``weight is None`` and ``x.dim() != 2`` are deliberately not checked here:
+    ``_jit_fused_add_rms_norm_supports_args`` and
+    ``_c_ext_fused_add_rms_norm_supports_args`` both reject those, so repeating
+    them would only add a second copy that could drift.
+    """
+    try:
+        hidden_size = x.shape[1] if x.dim() == 2 else None
+    except (AttributeError, IndexError, RuntimeError, TypeError):
+        return False
+    return isinstance(hidden_size, int) and not isinstance(hidden_size, bool)
+
+
 def _rms_norm_supports_args(
     x: Tensor,
     weight: Tensor | None,
@@ -181,6 +208,10 @@ def _select_musa_fused_add_rms_norm_impl(
     the kernel chosen for that entire range; it must not branch on a symbolic
     example tensor's row-count hint.
     """
+    # A symbolic hidden dimension has no truthful answer for the weight-numel
+    # and multiple-of-8 comparisons below, so reject it before either runs.
+    if not _fused_add_rms_norm_hidden_dim_is_concrete(x):
+        return None
     if _jit_fused_add_rms_norm_supports_args(
         x, x_residual, weight, epsilon, variance_size
     ):

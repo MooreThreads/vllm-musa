@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Elon Gao <elon.gao@mthreads.com>
+Date: Mon, 17 Aug 2026 18:07:00 +0800
+Subject: [PATCH] MUSA: keep compile warmup outside CUDAGraph
+
+---
+ vllm/v1/worker/gpu_worker.py | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+index 906f6a1..0e74532 100644
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -678,7 +678,12 @@ class Worker(WorkerBase):
+         # We skip EPLB here since we don't want to record dummy metrics
+         for size in sorted(warmup_sizes, reverse=True):
+             logger.info("Compile and warming up model for size %d", size)
+-            self.model_runner._dummy_run(size, skip_eplb=True, remove_lora=False)
++            self.model_runner._dummy_run(
++                size,
++                cudagraph_runtime_mode=CUDAGraphMode.NONE,
++                skip_eplb=True,
++                remove_lora=False,
++            )
+         self.model_runner.maybe_remove_all_loras(self.model_runner.lora_config)
+
+         # Warmup and tune the kernels used during model execution before
