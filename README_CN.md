@@ -53,6 +53,32 @@ docker pull "${VLLM_MUSA_IMAGE}"
 该镜像独立于当前分支构建。请将镜像内已安装的软件包版本与 `third_party/PINS`
 核对；需要与当前分支完全一致时，请按照[安装指南](docs/installation-cn.md)构建本地镜像。
 
+#### 预构建集成镜像
+
+`registry.mthreads.com/mcconline/inference/vllm-omni:flux3` 打包了 vLLM
+`0.28.0`、`vllm-musa` `0.1.28`，以及带 FLUX.3 Image Klein 的 vllm-omni
+`0.28.0`（vllm-omni PR
+[#9007](https://github.com/vllm-project/vllm-omni/pull/9007) 回移到 `v0.28.0`
+tag，并包含两处面向 MUSA 的调整：按平台门控的 RoPE dtype，以及 VAE 融合
+GroupNorm+SiLU 路径的设备判断）：
+
+```bash
+docker run -it --rm --entrypoint bash \
+  --runtime=mthreads --shm-size 32g \
+  -e MTHREADS_VISIBLE_DEVICES=0 \
+  -v /ipfs:/ipfs \
+  registry.mthreads.com/mcconline/inference/vllm-omni:flux3
+```
+
+它需要 MUSA `5.2.0-server` 驱动，以及一张空闲显存约 25 GB 的 S5000。FLUX.3 权重未
+打包进镜像，请挂载或下载后通过 `--model <path>` 指定。镜像内
+`/opt/flux3/TESTING.md` 记录了六项验证步骤，从免权重的正确性 smoke 到 1024x1024 的
+官方文生图示例。已在单张 S5000 上验证：官方示例在约 36 秒权重加载后约 2.5 秒出图，
+FLUX.3 单元测试通过（140 passed、39 skipped）。上面的 tag 是可变指针，本次验证的
+manifest 为
+`sha256:edb4ae4a04f497c36f0cc282b1a188ad29acbe428457b6fe33b8306ade5ced43`，
+需要可复现时可用 `@sha256:` 固定。
+
 - [安装与源码构建指南](docs/installation-cn.md)
 - [Docker 构建指南（英文）](docker/README.md)
 - [配置参考（英文）](docs/configuration.md)
