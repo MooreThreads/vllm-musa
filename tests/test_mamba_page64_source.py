@@ -14,17 +14,24 @@ def _read(name: str) -> str:
 
 def test_separate_pool_keeps_attention_and_mamba_page_sizes_independent():
     source = _read("0082-MUSA-separate-mamba-state-BlockPools.patch")
+    prefix_source = _read("0192-MUSA-optimize-hybrid-attention-page-size-fastpath.patch")
     platform = (ROOT / "vllm_musa" / "platform.py").read_text()
 
     assert "musa_mamba_separate_pool_enabled()" in source
     assert "groups = _get_kv_cache_groups_uniform_page_size(filtered_spec)" in source
     assert "filtered_spec = unify_kv_cache_spec_page_size(filtered_spec)" in source
     assert "separate_mamba_pages = (" in platform
-    assert 'cache_config.mamba_cache_mode == "none"' in platform
+    assert 'cache_config.mamba_cache_mode == "none"' not in platform
+    assert 'cache_config.mamba_cache_mode == "align"' in platform
+    assert "Mamba scheduler blocks at 64 tokens" in platform
     assert 'VLLM_MUSA_MAMBA_PAGE64' not in platform
     assert 'target_block_size = (' in platform
     assert 'else 64' in platform
+    assert "cache_config.mamba_block_size = 64" in platform
     assert "cache_config.mamba_page_size_padded = None" in platform
+    assert "vllm/v1/engine/core.py" in prefix_source
+    assert 'mamba_cache_mode == "align"' in prefix_source
+    assert "if not isinstance(g.kv_cache_spec, MambaSpec)" in prefix_source
 
 
 def test_mixed_page_memory_check_accounts_for_each_cache_family():

@@ -1,0 +1,308 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 14 Oct 2026 18:00:00 +0800
+Subject: [PATCH] MUSA: optimize hybrid attention page-size fastpath
+
+Keep align-mode Mamba state metadata and dedicated-pool admission compatible
+with the 64-token attention page fastpath.
+---
+ vllm/v1/attention/backends/gdn_attn.py | 47 ++++++++++++++++++++++++++------
+ vllm/v1/engine/core.py                 | 26 +++++++++++++++---
+ tests/v1/core/test_kv_cache_utils.py   | 35 ++++++++++++++++++++++++
+ vllm/v1/worker/mamba_utils.py          | 11 +++++--
+ vllm/v1/worker/gpu_model_runner.py     | 41 ++++++++++++++++------------
+ 5 files changed, 126 insertions(+), 34 deletions(-)
+
+diff --git a/vllm/v1/attention/backends/gdn_attn.py b/vllm/v1/attention/backends/gdn_attn.py
+index 1a07a69..af7ce80 100644
+--- a/vllm/v1/attention/backends/gdn_attn.py
++++ b/vllm/v1/attention/backends/gdn_attn.py
+@@ -167,6 +167,11 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]):
+             dtype=torch.int32,
+             device=device,
+         )
++        self.musa_align_state_indices: torch.Tensor = torch.empty(
++            (self.vllm_config.scheduler_config.max_num_seqs, self.num_spec + 1),
++            dtype=torch.int32,
++            device=device,
++        )
+ 
+     def _build_chunk_metadata(
+         self,
+@@ -223,12 +228,29 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]):
+         query_start_loc = m.query_start_loc
+         query_start_loc_cpu = m.query_start_loc_cpu
+         nums_dict, batch_ptr, token_chunk_offset_ptr = None, None, None
+-        block_table_tensor = mamba_get_block_table_tensor(
+-            m.block_table_tensor,
+-            m.seq_lens,
+-            self.kv_cache_spec,
+-            self.vllm_config.cache_config.mamba_cache_mode,
+-        )
++        mamba_cache_mode = self.vllm_config.cache_config.mamba_cache_mode
++        if (
++            mamba_cache_mode == "align"
++            and m.block_table_tensor.device.type == "musa"
++        ):
++            from vllm_musa.jit_kernel.mamba_metadata import (
++                build_mamba_align_block_table,
++            )
++
++            block_table_tensor = build_mamba_align_block_table(
++                m.block_table_tensor,
++                m.seq_lens,
++                self.musa_align_state_indices,
++                mamba_block_size=self.kv_cache_spec.block_size,
++                num_speculative_blocks=self.kv_cache_spec.num_speculative_blocks,
++            )
++        else:
++            block_table_tensor = mamba_get_block_table_tensor(
++                m.block_table_tensor,
++                m.seq_lens,
++                self.kv_cache_spec,
++                mamba_cache_mode,
++            )
+ 
+         spec_sequence_masks_cpu: torch.Tensor | None = None
+         if (
+@@ -488,9 +510,16 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]):
+             and num_spec_decodes == 0
+             and num_decodes <= self.decode_cudagraph_max_bs
+         ):
+-            reuse_common_decode_tensors = (
+-                self.vllm_config.cache_config.mamba_cache_mode == "none"
+-                and num_decodes == batch_size
++            # The align gather writes to a stable buffer in the non-speculative
++            # case, so graph replay can read it directly. Speculative state
++            # indices have a stride and still require the contiguous copy.
++            reuse_common_decode_tensors = num_decodes == batch_size and (
++                mamba_cache_mode == "none"
++                or (
++                    mamba_cache_mode == "align"
++                    and self.num_spec == 0
++                    and m.block_table_tensor.device.type == "musa"
++                )
+             )
+             if not reuse_common_decode_tensors:
+                 self.non_spec_state_indices_tensor[:num_decodes].copy_(
+diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
+index 295c66b36..f7be74821 100644
+--- a/vllm/v1/engine/core.py
++++ b/vllm/v1/engine/core.py
+@@ -84,7 +84,11 @@ from vllm.v1.fault_tolerance.engine_core_sentinel import (
+     EngineCoreSentinel,
+     fault_tolerant_wrapper,
+ )
+-from vllm.v1.kv_cache_interface import KVCacheConfig, get_kv_cache_spec_kind
++from vllm.v1.kv_cache_interface import (
++    KVCacheConfig,
++    MambaSpec,
++    get_kv_cache_spec_kind,
++)
+ from vllm.v1.metrics.stats import SchedulerIterationDetails, SchedulerStats
+ from vllm.v1.outputs import ModelRunnerOutput
+ from vllm.v1.request import Request, RequestStatus
+@@ -319,9 +323,23 @@ class EngineCore:
+         vllm_config.cache_config.num_gpu_blocks = scheduler_kv_cache_config.num_blocks
+         kv_cache_groups = scheduler_kv_cache_config.kv_cache_groups
+         if kv_cache_groups:
+-            vllm_config.cache_config.block_size = min(
+-                g.kv_cache_spec.block_size for g in kv_cache_groups
+-            )
++            if (
++                vllm_config.cache_config.mamba_cache_mode == "align"
++                and any(isinstance(g.kv_cache_spec, MambaSpec) for g in kv_cache_groups)
++                and any(
++                    not isinstance(g.kv_cache_spec, MambaSpec)
++                    for g in kv_cache_groups
++                )
++            ):
++                vllm_config.cache_config.block_size = max(
++                    g.kv_cache_spec.block_size
++                    for g in kv_cache_groups
++                    if not isinstance(g.kv_cache_spec, MambaSpec)
++                )
++            else:
++                vllm_config.cache_config.block_size = min(
++                    g.kv_cache_spec.block_size for g in kv_cache_groups
++                )
+             update_kv_cache_capacity(vllm_config, scheduler_kv_cache_config)
+ 
+         vllm_config.validate_block_size()
+diff --git a/tests/v1/core/test_kv_cache_utils.py b/tests/v1/core/test_kv_cache_utils.py
+--- a/tests/v1/core/test_kv_cache_utils.py
++++ b/tests/v1/core/test_kv_cache_utils.py
+@@ -195,6 +195,54 @@
+     )
+ 
+ 
++@pytest.mark.parametrize(
++    ("mode", "speculative_blocks", "max_concurrent_batches", "expected_pool_blocks"),
++    [
++        ("none", 0, 2, 9),
++        ("align", 0, 1, 25),
++        ("align", 6, 2, 81),
++    ],
++)
++def test_musa_dedicated_mamba_pool_capacity_by_mode(
++    mode, speculative_blocks, max_concurrent_batches, expected_pool_blocks
++):
++    """Pin the mamba-pool block count for none/align pool ownership."""
++    mamba = new_mamba_spec(
++        block_size=64,
++        num_speculative_blocks=speculative_blocks,
++        mamba_cache_mode=mode,
++    )
++    attention = new_kv_cache_spec(block_size=64)
++    # The align sizing path reads all of these; a missing attribute raises
++    # AttributeError instead of pinning a block count.
++    config = SimpleNamespace(
++        cache_config=SimpleNamespace(
++            mamba_cache_mode=mode,
++            num_gpu_blocks_override=None,
++            enable_prefix_caching=False,
++            prefix_match_unit=None,
++        ),
++        scheduler_config=SimpleNamespace(max_num_seqs=8),
++        model_config=SimpleNamespace(max_model_len=131072),
++        parallel_config=SimpleNamespace(decode_context_parallel_size=1),
++        kv_transfer_config=None,
++        max_concurrent_batches=max_concurrent_batches,
++    )
++    groups = [
++        KVCacheGroupSpec(["mamba"], mamba),
++        KVCacheGroupSpec(["attention"], attention),
++    ]
++    tensors, _, mamba_pool_blocks = (
++        kv_cache_utils._musa_separated_mamba_attn_tensors(
++            config, groups, available_memory=64 * 1024 * 1024
++        )
++    )
++    assert mamba_pool_blocks == expected_pool_blocks
++    assert next(t for t in tensors if t.shared_by == ["mamba"]).size == (
++        mamba.page_size_bytes * mamba_pool_blocks
++    )
++
++
+ @pytest.mark.parametrize("hash_fn", [sha256, sha256_cbor])
+ def test_none_hash(monkeypatch, hash_fn):
+     import vllm.v1.core.kv_cache_utils
+diff --git a/vllm/v1/worker/mamba_utils.py b/vllm/v1/worker/mamba_utils.py
+--- a/vllm/v1/worker/mamba_utils.py
++++ b/vllm/v1/worker/mamba_utils.py
+@@ -1183,7 +1183,7 @@
+     mamba_state_copy_funcs: tuple[MambaStateCopyFunc, ...],
+     copy_bufs: MambaCopyBuffers,
+     align_ctx: MambaSpecDecodeGPUContext | None = None,
+-):
++) -> bool:
+     """
+     Copy the mamba state of previous step to the last
+     (1 + num_speculative_blocks) block.
+@@ -1199,10 +1199,12 @@
+ 
+     copy_bufs.offset = 0
+     num_reqs = len(input_batch.req_ids)
++    needs_fused_copy = False
++    reset_accepted_tokens = False
+ 
+     if fused is not None:
+         if num_reqs == 0:
+-            return
++            return False
+         if not fused.ctx.is_initialized:
+             fused.ctx.initialize_from_forward_context(
+                 kv_cache_config,
+@@ -1250,6 +1252,7 @@
+                 assert accept_token_bias >= 0
+                 fused.src_col.np[i] = prev_state_idx
+                 fused.token_bias.np[i] = accept_token_bias
++                needs_fused_copy = True
+             else:
+                 collect_mamba_copy_meta(
+                     copy_bufs,
+@@ -1263,8 +1266,9 @@
+                     forward_context,
+                 )
+             input_batch.num_accepted_tokens_cpu[i] = 1
++            reset_accepted_tokens = True
+ 
+-    if fused is not None:
++    if fused is not None and needs_fused_copy:
+         fused.state_idx.copy_to_gpu(num_reqs)
+         fused.src_col.copy_to_gpu(num_reqs)
+         fused.token_bias.copy_to_gpu(num_reqs)
+@@ -1277,6 +1281,7 @@
+         )
+     else:
+         do_mamba_copy_block(copy_bufs)
++    return reset_accepted_tokens
+ 
+ 
+ def postprocess_mamba_all(
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -1177,9 +1177,11 @@
+                 copy_funcs=self.model.get_mamba_state_copy_func(),
+                 make_buffer=self._make_buffer,
+                 device=self.device,
+-                with_postprocess_align=(
+-                    self.speculative_config is not None and self.model_config.is_hybrid
+-                ),
++                # The context owns the GPU fused pre-copy path for every
++                # align-mode request.  Speculative hybrid execution adds the
++                # postprocess buffers, but ordinary decode must not fall back
++                # to the CPU pointer-array + batch_memcpy path.
++                with_postprocess_align=(self.cache_config.mamba_cache_mode == "align"),
+             )
+         return self._mamba_bufs
+ 
+@@ -4590,7 +4592,7 @@
+                     deferred_state_corrections_fn()
+                     deferred_state_corrections_fn = None
+                 mamba_bufs = self._get_mamba_bufs()
+-                mamba_utils.preprocess_mamba(
++                mamba_reset_accepted_tokens = mamba_utils.preprocess_mamba(
+                     scheduler_output,
+                     self.kv_cache_config,
+                     self.cache_config,
+@@ -4602,21 +4604,24 @@
+                     mamba_bufs.preprocess,
+                     align_ctx=mamba_bufs.postprocess_align,
+                 )
+-                # preprocess_mamba resets num_accepted_tokens_cpu to 1
+-                # for requests whose state was copied to a new block.
+-                # Re-sync to GPU so the mamba kernel reads from the
+-                # correct initial state slot (init_token_idx = 0).
+-                self.num_accepted_tokens.np[:num_reqs] = (
+-                    self.input_batch.num_accepted_tokens_cpu[:num_reqs]
+-                )
+-                self.num_accepted_tokens.copy_to_gpu(num_reqs)
++                # preprocess_mamba only changes accepted counts when a
++                # request crosses a Mamba state block.  Ordinary decode
++                # keeps the already-synced neutral value (1), so avoid a
++                # redundant host-to-device copy on every other step.
++                if mamba_reset_accepted_tokens:
++                    self.num_accepted_tokens.np[:num_reqs] = (
++                        self.input_batch.num_accepted_tokens_cpu[:num_reqs]
++                    )
++                    self.num_accepted_tokens.copy_to_gpu(num_reqs)
+ 
+-                # Stage per-request inputs for the fused postprocess kernel
+-                # only when that kernel will actually run. The kernel is
+-                # gated on spec-decode + hybrid (see MambaBuffers.create);
+-                # without it, ``mamba_bufs.postprocess_align`` is None and
+-                # the staging buffers don't exist.
+-                if mamba_bufs.postprocess_align is not None:
++                # Stage per-request inputs only when the fused postprocess
++                # kernel will actually run.  The same context is also used
++                # solely for pre-copy in ordinary align-mode decode.
++                if (
++                    mamba_bufs.postprocess_align is not None
++                    and self.speculative_config is not None
++                    and self.model_config.is_hybrid
++                ):
+                     mamba_utils.stage_postprocess_inputs_to_gpu(
+                         mamba_bufs.postprocess_align,
+                         scheduler_output,
