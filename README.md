@@ -23,6 +23,7 @@
 - [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next`
 - [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash`
 - [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
+- [FLUX.3-Image-Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) — `registry.mthreads.com/mcconline/inference/vllm-omni:flux3`
 
 These model-specific tags are maintained independently of this branch; verify
 the exact image and model revision before production use.
@@ -54,33 +55,6 @@ docker pull "${VLLM_MUSA_IMAGE}"
 The image is built independently of this branch. Verify its installed package
 versions against `third_party/PINS`; build the local image from the
 [installation guide](docs/installation.md) when exact branch parity is needed.
-
-#### Prebuilt integration images
-
-`registry.mthreads.com/mcconline/inference/vllm-omni:flux3` packages vLLM
-`0.28.0`, `vllm-musa` `0.1.28`, and vllm-omni `0.28.0` with FLUX.3 Image Klein
-(vllm-omni PR [#9007](https://github.com/vllm-project/vllm-omni/pull/9007)
-backported onto the `v0.28.0` tag, plus two MUSA-facing adjustments: a
-platform-gated RoPE dtype and a device gate on the VAE's fused GroupNorm+SiLU
-path):
-
-```bash
-docker run -it --rm --entrypoint bash \
-  --runtime=mthreads --shm-size 32g \
-  -e MTHREADS_VISIBLE_DEVICES=0 \
-  -v /ipfs:/ipfs \
-  registry.mthreads.com/mcconline/inference/vllm-omni:flux3
-```
-
-It needs the MUSA `5.2.0-server` driver and one S5000 card with roughly 25 GB
-free. The FLUX.3 checkpoint is not bundled, so mount or download it and pass
-`--model <path>`. `/opt/flux3/TESTING.md` inside the image documents six checks,
-from a weight-free correctness smoke to the official text-to-image examples at
-1024x1024. Validated on one S5000: an official example produced an image in
-about 2.5 s after a ~36 s weight load, and the FLUX.3 unit tests passed
-(140 passed, 39 skipped). The tag is a mutable pointer; the validated manifest
-is `sha256:edb4ae4a04f497c36f0cc282b1a188ad29acbe428457b6fe33b8306ade5ced43`,
-pinnable with `@sha256:` when reproducibility matters.
 
 - [Installation and source build](docs/installation.md)
 - [Docker build guide](docker/README.md)
