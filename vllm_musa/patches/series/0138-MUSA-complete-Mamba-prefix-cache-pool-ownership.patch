@@ -4,17 +4,17 @@ Date: Thu, 3 Sep 2026 12:05:24 +0800
 Subject: [PATCH] MUSA: complete Mamba prefix-cache pool ownership
 
 ---
- tests/v1/core/test_prefix_caching.py         | 105 ++++++++++++++++++++++
- vllm/v1/core/block_pool.py                   |  12 +--
- vllm/v1/core/kv_cache_coordinator.py         | 122 +++++++++++++++++++++++++-
- vllm/v1/core/kv_cache_manager.py             |  82 ++++++++++++++---
- vllm/v1/core/kv_cache_utils.py               |  74 +++++++++++++---
- vllm/v1/core/sched/scheduler.py              |   4 -
- vllm/v1/core/single_type_kv_cache_manager.py |  38 ++++++++
- 7 files changed, 391 insertions(+), 46 deletions(-)
+ tests/v1/core/test_prefix_caching.py         | 105 ++++++++++++++++
+ vllm/v1/core/block_pool.py                   |  12 +-
+ vllm/v1/core/kv_cache_coordinator.py         | 122 ++++++++++++++++++-
+ vllm/v1/core/kv_cache_manager.py             |  82 ++++++++++---
+ vllm/v1/core/kv_cache_utils.py               |  70 ++++++++---
+ vllm/v1/core/sched/scheduler.py              |   4 +-
+ vllm/v1/core/single_type_kv_cache_manager.py |  38 +++++-
+ 7 files changed, 387 insertions(+), 46 deletions(-)
 
 diff --git a/tests/v1/core/test_prefix_caching.py b/tests/v1/core/test_prefix_caching.py
-index 13ed7c7..ece9b77 100644
+index 13ed7c7b9d..ece9b776fa 100644
 --- a/tests/v1/core/test_prefix_caching.py
 +++ b/tests/v1/core/test_prefix_caching.py
 @@ -4120,6 +4120,111 @@ def test_mamba_reachable_block_mask_pins_shared_prefix():
@@ -130,7 +130,7 @@ index 13ed7c7..ece9b77 100644
      """Manager-level check of the full wiring: a pinned shared-prefix boundary
      (``Request.shared_prefix_boundary``, set by the scheduler on Marconi-style
 diff --git a/vllm/v1/core/block_pool.py b/vllm/v1/core/block_pool.py
-index a8a6c1c..71c1763 100644
+index a8a6c1ca94..71c17639e0 100644
 --- a/vllm/v1/core/block_pool.py
 +++ b/vllm/v1/core/block_pool.py
 @@ -282,12 +282,12 @@ class BlockPool:
@@ -153,7 +153,7 @@ index a8a6c1c..71c1763 100644
                  self._emit_block_removed_events(removed_hashes)
              self._insert_block_hash(
 diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
-index bf9c8d5..4cee266 100644
+index bf9c8d5ac5..4cee2663dd 100644
 --- a/vllm/v1/core/kv_cache_coordinator.py
 +++ b/vllm/v1/core/kv_cache_coordinator.py
 @@ -1,7 +1,7 @@
@@ -312,7 +312,7 @@ index bf9c8d5..4cee266 100644
          self,
          request_id: str,
 diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
-index 44097c3..c64f40e 100644
+index 44097c3da2..c64f40e15f 100644
 --- a/vllm/v1/core/kv_cache_manager.py
 +++ b/vllm/v1/core/kv_cache_manager.py
 @@ -2,7 +2,7 @@
@@ -474,7 +474,7 @@ index 44097c3..c64f40e 100644
                  offloads.setdefault(req_id, []).append(
                      (group_id, block.block_id, boundary_tokens)
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index ea87e17..6b8ab2a 100644
+index ea87e17bdb..c7dff18cd7 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
 @@ -1426,6 +1426,52 @@ def _musa_separate_pool_eligible(vllm_config, kv_cache_groups) -> bool:
@@ -529,9 +529,9 @@ index ea87e17..6b8ab2a 100644
 +
  def _musa_separated_mamba_attn_tensors(vllm_config, kv_cache_groups, available_memory):
      """Split KV memory into a small contiguous mamba pool and the attention pool.
-
-@@ -1440,19 +1488,14 @@ def _musa_separated_mamba_attn_tensors(vllm_config, kv_cache_groups, available_m
  
+@@ -1440,18 +1486,11 @@ def _musa_separated_mamba_attn_tensors(vllm_config, kv_cache_groups, available_m
+     ]
      mamba_page = get_uniform_page_size([g.kv_cache_spec for g in mamba_groups])
      max_num_seqs = vllm_config.scheduler_config.max_num_seqs
 -    # Each Mamba group gets its own non-binding BlockPool/address space.
@@ -552,12 +552,9 @@ index ea87e17..6b8ab2a 100644
 +    mamba_blocks_per_request = _musa_mamba_pool_blocks_per_request(
 +        vllm_config, mamba_groups, mamba_page
      )
-+    # Reserve one resident state footprint per running request, plus the
-+    # BlockPool null block. Cache snapshots use the same admission path.
      mamba_num_blocks = max_num_seqs * mamba_blocks_per_request + 1
      mamba_layers = [ln for g in mamba_groups for ln in g.layer_names]
-     mamba_bytes = mamba_page * mamba_num_blocks * len(mamba_layers)
-@@ -2144,9 +2187,10 @@ def _max_memory_usage_bytes_from_groups(
+@@ -2144,9 +2183,10 @@ def _max_memory_usage_bytes_from_groups(
          mamba_page = get_uniform_page_size(
              [group.kv_cache_spec for group in mamba_groups]
          )
@@ -572,7 +569,7 @@ index ea87e17..6b8ab2a 100644
          mamba_num_blocks = (
              vllm_config.scheduler_config.max_num_seqs
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index e4a2132..f4aa2d2 100644
+index e4a2132866..f4aa2d26f7 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
 @@ -2448,7 +2448,7 @@ class Scheduler(SchedulerInterface):
@@ -594,7 +591,7 @@ index e4a2132..f4aa2d2 100644
      def get_num_unfinished_requests(self) -> int:
          if self._pause_state == PauseState.PAUSED_ALL:
 diff --git a/vllm/v1/core/single_type_kv_cache_manager.py b/vllm/v1/core/single_type_kv_cache_manager.py
-index 75acb7f..9528a5d 100644
+index 75acb7f497..9528a5d643 100644
 --- a/vllm/v1/core/single_type_kv_cache_manager.py
 +++ b/vllm/v1/core/single_type_kv_cache_manager.py
 @@ -1283,6 +1283,7 @@ class MambaManager(SingleTypeKVCacheManager):
