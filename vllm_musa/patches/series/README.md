@@ -19,7 +19,11 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **192 patches**, plus **3 upstream entries** in `upstream/`.
+Currently **193 patches**, plus **3 upstream entries** in `upstream/`.
+Graph capture and graph-memory profiling switch the caching allocator to
+ordinary segments, because expandable segments cannot grow during stream
+capture, and replay the full allocator config so other allocator knobs are
+preserved.
 This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
