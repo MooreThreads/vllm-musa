@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 21 Oct 2026 16:00:00 +0800
+Subject: [PATCH] MUSA: disable expandable segments before graph capture
+
+MUSA's expandable-segment allocator cannot grow a segment while a stream is
+being captured, which surfaces as an OOM during CUDA graph capture even when
+device memory is still available. Switch the allocator back to ordinary
+segments right before capture_model(); the profile phase above keeps using
+expandable segments to avoid fragmentation OOMs.
+---
+ vllm/v1/worker/gpu_worker.py | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -789,6 +789,14 @@
+ 
+         cuda_graph_memory_bytes = 0
+         if not self.model_config.enforce_eager:
++            if current_platform.is_musa() and hasattr(
++                torch.musa.memory, "_set_allocator_settings"
++            ):
++                # Expandable segments cannot grow while a stream is being
++                # captured, which surfaces as an OOM during graph capture.
++                torch.musa.memory._set_allocator_settings(
++                    "expandable_segments:False"
++                )
+             cuda_graph_memory_bytes = self.model_runner.capture_model()
+ 
+         # Compare actual vs estimated CUDA graph memory (if we did profiling)
