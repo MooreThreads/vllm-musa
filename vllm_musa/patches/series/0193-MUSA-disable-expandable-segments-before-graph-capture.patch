@@ -1,32 +1,80 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Wed, 21 Oct 2026 16:00:00 +0800
-Subject: [PATCH] MUSA: disable expandable segments before graph capture
+Date: Wed, 21 Oct 2026 18:00:00 +0800
+Subject: [PATCH] MUSA: handle expandable segments around CUDA graph capture
 
-MUSA's expandable-segment allocator cannot grow a segment while a stream is
-being captured, which surfaces as an OOM during CUDA graph capture even when
-device memory is still available. Switch the allocator back to ordinary
-segments right before capture_model(); the profile phase above keeps using
-expandable segments to avoid fragmentation OOMs.
+torch_musa's expandable-segment allocator cannot grow a segment while a
+stream is being captured, which surfaces as a spurious OOM during graph
+capture even when device memory is still available (e.g. a 2 MiB allocation
+failing with several GiB free).
+
+Expandable segments are still needed during profile_run to avoid
+fragmentation OOMs, so keep them enabled there and switch to ordinary
+segments around both capture sites: the throwaway graphs used to profile
+graph memory and the real capture. The setting is restored in between so
+the KV cache allocation keeps the fragmentation benefit.
+
+Verified on S5000 with Qwen3.5-122B-A10B TP4 at --gpu-memory-utilization
+0.96 without --kv-cache-memory-bytes: graph estimate 2.14 GiB, available KV
+cache 14.03 GiB, all graphs captured, server started and served requests.
 ---
- vllm/v1/worker/gpu_worker.py | 8 ++++++++
- 1 file changed, 8 insertions(+)
+ vllm/v1/worker/gpu_worker.py | 33 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
-@@ -789,6 +789,14 @@
+@@ -92,6 +92,19 @@
+ logger = init_logger(__name__)
+ 
+ 
++def _musa_expandable_segments_enabled() -> bool:
++    conf = os.environ.get("PYTORCH_MUSA_ALLOC_CONF", "")
++    return "expandable_segments:true" in conf.replace(" ", "").lower()
++
++
++def _musa_set_expandable_segments(enabled: bool) -> None:
++    if not current_platform.is_musa() or not hasattr(
++        torch.musa.memory, "_set_allocator_settings"
++    ):
++        return
++    torch.musa.memory._set_allocator_settings(f"expandable_segments:{enabled}")
++
++
+ def _musa_deepseek_v4_mtp_sparse_prefill_reserve_bytes(
+     vllm_config: VllmConfig,
+ ) -> int:
+@@ -576,7 +589,22 @@
+             current_platform.is_cuda_alike()
+             and self.vllm_config.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
+         ):
+-            cudagraph_memory_estimate = self.model_runner.profile_cudagraph_memory()
++            # MUSA's expandable-segment allocator cannot grow during stream
++            # capture, so use ordinary segments for the throwaway profiling
++            # graphs and restore the setting for the KV cache allocation.
++            restore_expandable = (
++                current_platform.is_musa()
++                and _musa_expandable_segments_enabled()
++            )
++            if restore_expandable:
++                _musa_set_expandable_segments(False)
++            try:
++                cudagraph_memory_estimate = (
++                    self.model_runner.profile_cudagraph_memory()
++                )
++            finally:
++                if restore_expandable:
++                    _musa_set_expandable_segments(True)
+ 
+         # Respect the opt-in flag as originally designed.
+         cudagraph_memory_estimate_applied = (
+@@ -789,6 +817,9 @@
  
          cuda_graph_memory_bytes = 0
          if not self.model_config.enforce_eager:
-+            if current_platform.is_musa() and hasattr(
-+                torch.musa.memory, "_set_allocator_settings"
-+            ):
-+                # Expandable segments cannot grow while a stream is being
-+                # captured, which surfaces as an OOM during graph capture.
-+                torch.musa.memory._set_allocator_settings(
-+                    "expandable_segments:False"
-+                )
++            # Expandable segments cannot grow while a stream is being captured,
++            # which surfaces as an OOM during graph capture.
++            _musa_set_expandable_segments(False)
              cuda_graph_memory_bytes = self.model_runner.capture_model()
  
          # Compare actual vs estimated CUDA graph memory (if we did profiling)
