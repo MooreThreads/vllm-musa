@@ -128,7 +128,7 @@ def test_get_device_spec_builds_from_device_properties(monkeypatch) -> None:
         uuid = None
 
     monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: FakeProps())
-    get_device_spec.cache_clear()
+    clear_device_spec_cache()
 
     spec = get_device_spec(0)
 
@@ -139,7 +139,7 @@ def test_get_device_spec_builds_from_device_properties(monkeypatch) -> None:
     assert spec.mp_count == 56
     assert spec.max_threads_per_multiprocessor == 3072
     assert spec.cache_tag == "mp_31_mp56"
-    get_device_spec.cache_clear()
+    clear_device_spec_cache()
 
 
 def test_get_device_spec_returns_none_when_probe_fails(monkeypatch) -> None:
@@ -149,10 +149,10 @@ def test_get_device_spec_returns_none_when_probe_fails(monkeypatch) -> None:
         raise RuntimeError("device not ready")
 
     monkeypatch.setattr(device_spec, "_get_properties", boom)
-    get_device_spec.cache_clear()
+    clear_device_spec_cache()
 
     assert get_device_spec(0) is None
-    get_device_spec.cache_clear()
+    clear_device_spec_cache()
 
 
 # --- regression guard: no capability literals outside device_spec -----------

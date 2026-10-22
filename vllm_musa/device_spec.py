@@ -57,6 +57,7 @@ __all__ = [
     "MusaFeature",
     "NATIVE_FP8_ARCHS",
     "VALIDATED_MUSA_ARCHS",
+    "clear_device_spec_cache",
     "current_device_spec",
     "get_device_spec",
     "is_validated_device",
@@ -234,12 +235,27 @@ def _probe_device_spec(device_id: int) -> MusaDeviceSpec:
         shared_memory_per_multiprocessor=_int_attr(
             props,
             "shared_memory_per_multiprocessor",
+            "shared_memory_per_multi_processor",
+        ),
+        regs_per_multiprocessor=_int_attr(
+            props, "regs_per_multiprocessor", "regs_per_multi_processor"
+        ),
+        max_threads_per_block=_int_attr(props, "max_threads_per_block"),
+        max_threads_per_multiprocessor=_int_attr(
+            props,
+            "max_threads_per_multiprocessor",
+            "max_threads_per_multi_processor",
         ),
         device_name=str(getattr(props, "name", "unknown")),
         uuid=getattr(props, "uuid", None),
     )
     _assert_build_targets_device(spec)
     return spec
+
+
+def clear_device_spec_cache() -> None:
+    """Forget every probed device. Used by tests, and after an in-process rebuild."""
+    _probe_device_spec.cache_clear()
 
 
 def get_device_spec(device_id: int = 0) -> Optional[MusaDeviceSpec]:
