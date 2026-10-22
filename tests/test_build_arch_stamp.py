@@ -140,3 +140,65 @@ def test_stamp_without_fp8_warns_but_does_not_fail(stamp, monkeypatch) -> None:
     spec = device_spec.get_device_spec(0)
 
     assert spec.supports(device_spec.MusaFeature.NATIVE_FP8)
+
+
+def _stamp_writer(tmp_path):
+    """Extract ``_write_build_stamp`` from setup.py and give it its globals.
+
+    setup.py cannot be imported - it calls ``setup()`` at module scope and needs
+    the MUSA toolchain - but the file it writes is the contract the runtime
+    check reads, so the real function is extracted and exercised.
+    """
+    tree = ast.parse(_SETUP_PY.read_text())
+    node = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.FunctionDef) and n.name == "_write_build_stamp"),
+        None,
+    )
+    assert node is not None, "_write_build_stamp not found in setup.py"
+
+    (tmp_path / "vllm_musa").mkdir()
+    namespace = {
+        "Path": Path,
+        "MTGPU_TARGET": "mp_31",
+        "ENABLE_FP8": True,
+        "MTGPU_TARGET_SOURCE": "device",
+        "_mcc_version_string": lambda: "5.2.0",
+        "__file__": str(tmp_path / "setup.py"),
+    }
+    exec(
+        compile(ast.Module(body=[node], type_ignores=[]), str(_SETUP_PY), "exec"),
+        namespace,
+    )
+    return namespace["_write_build_stamp"], namespace
+
+
+def test_setup_writes_a_stamp_the_runtime_can_read(tmp_path) -> None:
+    """The writer's output must be exactly what read_build_stamp() expects."""
+    write_stamp, _ = _stamp_writer(tmp_path)
+
+    write_stamp()
+
+    produced = tmp_path / "vllm_musa" / "_build_stamp.py"
+    rendered: dict = {}
+    exec(compile(produced.read_text(), str(produced), "exec"), rendered)
+
+    assert rendered["MTGPU_TARGETS"] == ("mp_31",)
+    assert rendered["ENABLE_FP8"] is True
+    assert rendered["MCC_VERSION"] == "5.2.0"
+    assert rendered["TARGET_SOURCE"] == "device"
+
+
+def test_stamp_writer_records_a_non_fp8_arch(tmp_path) -> None:
+    write_stamp, namespace = _stamp_writer(tmp_path)
+    namespace["MTGPU_TARGET"] = "mp_22"
+    namespace["ENABLE_FP8"] = False
+
+    write_stamp()
+
+    produced = tmp_path / "vllm_musa" / "_build_stamp.py"
+    rendered: dict = {}
+    exec(compile(produced.read_text(), str(produced), "exec"), rendered)
+
+    assert rendered["MTGPU_TARGETS"] == ("mp_22",)
+    assert rendered["ENABLE_FP8"] is False
