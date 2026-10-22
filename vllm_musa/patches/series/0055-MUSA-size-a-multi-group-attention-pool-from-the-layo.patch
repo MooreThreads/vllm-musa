@@ -1,0 +1,218 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 21 Oct 2026 05:48:14 +0800
+Subject: [PATCH] MUSA: size a multi-group attention pool from the layout
+ strides
+
+The MUSA separate-Mamba-pool path built one attention tensor per layer slot
+and sized it from one uniform page. That is well defined only when every
+attention layer is in a single group. A speculative-decoding draft that owns
+its own attention cache (DFlash2; MTP reuses the target cache) adds groups
+with different page sizes, so a slot tensor listed several layers at one
+pool stride and the KV view ran past its storage.
+
+Keep the per-slot construction for the single-group case, and build the
+tensors from the resolved layout strides only when there is more than one
+attention group. On that path the groups alias one attention pool from byte
+0 (a block id belongs to one group at a time), so allocate one shared
+attention buffer; single-group per-layer tensors keep their own buffers.
+Mamba groups keep their own block-id space and buffer either way.
+---
+ vllm/v1/core/kv_cache_utils.py | 122 ++++++++++++++++++++++++++++-----
+ vllm/v1/worker/utils.py        |  33 +++++++--
+ 2 files changed, 129 insertions(+), 26 deletions(-)
+
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index 506e8ceb25..f811ca38fc 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1629,32 +1629,116 @@ def _musa_separated_mamba_attn_tensors(vllm_config, kv_cache_groups, available_m
+     mamba_num_blocks = max_num_seqs * mamba_blocks_per_request + 1
+     mamba_layers = [ln for g in mamba_groups for ln in g.layer_names]
+     mamba_bytes = mamba_page * mamba_num_blocks * len(mamba_layers)
+-    attn_group_size = max(len(g.layer_names) for g in attn_groups)
+-    attn_page = get_uniform_page_size([g.kv_cache_spec for g in attn_groups])
+     profiling_num_blocks = (
+         vllm_config.cache_config.num_gpu_blocks_override
+         if available_memory == 0
+         else None
+     )
+-    if profiling_num_blocks is not None:
+-        # vLLM v0.28 profiles cudagraph memory with available_memory=0 and a
+-        # temporary block override. Build that deliberately minimal attention
+-        # cache while retaining the fixed-size Mamba state pool required by
+-        # the captured batch, rather than treating zero as the final budget.
+-        attn_num_blocks = profiling_num_blocks
+-    else:
+-        if mamba_bytes >= available_memory:
+-            raise ValueError("MUSA separate mamba pool needs more memory than available")
+-        remaining = available_memory - mamba_bytes
+-        attn_num_blocks = get_num_blocks(
+-            vllm_config, attn_group_size, remaining, attn_page
+-        )
+     kv_cache_tensors = []
+-    for i in range(attn_group_size):
+-        shared_by = [g.layer_names[i] for g in attn_groups if i < len(g.layer_names)]
+-        kv_cache_tensors.append(
+-            KVCacheTensor(size=attn_page * attn_num_blocks, layers=shared_by, layer_stride=attn_page * attn_num_blocks, block_stride=attn_page)
++    if len(attn_groups) == 1:
++        # The per-slot scheme is well defined only when every attention layer
++        # sits in one group: each tensor then holds exactly one layer, so the
++        # tensor size and the layer stride are the same page pool. Keep that
++        # layout untouched for every model that works today (no draft model of
++        # its own, MTP, or no speculation at all).
++        attn_group_size = len(attn_groups[0].layer_names)
++        attn_page = get_uniform_page_size([g.kv_cache_spec for g in attn_groups])
++        if profiling_num_blocks is not None:
++            attn_num_blocks = profiling_num_blocks
++        else:
++            if mamba_bytes >= available_memory:
++                raise ValueError(
++                    "MUSA separate mamba pool needs more memory than available"
++                )
++            remaining = available_memory - mamba_bytes
++            attn_num_blocks = get_num_blocks(
++                vllm_config, attn_group_size, remaining, attn_page
++            )
++        for i in range(attn_group_size):
++            shared_by = [
++                g.layer_names[i] for g in attn_groups if i < len(g.layer_names)
++            ]
++            kv_cache_tensors.append(
++                KVCacheTensor(
++                    size=attn_page * attn_num_blocks,
++                    layers=shared_by,
++                    layer_stride=attn_page * attn_num_blocks,
++                    block_stride=attn_page,
++                )
++            )
++    else:
++        # More than one attention group can only be described by the resolved
++        # layout strides: a speculative-decoding draft that owns its own
++        # attention cache (DFlash2 does; MTP reuses the target cache) has a
++        # different page size, so one uniform page per layer slot would let the
++        # view run past its tensor.
++        layout = vllm_config.cache_config.get_resolved_kv_cache_layout()
++        validate_kv_cache_layout(layout, attn_groups)
++        attn_bytes_per_block = _get_kv_cache_bytes_per_block(attn_groups, layout)
++        if profiling_num_blocks is not None:
++            attn_num_blocks = profiling_num_blocks
++        else:
++            if mamba_bytes >= available_memory:
++                raise ValueError(
++                    "MUSA separate mamba pool needs more memory than available"
++                )
++            remaining = available_memory - mamba_bytes
++            attn_num_blocks = may_override_num_blocks(
++                vllm_config, remaining // attn_bytes_per_block
++            )
++        attn_total_size = attn_bytes_per_block * attn_num_blocks
++        interleaved_block_stride = (
++            attn_bytes_per_block if layout.is_block_outermost else None
+         )
++        for group in attn_groups:
++            group_spec = group.kv_cache_spec
++            layers_by_spec: defaultdict[KVCacheSpec, list[str]] = defaultdict(list)
++            if isinstance(group_spec, UniformTypeKVCacheSpecs):
++                for layer_name, spec in group_spec.kv_cache_specs.items():
++                    layers_by_spec[spec].append(layer_name)
++            elif group.layer_names:
++                layers_by_spec[group_spec].extend(group.layer_names)
++
++            # Groups alias one attention pool from byte 0: a block id belongs
++            # to one group at a time, so overlapping regions are never live
++            # together.
++            byte_offset = 0
++            for spec, layer_names in layers_by_spec.items():
++                block_stride = interleaved_block_stride
++                padded_page = _get_layer_block_stride(spec)
++                if block_stride is None and padded_page != spec.page_size_bytes:
++                    assert layout.is_block_compact, (
++                        f"{layout.name} cannot pad pages"
++                    )
++                    block_stride = padded_page
++                layer_stride, block_stride, _, _, _ = compute_layout_strides(
++                    spec,
++                    attn_num_blocks,
++                    len(layer_names),
++                    layout,
++                    fixed_strides=(None, block_stride, None, None, None),
++                )
++                kv_cache_tensors.append(
++                    KVCacheTensor(
++                        size=attn_total_size,
++                        layers=layer_names,
++                        layer_stride=layer_stride,
++                        block_stride=block_stride,
++                        offset=byte_offset,
++                    )
++                )
++                byte_offset += len(layer_names) * (
++                    spec.page_size_bytes
++                    if layout.is_block_outermost
++                    else layer_stride
++                )
++    logger.info(
++        "MUSA separated pool: attention_groups=%d mamba_groups=%d "
++        "attention_blocks=%d",
++        len(attn_groups),
++        len(mamba_groups),
++        attn_num_blocks,
++    )
+     for ln in mamba_layers:
+         kv_cache_tensors.append(
+             KVCacheTensor(
+diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
+index ee1c8a1734..63add56968 100644
+--- a/vllm/v1/worker/utils.py
++++ b/vllm/v1/worker/utils.py
+@@ -579,8 +579,11 @@ def allocate_kv_cache(
+     if not kv_cache_config.kv_cache_tensors:
+         return {}
+ 
+-    # MUSA may use separate attention and Mamba pools. Each pool has its own
+-    # backing allocation; the default v0.30 layout continues to share one.
++    # MUSA may use separate attention and Mamba pools. Attention groups keep
++    # aliasing one backing allocation, as on the shared-pool path: a block id
++    # belongs to one group at a time, and the groups' page regions sit at
++    # distinct offsets inside each block. Each Mamba group has its own block-id
++    # space, so it needs its own buffer.
+     separate_musa_pools = kv_cache_config.musa_mamba_num_blocks is not None
+     sizes = {tensor.size for tensor in kv_cache_config.kv_cache_tensors}
+     if not separate_musa_pools:
+@@ -605,14 +608,30 @@ def allocate_kv_cache(
+         if separate_musa_pools
+         else torch.zeros(buf_size, dtype=torch.int8, device=device)
+     )
++    # Count the attention groups, not the layers per tensor: the multi-group
++    # construction sizes every attention tensor from the whole pool, so two
++    # one-layer groups would otherwise each allocate a full buffer. The
++    # single-group per-slot construction keeps one buffer per layer tensor.
++    musa_attn_groups = [
++        group
++        for group in kv_cache_config.kv_cache_groups
++        if not isinstance(group.kv_cache_spec, MambaSpec)
++    ]
++    shared_musa_attn = separate_musa_pools and len(musa_attn_groups) > 1
++    musa_attn_buf = (
++        torch.zeros(buf_size, dtype=torch.int8, device=device)
++        if shared_musa_attn
++        else None
++    )
+ 
+     kv_caches: dict[str, torch.Tensor] = {}
+     for tensor in kv_cache_config.kv_cache_tensors:
+-        buf = (
+-            torch.zeros(tensor.size, dtype=torch.int8, device=device)
+-            if separate_musa_pools
+-            else shared_buf
+-        )
++        if not separate_musa_pools:
++            buf = shared_buf
++        elif tensor.musa_mamba_pool or not shared_musa_attn:
++            buf = torch.zeros(tensor.size, dtype=torch.int8, device=device)
++        else:
++            buf = musa_attn_buf
+         assert buf is not None
+         layer_name = tensor.layers[0]
+         group_id, group = next(
