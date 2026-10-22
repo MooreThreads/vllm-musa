@@ -145,6 +145,9 @@ def _register_ops() -> None:
     import vllm_musa.model_executor  # noqa: F401
     import vllm_musa.jit_kernel.csrc.moe as _moe  # noqa: F401
 
+    from .custom_op_modules import preload_custom_op_modules
+
+    preload_custom_op_modules()
     _moe.prewarm()
 
 
