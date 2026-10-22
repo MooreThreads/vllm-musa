@@ -169,18 +169,30 @@ def _warmup_paged_mqa_logits_metadata(model: torch.nn.Module) -> None:
         get_paged_mqa_logits_metadata_module(rows)
 
 
-def _rotary_dim() -> int | None:
-    """The loaded model's rotary width, or ``None`` when it cannot be read.
+def _rotary_dim(hf_config: object | None = None) -> int | None:
+    """The rotary width the kernel will actually receive, or ``None``.
 
-    Only used to skip a store-hint variant that the auto policy can never pick;
-    an unknown width keeps both, which is always safe.
+    Not ``head_dim``: a partial-rotary model (Qwen3.5, Qwen3-Next) reports
+    ``head_dim=256`` with ``partial_rotary_factor=0.25`` and rotates only 64
+    lanes, and ``rope._store_hint`` keys on the rotated width.  Using
+    ``head_dim`` there would skip ``stcg`` for exactly the models that select
+    it, and the build would happen mid-serving after all.
+
+    Only used to skip a store-hint variant the auto policy can never pick; an
+    unknown width keeps both, which is always safe.
     """
     try:
-        from vllm.config import get_current_vllm_config
+        if hf_config is None:
+            from vllm.config import get_current_vllm_config
 
-        config = get_current_vllm_config()
-        return int(config.model_config.hf_config.head_dim)
+            hf_config = get_current_vllm_config().model_config.hf_config
+        head_dim = int(hf_config.head_dim)
     except Exception:  # noqa: BLE001 - optional acceleration hint
+        return None
+    factor = getattr(hf_config, "partial_rotary_factor", 1.0) or 1.0
+    try:
+        return int(head_dim * float(factor))
+    except (TypeError, ValueError):  # noqa: BLE001 - unusable factor
         return None
 
 

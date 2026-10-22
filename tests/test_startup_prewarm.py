@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from vllm_musa.jit_kernel.csrc import rope
@@ -28,6 +30,15 @@ def test_rope_prewarm_receives_the_models_rotary_width(built) -> None:
     assert built == [{"rot_dim": warmup._rotary_dim()}]
 
 
+def test_partial_rotary_models_use_the_rotated_width(monkeypatch) -> None:
+    """Qwen3.5 reports head_dim 256 but rotates 64 lanes; stcg must survive."""
+    hf_config = SimpleNamespace(head_dim=256, partial_rotary_factor=0.25)
+    assert warmup._rotary_dim(hf_config) == 64
+
+    full = SimpleNamespace(head_dim=128)
+    assert warmup._rotary_dim(full) == 128
+
+
 def test_auto_policy_variants_depend_on_the_rotary_width() -> None:
     """`stcg` is only selected at rot_dim 64, so only it may skip the build."""
     assert rope.reachable_store_hints(64) == ("stwb", "stcg")
@@ -38,10 +49,9 @@ def test_auto_policy_variants_depend_on_the_rotary_width() -> None:
 def test_rope_prewarm_never_blocks_startup(monkeypatch) -> None:
     """A prewarm failure must degrade to the lazy path, not abort the plugin."""
 
-    def boom() -> list[str]:
+    def boom(rot_dim=None) -> list[str]:
         raise RuntimeError("no device")
 
-    monkeypatch.delenv("VLLM_MUSA_PREWARM_ROPE", raising=False)
     monkeypatch.setattr(rope, "prewarm_rope_modules", boom)
 
     warmup._warmup_rope_store_hints()  # must not raise
