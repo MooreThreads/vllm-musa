@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import os
-import re
 import platform
+import re
 import shutil
 import subprocess
 import sys

@@ -50,7 +50,6 @@ def stamp(monkeypatch):
 
     def install(targets=("mp_31",), fp8=True):
         module = types.ModuleType("vllm_musa._build_stamp")
-        module.MTGPPU_TARGETS_UNUSED = None
         module.MTGPU_TARGETS = tuple(targets)
         module.ENABLE_FP8 = fp8
         module.MCC_VERSION = "5.2.0"
@@ -62,15 +61,15 @@ def stamp(monkeypatch):
     yield install
     sys.modules.pop("vllm_musa._build_stamp", None)
     device_spec.read_build_stamp.cache_clear()
-    device_spec.get_device_spec.cache_clear()
+    device_spec.clear_device_spec_cache()
 
 
 @pytest.fixture
 def spec(monkeypatch):
     monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: _FakeProps())
-    device_spec.get_device_spec.cache_clear()
+    device_spec.clear_device_spec_cache()
     yield device_spec.get_device_spec(0)
-    device_spec.get_device_spec.cache_clear()
+    device_spec.clear_device_spec_cache()
 
 
 def test_setup_fp8_table_matches_runtime_arch_set() -> None:
@@ -109,7 +108,7 @@ def test_wrong_arch_build_is_refused(stamp, monkeypatch) -> None:
     """A binary for another arch must be an error, not a wrong number."""
     stamp(("mp_22",))
     monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: _FakeProps())
-    device_spec.get_device_spec.cache_clear()
+    device_spec.clear_device_spec_cache()
 
     with pytest.raises(RuntimeError, match="built for MUSA arch mp_22"):
         device_spec.get_device_spec(0)
@@ -118,7 +117,7 @@ def test_wrong_arch_build_is_refused(stamp, monkeypatch) -> None:
 def test_fat_build_accepts_either_arch(stamp, monkeypatch) -> None:
     stamp(("mp_21", "mp_31"))
     monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: _FakeProps())
-    device_spec.get_device_spec.cache_clear()
+    device_spec.clear_device_spec_cache()
 
     assert device_spec.get_device_spec(0).arch_name == "mp_31"
 
@@ -135,7 +134,7 @@ def test_missing_stamp_is_unknown_not_a_mismatch(monkeypatch, spec) -> None:
 def test_stamp_without_fp8_warns_but_does_not_fail(stamp, monkeypatch) -> None:
     stamp(("mp_31",), fp8=False)
     monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: _FakeProps())
-    device_spec.get_device_spec.cache_clear()
+    device_spec.clear_device_spec_cache()
 
     spec = device_spec.get_device_spec(0)
 
