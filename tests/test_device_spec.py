@@ -76,7 +76,6 @@ def test_unvalidated_arch_fails_closed(
     assert not spec.is_validated
     assert not spec.supports_native_fp8
     assert not spec.supports(MusaFeature.VALIDATED_TARGET)
-    assert spec.cache_tag.startswith(arch_name)
 
 
 def test_arch_code_and_name_derivation() -> None:
@@ -85,13 +84,19 @@ def test_arch_code_and_name_derivation() -> None:
     assert device_spec._arch_name(2, 2) == "mp_22"
 
 
-def test_cache_tag_carries_mp_count() -> None:
-    """Two bins of one arch must not share a compile-cache path."""
+def test_the_compile_key_ignores_the_multiprocessor_count() -> None:
+    """Codegen input is arch plus compiler; SM count only moves the tiling.
+
+    Two bins of one arch compile the same source to the same instructions, so
+    folding mp_count into the JIT directory would fragment the cache without
+    changing a single object file.  Tuning that does depend on the bin lives in
+    the tactics table, which is keyed separately.
+    """
     a = make_spec(mp_count=48)
     b = make_spec(mp_count=56)
 
     assert a.arch_name == b.arch_name
-    assert a.cache_tag != b.cache_tag
+    assert not hasattr(a, "cache_tag")
 
 
 def test_explicit_sets_are_the_source_of_truth() -> None:
@@ -138,7 +143,6 @@ def test_get_device_spec_builds_from_device_properties(monkeypatch) -> None:
     assert spec.arch_name == "mp_31"
     assert spec.mp_count == 56
     assert spec.max_threads_per_multiprocessor == 3072
-    assert spec.cache_tag == "mp_31_mp56"
     device_spec.clear_device_spec_cache()
 
 
