@@ -107,7 +107,9 @@ def test_duplicate_entries_are_rejected(table) -> None:
 
 def test_shipped_tables_parse_and_resolve() -> None:
     """Every table in the package must load and answer for any arch."""
-    for path in sorted(tactics.TACTICS_DIR.glob("*.json")):
+    tables = sorted(tactics.TACTICS_DIR.glob("*.json"))
+    assert tables, f"no tactic tables found in {tactics.TACTICS_DIR}"
+    for path in tables:
         kernel = path.stem
         tactics.load(kernel)
         # The shipped tables only carry a generic entry today, so an untuned
@@ -129,3 +131,37 @@ def test_describe_lists_every_entry(tmp_path) -> None:
     text = tactics.describe("demo", tmp_path)
 
     assert "mp_31/mp56" in text and "tuned" in text and "default" in text
+
+
+def test_module_entry_point_prints_a_table(capsys) -> None:
+    """`python -m vllm_musa.tactics <kernel>` must work; the guard cannot."""
+    assert tactics.main(["moe"]) == 0
+    assert "moe" in capsys.readouterr().out
+
+
+def test_module_entry_point_without_arguments_shows_usage(capsys) -> None:
+    assert tactics.main([]) == 2
+    out = capsys.readouterr().out
+    assert "usage: python -m vllm_musa.tactics" in out
+    assert "moe" in out
+
+
+def test_package_main_module_exists() -> None:
+    """`-m` dispatches to ``vllm_musa.tactics.__main__``, not to ``__init__``."""
+    import importlib.util
+
+    spec = importlib.util.find_spec("vllm_musa.tactics.__main__")
+    assert spec is not None and spec.origin is not None
+    assert spec.origin.endswith("__main__.py")
+
+
+def test_package_data_ships_the_tables() -> None:
+    """The tables are data files; without this they never reach a wheel."""
+    import re
+
+    pyproject = (tactics.TACTICS_DIR.parents[1] / "pyproject.toml").read_text()
+    section = re.search(
+        r"\[tool\.setuptools\.package-data\](.*?)(?:\n\[|\Z)", pyproject, re.DOTALL
+    )
+    assert section is not None, "no [tool.setuptools.package-data] section"
+    assert "tactics/*.json" in section.group(1), section.group(1)

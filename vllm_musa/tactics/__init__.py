@@ -57,7 +57,13 @@ def _ladder(arch_name: str, mp_count: Optional[int]) -> list[tuple[str, Optional
     return keys
 
 
-def load(kernel: str, directory: Path | None = None) -> dict[tuple[str, Optional[int]], TacticEntry]:
+def _table_path(kernel: str, directory: Path | None) -> Path:
+    return (TACTICS_DIR if directory is None else directory) / f"{kernel}.json"
+
+
+def load(
+    kernel: str, directory: Path | None = None
+) -> dict[tuple[str, Optional[int]], TacticEntry]:
     """Load ``<kernel>.json`` into a ``(arch, mp_count) -> entry`` map."""
     directory = TACTICS_DIR if directory is None else directory
     path = directory / f"{kernel}.json"
@@ -73,19 +79,35 @@ def load(kernel: str, directory: Path | None = None) -> dict[tuple[str, Optional
             f"expected {SCHEMA_VERSION}"
         )
     if raw.get("kernel") != kernel:
-        raise ValueError(f"{path}: table says kernel {raw.get('kernel')!r}, expected {kernel!r}")
+        raise ValueError(
+            f"{path}: table says kernel {raw.get('kernel')!r}, "
+            f"expected {kernel!r}"
+        )
 
     table: dict[tuple[str, Optional[int]], TacticEntry] = {}
-    for item in raw.get("tactics", []):
-        key = (item["arch"], item.get("mp_count"))
+    entries = raw.get("tactics", [])
+    if not isinstance(entries, list):
+        raise ValueError(f"{path}: 'tactics' must be a list, got {type(entries).__name__}")
+    for index, item in enumerate(entries):
+        try:
+            key = (item["arch"], item.get("mp_count"))
+            entry = TacticEntry(
+                arch=item["arch"],
+                mp_count=item.get("mp_count"),
+                values=dict(item["values"]),
+                note=item.get("note", ""),
+            )
+        except (KeyError, TypeError, AttributeError) as exc:
+            raise ValueError(
+                f"{path}: tactic #{index} is malformed ({exc!r}); each entry needs "
+                "'arch' and a 'values' mapping"
+            ) from exc
         if key in table:
-            raise ValueError(f"{path}: duplicate tactic for arch={key[0]} mp_count={key[1]}")
-        table[key] = TacticEntry(
-            arch=item["arch"],
-            mp_count=item.get("mp_count"),
-            values=dict(item["values"]),
-            note=item.get("note", ""),
-        )
+            raise ValueError(
+                f"{path}: duplicate tactic for arch={key[0]} "
+                f"mp_count={key[1]}"
+            )
+        table[key] = entry
     if not table:
         raise ValueError(f"{path}: table defines no tactics")
     return table
@@ -119,7 +141,7 @@ def select(
     raise TacticNotFound(
         f"no tactic for kernel {kernel!r} on {arch_name} "
         f"(mp_count={mp_count}); tried {', '.join(tried)}. Add an entry to "
-        f"{TACTICS_DIR / f'{kernel}.json'} with the measured numbers for this "
+        f"{_table_path(kernel, directory)} with the measured numbers for this "
         "arch, or pass default= where a generic tactic is known to be fine."
     )
 
@@ -137,8 +159,24 @@ def describe(kernel: str, directory: Path | None = None) -> str:
     return "\n".join(lines)
 
 
-if __name__ == "__main__":  # pragma: no cover - operator convenience
+def main(argv: Optional[list[str]] = None) -> int:
+    """``python -m vllm_musa.tactics <kernel>...``: dump the tables.
+
+    Kept as a function so ``__main__.py`` can call it; a bare
+    ``if __name__ == "__main__"`` guard here would never fire, because ``-m``
+    dispatches to the package's ``__main__`` module.
+    """
     import sys
 
-    for name in sys.argv[1:]:
+    names = list(sys.argv[1:] if argv is None else argv)
+    if not names:
+        available = sorted(p.stem for p in TACTICS_DIR.glob("*.json"))
+        print(f"usage: python -m vllm_musa.tactics <kernel> [{', '.join(available)}]")
+        return 2
+    for name in names:
         print(describe(name))
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - direct script execution
+    raise SystemExit(main())
