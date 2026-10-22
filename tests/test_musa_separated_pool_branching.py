@@ -214,6 +214,47 @@ def test_two_attention_groups_take_layout_path(monkeypatch, layout, draft_heads)
     assert caches["mamba.0"].untyped_storage().data_ptr() not in attention_ptrs
 
 
+@pytest.mark.parametrize("layout", [KVCacheLayout.BLHNC, KVCacheLayout.LBNHC])
+def test_single_layer_attention_groups_share_one_buffer(monkeypatch, layout):
+    """Two one-layer attention groups still share one attention buffer.
+
+    The layout-aware construction sizes every attention tensor from the whole
+    pool, so gating the shared buffer on ``len(t.layers) > 1`` would allocate
+    one full pool buffer per group here.
+    """
+    monkeypatch.setattr(kcu, "musa_mamba_separate_pool_enabled", lambda: True)
+    config = _vllm_config(layout)
+    target = KVCacheGroupSpec(["target.0"], _attention_spec(2))
+    draft = KVCacheGroupSpec(["draft.0"], _attention_spec(2))
+    mamba = KVCacheGroupSpec(["mamba.0"], _mamba_spec())
+    groups = [target, draft, mamba]
+
+    tensors, num_blocks, mamba_blocks = kcu._musa_separated_mamba_attn_tensors(
+        config, groups, 1 << 20
+    )
+    attention, _ = _split_tensors(tensors)
+    assert len(attention) == 2
+    assert {len(t.layers) for t in attention} == {1}
+    total_size = attention[0].size
+    assert all(t.size == total_size for t in attention)
+
+    kv_config = KVCacheConfig(
+        num_blocks=num_blocks,
+        kv_cache_tensors=tensors,
+        kv_cache_groups=groups,
+        musa_mamba_num_blocks=mamba_blocks,
+    )
+    caches = allocate_kv_cache(kv_config, torch.device("cpu"), layout)
+    target_ptr = caches["target.0"].untyped_storage().data_ptr()
+    draft_ptr = caches["draft.0"].untyped_storage().data_ptr()
+    assert target_ptr == draft_ptr, (
+        "one-layer attention groups must alias one pool buffer, not one full "
+        "buffer each"
+    )
+    assert caches["target.0"].untyped_storage().nbytes() == total_size
+    assert caches["mamba.0"].untyped_storage().data_ptr() != target_ptr
+
+
 def test_attention_only_model_never_reaches_musa_builder(monkeypatch):
     """No Mamba group -> the MUSA separate-pool builder is not called."""
 
