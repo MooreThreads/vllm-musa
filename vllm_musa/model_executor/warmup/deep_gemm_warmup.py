@@ -169,6 +169,21 @@ def _warmup_paged_mqa_logits_metadata(model: torch.nn.Module) -> None:
         get_paged_mqa_logits_metadata_module(rows)
 
 
+def _rotary_dim() -> int | None:
+    """The loaded model's rotary width, or ``None`` when it cannot be read.
+
+    Only used to skip a store-hint variant that the auto policy can never pick;
+    an unknown width keeps both, which is always safe.
+    """
+    try:
+        from vllm.config import get_current_vllm_config
+
+        config = get_current_vllm_config()
+        return int(config.model_config.hf_config.head_dim)
+    except Exception:  # noqa: BLE001 - optional acceleration hint
+        return None
+
+
 def _warmup_rope_store_hints() -> None:
     """Build every rotary-embedding store-hint variant before serving.
 
@@ -182,7 +197,7 @@ def _warmup_rope_store_hints() -> None:
     try:
         from vllm_musa.jit_kernel.csrc.rope import prewarm_rope_modules
 
-        built = prewarm_rope_modules()
+        built = prewarm_rope_modules(_rotary_dim())
     except Exception as exc:  # noqa: BLE001 - warmup must not block serving
         logger.warning("Rotary-embedding warmup skipped: %s", exc)
         return

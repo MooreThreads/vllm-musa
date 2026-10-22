@@ -11,20 +11,28 @@ from vllm_musa.model_executor.warmup import deep_gemm_warmup as warmup
 
 @pytest.fixture
 def built(monkeypatch):
-    calls: list[str] = []
+    calls: list[dict] = []
 
-    def fake_prewarm() -> list[str]:
-        calls.append("prewarm")
+    def fake_prewarm(rot_dim=None) -> list[str]:
+        calls.append({"rot_dim": rot_dim})
         return ["mp31_stwb", "mp31_stcg"]
 
     monkeypatch.setattr(rope, "prewarm_rope_modules", fake_prewarm)
     return calls
 
 
-def test_rope_prewarm_builds_both_variants(built) -> None:
+def test_rope_prewarm_receives_the_models_rotary_width(built) -> None:
+    """The warmup must tell the prewarm which variants are reachable."""
     warmup._warmup_rope_store_hints()
 
-    assert built == ["prewarm"]
+    assert built == [{"rot_dim": warmup._rotary_dim()}]
+
+
+def test_auto_policy_variants_depend_on_the_rotary_width() -> None:
+    """`stcg` is only selected at rot_dim 64, so only it may skip the build."""
+    assert rope.reachable_store_hints(64) == ("stwb", "stcg")
+    assert rope.reachable_store_hints(128) == ("stwb",)
+    assert rope.reachable_store_hints(None) == ("stwb", "stcg")
 
 
 def test_rope_prewarm_never_blocks_startup(monkeypatch) -> None:

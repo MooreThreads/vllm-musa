@@ -63,19 +63,31 @@ def _musa_arch_tag() -> str:
 _ROPE_STORE_HINTS = ("stwb", "stcg")
 
 
-def prewarm_rope_modules() -> list[str]:
-    """Build every store-hint variant the auto policy can pick.
+def prewarm_rope_modules(rot_dim: int | None = None) -> list[str]:
+    """Build the store-hint variants the auto policy can pick for this model.
 
-    Called once at plugin registration.  Two mcc builds here (a few seconds
-    each, cached afterwards) replace a first-request build of one variant plus
-    a mid-serving build of the other when the batch crosses 512 tokens.
+    Called from the warmup that runs before graph capture, not at plugin
+    registration.  Two mcc builds here (a few seconds each, cached afterwards)
+    replace a first-request build of one variant plus a mid-serving build of
+    the other when the batch crosses 512 tokens.
+
+    ``rot_dim`` is the model's rotary width.  The auto policy only ever selects
+    ``stcg`` when ``rot_dim == 64``, so a model with another width gets a single
+    variant instead of a build that can never be loaded.
     """
     arch_tag = _musa_arch_tag()
     built = []
-    for hint in _ROPE_STORE_HINTS:
+    for hint in reachable_store_hints(rot_dim):
         _rope_module(arch_tag, hint)
         built.append(f"{arch_tag}_{hint}")
     return built
+
+
+def reachable_store_hints(rot_dim: int | None = None) -> tuple[str, ...]:
+    """Store-hint variants ``_store_hint`` can return for this rotary width."""
+    if rot_dim is not None and rot_dim != 64:
+        return ("stwb",)
+    return _ROPE_STORE_HINTS
 
 
 @cache_once
