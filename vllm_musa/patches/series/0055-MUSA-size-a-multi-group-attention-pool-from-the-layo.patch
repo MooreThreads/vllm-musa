@@ -19,8 +19,8 @@ attention buffer; single-group per-layer tensors keep their own buffers.
 Mamba groups keep their own block-id space and buffer either way.
 ---
  vllm/v1/core/kv_cache_utils.py | 122 ++++++++++++++++++++++++++++-----
- vllm/v1/worker/utils.py        |  31 +++++++--
- 2 files changed, 127 insertions(+), 26 deletions(-)
+ vllm/v1/worker/utils.py        |  33 +++++++--
+ 2 files changed, 129 insertions(+), 26 deletions(-)
 
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
 index 506e8ceb25..f811ca38fc 100644
@@ -163,7 +163,7 @@ index 506e8ceb25..f811ca38fc 100644
          kv_cache_tensors.append(
              KVCacheTensor(
 diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
-index ee1c8a1734..2648e13a50 100644
+index ee1c8a1734..63add56968 100644
 --- a/vllm/v1/worker/utils.py
 +++ b/vllm/v1/worker/utils.py
 @@ -579,8 +579,11 @@ def allocate_kv_cache(
@@ -180,18 +180,20 @@ index ee1c8a1734..2648e13a50 100644
      separate_musa_pools = kv_cache_config.musa_mamba_num_blocks is not None
      sizes = {tensor.size for tensor in kv_cache_config.kv_cache_tensors}
      if not separate_musa_pools:
-@@ -605,14 +608,28 @@ def allocate_kv_cache(
+@@ -605,14 +608,30 @@ def allocate_kv_cache(
          if separate_musa_pools
          else torch.zeros(buf_size, dtype=torch.int8, device=device)
      )
-+    # A multi-layer attention tensor is the layout-aware construction, whose
-+    # groups alias one pool and therefore must share a buffer. The single-group
-+    # per-slot construction keeps one buffer per layer tensor, as before.
-+    shared_musa_attn = separate_musa_pools and any(
-+        len(t.layers) > 1
-+        for t in kv_cache_config.kv_cache_tensors
-+        if not t.musa_mamba_pool
-+    )
++    # Count the attention groups, not the layers per tensor: the multi-group
++    # construction sizes every attention tensor from the whole pool, so two
++    # one-layer groups would otherwise each allocate a full buffer. The
++    # single-group per-slot construction keeps one buffer per layer tensor.
++    musa_attn_groups = [
++        group
++        for group in kv_cache_config.kv_cache_groups
++        if not isinstance(group.kv_cache_spec, MambaSpec)
++    ]
++    shared_musa_attn = separate_musa_pools and len(musa_attn_groups) > 1
 +    musa_attn_buf = (
 +        torch.zeros(buf_size, dtype=torch.int8, device=device)
 +        if shared_musa_attn
