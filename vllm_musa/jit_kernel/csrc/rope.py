@@ -43,11 +43,51 @@ def _store_hint(num_tokens: int, rot_dim: int) -> str:
 
 
 def _musa_arch_tag() -> str:
-    try:
-        major, minor = torch.musa.get_device_capability()
-        return f"mp{int(major)}{int(minor)}"
-    except Exception:
-        return "mp31"
+    """Arch tag for the module name, from the device spec (fail closed)."""
+    from vllm_musa.device_spec import current_device_spec
+
+    spec = current_device_spec()
+    if spec is None:
+        raise RuntimeError(
+            "cannot determine the MUSA arch for the rotary-embedding JIT build; "
+            "the kernel name is arch-qualified so a guess here would pin a wrong "
+            "binary into the cache. Set VLLM_MUSA_ARCH_LIST (e.g. '31')."
+        )
+    return spec.arch_name.replace("_", "")  # "mp_31" -> "mp31"
+
+
+#: Store-hint variants the auto policy can select (see :func:`_store_hint`).
+#: The hint is a compile-time constant, so each value is its own ``.so``; if only
+#: the value the first request happens to need is built, a later batch that
+#: crosses 512 tokens builds the other one *in the middle of serving*.
+_ROPE_STORE_HINTS = ("stwb", "stcg")
+
+
+def prewarm_rope_modules(rot_dim: int | None = None) -> list[str]:
+    """Build the store-hint variants the auto policy can pick for this model.
+
+    Called from the warmup that runs before graph capture, not at plugin
+    registration.  Two mcc builds here (a few seconds each, cached afterwards)
+    replace a first-request build of one variant plus a mid-serving build of
+    the other when the batch crosses 512 tokens.
+
+    ``rot_dim`` is the model's rotary width.  The auto policy only ever selects
+    ``stcg`` when ``rot_dim == 64``, so a model with another width gets a single
+    variant instead of a build that can never be loaded.
+    """
+    arch_tag = _musa_arch_tag()
+    built = []
+    for hint in reachable_store_hints(rot_dim):
+        _rope_module(arch_tag, hint)
+        built.append(f"{arch_tag}_{hint}")
+    return built
+
+
+def reachable_store_hints(rot_dim: int | None = None) -> tuple[str, ...]:
+    """Store-hint variants ``_store_hint`` can return for this rotary width."""
+    if rot_dim is not None and rot_dim != 64:
+        return ("stwb",)
+    return _ROPE_STORE_HINTS
 
 
 @cache_once
