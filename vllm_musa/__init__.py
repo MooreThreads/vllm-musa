@@ -145,16 +145,18 @@ def _register_ops() -> None:
     import vllm_musa.model_executor  # noqa: F401
     import vllm_musa.jit_kernel.csrc.moe as _moe  # noqa: F401
 
-    # Register eagerly, not on first compile.  `vllm_musa.kernels` modules
-    # register their ops as an import side effect, and this one is otherwise
-    # only imported from the compile path
-    # (``compilation/qwen3_qk_rope_kv_presplit.apply_...``).  The torch AOT
-    # autograd cache loads its saved artifact during engine init, *before* any
-    # compile runs, so a lazily registered op makes that load fail with a
-    # missing-attribute error and the engine silently recompiles the whole
-    # model on every boot.  Importing it here puts the op in the namespace
-    # before the cache is read.
-    import vllm_musa.kernels.qwen3_qk_rope_kv  # noqa: F401
+    # Register *every* custom-op module eagerly, not on first compile.
+    # `vllm_musa` modules register their ops as an import side effect, but many
+    # of them are otherwise only imported from the compile path or from the
+    # model that happens to use them.  The torch AOT autograd cache loads its
+    # saved artifact during engine init, *before* any compile runs, so any op the
+    # cached graph names that is not registered yet makes that load fail with a
+    # missing-attribute error — and the engine silently recompiles the whole
+    # model on every boot.  A single hardcoded import fixes only the one op that
+    # was noticed; the manifest plus its AST test keeps the set complete.
+    from .custom_op_modules import preload_custom_op_modules
+
+    preload_custom_op_modules()
 
     _moe.prewarm()
 
