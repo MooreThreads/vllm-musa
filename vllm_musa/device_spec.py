@@ -38,6 +38,8 @@ arch of the device in front of you.  Always take the device arch from
 
 from __future__ import annotations
 
+import importlib
+
 import functools
 import enum
 import logging
@@ -252,6 +254,8 @@ def get_device_spec(device_id: int = 0) -> Optional[MusaDeviceSpec]:
             spec.mp_count,
         )
 
+    _assert_build_targets_device(spec)
+
     if (spec.warp_size == 32) != (arch_code in _WARP32_ARCHS):
         # The device is authoritative; this only catches a wrong assumption in
         # code that hardcodes a warp width for an arch.
@@ -272,3 +276,76 @@ def current_device_spec() -> Optional[MusaDeviceSpec]:
     except Exception:  # noqa: BLE001
         device_id = 0
     return get_device_spec(device_id)
+
+# --------------------------------------------------------------------------
+# Build-time arch record
+# --------------------------------------------------------------------------
+#: Written by ``setup.py`` at build time; absent in a source checkout, which is
+#: how "unknown" is distinguishable from "built for the wrong arch".
+_BUILD_STAMP_MODULE = "vllm_musa._build_stamp"
+
+
+@functools.cache
+def read_build_stamp() -> Optional[dict]:
+    """The arch record of the compiled extension, or ``None`` if unknown.
+
+    Cached for the process lifetime: the stamp is written by ``setup.py``, so a
+    rebuild needs a restart to be seen.  Caching it deliberately (rather than
+    letting ``import_module`` cache it accidentally) keeps "absent stamp" a
+    stable answer instead of a per-call race with a build running alongside.
+    """
+    try:
+        module = importlib.import_module(_BUILD_STAMP_MODULE)
+    except Exception:  # noqa: BLE001 - absent for editable/source checkouts
+        return None
+    return {
+        "targets": tuple(getattr(module, "MTGPU_TARGETS", ())),
+        "fp8": bool(getattr(module, "ENABLE_FP8", False)),
+        "mcc_version": getattr(module, "MCC_VERSION", "unknown"),
+        "source": getattr(module, "TARGET_SOURCE", "unknown"),
+    }
+
+
+def _assert_build_targets_device(spec: MusaDeviceSpec) -> None:
+    """Fail closed when the extension was built for a different arch.
+
+    A cubin for the wrong arch does not fault on MUSA: ``musaDeviceSynchronize``
+    returns success and the output buffer keeps whatever it had.  Without this
+    check the only symptom is a wrong answer, so a build/device mismatch has to
+    be an error at the point where the device is first described.
+
+    An absent stamp is *unknown*, not a mismatch: editable and source installs
+    have never recorded one, so it warns once instead of refusing to run.
+    """
+    stamp = read_build_stamp()
+    if stamp is None:
+        logger.warning_once(
+            "No MUSA build stamp found (%s); the extension's target arch cannot "
+            "be checked against device %s. Set MTGPU_TARGET and rebuild to "
+            "enable the check.",
+            _BUILD_STAMP_MODULE,
+            spec.arch_name,
+        )
+        return
+    targets = stamp["targets"]
+    if not targets:
+        return
+    if spec.arch_name not in targets:
+        raise RuntimeError(
+            f"vllm_musa was built for MUSA arch {', '.join(targets)} but this "
+            f"device is {spec.arch_name} ({spec.device_name}). A kernel binary "
+            "for another arch loads and runs here without reporting an error and "
+            "produces wrong results, so this is refused. Rebuild with "
+            f"MTGPU_TARGET={spec.arch_name} or install a wheel built for it."
+        )
+    if spec.supports(MusaFeature.NATIVE_FP8) and not stamp["fp8"]:
+        # Not fatal: the FP8 kernels are simply not in this build, and every FP8
+        # gate already falls back.  Worth saying because it looks like a
+        # performance cliff rather than a build choice.
+        logger.warning_once(
+            "This vllm_musa build has no FP8 support (%s) although %s has native "
+            "FP8; FP8 quantisation will fall back to the non-FP8 paths. mcc %s.",
+            spec.arch_name,
+            spec.arch_name,
+            stamp["mcc_version"],
+        )
