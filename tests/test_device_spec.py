@@ -76,7 +76,6 @@ def test_unvalidated_arch_fails_closed(
     assert not spec.is_validated
     assert not spec.supports_native_fp8
     assert not spec.supports(MusaFeature.VALIDATED_TARGET)
-    assert spec.cache_tag.startswith(arch_name)
 
 
 def test_arch_code_and_name_derivation() -> None:
@@ -85,13 +84,19 @@ def test_arch_code_and_name_derivation() -> None:
     assert device_spec._arch_name(2, 2) == "mp_22"
 
 
-def test_cache_tag_carries_mp_count() -> None:
-    """Two bins of one arch must not share a compile-cache path."""
+def test_the_compile_key_ignores_the_multiprocessor_count() -> None:
+    """Codegen input is arch plus compiler; SM count only moves the tiling.
+
+    Two bins of one arch compile the same source to the same instructions, so
+    folding mp_count into the JIT directory would fragment the cache without
+    changing a single object file.  Tuning that does depend on the bin lives in
+    the tactics table, which is keyed separately.
+    """
     a = make_spec(mp_count=48)
     b = make_spec(mp_count=56)
 
     assert a.arch_name == b.arch_name
-    assert a.cache_tag != b.cache_tag
+    assert not hasattr(a, "cache_tag")
 
 
 def test_explicit_sets_are_the_source_of_truth() -> None:
@@ -138,7 +143,6 @@ def test_get_device_spec_builds_from_device_properties(monkeypatch) -> None:
     assert spec.arch_name == "mp_31"
     assert spec.mp_count == 56
     assert spec.max_threads_per_multiprocessor == 3072
-    assert spec.cache_tag == "mp_31_mp56"
     device_spec.clear_device_spec_cache()
 
 
@@ -215,21 +219,37 @@ def test_a_failed_probe_is_not_cached(monkeypatch) -> None:
     debug line to show for it.
     """
     calls = {"n": 0}
-    real = device_spec._get_properties
+
+    class Properties:
+        major = 3
+        minor = 1
+        name = "MTT S5000"
+        multi_processor_count = 56
+        warp_size = 32
+        total_memory = 80 << 30
+        L2_cache_size = 8 << 20
+        shared_memory_per_block = 48 << 10
+        shared_memory_per_multiprocessor = 256 << 10
+        regs_per_multiprocessor = 65536
+        max_threads_per_block = 1024
+        max_threads_per_multiprocessor = 2048
+        uuid = None
 
     def flaky(device_id):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("device not ready")
-        return real(device_id)
+        return Properties()
 
     device_spec._probe_device_spec.cache_clear()
     monkeypatch.setattr(device_spec, "_get_properties", flaky)
+    monkeypatch.setattr(device_spec, "read_build_stamp", lambda: None)
 
     assert device_spec.get_device_spec(0) is None
     recovered = device_spec.get_device_spec(0)
     assert calls["n"] == 2
-    assert recovered is None or recovered.arch_name
+    assert recovered is not None
+    assert recovered.arch_name == "mp_31"
 
 
 def test_a_build_target_mismatch_is_not_swallowed(monkeypatch) -> None:

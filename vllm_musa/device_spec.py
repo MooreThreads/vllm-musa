@@ -141,17 +141,7 @@ class MusaDeviceSpec:
             return self.is_validated
         raise ValueError(f"unknown MUSA feature: {feature!r}")
 
-    # ---- cache-key helpers ----------------------------------------------
-
-    @property
-    def cache_tag(self) -> str:
-        """Stable tag for compile-cache paths.
-
-        Includes the multiprocessor count because two bins of the same arch
-        carry different ideal tilings, and a cached artifact built for one bin
-        must not be silently reused by the other.
-        """
-        return f"{self.arch_name}_mp{self.mp_count}"
+    # ---- identity helpers -----------------------------------------------
 
     def __str__(self) -> str:  # pragma: no cover - logging aid
         return (

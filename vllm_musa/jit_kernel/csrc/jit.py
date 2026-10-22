@@ -118,8 +118,10 @@ def _mcc_version() -> str:
     match = re.search(r"mcc\s+version\s+(\d+\.\d+\.\d+)", text, re.IGNORECASE)
     if match:
         return match.group(1)
-    match = re.search(r"\b(\d+\.\d+\.\d+)\b", text)
-    return match.group(1) if match else "unknown"
+    # `mcc --version` prints the clang version first, so an unanchored match
+    # would tag the cache with 14.0.0 on every compiler.  Unknown is honest and
+    # still keeps the tag stable.
+    return "unknown"
 
 
 def build_tag() -> str:
