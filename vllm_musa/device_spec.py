@@ -42,7 +42,6 @@ import importlib
 
 import functools
 import enum
-import logging
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -269,6 +268,21 @@ def get_device_spec(device_id: int = 0) -> Optional[MusaDeviceSpec]:
     return spec
 
 
+def is_validated_device(device_id: Optional[int] = None) -> bool:
+    """Whether S5000-calibrated code paths may run on this device.
+
+    The single call-site helper for "is this arch one we have validated?":
+    asked as an identity check on the arch code, never as an ordering, because
+    MUSA capability tuples are not monotonic.  A device whose spec cannot be
+    read is not validated -- the safe answer for a gating question.
+    """
+    try:
+        spec = current_device_spec() if device_id is None else get_device_spec(device_id)
+    except Exception:  # noqa: BLE001 - a failed probe must not enable anything
+        return False
+    return spec is not None and spec.is_validated
+
+
 def current_device_spec() -> Optional[MusaDeviceSpec]:
     """Spec for the current device, or ``None`` when it cannot be determined."""
     try:
@@ -280,8 +294,10 @@ def current_device_spec() -> Optional[MusaDeviceSpec]:
 # --------------------------------------------------------------------------
 # Build-time arch record
 # --------------------------------------------------------------------------
-#: Written by ``setup.py`` at build time; absent in a source checkout, which is
-#: how "unknown" is distinguishable from "built for the wrong arch".
+#: Written by ``setup.py`` at build time into both the source tree and
+#: ``build_lib``, so an editable install and a wheel both carry it.  Only a
+#: checkout that was never built has none, which is how "unknown" stays
+#: distinguishable from "built for the wrong arch".
 _BUILD_STAMP_MODULE = "vllm_musa._build_stamp"
 
 
@@ -296,7 +312,7 @@ def read_build_stamp() -> Optional[dict]:
     """
     try:
         module = importlib.import_module(_BUILD_STAMP_MODULE)
-    except Exception:  # noqa: BLE001 - absent for editable/source checkouts
+    except Exception:  # noqa: BLE001 - a checkout that was never built
         return None
     return {
         "targets": tuple(getattr(module, "MTGPU_TARGETS", ())),

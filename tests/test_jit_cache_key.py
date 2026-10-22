@@ -36,7 +36,7 @@ def test_fat_build_is_refused_for_single_arch_templates(monkeypatch) -> None:
 
 def test_single_arch_define_matches_the_device(monkeypatch) -> None:
     monkeypatch.setenv("VLLM_MUSA_ARCH_LIST", "32")
-    assert jit.musa_arch_define() == "-D__MUSA_ARCH_LIST__=32"
+    assert jit.musa_arch_define() == "-D__MUSA_ARCH_LIST__=320"
 
 
 def test_no_silent_mp31_fallback(monkeypatch) -> None:

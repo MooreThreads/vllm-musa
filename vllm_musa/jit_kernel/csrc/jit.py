@@ -84,10 +84,13 @@ def musa_arch_codes() -> list[str]:
 def musa_arch_define(name: str = "__MUSA_ARCH_LIST__") -> str:
     """The single-arch ``-D<name>=<code>`` flag the TileLang templates branch on.
 
-    ``tl_templates/musa/*.h`` compare this macro with a single ``__MUSA_ARCH__``
+    The template headers compare this macro against a single ``__MUSA_ARCH__``
     value (``== 310``, ``>= 220``), so it cannot express a fat build.  Rather
     than emit one arch's value for a multi-arch build and silently compile the
     wrong template branch, refuse.
+
+    The value is the three-digit form (``mp_31`` -> ``310``) that those headers
+    compare against, not the two-digit code used in flag names.
     """
     codes = musa_arch_codes()
     if len(codes) != 1:
@@ -96,7 +99,7 @@ def musa_arch_define(name: str = "__MUSA_ARCH_LIST__") -> str:
             f"(VLLM_MUSA_ARCH_LIST={os.environ.get('VLLM_MUSA_ARCH_LIST')!r}, "
             f"resolved arches={codes}) is not supported for this kernel."
         )
-    return f"-D{name}={codes[0]}"
+    return f"-D{name}={int(codes[0]) * 10}"
 
 
 @functools.cache
@@ -122,9 +125,9 @@ def _mcc_version() -> str:
 def build_tag() -> str:
     """Cache-directory tag for the current target.
 
-    An object built for one arch/compiler must never be reused by another: the
-    directory used to be keyed on the kernel name alone, so switching arch (or
-    mcc) silently reloaded a stale ``.so``.
+    A cached object is valid only for the arch and compiler that produced it,
+    so both are part of the tag: switching arch or mcc must not resolve to an
+    existing directory.
     """
     arches = "_".join(f"mp_{code}" for code in musa_arch_codes())
     return f"{arches}__mcc{_mcc_version()}"

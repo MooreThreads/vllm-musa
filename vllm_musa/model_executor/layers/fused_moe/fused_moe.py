@@ -165,10 +165,9 @@ def _musa_device_fingerprint(
 
 def _is_validated_musa_arch(device_index: int) -> bool:
     """Whether the S5000-calibrated MoE tactics may run on this arch."""
-    from vllm_musa.device_spec import get_device_spec
+    from vllm_musa.device_spec import is_validated_device
 
-    spec = get_device_spec(device_index)
-    return spec is not None and spec.is_validated
+    return is_validated_device(device_index)
 
 
 def _musa_native_fp8() -> bool:

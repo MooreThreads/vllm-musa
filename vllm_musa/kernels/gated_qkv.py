@@ -20,18 +20,8 @@ from vllm.platforms import current_platform
 
 from vllm.triton_utils import tl, triton
 
+from vllm_musa.device_spec import is_validated_device
 
-def _is_validated_musa_arch(device_id: int) -> bool:
-    """Whether this device runs an arch the packed-QKV kernel is validated on.
-
-    Deliberately an identity check on the arch code: MUSA capability tuples are
-    not ordered, so an unvalidated arch must take the generic path instead of
-    inheriting S5000 behaviour. See ``vllm_musa.device_spec``.
-    """
-    from vllm_musa.device_spec import get_device_spec
-
-    spec = get_device_spec(device_id)
-    return spec is not None and spec.is_validated
 
 
 _HEAD_DIM = 256
@@ -187,7 +177,7 @@ def _supports_gated_qkv(
         and mrope_interleaved
         and is_neox_style
         and weight_offset == 1.0
-        and _is_validated_musa_arch(device_id)
+        and is_validated_device(device_id)
         and packed_qkv.dtype == torch.bfloat16
         and q_weight.dtype == packed_qkv.dtype
         and k_weight.dtype == packed_qkv.dtype

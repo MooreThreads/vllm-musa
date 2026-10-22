@@ -177,7 +177,7 @@ def test_setup_writes_a_stamp_the_runtime_can_read(tmp_path) -> None:
     """The writer's output must be exactly what read_build_stamp() expects."""
     write_stamp, _ = _stamp_writer(tmp_path)
 
-    write_stamp()
+    write_stamp(tmp_path / "vllm_musa")
 
     produced = tmp_path / "vllm_musa" / "_build_stamp.py"
     rendered: dict = {}
@@ -194,7 +194,7 @@ def test_stamp_writer_records_a_non_fp8_arch(tmp_path) -> None:
     namespace["MTGPU_TARGET"] = "mp_22"
     namespace["ENABLE_FP8"] = False
 
-    write_stamp()
+    write_stamp(tmp_path / "vllm_musa")
 
     produced = tmp_path / "vllm_musa" / "_build_stamp.py"
     rendered: dict = {}
@@ -202,3 +202,39 @@ def test_stamp_writer_records_a_non_fp8_arch(tmp_path) -> None:
 
     assert rendered["MTGPU_TARGETS"] == ("mp_22",)
     assert rendered["ENABLE_FP8"] is False
+
+
+def test_stamp_reaches_build_lib_not_only_the_source_tree() -> None:
+    """`build_py` runs before `build_ext`, so a wheel packs what is in build_lib.
+
+    A stamp written only to the source tree is never in the artifact, and the
+    runtime check then silently degrades to its warning path on every install.
+    """
+    tree = ast.parse(_SETUP_PY.read_text())
+    build_ext = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "build_extensions"
+    )
+    destinations = [
+        ast.unparse(call.args[0])
+        for call in ast.walk(build_ext)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "_write_build_stamp"
+    ]
+    assert len(destinations) == 2, (
+        "build_extensions must write the stamp to both the source tree and "
+        f"build_lib; it writes to {destinations}"
+    )
+    assert any("build_lib" in d for d in destinations), destinations
+    assert any("__file__" in d for d in destinations), destinations
+
+
+def test_the_stamp_writer_takes_its_destination_as_an_argument() -> None:
+    """The destination must be a parameter, not the module's own directory."""
+    tree = ast.parse(_SETUP_PY.read_text())
+    node = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "_write_build_stamp"
+    )
+    assert [a.arg for a in node.args.args] == ["dest"], ast.dump(node.args)

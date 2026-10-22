@@ -25,13 +25,9 @@ def _has_validated_musa_device_capability() -> bool:
     ``vllm_musa.device_spec``), never an ordering: MUSA capabilities are not
     monotonic, so "at least (3, 1)" is not a meaningful question.
     """
-    try:
-        from vllm_musa.device_spec import current_device_spec
+    from vllm_musa.device_spec import is_validated_device
 
-        spec = current_device_spec()
-        return spec is not None and spec.is_validated
-    except Exception:
-        return False
+    return is_validated_device()
 
 
 def _is_dense_model(config: VllmConfig) -> bool:
