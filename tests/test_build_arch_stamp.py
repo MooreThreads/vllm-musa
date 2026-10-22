@@ -50,7 +50,6 @@ def stamp(monkeypatch):
 
     def install(targets=("mp_31",), fp8=True):
         module = types.ModuleType("vllm_musa._build_stamp")
-        module.MTGPPU_TARGETS_UNUSED = None
         module.MTGPU_TARGETS = tuple(targets)
         module.ENABLE_FP8 = fp8
         module.MCC_VERSION = "5.2.0"

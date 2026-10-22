@@ -3,7 +3,7 @@ from typing import Optional, Union
 
 import torch
 
-from vllm_musa.device_spec import get_device_spec
+from vllm_musa.device_spec import MusaBuildTargetMismatch, get_device_spec
 
 _QWEN_MIN_P_VOCABS = (151936, 248320)
 _QWEN_MIN_P_MAX_BATCH = 64
@@ -213,6 +213,8 @@ def _is_validated_musa_device(device: torch.device) -> bool:
             return False
         spec = get_device_spec(device_id)
         return spec is not None and spec.is_validated
+    except MusaBuildTargetMismatch:
+        raise
     except Exception:
         # A device query can fail while the platform is still initializing.
         # Falling back is safer than selecting an architecture-specialized op.

@@ -205,3 +205,44 @@ def test_no_new_capability_literal_comparisons() -> None:
         "capability literals must be replaced by vllm_musa.device_spec:\n"
         + "\n".join(offenders)
     )
+
+
+def test_a_failed_probe_is_not_cached(monkeypatch) -> None:
+    """A probe that fails before the device is ready must be retried.
+
+    Caching the failure would pin every arch gate to the generic path for the
+    rest of the process -- FP8, gated QKV, MoE tactics, min-p -- with only a
+    debug line to show for it.
+    """
+    calls = {"n": 0}
+    real = device_spec._get_properties
+
+    def flaky(device_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("device not ready")
+        return real(device_id)
+
+    device_spec._probe_device_spec.cache_clear()
+    monkeypatch.setattr(device_spec, "_get_properties", flaky)
+
+    assert device_spec.get_device_spec(0) is None
+    recovered = device_spec.get_device_spec(0)
+    assert calls["n"] == 2
+    assert recovered is None or recovered.arch_name
+
+
+def test_a_build_target_mismatch_is_not_swallowed(monkeypatch) -> None:
+    """A wrong-arch wheel must not be reported as "no validated device"."""
+    mismatch = device_spec.MusaBuildTargetMismatch("built for mp_22")
+
+    def boom(device_id):
+        raise mismatch
+
+    device_spec._probe_device_spec.cache_clear()
+    monkeypatch.setattr(device_spec, "_probe_device_spec", boom)
+
+    with pytest.raises(device_spec.MusaBuildTargetMismatch):
+        device_spec.get_device_spec(0)
+    with pytest.raises(device_spec.MusaBuildTargetMismatch):
+        device_spec.is_validated_device(0)

@@ -38,10 +38,9 @@ arch of the device in front of you.  Always take the device arch from
 
 from __future__ import annotations
 
-import importlib
-
-import functools
 import enum
+import functools
+import importlib
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -53,11 +52,15 @@ logger = init_logger(__name__)
 
 
 __all__ = [
-    "MusaFeature",
+    "MusaBuildTargetMismatch",
     "MusaDeviceSpec",
+    "MusaFeature",
+    "NATIVE_FP8_ARCHS",
     "VALIDATED_MUSA_ARCHS",
-    "get_device_spec",
     "current_device_spec",
+    "get_device_spec",
+    "is_validated_device",
+    "read_build_stamp",
 ]
 
 
@@ -197,28 +200,31 @@ def _get_properties(device_id: int) -> Any:
     return torch_musa.get_device_properties(device_id)
 
 
-@functools.lru_cache(maxsize=None)
-def get_device_spec(device_id: int = 0) -> Optional[MusaDeviceSpec]:
-    """Return the :class:`MusaDeviceSpec` for ``device_id``, or ``None``.
+class MusaBuildTargetMismatch(RuntimeError):
+    """The compiled extension was built for a different MUSA arch.
 
-    ``None`` means "could not determine", which every caller must treat as
-    "not validated": falling back to the generic path is safe, whereas guessing
-    an arch is not.  Runtime failures are swallowed because this is called from
-    platform probes that run before the device is necessarily usable.
+    Deliberately not a plain ``RuntimeError``: every arch gate in this tree
+    catches broad exceptions and falls back to the generic path, which is right
+    for "the probe is not ready yet" and catastrophic for "these kernels belong
+    to another device" -- a wrong-arch cubin runs and returns wrong numbers.  A
+    distinct type lets those handlers re-raise this one case.
     """
-    try:
-        props = _get_properties(device_id)
-        major = int(getattr(props, "major"))
-        minor = int(getattr(props, "minor"))
-    except Exception as exc:  # noqa: BLE001 - probe path, must not raise
-        logger.debug("MUSA device properties unavailable for device %s: %s",
-                     device_id, exc)
-        return None
 
-    arch_code = _arch_code(major, minor)
+
+@functools.lru_cache(maxsize=None)
+def _probe_device_spec(device_id: int) -> MusaDeviceSpec:
+    """Build the spec for ``device_id``; raises when the device cannot describe it.
+
+    Cached only on success.  Caching a failed probe would pin every arch gate to
+    the generic path for the rest of the process, which is exactly the decision
+    that must be re-tried once the device finishes initialising.
+    """
+    props = _get_properties(device_id)
+    major = int(getattr(props, "major"))
+    minor = int(getattr(props, "minor"))
     spec = MusaDeviceSpec(
         device_capability=(major, minor),
-        arch_code=arch_code,
+        arch_code=_arch_code(major, minor),
         arch_name=_arch_name(major, minor),
         mp_count=_int_attr(props, "multi_processor_count"),
         warp_size=_int_attr(props, "warp_size"),
@@ -228,22 +234,37 @@ def get_device_spec(device_id: int = 0) -> Optional[MusaDeviceSpec]:
         shared_memory_per_multiprocessor=_int_attr(
             props,
             "shared_memory_per_multiprocessor",
-            "shared_memory_per_multi_processor",
-        ),
-        regs_per_multiprocessor=_int_attr(
-            props, "regs_per_multiprocessor", "regs_per_multi_processor"
-        ),
-        max_threads_per_block=_int_attr(props, "max_threads_per_block"),
-        max_threads_per_multiprocessor=_int_attr(
-            props,
-            "max_threads_per_multiprocessor",
-            "max_threads_per_multi_processor",
         ),
         device_name=str(getattr(props, "name", "unknown")),
         uuid=getattr(props, "uuid", None),
     )
+    _assert_build_targets_device(spec)
+    return spec
 
-    if arch_code not in VALIDATED_MUSA_ARCHS:
+
+def get_device_spec(device_id: int = 0) -> Optional[MusaDeviceSpec]:
+    """Return the :class:`MusaDeviceSpec` for ``device_id``, or ``None``.
+
+    ``None`` means "could not determine", which every caller must treat as
+    "not validated": falling back to the generic path is safe, whereas guessing
+    an arch is not.  A probe failure is not cached, so a call made before the
+    device is usable does not pin the gates for the rest of the process.
+
+    A :class:`MusaBuildTargetMismatch` is *not* converted to ``None``: that is a
+    wrong-kernel-binary condition, not an unavailable device, and swallowing it
+    here is what would let a wrong-arch wheel serve wrong numbers.
+    """
+    try:
+        spec = _probe_device_spec(device_id)
+    except MusaBuildTargetMismatch:
+        raise
+    except Exception as exc:  # noqa: BLE001 - probe path, must not raise
+        logger.debug(
+            "MUSA device properties unavailable for device %s: %s", device_id, exc
+        )
+        return None
+
+    if not spec.is_validated:
         logger.warning_once(
             "MUSA arch %s (%s, mp=%d) has not been validated; S5000-specific "
             "kernel and tuning paths stay disabled and the generic paths are "
@@ -252,10 +273,7 @@ def get_device_spec(device_id: int = 0) -> Optional[MusaDeviceSpec]:
             spec.device_capability,
             spec.mp_count,
         )
-
-    _assert_build_targets_device(spec)
-
-    if (spec.warp_size == 32) != (arch_code in _WARP32_ARCHS):
+    if (spec.warp_size == 32) != (spec.arch_code in _WARP32_ARCHS):
         # The device is authoritative; this only catches a wrong assumption in
         # code that hardcodes a warp width for an arch.
         logger.warning_once(
@@ -264,7 +282,6 @@ def get_device_spec(device_id: int = 0) -> Optional[MusaDeviceSpec]:
             spec.arch_name,
             spec.warp_size,
         )
-
     return spec
 
 
@@ -277,7 +294,11 @@ def is_validated_device(device_id: Optional[int] = None) -> bool:
     read is not validated -- the safe answer for a gating question.
     """
     try:
-        spec = current_device_spec() if device_id is None else get_device_spec(device_id)
+        spec = (
+            current_device_spec() if device_id is None else get_device_spec(device_id)
+        )
+    except MusaBuildTargetMismatch:
+        raise
     except Exception:  # noqa: BLE001 - a failed probe must not enable anything
         return False
     return spec is not None and spec.is_validated
@@ -347,7 +368,7 @@ def _assert_build_targets_device(spec: MusaDeviceSpec) -> None:
     if not targets:
         return
     if spec.arch_name not in targets:
-        raise RuntimeError(
+        raise MusaBuildTargetMismatch(
             f"vllm_musa was built for MUSA arch {', '.join(targets)} but this "
             f"device is {spec.arch_name} ({spec.device_name}). A kernel binary "
             "for another arch loads and runs here without reporting an error and "

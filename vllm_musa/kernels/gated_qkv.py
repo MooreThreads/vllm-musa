@@ -22,8 +22,6 @@ from vllm.triton_utils import tl, triton
 
 from vllm_musa.device_spec import is_validated_device
 
-
-
 _HEAD_DIM = 256
 _ROTARY_DIM = 64
 _ROTARY_HALF = _ROTARY_DIM // 2
