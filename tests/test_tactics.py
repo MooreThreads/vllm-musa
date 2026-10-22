@@ -54,7 +54,8 @@ def test_unknown_arch_falls_back_to_the_tables_default(table) -> None:
 def test_no_default_and_no_caller_default_raises(table) -> None:
     _write(table, "bare", [{"arch": "mp_31", "mp_count": 56, "values": {"block_m": 128}}])
 
-    with pytest.raises(tactics.TacticNotFound, match="tried mp_31/mp56, mp_31"):
+    # the ladder describes the *requested* device, not the table's arch
+    with pytest.raises(tactics.TacticNotFound, match=r"tried mp_22/mp48, mp_22, default"):
         tactics.select("bare", arch_name="mp_22", mp_count=48, directory=table)
 
 
