@@ -23,7 +23,11 @@ BF16 dense-model recipe for two S5000 GPUs.
 ```bash
 export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export VLLM_DISABLE_COMPILE_CACHE=1
+# NOTE: do not set VLLM_DISABLE_COMPILE_CACHE=1 here.  It worked around a
+# torch 2.9 AOT-autograd-cache safelist gap that
+# vllm_musa/patches/torch___inductor__aot_cache_safelist.patch.py fixes, and
+# torch >= 2.10 safelists those tensor methods natively.  With the switch on,
+# every boot pays a cold torch.compile (measured ~+10 s on Qwen3-8B/S5000).
 export SAFETENSORS_FAST_GPU=1
 
 vllm serve /models/Qwen3.5-27B \

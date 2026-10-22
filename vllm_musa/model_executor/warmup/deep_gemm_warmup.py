@@ -169,6 +169,26 @@ def _warmup_paged_mqa_logits_metadata(model: torch.nn.Module) -> None:
         get_paged_mqa_logits_metadata_module(rows)
 
 
+def _warmup_rope_store_hints() -> None:
+    """Build every rotary-embedding store-hint variant before serving.
+
+    The cache-store class is chosen from the *runtime* token count
+    (``rope._store_hint``: ``stcg`` for 512..2048 tokens, ``stwb`` otherwise) and
+    is a compile-time constant in the module name, so a server that only ever
+    saw short batches builds the other variant the first time a batch crosses
+    512 tokens - an mcc build in the middle of serving.  Both are built here,
+    ahead of graph capture, and cached afterwards.
+    """
+    try:
+        from vllm_musa.jit_kernel.csrc.rope import prewarm_rope_modules
+
+        built = prewarm_rope_modules()
+    except Exception as exc:  # noqa: BLE001 - warmup must not block serving
+        logger.warning("Rotary-embedding warmup skipped: %s", exc)
+        return
+    logger.info("Built MUSA rotary-embedding kernels: %s", ", ".join(built))
+
+
 _upstream_deep_gemm_warmup = (
     vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup
 )
@@ -178,6 +198,7 @@ def deep_gemm_warmup(model: torch.nn.Module, max_tokens: int, pbar=None):
     _upstream_deep_gemm_warmup(model, max_tokens)
     _warmup_bf16_grouped_moe(model, max_tokens)
     _warmup_paged_mqa_logits_metadata(model)
+    _warmup_rope_store_hints()
 
 
 vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup = deep_gemm_warmup
