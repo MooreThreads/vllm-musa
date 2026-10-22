@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Wed, 21 Oct 2026 18:00:00 +0800
-Subject: [PATCH] MUSA: handle expandable segments around CUDA graph capture
+Subject: [PATCH] MUSA: handle expandable segments around graph capture
 
 torch_musa's expandable-segment allocator cannot grow a segment while a
 stream is being captured, which surfaces as a spurious OOM during graph
@@ -11,9 +11,12 @@ failing with several GiB free).
 Expandable segments are still needed during profile_run to avoid
 fragmentation OOMs, so keep them enabled there and switch to ordinary
 segments around both capture sites: the throwaway graphs used to profile
-graph memory and the real capture. Each toggle now replays the full
-allocator config, because parsing a partial one resets max_split_size,
-garbage_collection_threshold and roundup_power2_divisions, and the setting
+graph memory and the real capture. Each toggle rewrites the allocator conf
+the allocator last applied, changing only expandable_segments: parsing a
+partial conf instead resets max_split_size, garbage_collection_threshold,
+roundup_power2_divisions and max_non_split_rounding_size, and the snapshot
+does not expose all of them. When the snapshot is unavailable the toggle is
+skipped with a warning instead of replaying that partial conf. The setting
 is restored after the capture so later allocations keep the fragmentation
 benefit.
 
@@ -21,14 +24,14 @@ Verified on S5000 with Qwen3.5-122B-A10B TP4 at --gpu-memory-utilization
 0.96 without --kv-cache-memory-bytes: graph estimate 2.14 GiB, available KV
 cache 14.03 GiB, all graphs captured, server started and served requests.
 ---
- vllm/v1/worker/gpu_worker.py | 66 ++++++++++++++++++++++++++++++++++--
- 1 file changed, 64 insertions(+), 2 deletions(-)
+ vllm/v1/worker/gpu_worker.py | 77 +++++++++++++++++++++++++++++++++++-
+ 1 file changed, 75 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index a2ff198..bafbc50 100644
+index a2ff198437..0976fade6b 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
-@@ -92,6 +92,41 @@ from .utils import request_memory
+@@ -92,6 +92,52 @@ from .utils import request_memory
  logger = init_logger(__name__)
  
  
@@ -37,26 +40,34 @@ index a2ff198..bafbc50 100644
 +    return "expandable_segments:true" in conf.replace(" ", "").lower()
 +
 +
-+def _musa_allocator_conf(expandable_segments: bool) -> str:
-+    """Rebuild the full allocator config because parsing a partial one resets
-+    max_split_size, garbage_collection_threshold and roundup_power2_divisions.
++_MUSA_EXPANDABLE_SEGMENTS = re.compile(
++    r"expandable_segments\s*:\s*(?:true|false)", re.IGNORECASE
++)
++
++
++def _musa_allocator_conf(expandable_segments: bool) -> str | None:
++    """Replay the live allocator config with only expandable_segments changed.
++
++    Parsing a partial config resets max_split_size, garbage_collection_threshold,
++    roundup_power2_divisions and max_non_split_rounding_size, and the snapshot
++    exposes only some of them, so rewrite the string the allocator last applied.
++    Returns None when the snapshot is unavailable, leaving the allocator settings
++    untouched instead of resetting the knobs this path avoids.
 +    """
 +    try:
-+        settings = torch.musa.memory._snapshot().get("allocator_settings", {})
++        settings = torch.musa.memory._snapshot()["allocator_settings"]
 +    except Exception:
-+        settings = {}
-+    parts = [f"expandable_segments:{expandable_segments}"]
-+    max_split_size = settings.get("max_split_size", -1)
-+    if max_split_size >= 0:
-+        parts.append(f"max_split_size_mb:{max_split_size // (1 << 20)}")
-+    gc_threshold = settings.get("garbage_collection_threshold", 0.0)
-+    if gc_threshold > 0:
-+        parts.append(f"garbage_collection_threshold:{gc_threshold}")
-+    roundup = settings.get("roundup_power2_divisions") or {}
-+    if any(int(v) for v in roundup.values()):
-+        entries = ",".join(f"{k}:{v}" for k, v in roundup.items())
-+        parts.append(f"roundup_power2_divisions:[{entries}]")
-+    return ",".join(parts)
++        logger.warning(
++            "MUSA allocator settings are unreadable; leaving allocator settings "
++            "unchanged instead of replaying a partial config",
++            exc_info=True,
++        )
++        return None
++    conf = settings.get("PYTORCH_MUSA_ALLOC_CONF", "")
++    token = f"expandable_segments:{expandable_segments}"
++    if _MUSA_EXPANDABLE_SEGMENTS.search(conf):
++        return _MUSA_EXPANDABLE_SEGMENTS.sub(token, conf, count=1)
++    return f"{conf},{token}" if conf else token
 +
 +
 +def _musa_set_expandable_segments(enabled: bool) -> None:
@@ -64,13 +75,16 @@ index a2ff198..bafbc50 100644
 +        torch.musa.memory, "_set_allocator_settings"
 +    ):
 +        return
-+    torch.musa.memory._set_allocator_settings(_musa_allocator_conf(enabled))
++    conf = _musa_allocator_conf(enabled)
++    if conf is None:
++        return
++    torch.musa.memory._set_allocator_settings(conf)
 +
 +
  def _musa_deepseek_v4_mtp_sparse_prefill_reserve_bytes(
      vllm_config: VllmConfig,
  ) -> int:
-@@ -576,7 +611,22 @@ class Worker(WorkerBase):
+@@ -576,7 +622,22 @@ class Worker(WorkerBase):
              current_platform.is_cuda_alike()
              and self.vllm_config.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
          ):
@@ -94,7 +108,7 @@ index a2ff198..bafbc50 100644
  
          # Respect the opt-in flag as originally designed.
          cudagraph_memory_estimate_applied = (
-@@ -789,7 +839,19 @@ class Worker(WorkerBase):
+@@ -789,7 +850,19 @@ class Worker(WorkerBase):
  
          cuda_graph_memory_bytes = 0
          if not self.model_config.enforce_eager:
@@ -115,6 +129,3 @@ index a2ff198..bafbc50 100644
  
          # Compare actual vs estimated CUDA graph memory (if we did profiling)
          if (
--- 
-2.34.1
-
