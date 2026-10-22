@@ -103,7 +103,7 @@ def test_separate_pool_needs_mamba_and_attention(monkeypatch):
 
 
 def test_single_attention_group_keeps_per_slot_tensors(monkeypatch):
-    """A non-speculative / MTP model keeps the pre-change tensor shape."""
+    """A non-speculative / MTP model keeps one layer per tensor and its own pool."""
     monkeypatch.setattr(kcu, "musa_mamba_separate_pool_enabled", lambda: True)
     spec = _attention_spec(2)
     attention_layers = [f"target.{i}" for i in range(3)]
@@ -158,11 +158,17 @@ def test_single_group_allocation_keeps_one_buffer_per_layer(monkeypatch):
     assert caches["mamba.0"].untyped_storage().data_ptr() not in attention_ptrs
 
 
-@pytest.mark.parametrize("draft_heads", [2, 4])
-def test_two_attention_groups_take_layout_path(monkeypatch, draft_heads):
+@pytest.mark.parametrize(
+    ("layout", "draft_heads"),
+    [
+        (KVCacheLayout.BLHNC, 2),
+        (KVCacheLayout.BLHNC, 4),
+        (KVCacheLayout.LBNHC, 2),
+    ],
+)
+def test_two_attention_groups_take_layout_path(monkeypatch, layout, draft_heads):
     """The draft-owned attention cache is a second group -> layout strides."""
     monkeypatch.setattr(kcu, "musa_mamba_separate_pool_enabled", lambda: True)
-    layout = KVCacheLayout.BLHNC
     config = _vllm_config(layout)
     target = KVCacheGroupSpec(["target.0", "target.1"], _attention_spec(2))
     draft = KVCacheGroupSpec(
