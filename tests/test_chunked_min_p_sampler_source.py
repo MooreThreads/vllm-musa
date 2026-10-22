@@ -37,8 +37,12 @@ def _load_device_guard(musa):
             is_validated=(major, minor) == (3, 1),
         )
 
+    class MusaBuildTargetMismatch(RuntimeError):
+        """Stand-in for the real class: this fake never raises it."""
+
     namespace = {
         "Optional": Optional,
+        "MusaBuildTargetMismatch": MusaBuildTargetMismatch,
         "cache": cache,
         "torch": SimpleNamespace(device=object, musa=musa),
         "get_device_spec": get_device_spec,
