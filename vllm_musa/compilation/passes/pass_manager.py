@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-from functools import cache
-
 from vllm.compilation.passes.pass_manager import PostGradPassManager
 from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.logger import init_logger
@@ -17,7 +15,6 @@ from .silu_deepgemm_fusion import MusaSiluDeepGemmFusionPass
 logger = init_logger(__name__)
 
 
-@cache
 def _has_validated_musa_device_capability() -> bool:
     """Whether the current logical device is a validated MUSA target.
 

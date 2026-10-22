@@ -17,7 +17,6 @@ from torch import Tensor
 from torch.library import wrap_triton
 from vllm import ir
 from vllm.platforms import current_platform
-
 from vllm.triton_utils import tl, triton
 
 from vllm_musa.device_spec import is_validated_device
