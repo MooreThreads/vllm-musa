@@ -912,7 +912,13 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def supports_fp8(cls) -> bool:
-        return cls.has_device_capability((3, 1))
+        # Native FP8 is a per-target build feature (`-DENABLE_FP8`), not a
+        # property of "newer" arches, so it is answered from an explicit set in
+        # vllm_musa.device_spec rather than from a capability comparison.
+        from vllm_musa.device_spec import MusaFeature, current_device_spec
+
+        spec = current_device_spec()
+        return spec is not None and spec.supports(MusaFeature.NATIVE_FP8)
 
     @classmethod
     def use_custom_allreduce(cls) -> bool:

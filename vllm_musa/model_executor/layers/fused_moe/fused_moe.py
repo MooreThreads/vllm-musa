@@ -150,19 +150,33 @@ def _musa_moe_routes_are_supported(
 def _musa_device_fingerprint(
     device_index: int,
 ) -> tuple[tuple[int, int], int]:
-    try:
-        capability = current_platform.get_device_capability(device_index)
-        device_capability = (
-            (int(capability[0]), int(capability[1]))
-            if capability is not None
-            else (-1, -1)
-        )
-        multiprocessor_count = int(
-            torch.musa.get_device_properties(device_index).multi_processor_count
-        )
-        return device_capability, multiprocessor_count
-    except Exception:
+    """(capability, multiprocessor_count) for the MoE tactic key.
+
+    Sourced from :mod:`vllm_musa.device_spec` so the MoE key and the arch gates
+    cannot disagree about which device they are looking at.
+    """
+    from vllm_musa.device_spec import get_device_spec
+
+    spec = get_device_spec(device_index)
+    if spec is None:
         return (-1, -1), -1
+    return spec.device_capability, spec.mp_count
+
+
+def _is_validated_musa_arch(device_index: int) -> bool:
+    """Whether the S5000-calibrated MoE tactics may run on this arch."""
+    from vllm_musa.device_spec import get_device_spec
+
+    spec = get_device_spec(device_index)
+    return spec is not None and spec.is_validated
+
+
+def _musa_native_fp8() -> bool:
+    """Whether this build carries native FP8 kernels for the current arch."""
+    from vllm_musa.device_spec import MusaFeature, current_device_spec
+
+    spec = current_device_spec()
+    return spec is not None and spec.supports(MusaFeature.NATIVE_FP8)
 
 
 def _tensor_meta(tensor: torch.Tensor | None) -> dict[str, object] | None:
@@ -1905,9 +1919,7 @@ def _supports_quant_scheme(
     else:
         is_rocm_on_gfx9 = False
     # ==================== MUSA ADAPTATION ====================
-    device_supports_fp8 = is_rocm_on_gfx9 or (
-        p.is_musa() and p.has_device_capability((3, 1))
-    )
+    device_supports_fp8 = is_rocm_on_gfx9 or (p.is_musa() and _musa_native_fp8())
     # ========================== END ==========================
     if not device_supports_fp8:
         return (weight_key, activation_key) == (None, None)
@@ -2379,7 +2391,10 @@ def _musa_fused_experts_impl_dispatch(
 
         # The policy is calibrated only for S5000/MP31. Other MUSA
         # architectures retain the established upstream implementation.
-        if device_capability == (3, 1):
+        # Identity check on the arch (see vllm_musa/device_spec.py): MUSA
+        # capabilities are not ordered, so an unvalidated arch must fall back
+        # rather than compare >= a threshold.
+        if _is_validated_musa_arch(device_index):
             # The calibrated GEMV sweeps use router weights after the expert
             # projection.  Fail closed for the alternate input-weighting
             # contract until it has its own exact policy key and evidence.
