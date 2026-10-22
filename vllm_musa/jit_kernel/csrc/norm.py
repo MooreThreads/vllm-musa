@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 from vllm.utils.torch_utils import direct_register_custom_op
 
-from vllm_musa.jit_kernel.csrc.jit import load_musa_jit
+from vllm_musa.jit_kernel.csrc.jit import load_musa_jit, musa_arch_define
 from vllm_musa.jit_kernel.utils import cache_once
 
 
@@ -23,7 +23,7 @@ def _norm_module():
             "-Wno-error=address-of-temporary",
             "-fmusa-flush-denormals-to-zero",
             "-fno-signed-zeros",
-            "-D__MUSA_ARCH_LIST__=310",
+            musa_arch_define(),
             "-mllvm",
             "-mtgpu-opt-level=1",
             "-mllvm",
@@ -166,7 +166,7 @@ def _qk_mrope_module():
             "-Wno-error=address-of-temporary",
             "-fmusa-flush-denormals-to-zero",
             "-fno-signed-zeros",
-            "-D__MUSA_ARCH_LIST__=310",
+            musa_arch_define(),
             "-mllvm",
             "-mtgpu-opt-level=1",
             "-mllvm",

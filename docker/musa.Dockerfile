@@ -221,10 +221,31 @@ FROM devel AS vllm_musa_deps
 # These architecture selectors are consumed only after the MUSA Python stack
 # is installed. Keep them out of base/apt/devel, but retain them in the final
 # image because the vllm-musa JIT uses MATE_MUSA_ARCH_LIST at runtime.
-# torch_musa uses "31"; MATE parses dotted arch tokens such as "3.1".
-ENV MTGPU_TARGET=mp_31 \
-    TORCH_MUSA_ARCH_LIST=31 \
-    MATE_MUSA_ARCH_LIST=3.1
+#
+# The three spellings below describe ONE arch and must agree; they differ only
+# because three consumers parse them differently:
+#   MTGPU_TARGET          setup.py / vllm_musa _C build   -> "mp_31"
+#   TORCH_MUSA_ARCH_LIST  torch_musa                      -> "31"
+#   MATE_MUSA_ARCH_LIST   MATE JIT                        -> "3.1"
+# Override all three together (docker build --build-arg ...); the RUN below
+# refuses to build an image whose selectors disagree, because a mismatched set
+# builds for one arch and JIT-compiles for another, and a cubin for the wrong
+# arch does not fault on MUSA - it returns wrong numbers.
+ARG MTGPU_TARGET=mp_31
+ARG TORCH_MUSA_ARCH_LIST=31
+ARG MATE_MUSA_ARCH_LIST=3.1
+ENV MTGPU_TARGET=${MTGPU_TARGET} \
+    TORCH_MUSA_ARCH_LIST=${TORCH_MUSA_ARCH_LIST} \
+    MATE_MUSA_ARCH_LIST=${MATE_MUSA_ARCH_LIST}
+
+RUN set -eux; \
+    test "mp_${TORCH_MUSA_ARCH_LIST}" = "${MTGPU_TARGET}"; \
+    case "${MTGPU_TARGET}" in \
+      mp_*) target_code="${MTGPU_TARGET#mp_}";; \
+      *) echo "MTGPU_TARGET must be mp_<code>, got ${MTGPU_TARGET}"; exit 1;; \
+    esac; \
+    test "${MATE_MUSA_ARCH_LIST}" = "$(echo "${target_code}" | cut -c1).$(echo "${target_code}" | cut -c2-)"; \
+    echo "MUSA arch selectors agree on ${MTGPU_TARGET}"
 
 # vllm-musa Python deps, installed before the source copy so the layers cache.
 # Split across two indexes (per the MUSA release_5.2.0 wheel guide):
