@@ -1,0 +1,207 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Unit tests for the per-architecture MUSA hardware spec.
+
+These run without a MUSA device: the dataclass is the contract, and the
+device-probing helper is exercised through a fake properties object.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from vllm_musa import device_spec
+from vllm_musa.device_spec import (
+    NATIVE_FP8_ARCHS,
+    VALIDATED_MUSA_ARCHS,
+    MusaDeviceSpec,
+    MusaFeature,
+    get_device_spec,
+)
+
+
+def make_spec(**overrides) -> MusaDeviceSpec:
+    base = dict(
+        device_capability=(3, 1),
+        arch_code=310,
+        arch_name="mp_31",
+        mp_count=56,
+        warp_size=32,
+        total_memory=85804969984,
+        l2_cache_size=60 * 1024 * 1024,
+        shared_memory_per_block=196608,
+        shared_memory_per_multiprocessor=196608,
+        regs_per_multiprocessor=131072,
+        max_threads_per_block=1024,
+        max_threads_per_multiprocessor=3072,
+        device_name="MTT S5000",
+        uuid=None,
+    )
+    base.update(overrides)
+    return MusaDeviceSpec(**base)
+
+
+def test_s5000_spec_is_validated_and_has_native_fp8() -> None:
+    spec = make_spec()
+
+    assert spec.is_validated
+    assert spec.supports_native_fp8
+    assert spec.supports(MusaFeature.VALIDATED_TARGET)
+    assert spec.supports(MusaFeature.NATIVE_FP8)
+
+
+@pytest.mark.parametrize(
+    "major,minor,arch_code,arch_name",
+    [
+        (2, 2, 220, "mp_22"),
+        (3, 2, 320, "mp_32"),
+        (4, 2, 420, "mp_42"),
+    ],
+)
+def test_unvalidated_arch_fails_closed(
+    major: int, minor: int, arch_code: int, arch_name: str
+) -> None:
+    """An arch nobody has run the S5000 kernels on gets the generic path.
+
+    This is the property the old ``== (3, 1)`` comparisons only had by
+    accident: any tuple other than the literal was rejected, including arches
+    newer than S5000. Here it is explicit and per-capability.
+    """
+    spec = make_spec(
+        device_capability=(major, minor),
+        arch_code=arch_code,
+        arch_name=arch_name,
+        warp_size=128 if arch_code != 310 else 32,
+    )
+
+    assert not spec.is_validated
+    assert not spec.supports_native_fp8
+    assert not spec.supports(MusaFeature.VALIDATED_TARGET)
+    assert spec.cache_tag.startswith(arch_name)
+
+
+def test_arch_code_and_name_derivation() -> None:
+    assert device_spec._arch_code(3, 1) == 310
+    assert device_spec._arch_code(4, 2) == 420
+    assert device_spec._arch_name(2, 2) == "mp_22"
+
+
+def test_cache_tag_carries_mp_count() -> None:
+    """Two bins of one arch must not share a compile-cache path."""
+    a = make_spec(mp_count=48)
+    b = make_spec(mp_count=56)
+
+    assert a.arch_name == b.arch_name
+    assert a.cache_tag != b.cache_tag
+
+
+def test_explicit_sets_are_the_source_of_truth() -> None:
+    """Guard against someone re-deriving capability from a numeric order."""
+    assert 310 in VALIDATED_MUSA_ARCHS
+    assert 310 in NATIVE_FP8_ARCHS
+    # 320/420 are newer *numbers* and still not validated targets.
+    assert 320 not in VALIDATED_MUSA_ARCHS
+    assert 420 not in VALIDATED_MUSA_ARCHS
+
+
+def test_unknown_feature_is_rejected() -> None:
+    class NotAFeature:
+        pass
+
+    with pytest.raises(ValueError):
+        make_spec().supports(NotAFeature())  # type: ignore[arg-type]
+
+
+def test_get_device_spec_builds_from_device_properties(monkeypatch) -> None:
+    class FakeProps:
+        major = 3
+        minor = 1
+        multi_processor_count = 56
+        warp_size = 32
+        total_memory = 85804969984
+        L2_cache_size = 60 * 1024 * 1024
+        shared_memory_per_block = 196608
+        shared_memory_per_multiprocessor = 196608
+        regs_per_multiprocessor = 131072
+        max_threads_per_block = 1024
+        max_threads_per_multi_processor = 3072
+        name = "MTT S5000"
+        uuid = None
+
+    monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: FakeProps())
+    get_device_spec.cache_clear()
+
+    spec = get_device_spec(0)
+
+    assert spec is not None
+    assert spec.device_capability == (3, 1)
+    assert spec.arch_code == 310
+    assert spec.arch_name == "mp_31"
+    assert spec.mp_count == 56
+    assert spec.max_threads_per_multiprocessor == 3072
+    assert spec.cache_tag == "mp_31_mp56"
+    get_device_spec.cache_clear()
+
+
+def test_get_device_spec_returns_none_when_probe_fails(monkeypatch) -> None:
+    """A failed probe must be "unknown", never a guessed arch."""
+
+    def boom(device_id: int):
+        raise RuntimeError("device not ready")
+
+    monkeypatch.setattr(device_spec, "_get_properties", boom)
+    get_device_spec.cache_clear()
+
+    assert get_device_spec(0) is None
+    get_device_spec.cache_clear()
+
+
+# --- regression guard: no capability literals outside device_spec -----------
+
+# Files that legitimately mention a capability literal. Each entry must be
+# either the identity check inside device_spec, a per-arch data default in the
+# MoE dispatch policy, or upstream code already overridden for MUSA by an
+# explicit `is_musa()` branch (documented next to each site).
+_LITERAL_ALLOWLIST = {
+    "vllm_musa/device_spec.py",
+    "vllm_musa/model_executor/layers/fused_moe/dispatch_policy.py",
+    "vllm_musa/v1/attention/backends/flash_attn.py",  # MUSA early-returns first
+    "vllm_musa/v1/attention/backends/mla/common.py",  # _pad_v forced off on MUSA
+}
+
+
+def test_no_new_capability_literal_comparisons() -> None:
+    """Arch selection must go through device_spec, not a tuple literal.
+
+    ``== (3, 1)`` happens to be correct today, but it silently means "the one
+    arch we validated" and it fails open for nobody: a new arch falls off the
+    S5000 path *and* off the capability path at the same time. Routing through
+    ``MusaDeviceSpec`` keeps the decision in one place and forces unvalidated
+    arches onto the generic path with a warning.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    offenders: list[str] = []
+    for path in (root / "vllm_musa").rglob("*.py"):
+        rel = path.relative_to(root).as_posix()
+        if rel in _LITERAL_ALLOWLIST:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if line.lstrip().startswith("#"):
+                continue
+            if any(
+                token in line
+                for token in (
+                    "== (3, 1)",
+                    "== (3,1)",
+                    "has_device_capability((",
+                    "is_device_capability((",
+                )
+            ):
+                offenders.append(f"{rel}:{lineno}: {line.strip()}")
+
+    assert not offenders, (
+        "capability literals must be replaced by vllm_musa.device_spec:\n"
+        + "\n".join(offenders)
+    )

@@ -3,7 +3,6 @@
 
 from functools import cache
 
-import torch
 from vllm.compilation.passes.pass_manager import PostGradPassManager
 from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.logger import init_logger
@@ -20,10 +19,17 @@ logger = init_logger(__name__)
 
 @cache
 def _has_validated_musa_device_capability() -> bool:
-    """Query the current logical device; MTML capability IDs are physical."""
+    """Whether the current logical device is a validated MUSA target.
+
+    The comparison is an identity check on the arch code (see
+    ``vllm_musa.device_spec``), never an ordering: MUSA capabilities are not
+    monotonic, so "at least (3, 1)" is not a meaningful question.
+    """
     try:
-        device_id = torch.musa.current_device()
-        return tuple(torch.musa.get_device_capability(device_id)) == (3, 1)
+        from vllm_musa.device_spec import current_device_spec
+
+        spec = current_device_spec()
+        return spec is not None and spec.is_validated
     except Exception:
         return False
 
