@@ -215,3 +215,6 @@ __marimo__/
 third_party/*
 !third_party/PINS
 vllm/
+
+# Written by setup.py at build time (arch record checked against the device).
+vllm_musa/_build_stamp.py
