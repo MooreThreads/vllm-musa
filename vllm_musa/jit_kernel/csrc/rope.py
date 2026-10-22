@@ -43,11 +43,39 @@ def _store_hint(num_tokens: int, rot_dim: int) -> str:
 
 
 def _musa_arch_tag() -> str:
-    try:
-        major, minor = torch.musa.get_device_capability()
-        return f"mp{int(major)}{int(minor)}"
-    except Exception:
-        return "mp31"
+    """Arch tag for the module name, from the device spec (fail closed)."""
+    from vllm_musa.device_spec import current_device_spec
+
+    spec = current_device_spec()
+    if spec is None:
+        raise RuntimeError(
+            "cannot determine the MUSA arch for the rotary-embedding JIT build; "
+            "the kernel name is arch-qualified so a guess here would pin a wrong "
+            "binary into the cache. Set VLLM_MUSA_ARCH_LIST (e.g. '31')."
+        )
+    return spec.arch_name.replace("_", "")  # "mp_31" -> "mp31"
+
+
+#: Store-hint variants the auto policy can select (see :func:`_store_hint`).
+#: The hint is a compile-time constant, so each value is its own ``.so``; if only
+#: the value the first request happens to need is built, a later batch that
+#: crosses 512 tokens builds the other one *in the middle of serving*.
+_ROPE_STORE_HINTS = ("stwb", "stcg")
+
+
+def prewarm_rope_modules() -> list[str]:
+    """Build every store-hint variant the auto policy can pick.
+
+    Called once at plugin registration.  Two mcc builds here (a few seconds
+    each, cached afterwards) replace a first-request build of one variant plus
+    a mid-serving build of the other when the batch crosses 512 tokens.
+    """
+    arch_tag = _musa_arch_tag()
+    built = []
+    for hint in _ROPE_STORE_HINTS:
+        _rope_module(arch_tag, hint)
+        built.append(f"{arch_tag}_{hint}")
+    return built
 
 
 @cache_once
