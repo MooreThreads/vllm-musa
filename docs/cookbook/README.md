@@ -16,9 +16,9 @@ removed from that line are intentionally not carried over.
 
 ## Before you start
 
-- Run inside the release image the recipe names, typically
-  `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.32.0`, or an
-  equivalent installation.
+- Run inside a release image of the same line as the page, e.g.
+  `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.32.0` for the
+  v0.32 recipes, or an equivalent installation.
 - The registry tag is published independently of this branch and may carry a
   different dependency revision; verify package versions, or build the local
   image described in the installation guide for exact branch parity.
