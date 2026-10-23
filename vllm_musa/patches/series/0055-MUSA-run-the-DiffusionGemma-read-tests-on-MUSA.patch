@@ -15,7 +15,7 @@ current_platform.device_type. The 21 cases then run on MUSA and pass.
  1 file changed, 16 insertions(+), 11 deletions(-)
 
 diff --git a/tests/v1/sample/test_diffusion_gemma_reads.py b/tests/v1/sample/test_diffusion_gemma_reads.py
-index 4abadc254d..1dfac3898b 100644
+index 4abadc254d..e393838b88 100644
 --- a/tests/v1/sample/test_diffusion_gemma_reads.py
 +++ b/tests/v1/sample/test_diffusion_gemma_reads.py
 @@ -19,10 +19,15 @@ from vllm.model_executor.models.diffusion_gemma import (
@@ -30,7 +30,7 @@ index 4abadc254d..1dfac3898b 100644
 +    reason="the sampler state lives on the GPU",
  )
  
-+DEVICE = current_platform.device_type
++DEVICE = current_platform.device_type or "cpu"
 +
  CL = 8
  VOCAB = 64
