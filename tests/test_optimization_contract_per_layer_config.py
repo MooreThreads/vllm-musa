@@ -18,7 +18,23 @@ from vllm_musa.optimization_contract import (
     resolve_optimization_contract,
 )
 
-PER_LAYER = ("num_key_value_heads", "num_attention_heads", "head_dim")
+# The attributes a heterogeneous config may serve directly; every other read is
+# per-layer geometry and must go through _config_attr.
+HOMOGENEOUS = frozenset(
+    {
+        "architectures",
+        "model_type",
+        "hidden_size",
+        "intermediate_size",
+        "num_hidden_layers",
+        "vocab_size",
+        "layer_types",
+        "quantization_config",
+        "error",
+        "__dict__",
+        "__class__",
+    }
+)
 
 
 class _Subclassed(AmbiguousGlobalPerLayerAttributeError):
@@ -29,9 +45,9 @@ class _TextConfig(SimpleNamespace):
     error: type = AmbiguousGlobalPerLayerAttributeError
 
     def __getattribute__(self, name: str):
-        if name in PER_LAYER:
-            raise self.error(f"{name!r} is per-layer")
-        return super().__getattribute__(name)
+        if name in HOMOGENEOUS:
+            return super().__getattribute__(name)
+        raise self.error(f"{name!r} is a per-layer attribute")
 
 
 def _config(error: type = AmbiguousGlobalPerLayerAttributeError) -> SimpleNamespace:
