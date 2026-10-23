@@ -86,6 +86,16 @@ template workaround, while GLM-5.2 uses its checkpoint template with
 The Nemotron profile serves one request at a time and targets per-token decode
 latency.
 
+## DiffusionGemma
+
+| Model | Precision | Hardware | Speculative decoding | Recipe |
+|---|---|---|---|---|
+| DiffusionGemma-26B-A4B-it | BF16 | 1x S5000, TP1 | Off | [Open recipe](diffusiongemma/diffusiongemma-26b-a4b-it.md) |
+
+The recipe uses the checkpoint's own canvas (256 tokens, 48 steps) and the
+`/v1/systemone` endpoint that vLLM v0.32 ships, so one server answers both
+`/v1/chat/completions` and structured reads.
+
 ## Verify a server
 
 The recipes expose an OpenAI-compatible endpoint on port 8000.
