@@ -145,6 +145,7 @@ These live in `vllm_xargs` on a normal request, not in the `/v1/systemone` body:
 | `diffusion_seed_canvas` | pre-fill the canvas with fixed token ids |
 | `diffusion_pinned` | hold those positions at their seed value across denoise steps; needs `diffusion_seed_canvas` |
 | `diffusion_read_only` | emit the canvas at convergence without the commit forward |
+| `diffusion_constrained` | sample only from `logprob_token_ids`; needs TP1 |
 | `diffusion_max_steps` | cap denoise steps for this request |
 | `diffusion_canvas_length` | run this request on a narrower canvas than the served one |
 

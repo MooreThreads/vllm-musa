@@ -25,8 +25,9 @@
 - [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
 - [DiffusionGemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev` (rebuilt from this branch after merge; the tag currently carries the v0.28 port)
 
-These model-specific tags are maintained independently of this branch; verify
-the exact image and model revision before production use.
+Apart from the DiffusionGemma row, these model-specific tags are maintained
+independently of this branch; verify the exact image and model revision before
+production use.
 
 ---
 
