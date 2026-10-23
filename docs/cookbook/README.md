@@ -1,6 +1,6 @@
 # vLLM-MUSA serving recipes
 
-Copy-ready configurations for serving supported models with vLLM-MUSA v0.28.0-dev
+Copy-ready configurations for serving supported models with vLLM-MUSA v0.32.0-dev
 on S5000 GPUs. Revalidate the exact image, model checkpoint, and workload
 before treating a profile as a production recommendation.
 
@@ -11,7 +11,7 @@ before treating a profile as a production recommendation.
 The profiles use the documented 4K-input/1K-output workload shape and bounded
 concurrency. Recheck first-token latency, per-token latency, and decode
 interference when your traffic shape or concurrency target differs.
-The commands follow the v0.28 scheduler interface; options removed from this
+The commands follow the v0.32 scheduler interface; options removed from this
 release line are intentionally not carried over.
 
 ## Before you start

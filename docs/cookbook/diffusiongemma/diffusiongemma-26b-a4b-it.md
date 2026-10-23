@@ -31,6 +31,7 @@ per-request `causal` tensor, which the MUSA FlashAttention path cannot express. 
 ## Launching the server
 
 ```bash
+# The :jev tag carries the v0.28 port today; rebuild it from this branch before using this block.
 docker run -d --name diffusiongemma \
   --runtime=mthreads -e MTHREADS_VISIBLE_DEVICES=0 \
   -v /models:/models:ro -p 8000:8000 \
@@ -69,7 +70,8 @@ curl -s http://localhost:8000/v1/chat/completions -H 'Content-Type: application/
 }'
 ```
 
-Measured output (first line is the model's thinking slot):
+Excerpt of the measured output (first line is the model's thinking slot; the completion ran to
+`64` tokens):
 
 ```
 thought
