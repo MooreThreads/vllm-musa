@@ -8,19 +8,15 @@ it and engine startup would abort before the contract fails closed.
 from types import SimpleNamespace
 
 import pytest
+from transformers.integrations.heterogeneity.configuration_utils import (
+    AmbiguousGlobalPerLayerAttributeError,
+)
 
 from vllm_musa.optimization_contract import (
     ModelFamily,
     OptimizationFeature,
     resolve_optimization_contract,
 )
-
-try:
-    from transformers.integrations.heterogeneity.configuration_utils import (
-        AmbiguousGlobalPerLayerAttributeError,
-    )
-except ImportError:  # transformers without per-layer interception
-    pytest.skip("no per-layer ambiguity error", allow_module_level=True)
 
 PER_LAYER = ("num_key_value_heads", "num_attention_heads", "head_dim")
 
