@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from transformers.integrations.heterogeneity.configuration_utils import (
+    AmbiguousGlobalPerLayerAttributeError,
+)
+
 from .providers import CONTRACT_PROVIDERS
 from .types import (
     ExecutionSignature,
@@ -30,10 +34,7 @@ def _config_attr(config: Any, name: str, default: Any = None) -> Any:
     """Read a config attribute, treating an ambiguous per-layer one as absent."""
     try:
         return getattr(config, name, default)
-    except RuntimeError as exc:
-        # transformers signals a per-layer attribute that varies across layers.
-        if type(exc).__name__ != "AmbiguousGlobalPerLayerAttributeError":
-            raise
+    except AmbiguousGlobalPerLayerAttributeError:
         return default
 
 

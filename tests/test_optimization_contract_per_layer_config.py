@@ -21,19 +21,26 @@ from vllm_musa.optimization_contract import (
 PER_LAYER = ("num_key_value_heads", "num_attention_heads", "head_dim")
 
 
+class _Subclassed(AmbiguousGlobalPerLayerAttributeError):
+    pass
+
+
 class _TextConfig(SimpleNamespace):
+    error: type = AmbiguousGlobalPerLayerAttributeError
+
     def __getattribute__(self, name: str):
         if name in PER_LAYER:
-            raise AmbiguousGlobalPerLayerAttributeError(f"{name!r} is per-layer")
+            raise self.error(f"{name!r} is per-layer")
         return super().__getattribute__(name)
 
 
-def _config() -> SimpleNamespace:
+def _config(error: type = AmbiguousGlobalPerLayerAttributeError) -> SimpleNamespace:
     return SimpleNamespace(
         model_config=SimpleNamespace(
             architectures=["DiffusionGemmaForBlockDiffusion"],
             model_type="diffusion_gemma",
             hf_text_config=_TextConfig(
+                error=error,
                 architectures=["DiffusionGemmaForBlockDiffusion"],
                 model_type="diffusion_gemma",
                 hidden_size=2816,
@@ -59,8 +66,9 @@ def _config() -> SimpleNamespace:
     )
 
 
-def test_per_layer_ambiguity_does_not_abort_the_resolver() -> None:
-    contract = resolve_optimization_contract(_config())
+@pytest.mark.parametrize("error", [AmbiguousGlobalPerLayerAttributeError, _Subclassed])
+def test_per_layer_ambiguity_does_not_abort_the_resolver(error: type) -> None:
+    contract = resolve_optimization_contract(_config(error))
     model = contract.model
     # The ambiguous geometry is missing, not guessed.
     assert model.num_key_value_heads is None
