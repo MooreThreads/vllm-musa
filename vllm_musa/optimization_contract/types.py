@@ -71,6 +71,10 @@ class OptimizationFeature(str, Enum):
     GLM5_EAGER_MCCL_INIT = "glm5.eager_mccl_init"
     PADDLEOCR_VL_ROTARY = "paddleocr_vl.rotary"
     HYBRID_SEPARATE_MAMBA_POOL = "hybrid.separate_mamba_pool"
+    # Platform-wide implementation choices, not tied to one model family.
+    # Listed separately from the ``<family>.<feature>`` entries above because
+    # any tensor-parallel model reaches the custom all-reduce seam.
+    MUSA_CAR_V2_ALL_REDUCE = "musa.car_v2_all_reduce"
 
 
 @dataclass(frozen=True, slots=True)
