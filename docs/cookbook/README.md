@@ -19,7 +19,7 @@ removed from that line are intentionally not carried over.
 
 - Run inside the v0.32.0 release image
   `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.32.0`, or an
-  equivalent installation.
+  equivalent installation, unless the recipe names its own image.
 - The registry tag is published independently of this branch and may carry a
   different dependency revision; verify package versions, or build the local
   image described in the installation guide for exact branch parity.
