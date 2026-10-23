@@ -26,6 +26,17 @@ def _normalize_name(value: Any) -> str | None:
     return str(value).lower().split(".")[-1]
 
 
+def _config_attr(config: Any, name: str, default: Any = None) -> Any:
+    """Read a config attribute, treating an ambiguous per-layer one as absent."""
+    try:
+        return getattr(config, name, default)
+    except RuntimeError as exc:
+        # transformers signals a per-layer attribute that varies across layers.
+        if type(exc).__name__ != "AmbiguousGlobalPerLayerAttributeError":
+            raise
+        return default
+
+
 def _int_tuple(value: Any) -> tuple[int, ...] | None:
     if not isinstance(value, (list, tuple)) or not value:
         return None
@@ -36,7 +47,7 @@ def _int_tuple(value: Any) -> tuple[int, ...] | None:
 
 def _int_attr(config: Any, *names: str) -> int | None:
     for name in names:
-        value = getattr(config, name, None)
+        value = _config_attr(config, name)
         if isinstance(value, int) and not isinstance(value, bool):
             return value
     return None
@@ -44,7 +55,7 @@ def _int_attr(config: Any, *names: str) -> int | None:
 
 def _float_attr(config: Any, *names: str) -> float | None:
     for name in names:
-        value = getattr(config, name, None)
+        value = _config_attr(config, name)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return float(value)
     return None
@@ -52,7 +63,7 @@ def _float_attr(config: Any, *names: str) -> float | None:
 
 def _str_attr(config: Any, *names: str) -> str | None:
     for name in names:
-        value = getattr(config, name, None)
+        value = _config_attr(config, name)
         if value is not None:
             return str(value).lower()
     return None
@@ -112,7 +123,7 @@ def _has_routed_experts(model_config: Any, text_config: Any) -> bool | None:
     if bool(getattr(model_config, "is_moe", False)):
         return True
     expert_values = [
-        getattr(text_config, name, None)
+        _config_attr(text_config, name)
         for name in (
             "num_experts",
             "moe_num_experts",
