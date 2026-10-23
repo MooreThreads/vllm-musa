@@ -20,9 +20,10 @@ removed from that line are intentionally not carried over.
   `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.32.0` for the
   v0.32 recipes, or an equivalent installation, unless the recipe names its
   own image.
-- The registry tag is published independently of this branch and may carry a
-  different dependency revision; verify package versions, or build the local
-  image described in the installation guide for exact branch parity.
+- Apart from `:jev`, the registry tags are published independently of this
+  branch and may carry a different dependency revision; verify package
+  versions, or build the local image described in the installation guide for
+  exact branch parity.
 - Mount the checkpoint under `/models` or update the path in the command.
 - Use the tensor-parallelism size documented in each recipe; increase TP only
   when memory requires it.
