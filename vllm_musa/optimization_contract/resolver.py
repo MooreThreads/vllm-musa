@@ -30,7 +30,7 @@ def _normalize_name(value: Any) -> str | None:
     return str(value).lower().split(".")[-1]
 
 
-def _config_attr(config: Any, name: str, default: Any = None) -> Any:
+def config_attr(config: Any, name: str, default: Any = None) -> Any:
     """Read a config attribute, treating an ambiguous per-layer one as absent."""
     try:
         return getattr(config, name, default)
@@ -48,7 +48,7 @@ def _int_tuple(value: Any) -> tuple[int, ...] | None:
 
 def _int_attr(config: Any, *names: str) -> int | None:
     for name in names:
-        value = _config_attr(config, name)
+        value = config_attr(config, name)
         if isinstance(value, int) and not isinstance(value, bool):
             return value
     return None
@@ -56,7 +56,7 @@ def _int_attr(config: Any, *names: str) -> int | None:
 
 def _float_attr(config: Any, *names: str) -> float | None:
     for name in names:
-        value = _config_attr(config, name)
+        value = config_attr(config, name)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return float(value)
     return None
@@ -64,7 +64,7 @@ def _float_attr(config: Any, *names: str) -> float | None:
 
 def _str_attr(config: Any, *names: str) -> str | None:
     for name in names:
-        value = _config_attr(config, name)
+        value = config_attr(config, name)
         if value is not None:
             return str(value).lower()
     return None
@@ -107,7 +107,7 @@ def _quantization(model_config: Any, text_config: Any) -> str | None:
     value = getattr(model_config, "quantization", None)
     if value is not None:
         return str(value).lower()
-    quantization_config = getattr(text_config, "quantization_config", None)
+    quantization_config = config_attr(text_config, "quantization_config")
     if isinstance(quantization_config, dict):
         value = quantization_config.get("quant_method")
         return str(value).lower() if value is not None else None
@@ -124,7 +124,7 @@ def _has_routed_experts(model_config: Any, text_config: Any) -> bool | None:
     if bool(getattr(model_config, "is_moe", False)):
         return True
     expert_values = [
-        _config_attr(text_config, name)
+        config_attr(text_config, name)
         for name in (
             "num_experts",
             "moe_num_experts",
@@ -153,7 +153,7 @@ def _model_signature(model_config: Any, vllm_config: Any | None) -> ModelSignatu
     gdn_width, gdn_dim = _gdn_conv_signature(text_config)
     architectures = _architectures(model_config, text_config)
     quant_config = getattr(vllm_config, "quant_config", None)
-    quantization_config = getattr(text_config, "quantization_config", None)
+    quantization_config = config_attr(text_config, "quantization_config")
     quant_block_shape = _int_tuple(getattr(quant_config, "weight_block_size", None))
     if quant_block_shape is None and isinstance(quantization_config, dict):
         quant_block_shape = _int_tuple(
@@ -164,7 +164,7 @@ def _model_signature(model_config: Any, vllm_config: Any | None) -> ModelSignatu
     if not isinstance(uses_mla, bool):
         uses_mla = getattr(text_config, "use_mla", None)
     if not isinstance(uses_mla, bool):
-        uses_mla = getattr(text_config, "kv_lora_rank", None) is not None
+        uses_mla = config_attr(text_config, "kv_lora_rank") is not None
     is_hybrid = getattr(model_config, "is_hybrid", None)
     if callable(is_hybrid):
         try:

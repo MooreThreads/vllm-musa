@@ -29,7 +29,6 @@ HOMOGENEOUS = frozenset(
         "num_hidden_layers",
         "vocab_size",
         "layer_types",
-        "quantization_config",
         "error",
         "__dict__",
         "__class__",
