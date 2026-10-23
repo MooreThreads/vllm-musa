@@ -8,7 +8,7 @@ it and engine startup would abort before the contract fails closed.
 from types import SimpleNamespace
 
 import pytest
-from transformers.integrations.heterogeneity.configuration_utils import (
+from transformers.integrations.heterogeneity import (
     AmbiguousGlobalPerLayerAttributeError,
 )
 

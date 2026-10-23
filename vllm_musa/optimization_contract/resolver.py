@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from transformers.integrations.heterogeneity.configuration_utils import (
+from transformers.integrations.heterogeneity import (
     AmbiguousGlobalPerLayerAttributeError,
 )
 
