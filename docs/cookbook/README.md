@@ -1,9 +1,8 @@
 # vLLM-MUSA serving recipes
 
 Copy-ready configurations for serving supported models with vLLM-MUSA on
-S5000 GPUs. Each page names the release line it was validated on. Revalidate
-the exact image, model checkpoint, and workload before treating a profile as a
-production recommendation.
+S5000 GPUs. Revalidate the exact image, model checkpoint, and workload before
+treating a profile as a production recommendation.
 
 > [!TIP]
 > Start with the recipe unchanged. Adjust the model path and served-model name
@@ -17,9 +16,9 @@ removed from that line are intentionally not carried over.
 
 ## Before you start
 
-- Run inside the v0.32.0 release image
+- Run inside the release image the recipe names, typically
   `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:v0.32.0`, or an
-  equivalent installation, unless the recipe names its own image.
+  equivalent installation.
 - The registry tag is published independently of this branch and may carry a
   different dependency revision; verify package versions, or build the local
   image described in the installation guide for exact branch parity.
