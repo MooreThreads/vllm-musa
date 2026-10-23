@@ -35,7 +35,8 @@ _ENABLED = os.environ.get("VLLM_MUSA_FP8_BLOCK_BF16_GEMM", "1") != "0"
 _BLOCK_R, _BLOCK_C = 64, 256
 
 
-@triton.jit
+# R is the token count when dequantizing an activation; one kernel serves all of them.
+@triton.jit(do_not_specialize=["R"])
 def _fp8_dequant_kernel(
     src_ptr,
     scale_ptr,

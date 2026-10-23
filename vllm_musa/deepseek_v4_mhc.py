@@ -393,13 +393,11 @@ def mhc_pre_delayed_musa(
             )
             fused = None
     if fused is not None:
+        from vllm_musa.kernels.mhc_collapse import mhc_collapse
+
         post, comb, next_pre_mix = fused
         layer_input = (
-            residual[:, 0]
-            if pre_mix is None
-            else (pre_mix.unsqueeze(-1) * residual.float())
-            .sum(dim=1)
-            .to(residual.dtype)
+            residual[:, 0] if pre_mix is None else mhc_collapse(residual, pre_mix)
         )
     else:
         from vllm.model_executor.kernels.mhc.torch import mhc_pre_delayed_torch
@@ -675,7 +673,9 @@ def mhc_fused_post_pre_delayed_musa(
         norm_eps=norm_eps,
     )
     if capture_aux:
-        aux = residual_cur.to(torch.float32).mean(dim=1).to(residual_cur.dtype)
+        from vllm_musa.kernels.mhc_collapse import mhc_collapse
+
+        aux = mhc_collapse(residual_cur)
     else:
         aux = residual_cur.new_empty((0, residual_cur.shape[-1]))
     return residual_cur, post, comb, layer_input, next_pre_mix, aux
