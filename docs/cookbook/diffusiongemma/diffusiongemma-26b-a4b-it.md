@@ -14,7 +14,7 @@ so one `vllm serve` process exposes both `/v1/chat/completions` and `/v1/systemo
 
 | Setting | Value |
 |---|---|
-| Image | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:diffusiongemma-26b-a4b` (built from this branch after merge; not yet published) |
+| Image | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev` (rebuilt from this branch after merge; the tag currently carries the v0.28 port) |
 | Checkpoint | `google/diffusiongemma-26B-A4B-it` (BF16) |
 | Hardware | 1x S5000 (TP1), MUSA 5.2.0, driver `5.2.0-server` |
 | Speculative decoding | Off |
@@ -34,7 +34,7 @@ per-request `causal` tensor, which the MUSA FlashAttention path cannot express. 
 docker run -d --name diffusiongemma \
   --runtime=mthreads -e MTHREADS_VISIBLE_DEVICES=0 \
   -v /models:/models:ro -p 8000:8000 \
-  registry.mthreads.com/mcconline/inference/vllm/vllm-openai:diffusiongemma-26b-a4b \
+  registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev \
   vllm serve /models/diffusiongemma-26B-A4B-it \
     --served-model-name diffusiongemma-26b \
     --host 0.0.0.0 --port 8000 \
