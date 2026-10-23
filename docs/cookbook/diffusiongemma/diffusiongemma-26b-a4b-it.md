@@ -34,6 +34,7 @@ per-request `causal` tensor, which the MUSA FlashAttention path cannot express. 
 # The :jev tag carries the v0.28 port today; rebuild it from this branch before using this block.
 docker run -d --name diffusiongemma \
   --runtime=mthreads -e MTHREADS_VISIBLE_DEVICES=0 \
+  -e MUSA_VISIBLE_DEVICES=0 \
   -v /models:/models:ro -p 8000:8000 \
   registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev \
   vllm serve /models/diffusiongemma-26B-A4B-it \
