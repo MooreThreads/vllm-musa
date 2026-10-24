@@ -37,7 +37,7 @@ docker run -d --name diffusiongemma \
   -e MUSA_VISIBLE_DEVICES=0 \
   -v /models:/models:ro -p 8000:8000 \
   registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev \
-  vllm serve /models/diffusiongemma-26B-A4B-it \
+  /models/diffusiongemma-26B-A4B-it \
     --served-model-name diffusiongemma-26b \
     --host 0.0.0.0 --port 8000 \
     --max-model-len 8192 \
@@ -46,7 +46,8 @@ docker run -d --name diffusiongemma \
     --max-logprobs 32
 ```
 
-With an installed vLLM-MUSA of this line, run the same `vllm serve …` line on the host. On a
+The image entrypoint is already `vllm serve`, so the arguments follow the image directly. With an
+installed vLLM-MUSA of this line, run the same arguments after `vllm serve` on the host. On a
 shared host, port 8000 is often taken: remap it (`-p 18091:8000`) and use that port below.
 
 Notes:
