@@ -18,8 +18,8 @@ from vllm_musa.optimization_contract import (
     resolve_optimization_contract,
 )
 
-# The attributes a heterogeneous config may serve directly; every other read is
-# per-layer geometry and must go through config_attr.
+# The names a heterogeneous config serves directly; every other read goes through
+# config_attr, since transformers may hide it behind the per-layer error.
 HOMOGENEOUS = frozenset(
     {
         "architectures",
