@@ -62,8 +62,13 @@ them in filename order before the editable or wheel install. They are source pat
 | `0052-MUSA-run-on-Python-3.10.patch` | The MUSA image runs Python 3.10: the package metadata accepts it, and `vllm/__init__.py` backfills the Python 3.11 `typing` names and `datetime.UTC` from `typing_extensions` before any other vLLM module loads. |
 | `0053-MUSA-keep-the-allocator-settings-while-loading-weigh.patch` | The worker's allocator split-size cap during weight loading uses the CUDA/ROCm accelerator allocator-settings API; MUSA keeps its allocator settings. |
 | `0054-MUSA-number-warmup-blocks-within-each-dedicated-Mamb.patch` | The V2 kernel warmups number the blocks of each dedicated MUSA Mamba pool from 1 inside that pool, so hybrid Mamba models warm up without writing state past it; groups in the shared KV pool draw from one counter. |
+| `0055-MUSA-run-the-DiffusionGemma-read-tests-on-MUSA.patch` | The read suite behind `/v1/systemone` runs on MUSA: it gates on `current_platform.is_cuda_alike()` and takes its device from `current_platform.device_type`, instead of skipping on `is_cuda()` with a hardcoded `"cuda"`. |
 
-Currently **54 patches** and **0 upstream entries** in `upstream/`.
+Upstream vLLM v0.32 already carries `/v1/systemone`, the diffusion scheduler and the sampler
+hooks, so no entry ports them. Entry `0055` only makes upstream's read suite run on MUSA; the
+`TRITON_ATTN` pin for diffusion models lives in `vllm_musa/platform.py`.
+
+Currently **55 patches** and **0 upstream entries** in `upstream/`.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM

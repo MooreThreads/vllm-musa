@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .resolver import resolve_optimization_contract
+from .resolver import config_attr, resolve_optimization_contract
 from .types import OptimizationFeature
 
 _DEEPSEEK_V4_SPARSE_PADDED_HEADS = 64
@@ -240,7 +240,7 @@ def model_has_routed_experts(model_config: Any | None) -> bool:
         hf_config = getattr(model_config, "hf_config", None)
         hf_text_config = getattr(hf_config, "text_config", hf_config)
     expert_values = [
-        getattr(hf_text_config, name, None)
+        config_attr(hf_text_config, name)
         for name in (
             "num_experts",
             "moe_num_experts",
