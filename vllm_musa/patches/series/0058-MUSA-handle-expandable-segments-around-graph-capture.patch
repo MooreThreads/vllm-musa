@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Mon, 26 Oct 2026 03:38:10 +0000
+Date: Mon, 26 Oct 2026 08:26:29 +0000
 Subject: [PATCH] MUSA: handle expandable segments around graph capture
 
 torch_musa's expandable-segment allocator cannot grow a segment while a
@@ -25,11 +25,11 @@ conf, or when the wheel lacks _set_allocator_settings, rather than silently
 replaying a partial conf or doing nothing. The setting is restored after
 the capture so later allocations keep the fragmentation benefit.
 ---
- vllm/v1/worker/gpu_worker.py | 90 ++++++++++++++++++++++++++++++++++--
- 1 file changed, 87 insertions(+), 3 deletions(-)
+ vllm/v1/worker/gpu_worker.py | 93 ++++++++++++++++++++++++++++++++++--
+ 1 file changed, 90 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index 7f53e62247..2b5f5fa5bd 100644
+index 7f53e62247..02186a85b3 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
 @@ -4,6 +4,7 @@
@@ -40,7 +40,7 @@ index 7f53e62247..2b5f5fa5bd 100644
  import time
  from collections.abc import Callable
  from contextlib import AbstractContextManager, contextmanager, nullcontext
-@@ -114,6 +115,85 @@ from .utils import request_memory
+@@ -114,6 +115,88 @@ from .utils import request_memory
  logger = init_logger(__name__)
  
  
@@ -52,8 +52,8 @@ index 7f53e62247..2b5f5fa5bd 100644
 +_MUSA_BACKEND_TOKEN = re.compile(r"^\s*backend\s*:", re.IGNORECASE)
 +
 +
-+def _musa_allocator_conf(settings: dict, expandable_segments: bool) -> str | None:
-+    """Replay the applied allocator conf with only expandable_segments changed.
++def _musa_allocator_confs(settings: dict) -> tuple[str, str] | None:
++    """Replay the applied allocator conf with expandable segments off and on.
 +
 +    The setter resets the other allocator knobs unless they are included, so
 +    rewrite the conf the allocator last applied instead of a partial one.
@@ -66,12 +66,16 @@ index 7f53e62247..2b5f5fa5bd 100644
 +        for token in conf.split(",")
 +        if token.strip() and not _MUSA_BACKEND_TOKEN.match(token)
 +    )
-+    token = f"expandable_segments:{expandable_segments}"
-+    if not conf:
-+        return token
-+    if _MUSA_EXPANDABLE_SEGMENTS.search(conf):
-+        return _MUSA_EXPANDABLE_SEGMENTS.sub(token, conf, count=1)
-+    return f"{conf},{token}"
++
++    def replay(expandable_segments: bool) -> str:
++        token = f"expandable_segments:{expandable_segments}"
++        if not conf:
++            return token
++        if _MUSA_EXPANDABLE_SEGMENTS.search(conf):
++            return _MUSA_EXPANDABLE_SEGMENTS.sub(token, conf, count=1)
++        return f"{conf},{token}"
++
++    return replay(False), replay(True)
 +
 +
 +@contextmanager
@@ -106,27 +110,26 @@ index 7f53e62247..2b5f5fa5bd 100644
 +        )
 +        yield
 +        return
-+    capture_conf = _musa_allocator_conf(settings, False)
-+    if capture_conf is None:
++    confs = _musa_allocator_confs(settings)
++    if confs is None:
 +        logger.warning(
 +            "MUSA allocator snapshot has no applied config; capture keeps the "
 +            "caller's allocator mode instead of replaying a partial one"
 +        )
 +        yield
 +        return
-+    restore_conf = _musa_allocator_conf(settings, True)
++    capture_conf, restore_conf = confs
 +    set_settings(capture_conf)
 +    try:
 +        yield
 +    finally:
-+        if restore_conf is not None:
-+            set_settings(restore_conf)
++        set_settings(restore_conf)
 +
 +
  def _musa_deepseek_v4_mtp_sparse_prefill_reserve_bytes(
      vllm_config: VllmConfig,
  ) -> int:
-@@ -750,7 +830,10 @@ class Worker(WorkerBase):
+@@ -750,7 +833,10 @@ class Worker(WorkerBase):
          if (
              current_platform.is_cuda_alike() or current_platform.is_xpu()
          ) and self.vllm_config.compilation_config.cudagraph_mode != CUDAGraphMode.NONE:
@@ -138,7 +141,7 @@ index 7f53e62247..2b5f5fa5bd 100644
  
          # Respect the opt-in flag as originally designed.
          cudagraph_memory_estimate_applied = (
-@@ -1035,8 +1118,9 @@ class Worker(WorkerBase):
+@@ -1035,8 +1121,9 @@ class Worker(WorkerBase):
  
          cuda_graph_memory_bytes = 0
          if not self.model_config.enforce_eager:
