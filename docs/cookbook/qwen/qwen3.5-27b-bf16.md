@@ -23,7 +23,7 @@ BF16 dense-model recipe for two S5000 GPUs.
 ```bash
 export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export VLLM_DISABLE_COMPILE_CACHE=1
+# Compile cache stays on; the AOT-autograd-cache safelist patch covers it.
 export SAFETENSORS_FAST_GPU=1
 
 vllm serve /models/Qwen3.5-27B \
