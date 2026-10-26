@@ -25,7 +25,7 @@
 - [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
 - [DiffusionGemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev`
 
-除 DiffusionGemma 一行（由当前分支重建）外，这些模型专用标签独立于当前分支维护；不建议在未核对确切镜像和模型版本的情况下用于生产。
+这些模型专用标签独立于当前分支维护；不建议在未核对确切镜像和模型版本的情况下用于生产。
 
 ---
 

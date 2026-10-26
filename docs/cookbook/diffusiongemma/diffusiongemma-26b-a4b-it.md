@@ -31,7 +31,6 @@ per-request `causal` tensor, which the MUSA FlashAttention path cannot express. 
 ## Launching the server
 
 ```bash
-# Rebuild the :jev tag from this branch before using this block.
 docker run -d --name diffusiongemma \
   --runtime=mthreads -e MTHREADS_VISIBLE_DEVICES=0 \
   -e MUSA_VISIBLE_DEVICES=0 \
