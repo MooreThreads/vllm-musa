@@ -63,12 +63,14 @@ them in filename order before the editable or wheel install. They are source pat
 | `0053-MUSA-keep-the-allocator-settings-while-loading-weigh.patch` | The worker's allocator split-size cap during weight loading uses the CUDA/ROCm accelerator allocator-settings API; MUSA keeps its allocator settings. |
 | `0054-MUSA-number-warmup-blocks-within-each-dedicated-Mamb.patch` | The V2 kernel warmups number the blocks of each dedicated MUSA Mamba pool from 1 inside that pool, so hybrid Mamba models warm up without writing state past it; groups in the shared KV pool draw from one counter. |
 | `0055-MUSA-run-the-DiffusionGemma-read-tests-on-MUSA.patch` | The read suite behind `/v1/systemone` runs on MUSA: it gates on `current_platform.is_cuda_alike()` and takes its device from `current_platform.device_type`, instead of skipping on `is_cuda()` with a hardcoded `"cuda"`. |
+| `0056-MUSA-handle-expandable-segments-around-graph-capture.patch` | Graph capture and graph-memory profiling switch the caching allocator to ordinary segments, because expandable segments cannot grow during stream capture, and replay the full allocator config so other allocator knobs are preserved. |
 
 Upstream vLLM v0.32 already carries `/v1/systemone`, the diffusion scheduler and the sampler
 hooks, so no entry ports them. Entry `0055` only makes upstream's read suite run on MUSA; the
-`TRITON_ATTN` pin for diffusion models lives in `vllm_musa/platform.py`.
+`TRITON_ATTN` pin for diffusion models lives in `vllm_musa/platform.py`. Entry `0056` ports the
+v0.28 `0193` allocator toggle around graph-memory profiling and the real graph capture.
 
-Currently **55 patches** and **0 upstream entries** in `upstream/`.
+Currently **56 patches** and **0 upstream entries** in `upstream/`.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM
