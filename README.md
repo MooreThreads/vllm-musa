@@ -23,11 +23,11 @@
 - [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next`
 - [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash`
 - [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
-- [DiffusionGemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev` (rebuilt from this branch after merge; the tag currently carries the v0.28 port)
+- [DiffusionGemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev`
 
-Apart from the DiffusionGemma row, these model-specific tags are maintained
-independently of this branch; verify the exact image and model revision before
-production use.
+Apart from the DiffusionGemma row, which this branch rebuilds, these
+model-specific tags are maintained independently of the release line; we do not
+recommend production use without verifying the exact image and model revision.
 
 ---
 
