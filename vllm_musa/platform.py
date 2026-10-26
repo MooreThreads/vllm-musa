@@ -929,6 +929,21 @@ class MUSAPlatformBase(Platform):
         return True if stamp is None else bool(stamp.fp8)
 
     @classmethod
+    def supports_fp4(cls) -> bool:
+        """Whether the device executes FP4 arithmetic, S5000 included.
+
+        Named after ``supports_fp8`` and answered from an explicit empty set, so
+        every arch says ``False`` today.  This is deliberately *not*
+        ``supports_mx()``: MX is upstream's block-scaled-type hook, and an MX FP4
+        checkpoint runs here through dequantisation, on any arch.  Confusing the
+        two would advertise FP4 kernels that do not exist.
+        """
+        from vllm_musa.device_spec import MusaFeature, current_device_spec
+
+        spec = current_device_spec()
+        return spec is not None and spec.supports(MusaFeature.NATIVE_FP4)
+
+    @classmethod
     def use_custom_allreduce(cls) -> bool:
         return True
 

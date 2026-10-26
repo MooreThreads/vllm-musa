@@ -652,6 +652,33 @@ class TestMUSAPlatformBase:
         """An editable install has no stamp; the arch still decides."""
         assert self._supports_fp8("mp_31", 310, None) is True
 
+    def test_supports_fp4_is_false_without_fp4_hardware(self):
+        """FP4 is an empty set, so the answer is False on every known arch.
+
+        The question is "does this arch execute FP4 instructions"; an MX FP4
+        checkpoint still runs, through dequantisation, on any arch.
+        """
+        from unittest.mock import patch
+
+        from vllm_musa import device_spec
+        from vllm_musa.platform import MUSAPlatformBase
+
+        spec = self._spec("mp_31", 310)
+        with patch.object(device_spec, "current_device_spec", return_value=spec):
+            assert MUSAPlatformBase.supports_fp4() is False
+
+    def test_supports_fp4_is_false_even_on_a_future_fp8_arch(self):
+        """No FP8-to-FP4 implication: the sets are independent."""
+        from unittest.mock import patch
+
+        from vllm_musa import device_spec
+        from vllm_musa.platform import MUSAPlatformBase
+
+        spec = self._spec("mp_31", 310)
+        assert spec.supports_native_fp8 is True
+        with patch.object(device_spec, "current_device_spec", return_value=spec):
+            assert MUSAPlatformBase.supports_fp4() is False
+
     def test_support_hybrid_kv_cache(self):
         """Test that support_hybrid_kv_cache returns True."""
         from vllm_musa.platform import MUSAPlatformBase
