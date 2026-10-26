@@ -2,7 +2,6 @@
 
 import copy
 import os
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -276,11 +275,9 @@ def test_gated_qkv_inductor_support_scope(monkeypatch) -> None:
     def fail_capability_query(*args, **kwargs):
         pytest.fail("non-MUSA inputs must not query MUSA device capability")
 
-    monkeypatch.setattr(
-        gated_qkv,
-        "current_platform",
-        SimpleNamespace(is_device_capability=fail_capability_query),
-    )
+    # The capability query the kernel makes is `is_validated_device`; patching
+    # `current_platform` here left the mock unconsulted.
+    monkeypatch.setattr(gated_qkv, "is_validated_device", fail_capability_query)
     assert not _supports_gated_qkv(*unsupported)
 
     if torch.musa.device_count() > 1:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -46,6 +47,14 @@ def _normalize_musa_arch(arch: str) -> str:
 
 
 def _musa_arch_flags() -> list[str]:
+    """``--offload-arch`` flags for the arch(es) this build targets.
+
+    The device arch is authoritative.  There is deliberately **no** mp_31
+    fallback: a cubin built for the wrong arch does not fail on MUSA, it runs
+    and produces a wrong result (``musaDeviceSynchronize`` returns success and
+    the output buffer is left untouched), so guessing here trades a loud build
+    error for a silent numerics bug.
+    """
     arch_list = os.environ.get("VLLM_MUSA_ARCH_LIST") or os.environ.get(
         "MATE_MUSA_ARCH_LIST"
     )
@@ -58,9 +67,72 @@ def _musa_arch_flags() -> list[str]:
 
         props = torch_musa.get_device_properties(torch_musa.current_device())
         arch = f"{int(props.major)}{int(props.minor)}"
-        return [f"--offload-arch={_normalize_musa_arch(arch)}"]
+    except Exception as exc:
+        raise RuntimeError(
+            "cannot determine the MUSA arch for a JIT build: "
+            f"torch_musa device query failed ({exc}). Set VLLM_MUSA_ARCH_LIST "
+            "(e.g. '31') to build without a visible device."
+        ) from exc
+    return [f"--offload-arch={_normalize_musa_arch(arch)}"]
+
+
+def musa_arch_codes() -> list[str]:
+    """Arch codes (``"31"``) this build targets, in flag order."""
+    return [flag.split("=", 1)[1].replace("mp_", "") for flag in _musa_arch_flags()]
+
+
+def musa_arch_define(name: str = "__MUSA_ARCH_LIST__") -> str:
+    """The single-arch ``-D<name>=<code>`` flag the TileLang templates branch on.
+
+    The template headers compare this macro against a single ``__MUSA_ARCH__``
+    value (``== 310``, ``>= 220``), so it cannot express a fat build.  Rather
+    than emit one arch's value for a multi-arch build and silently compile the
+    wrong template branch, refuse.
+
+    The value is the three-digit form (``mp_31`` -> ``310``) that those headers
+    compare against, not the two-digit code used in flag names.
+    """
+    codes = musa_arch_codes()
+    if len(codes) != 1:
+        raise RuntimeError(
+            f"kernel templates branch on a single {name}; a multi-arch JIT build "
+            f"(VLLM_MUSA_ARCH_LIST={os.environ.get('VLLM_MUSA_ARCH_LIST')!r}, "
+            f"resolved arches={codes}) is not supported for this kernel."
+        )
+    return f"-D{name}={int(codes[0]) * 10}"
+
+
+@functools.cache
+def _mcc_version() -> str:
+    """``mcc --version`` as a cache tag component (``"unknown"`` if unreadable)."""
+    try:
+        proc = subprocess.run(
+            [_mcc(), "--version"], capture_output=True, text=True, timeout=60
+        )
     except Exception:
-        return ["--offload-arch=mp_31"]
+        return "unknown"
+    text = (proc.stdout or "") + (proc.stderr or "")
+    # `mcc --version` prints the clang base version first and its own second
+    # ("clang version 14.0.0 ... / mcc version 5.2.0"), so anchor on the mcc
+    # line; a bare X.Y.Z search would tag every build with the clang version.
+    match = re.search(r"mcc\s+version\s+(\d+\.\d+\.\d+)", text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    # `mcc --version` prints the clang version first, so an unanchored match
+    # would tag the cache with 14.0.0 on every compiler.  Unknown is honest and
+    # still keeps the tag stable.
+    return "unknown"
+
+
+def build_tag() -> str:
+    """Cache-directory tag for the current target.
+
+    A cached object is valid only for the arch and compiler that produced it,
+    so both are part of the tag: switching arch or mcc must not resolve to an
+    existing directory.
+    """
+    arches = "_".join(f"mp_{code}" for code in musa_arch_codes())
+    return f"{arches}__mcc{_mcc_version()}"
 
 
 def _escape(path: Path) -> str:
@@ -121,7 +193,7 @@ def _ninja_content(
         *_parse_env_flags("VLLM_MUSA_EXTRA_LDFLAGS"),
     ]
 
-    build_dir = _CACHE_DIR / name
+    build_dir = _CACHE_DIR / f"{name}__{build_tag()}"
     lines = [
         "ninja_required_version = 1.3",
         f"cxx = {os.environ.get('CXX', 'c++')}",
@@ -169,10 +241,10 @@ def load_musa_jit(
     extra_ldflags: tuple[str, ...] = (),
 ):
     resolved_sources = tuple((_CSRC_DIR / source).resolve() for source in sources)
-    build_dir = _CACHE_DIR / name
+    build_dir = _CACHE_DIR / f"{name}__{build_tag()}"
     ninja_path = build_dir / "build.ninja"
     so_path = build_dir / f"{name}.so"
-    lock_path = _CACHE_DIR / "tmp" / f"{name}.lock"
+    lock_path = _CACHE_DIR / "tmp" / f"{name}__{build_tag()}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(lock_path)):
         build_dir.mkdir(parents=True, exist_ok=True)

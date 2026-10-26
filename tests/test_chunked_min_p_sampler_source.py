@@ -19,7 +19,6 @@ def _load_device_guard(musa):
     tree = ast.parse(source_path.read_text(encoding="utf-8"), source_path)
     helper_names = {
         "_musa_device_index",
-        "_get_musa_device_capability",
         "_is_validated_musa_device",
     }
     helpers = [
@@ -27,10 +26,26 @@ def _load_device_guard(musa):
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name in helper_names
     ]
+    # The guard asks vllm_musa.device_spec for the device facts; provide a fake
+    # that resolves them through the injected `musa` namespace so these tests
+    # keep asserting *which* device id gets queried.
+    @cache
+    def get_device_spec(device_id: int):
+        major, minor = musa.get_device_capability(device_id)
+        return SimpleNamespace(
+            device_capability=(major, minor),
+            is_validated=(major, minor) == (3, 1),
+        )
+
+    class MusaBuildTargetMismatch(RuntimeError):
+        """Stand-in for the real class: this fake never raises it."""
+
     namespace = {
         "Optional": Optional,
+        "MusaBuildTargetMismatch": MusaBuildTargetMismatch,
         "cache": cache,
         "torch": SimpleNamespace(device=object, musa=musa),
+        "get_device_spec": get_device_spec,
     }
     exec(
         compile(ast.Module(body=helpers, type_ignores=[]), source_path, "exec"),
@@ -61,8 +76,10 @@ def test_min_p_dispatch_keeps_the_validated_contract_guard() -> None:
     assert "and 0 < probs.shape[0] <= _QWEN_MIN_P_MAX_BATCH" in source
     assert "and probs.is_contiguous()" in source
     assert "and _is_validated_musa_device(probs.device)" in source
-    assert "_get_musa_device_capability(device_id)" in source
-    assert "torch.musa.get_device_capability(device_id)" in source
+    # The arch predicate now lives in vllm_musa/device_spec.py; the guard must
+    # ask the spec rather than compare a capability tuple against a literal.
+    assert "spec.is_validated" in source
+    assert "== (3, 1)" not in source
     assert "and _is_supported_musa_generator(generator, probs.device)" in source
     assert "musa_chunked_min_p_sampling_from_probs.default" in source
     assert "min_p_sampling_from_probs.default" in source

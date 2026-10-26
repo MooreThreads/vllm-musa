@@ -5,7 +5,7 @@ import os
 
 import torch
 
-from vllm_musa.jit_kernel.csrc.jit import load_musa_jit
+from vllm_musa.jit_kernel.csrc.jit import load_musa_jit, musa_arch_define
 
 
 def _default_threads_blocks(world_size: int) -> tuple[int, int]:
@@ -49,7 +49,7 @@ def _custom_ar_module(world_size: int):
             "-Wno-error=address-of-temporary",
             "-fmusa-flush-denormals-to-zero",
             "-fno-signed-zeros",
-            "-D__MUSA_ARCH_LIST__=310",
+            musa_arch_define(),
             f"-DSGL_CUSTOM_AR_THREADS={threads}",
             f"-DSGL_CUSTOM_AR_BLOCKS={blocks}",
             f"-DSGL_CUSTOM_AR_VECTOR_LOAD={vector_load}",
