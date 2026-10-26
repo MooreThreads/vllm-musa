@@ -1,5 +1,7 @@
 # Runtime Python dependencies that are portable across MUSA images.
-torchada==0.1.95
+# 0.1.104 adds torchada.musa: the shared device facts and build identity this
+# package's device_spec.py and setup.py now use.
+torchada==0.1.104
 mthreads-ml-py>=2.4.3
 numpy==1.26
 openai>=2.25.0
