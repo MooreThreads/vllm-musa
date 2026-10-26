@@ -65,12 +65,14 @@ them in filename order before the editable or wheel install. They are source pat
 | `0055-MUSA-run-the-DiffusionGemma-read-tests-on-MUSA.patch` | The read suite behind `/v1/systemone` runs on MUSA: it gates on `current_platform.is_cuda_alike()` and takes its device from `current_platform.device_type`, instead of skipping on `is_cuda()` with a hardcoded `"cuda"`. |
 | `0056-MUSA-size-the-dedicated-Mamba-pool-per-align-mode-sn.patch` | Align mode pins one reusable Mamba state snapshot per cacheable boundary and lets an in-flight batch hold one retired running block, so the per-request bound of the dedicated Mamba pool follows the mode instead of a fixed slack; the pool plan and the admission bound share one helper. When the dedicated pools are active, attention pages keep their own page size instead of being expanded to the recurrent-state page, so align mode does not lose the attention KV capacity. |
 | `0057-MUSA-optimize-hybrid-attention-page-size-fastpath.patch` | The align-mode block-table gather runs in a MUSA JIT kernel, non-speculative decode graphs reuse its stable buffer, the scheduler block stays on the attention page when Mamba state lives in a dedicated pool, and ordinary align decode takes the fused pre-copy path. |
+| `0058-MUSA-handle-expandable-segments-around-graph-capture.patch` | Graph capture and graph-memory profiling switch the caching allocator to ordinary segments, because expandable segments cannot grow during stream capture, and replay the full allocator config so other allocator knobs are preserved. |
 
 Upstream vLLM v0.32 already carries `/v1/systemone`, the diffusion scheduler and the sampler
 hooks, so no entry ports them. Entry `0055` only makes upstream's read suite run on MUSA; the
-`TRITON_ATTN` pin for diffusion models lives in `vllm_musa/platform.py`.
+`TRITON_ATTN` pin for diffusion models lives in `vllm_musa/platform.py`. Entry `0056` ports the
+v0.28 `0193` allocator toggle around graph-memory profiling and the real graph capture.
 
-Currently **57 patches** and **0 upstream entries** in `upstream/`.
+Currently **58 patches** and **0 upstream entries** in `upstream/`.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM
