@@ -14,7 +14,7 @@ so one `vllm serve` process exposes both `/v1/chat/completions` and `/v1/systemo
 
 | Setting | Value |
 |---|---|
-| Image | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev` (rebuilt from this branch after merge; the tag currently carries the v0.28 port) |
+| Image | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev` |
 | Checkpoint | `google/diffusiongemma-26B-A4B-it` (BF16) |
 | Hardware | 1x S5000 (TP1), MUSA 5.2.0, driver `5.2.0-server` |
 | Speculative decoding | Off |
