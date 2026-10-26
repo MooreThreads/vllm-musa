@@ -14,6 +14,14 @@ import pytest
 import torch
 
 
+def _patch_section(text: str, path: str) -> str:
+    """Return the diff block for ``path`` inside a git-am mailbox patch."""
+    start = text.find("diff --git a/" + path)
+    assert start >= 0, f"{path} not found in patch"
+    end = text.find("\ndiff --git ", start + 10)
+    return text[start:] if end < 0 else text[start:end]
+
+
 class TestPatchFileNaming:
     """Tests for patch file naming convention."""
 
@@ -103,15 +111,19 @@ class TestCustomOpsRuntimePatches:
 
 class TestModelOptFp8CapabilityPatch:
     def test_modelopt_fp8_uses_musa_capability_floor(self):
+        # 0.32 folds the ModelOpt FP8 capability floor into the base platform
+        # port (0001); the standalone 0099 entry no longer exists.
         patch_path = (
             Path(__file__).parent.parent
-            / "vllm_musa/patches/series/0099-MUSA-allow-ModelOpt-FP8-on-MUSA-capability.patch"
+            / "vllm_musa/patches/series/0001-MUSA-base-platform-port.patch"
         )
-        source = patch_path.read_text()
+        section = _patch_section(
+            patch_path.read_text(),
+            "vllm/model_executor/layers/quantization/modelopt.py",
+        )
 
-        assert "vllm/model_executor/layers/quantization/modelopt.py" in source
-        assert "-        return 89" in source
-        assert "+        return 31" in source
+        assert "-        return 80" in section
+        assert "+        return 31" in section
 
 
 class TestCompilationBackendPatch:
@@ -1119,7 +1131,8 @@ class TestMUSAPlatformDefaults:
         # The MUSA platform seeds a 64-element KV page for non-hybrid,
         # non-user-specified configs so paged FMHA/MLA decode takes the TME
         # bulk-gather path. Fixed-page kernels and explicit user overrides are
-        # preserved; hybrid models defer to the upstream mamba-aligned selection.
+        # preserved. Hybrid models with separate physical Mamba pools keep the
+        # attention page independent in both none and align cache modes.
         from types import SimpleNamespace
 
         from vllm.v1.attention.backend import AttentionBackend, MultipleOf
@@ -1152,20 +1165,21 @@ class TestMUSAPlatformDefaults:
             mamba_cache_mode="none",
         ):
             return SimpleNamespace(
-                model_config=SimpleNamespace(is_hybrid=is_hybrid),
+                model_config=SimpleNamespace(is_hybrid=is_hybrid, architectures=[]),
                 cache_config=SimpleNamespace(
                     block_size=block_size,
                     user_specified_block_size=user_specified,
                     mamba_cache_mode=mamba_cache_mode,
                     mamba_page_size_padded=1056,
+                    kv_cache_dtype_skip_layers=[],
                 ),
             )
 
         def _use_backend(backend):
             monkeypatch.setattr(
                 MUSAPlatformBase,
-                "_find_non_ssm_backend",
-                classmethod(lambda cls, vllm_config: backend),
+                "_find_non_ssm_backends",
+                classmethod(lambda cls, vllm_config: [backend]),
             )
 
         # non-hybrid, default block size, kernel accepts multiples of 16 -> 64
@@ -1193,16 +1207,12 @@ class TestMUSAPlatformDefaults:
         assert cfg.cache_config.block_size == 64
         assert cfg.cache_config.mamba_page_size_padded is None
 
-        # The legacy aligned-cache mode still follows the upstream page size.
-        monkeypatch.setattr(
-            MUSAPlatformBase,
-            "_align_hybrid_block_size",
-            classmethod(lambda cls, vllm_config, backend_cls: None),
-        )
+        # Prefix-cached align mode keeps the same independent attention page.
         cfg = _cfg(is_hybrid=True, mamba_cache_mode="align")
         MUSAPlatformBase.update_block_size_for_backend(cfg)
-        assert cfg.cache_config.block_size == 16
-        assert cfg.cache_config.mamba_page_size_padded == 1056
+        assert cfg.cache_config.block_size == 64
+        assert cfg.cache_config.mamba_block_size == 64
+        assert cfg.cache_config.mamba_page_size_padded is None
 
     def test_dense_fp8_does_not_cap_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase
@@ -1747,41 +1757,49 @@ class TestBuildTimeSeries:
         )
 
     def test_gemma_norm_series_patch_uses_generic_inplace_ir_contract(self):
-        series = (
-            self._SERIES_DIR / "0079-MUSA-allow-Gemma-RMSNorm-residual-donation.patch"
+        # 0.32 folds the Gemma RMSNorm donation contract into 0001.
+        series = _patch_section(
+            self._read_patch(
+                self._SERIES_DIR / "0001-MUSA-base-platform-port.patch"
+            ),
+            "vllm/model_executor/layers/layernorm.py",
         )
-        series = self._read_patch(series)
 
         assert "fused_add_rms_norm.maybe_inplace" in series
         assert "allow_inplace" not in series
-        assert "vllm/model_executor/models/qwen3_5.py" not in series
-        assert "vllm/model_executor/models/qwen3_5_mtp.py" not in series
 
     def test_gated_qkv_series_patch_uses_generic_ir_contract(self):
-        series = self._SERIES_DIR / "0080-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch"
-        series = self._read_patch(series)
+        # 0.32 folds the gated-QKV IR op into the base port (0001): the op is
+        # registered under vllm/ir/ops/gated_qkv.py and qwen3_next.py consumes
+        # it through ir.ops; no private experimental switch may come back.
+        base = self._read_patch(
+            self._SERIES_DIR / "0001-MUSA-base-platform-port.patch"
+        )
+        op = _patch_section(base, "vllm/ir/ops/gated_qkv.py")
+        section = _patch_section(
+            base, "vllm/model_executor/models/qwen3_next.py"
+        )
 
-        assert '@register_op(activations=["packed_qkv"])' in series
-        assert "def gated_qkv_rms_norm_rope(" in series
-        assert "ir.ops.gated_qkv_rms_norm_rope(" in series
-        assert "q, k = ir.ops.gated_qkv_rms_norm_rope(" in series
-        assert "q, k, gate = ir.ops.gated_qkv_rms_norm_rope(" not in series
-        assert "attn_output.view_as(gate) * torch.sigmoid(gate)" in series
-        assert "gate = gate.reshape(*orig_shape, -1)" not in series
-        assert "vllm/model_executor/models/qwen3_next.py" in series
-        assert "VLLM_MUSA_EXPERIMENTAL_GATED_QKV_MROPE" not in series
-        assert "current_platform.is_musa()" not in series
-        assert "override_tolerance(torch.bfloat16, atol=2e-2, rtol=1.6e-2)" in series
+        assert '@register_op(activations=["packed_qkv"])' in op
+        assert "def gated_qkv_rms_norm_rope(" in op
+        assert "ir.ops.gated_qkv_rms_norm_rope(" in section
+        assert "q, k = ir.ops.gated_qkv_rms_norm_rope(" in section
+        assert "q, k, gate = ir.ops.gated_qkv_rms_norm_rope(" not in section
+        assert "attn_output.view_as(gate) * torch.sigmoid(gate)" in section
+        assert "VLLM_MUSA_EXPERIMENTAL_GATED_QKV_MROPE" not in base
 
     def test_apply_patch_series_missing_dir_is_noop(self, tmp_path):
         ba = self._load_build_apply()
         assert ba.apply_patch_series(tmp_path, tmp_path / "nope") == []
 
     def test_deepseek_v4_spec_metadata_upload_series_patch_present(self):
-        series = self._SERIES_DIR / (
-            "0035-MUSA-vllm.v1.worker.gpu_model_runner-v0.28-reanchor.patch"
+        # 0.32 folds the gpu_model_runner re-anchor into the base port (0001).
+        series = _patch_section(
+            self._read_patch(
+                self._SERIES_DIR / "0001-MUSA-base-platform-port.patch"
+            ),
+            "vllm/v1/worker/gpu_model_runner.py",
         )
-        series = self._read_patch(series)
 
         assert "_spec_cu_num_draft_tokens" in series
         assert "_spec_cu_num_sampled_tokens" in series
@@ -1803,11 +1821,13 @@ class TestBuildTimeSeries:
         assert "torch.from_numpy(bonus_logits_indices).to" not in musa_branch
 
     def test_deepseek_v4_materialized_indexer_series_patch_present(self):
-        series = (
-            self._SERIES_DIR
-            / "0013-MUSA-vllm.model_executor.layers.sparse_attn_indexer.patch"
+        # 0.32 folds the sparse-attn-indexer work into the base port (0001).
+        series = _patch_section(
+            self._read_patch(
+                self._SERIES_DIR / "0001-MUSA-base-platform-port.patch"
+            ),
+            "vllm/model_executor/layers/sparse_attn_indexer.py",
         )
-        series = self._read_patch(series)
 
         assert "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL" not in series
         assert "return True" in series

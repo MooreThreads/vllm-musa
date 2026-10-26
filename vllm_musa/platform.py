@@ -666,20 +666,62 @@ class MUSAPlatformBase(Platform):
         model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
         # The separate Mamba pools have independent physical pages and block-id
-        # spaces. In the no-prefix-cache mode used by Qwen3.5/Qwen3.6 serving,
-        # do not let upstream inflate the attention block to the full recurrent
-        # state page (1056 tokens for Qwen3.6-35B-A3B). That inflation wastes
-        # attention KV capacity and forces avoidable request preemption.
+        # spaces, so attention and recurrent page sizes are independent in both
+        # cache modes. Without prefix caching, do not let upstream inflate the
+        # attention block to the full recurrent state page (1056 tokens for
+        # Qwen3.6-35B-A3B); with align-mode prefix caching, keep both scheduler
+        # blocks on the common 64-token unit instead of the padded state page.
         separate_mamba_pages = (
             model_config is not None
             and cache_config is not None
             and model_config.is_hybrid
-            and cache_config.mamba_cache_mode == "none"
             and resolve_optimization_contract(vllm_config).prefers(
                 OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
             )
         )
         if separate_mamba_pages:
+            if cache_config.mamba_cache_mode == "align":
+                backend_classes = cls._find_non_ssm_backends(vllm_config)
+                if backend_classes:
+                    from vllm.config.vllm import set_current_vllm_config
+
+                    with set_current_vllm_config(vllm_config):
+                        supports_64 = all(
+                            b.supports_block_size(64) for b in backend_classes
+                        )
+                    if (
+                        cache_config.user_specified_block_size
+                        and cache_config.block_size != 64
+                    ):
+                        # An explicit --block-size wins, but the align fastpath
+                        # assumes the common 64-token scheduling unit: a
+                        # different page size splits align-mode prefill and can
+                        # break the one-cacheable-state-per-boundary sharing.
+                        logger.warning_once(
+                            "[MUSA]--block-size=%d was set explicitly together with "
+                            "align-mode Mamba paging; the 64-token fastpath is "
+                            "disabled for %s, so align prefill may split and Mamba "
+                            "state sharing may regress. Drop --block-size to use the "
+                            "64-token page.",
+                            cache_config.block_size,
+                            "/".join(b.get_name() for b in backend_classes),
+                        )
+                    elif supports_64:
+                        # Dedicated pools make attention and recurrent pages
+                        # physically independent. Using the common 64-token
+                        # scheduling unit avoids align-mode prefill splits while
+                        # preserving one cacheable Mamba state per boundary.
+                        cache_config.block_size = 64
+                        cache_config.mamba_block_size = 64
+                        cache_config.mamba_page_size_padded = None
+                        logger.info(
+                            "[MUSA]Using independent align-mode attention and "
+                            "Mamba scheduler blocks at 64 tokens for %s.",
+                            "/".join(b.get_name() for b in backend_classes),
+                        )
+                        return
+                super().update_block_size_for_backend(vllm_config)
+                return
             backend_classes = cls._find_non_ssm_backends(vllm_config)
             if backend_classes:
                 from vllm.config.vllm import set_current_vllm_config
