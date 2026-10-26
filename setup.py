@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import importlib.util
 import os
 import platform
 import shutil
@@ -257,29 +258,59 @@ EXTRA_LINK_ARGS = [
 #: indistinguishable from an ordering: when mp_32 lands it would silently build
 #: without FP8 even though the arch has it.
 ARCH_BUILD_CAPABILITIES = {
+    "mp_21": {"native_fp8": False},
     "mp_22": {"native_fp8": False},
     "mp_31": {"native_fp8": True},
 }
 
-DEFAULT_MTGPU_TARGET = "mp_31"
-MTGPU_TARGET = os.environ.get("MTGPU_TARGET")
-MTGPU_TARGET_SOURCE = "environment"
+# The selection rules live in a module so they can be tested without building:
+# ``MTGPU_TARGET`` takes one arch or several (``mp_31`` / ``mp_21,mp_22``), and a
+# disagreement with ``TORCH_MUSA_ARCH_LIST`` -- the variable ``torch_musa`` turns
+# into ``--offload-arch`` -- is refused instead of producing a wheel whose stamp
+# and object code name different hardware.
+_build_arch_spec = importlib.util.spec_from_file_location(
+    "vllm_musa_build_arch", Path(__file__).parent / "vllm_musa" / "_build_arch.py"
+)
+_build_arch = importlib.util.module_from_spec(_build_arch_spec)
+# Register before executing: dataclasses look their module up in sys.modules.
+sys.modules[_build_arch_spec.name] = _build_arch
+_build_arch_spec.loader.exec_module(_build_arch)
 
-if MTGPU_TARGET:
-    print(f"Using MTGPU_TARGET from environment: {MTGPU_TARGET}")
-else:
-    MTGPU_TARGET = DEFAULT_MTGPU_TARGET
-    MTGPU_TARGET_SOURCE = "default"
-
-if "MTGPU_TARGET" not in os.environ and torch.musa.is_available():
+_device_arch = None
+if torch.musa.is_available():
     try:
-        device_props = torch.musa.get_device_properties(0)
-        MTGPU_TARGET = f"mp_{device_props.major}{device_props.minor}"
-        MTGPU_TARGET_SOURCE = "device"
+        _device_props = torch.musa.get_device_properties(0)
+        _device_arch = f"mp_{_device_props.major}{_device_props.minor}"
     except Exception as e:
         print(f"Warning: Failed to detect GPU properties: {e}")
-        MTGPU_TARGET_SOURCE = "default"
-elif "MTGPU_TARGET" not in os.environ:
+
+try:
+    ARCH_SELECTION = _build_arch.resolve(
+        os.environ.get(_build_arch.TARGET_ENV),
+        device_arch=_device_arch,
+        capabilities=ARCH_BUILD_CAPABILITIES,
+    )
+    _declared_arch_list = _build_arch.resolve_compiler_arch_list(
+        os.environ.get(_build_arch.COMPILER_LIST_ENV), ARCH_SELECTION
+    )
+except _build_arch.ArchBuildError as e:
+    print(f"ERROR: {e}")
+    sys.exit(1)
+
+MTGPU_TARGETS = list(ARCH_SELECTION.targets)
+MTGPU_TARGET = ARCH_SELECTION.display
+MTGPU_TARGET_SOURCE = ARCH_SELECTION.source
+# ``torch_musa``'s extension builder reads this at extension-construction time and
+# turns it into one ``--offload-arch`` per arch, so it must be set before the
+# extensions below are created.  mcc accepts the flag repeatedly and bundles the
+# result into a single __CLANG_OFFLOAD_BUNDLE__, which is the fat binary.
+os.environ[_build_arch.COMPILER_LIST_ENV] = _declared_arch_list
+
+if MTGPU_TARGET_SOURCE == "environment":
+    print(f"Using MTGPU_TARGET from environment: {MTGPU_TARGET}")
+elif MTGPU_TARGET_SOURCE == "device":
+    print(f"Using MTGPU_TARGET detected on the device: {MTGPU_TARGET}")
+else:
     # Loud on purpose: this is the one path that picks an arch nobody asked for,
     # and a wrong arch does not fault on MUSA, it returns wrong numbers.
     print(
@@ -287,14 +318,12 @@ elif "MTGPU_TARGET" not in os.environ:
         f"derived from a device. Building for the default {MTGPU_TARGET}. "
         f"Set MTGPU_TARGET explicitly to build for another arch."
     )
-
-SUPPORTED_MTGPU_TARGETS = sorted(ARCH_BUILD_CAPABILITIES)
-if MTGPU_TARGET not in SUPPORTED_MTGPU_TARGETS:
+if ARCH_SELECTION.is_fat:
     print(
-        f"ERROR: unsupported GPU architecture '{MTGPU_TARGET}'. "
-        f"Expected one of: {SUPPORTED_MTGPU_TARGETS}"
+        f"WARNING: building a fat binary for {MTGPU_TARGET}; every arch gets the "
+        f"same -DENABLE_FP8={ARCH_SELECTION.fp8} and the same tactics."
     )
-    sys.exit(1)
+print(f"TORCH_MUSA_ARCH_LIST={_declared_arch_list} (--offload-arch per arch)")
 
 MCC_FLAGS = [
     "-DNDEBUG",
@@ -312,7 +341,7 @@ MCC_FLAGS = [
     "-DUSE_MUSA",
 ]
 
-ENABLE_FP8 = ARCH_BUILD_CAPABILITIES[MTGPU_TARGET]["native_fp8"]
+ENABLE_FP8 = ARCH_SELECTION.fp8
 if ENABLE_FP8:
     MCC_FLAGS.append("-DENABLE_FP8")
 
@@ -418,7 +447,7 @@ class _CustomBuildExt(BuildExtension):
         """
         stamp = ta_build.write_build_stamp(
             Path(dest),
-            [MTGPU_TARGET],
+            MTGPU_TARGETS,
             fp8=ENABLE_FP8,
             compiler=_mcc_version_string(),
             source=MTGPU_TARGET_SOURCE,

@@ -164,6 +164,7 @@ def _stamp_writer(tmp_path):
         "Path": Path,
         "ta_build": ta_build,
         "MTGPU_TARGET": "mp_31",
+        "MTGPU_TARGETS": ["mp_31"],
         "ENABLE_FP8": True,
         "MTGPU_TARGET_SOURCE": "device",
         "_mcc_version_string": lambda: "5.2.0",
@@ -195,6 +196,7 @@ def test_setup_writes_a_stamp_the_runtime_can_read(tmp_path) -> None:
 def test_stamp_writer_records_a_non_fp8_arch(tmp_path) -> None:
     write_stamp, namespace = _stamp_writer(tmp_path)
     namespace["MTGPU_TARGET"] = "mp_22"
+    namespace["MTGPU_TARGETS"] = ["mp_22"]
     namespace["ENABLE_FP8"] = False
 
     write_stamp(tmp_path / "vllm_musa")
@@ -204,6 +206,23 @@ def test_stamp_writer_records_a_non_fp8_arch(tmp_path) -> None:
     exec(compile(produced.read_text(), str(produced), "exec"), rendered)
 
     assert rendered["MTGPU_TARGETS"] == ("mp_22",)
+    assert rendered["ENABLE_FP8"] is False
+
+
+def test_stamp_writer_records_every_arch_of_a_fat_build(tmp_path) -> None:
+    """A fat wheel names its set, so the runtime accepts either arch and no other."""
+    write_stamp, namespace = _stamp_writer(tmp_path)
+    namespace["MTGPU_TARGET"] = "mp_21,mp_22"
+    namespace["MTGPU_TARGETS"] = ["mp_21", "mp_22"]
+    namespace["ENABLE_FP8"] = False
+
+    write_stamp(tmp_path / "vllm_musa")
+
+    produced = tmp_path / "vllm_musa" / "_build_stamp.py"
+    rendered: dict = {}
+    exec(compile(produced.read_text(), str(produced), "exec"), rendered)
+
+    assert rendered["MTGPU_TARGETS"] == ("mp_21", "mp_22")
     assert rendered["ENABLE_FP8"] is False
 
 

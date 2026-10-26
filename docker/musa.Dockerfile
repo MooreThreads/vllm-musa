@@ -222,15 +222,17 @@ FROM devel AS vllm_musa_deps
 # is installed. Keep them out of base/apt/devel, but retain them in the final
 # image because the vllm-musa JIT uses MATE_MUSA_ARCH_LIST at runtime.
 #
-# The three spellings below describe ONE arch and must agree; they differ only
-# because three consumers parse them differently:
-#   MTGPU_TARGET          setup.py / vllm_musa _C build   -> "mp_31"
-#   TORCH_MUSA_ARCH_LIST  torch_musa                      -> "31"
-#   MATE_MUSA_ARCH_LIST   MATE JIT                        -> "3.1"
-# Override all three together (docker build --build-arg ...); the RUN below
-# refuses to build an image whose selectors disagree, because a mismatched set
-# builds for one arch and JIT-compiles for another, and a cubin for the wrong
-# arch does not fault on MUSA - it returns wrong numbers.
+# The three spellings below describe the SAME SET of arches and must agree; they
+# differ only because three consumers parse them differently:
+#   MTGPU_TARGET          setup.py / vllm_musa _C build   -> "mp_31" or "mp_31,mp_22"
+#   TORCH_MUSA_ARCH_LIST  torch_musa                      -> "31"   or "31;22"
+#   MATE_MUSA_ARCH_LIST   MATE JIT                        -> "3.1"  or "3.1;2.2"
+# A list builds a fat binary (one --offload-arch per arch); the image ships one
+# arch because that is what has been validated, and the plumbing is there for
+# when it is not.  Override all three together (docker build --build-arg ...);
+# the RUN below refuses to build an image whose selectors disagree, because a
+# mismatched set builds for one arch and JIT-compiles for another, and a cubin
+# for the wrong arch does not fault on MUSA - it returns wrong numbers.
 ARG MTGPU_TARGET=mp_31
 ARG TORCH_MUSA_ARCH_LIST=31
 ARG MATE_MUSA_ARCH_LIST=3.1
@@ -238,14 +240,21 @@ ENV MTGPU_TARGET=${MTGPU_TARGET} \
     TORCH_MUSA_ARCH_LIST=${TORCH_MUSA_ARCH_LIST} \
     MATE_MUSA_ARCH_LIST=${MATE_MUSA_ARCH_LIST}
 
+# Normalise every spelling to a sorted set of two-digit codes, then compare sets.
 RUN set -eux; \
-    test "mp_${TORCH_MUSA_ARCH_LIST}" = "${MTGPU_TARGET}"; \
-    case "${MTGPU_TARGET}" in \
-      mp_*) target_code="${MTGPU_TARGET#mp_}";; \
-      *) echo "MTGPU_TARGET must be mp_<code>, got ${MTGPU_TARGET}"; exit 1;; \
-    esac; \
-    test "${MATE_MUSA_ARCH_LIST}" = "$(echo "${target_code}" | cut -c1).$(echo "${target_code}" | cut -c2-)"; \
-    echo "MUSA arch selectors agree on ${MTGPU_TARGET}"
+    target_codes="$(echo "${MTGPU_TARGET}" | tr ',;' '\n\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e 's/^mp_//' | sort -u | paste -sd';')"; \
+    torch_codes="$(echo "${TORCH_MUSA_ARCH_LIST}" | tr ',;' '\n\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e 's/^mp_//' | sort -u | paste -sd';')"; \
+    mate_codes="$(echo "${MATE_MUSA_ARCH_LIST}" | tr ',;' '\n\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e 's/\.//g' | sort -u | paste -sd';')"; \
+    test -n "${target_codes}"; \
+    for code in $(echo "${target_codes}" | tr ';' ' '); do \
+      case "${code}" in \
+        [0-9]*) ;; \
+        *) echo "MTGPU_TARGET must be mp_<code>, got ${MTGPU_TARGET}"; exit 1;; \
+      esac; \
+    done; \
+    test "${torch_codes}" = "${target_codes}" || { echo "MTGPU_TARGET=${MTGPU_TARGET} != TORCH_MUSA_ARCH_LIST=${TORCH_MUSA_ARCH_LIST}"; exit 1; }; \
+    test "${mate_codes}" = "${target_codes}" || { echo "MTGPU_TARGET=${MTGPU_TARGET} != MATE_MUSA_ARCH_LIST=${MATE_MUSA_ARCH_LIST}"; exit 1; }; \
+    echo "MUSA arch selectors agree on ${target_codes}"
 
 # vllm-musa Python deps, installed before the source copy so the layers cache.
 # Split across two indexes (per the MUSA release_5.2.0 wheel guide):
