@@ -13,6 +13,7 @@ from pathlib import Path
 # Activate MUSA patches before importing the torch ecosystem.
 import torchada  # noqa: F401
 import torch
+from torchada.musa import build as ta_build
 
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
@@ -247,27 +248,50 @@ EXTRA_LINK_ARGS = [
 ]
 
 # Detect MTGPU target architecture
+#: Per-arch build capabilities.  The build-time half of the same fact that
+#: ``vllm_musa/device_spec.py::NATIVE_FP8_ARCHS`` records at runtime; setup.py
+#: cannot import the package it is building, so the two are kept in sync by
+#: ``tests/test_build_arch_stamp.py``.
+#:
+#: This is a table, not ``MTGPU_TARGET == "mp_31"``, because the equality is
+#: indistinguishable from an ordering: when mp_32 lands it would silently build
+#: without FP8 even though the arch has it.
+ARCH_BUILD_CAPABILITIES = {
+    "mp_22": {"native_fp8": False},
+    "mp_31": {"native_fp8": True},
+}
+
 DEFAULT_MTGPU_TARGET = "mp_31"
 MTGPU_TARGET = os.environ.get("MTGPU_TARGET")
+MTGPU_TARGET_SOURCE = "environment"
 
 if MTGPU_TARGET:
     print(f"Using MTGPU_TARGET from environment: {MTGPU_TARGET}")
 else:
     MTGPU_TARGET = DEFAULT_MTGPU_TARGET
+    MTGPU_TARGET_SOURCE = "default"
 
 if "MTGPU_TARGET" not in os.environ and torch.musa.is_available():
     try:
         device_props = torch.musa.get_device_properties(0)
         MTGPU_TARGET = f"mp_{device_props.major}{device_props.minor}"
+        MTGPU_TARGET_SOURCE = "device"
     except Exception as e:
         print(f"Warning: Failed to detect GPU properties: {e}")
+        MTGPU_TARGET_SOURCE = "default"
 elif "MTGPU_TARGET" not in os.environ:
-    print(f"Warning: torch.musa not available. Using default target: {MTGPU_TARGET}")
+    # Loud on purpose: this is the one path that picks an arch nobody asked for,
+    # and a wrong arch does not fault on MUSA, it returns wrong numbers.
+    print(
+        f"WARNING: torch.musa is not available, so the build target cannot be "
+        f"derived from a device. Building for the default {MTGPU_TARGET}. "
+        f"Set MTGPU_TARGET explicitly to build for another arch."
+    )
 
-SUPPORTED_MTGPU_TARGETS = ["mp_22", "mp_31"]
+SUPPORTED_MTGPU_TARGETS = sorted(ARCH_BUILD_CAPABILITIES)
 if MTGPU_TARGET not in SUPPORTED_MTGPU_TARGETS:
     print(
-        f"Warning: Unsupported GPU architecture '{MTGPU_TARGET}'. "
+        f"ERROR: unsupported GPU architecture '{MTGPU_TARGET}'. "
         f"Expected one of: {SUPPORTED_MTGPU_TARGETS}"
     )
     sys.exit(1)
@@ -288,7 +312,8 @@ MCC_FLAGS = [
     "-DUSE_MUSA",
 ]
 
-if MTGPU_TARGET == "mp_31":
+ENABLE_FP8 = ARCH_BUILD_CAPABILITIES[MTGPU_TARGET]["native_fp8"]
+if ENABLE_FP8:
     MCC_FLAGS.append("-DENABLE_FP8")
 
 COMPILE_ARGS = {
@@ -360,8 +385,45 @@ EXT_MODULES = [
 ]
 
 
+def _mcc_version_string() -> str:
+    """`mcc --version` as recorded in the build stamp ("unknown" if unreadable).
+
+    ``torchada.musa.build.mcc_version`` anchors on the ``mcc version`` line, since
+    ``mcc --version`` prints the clang base version first; ``VLLM_MUSA_MCC`` still
+    overrides the binary.
+    """
+    return ta_build.mcc_version(os.environ.get("VLLM_MUSA_MCC"))
+
+
 class _CustomBuildExt(BuildExtension):
     """Custom build extension that clones third-party repositories before building."""
+
+    def build_extensions(self):
+        super().build_extensions()
+        # Write to the source tree *and* to build_lib.  `build_py` runs before
+        # `build_ext`, so by the time this runs the package has already been
+        # copied into build/lib and a stamp written only to the source tree
+        # never reaches the wheel -- bdist_wheel packs build/lib.
+        self._write_build_stamp(Path(__file__).parent / "vllm_musa")
+        if self.build_lib:
+            self._write_build_stamp(Path(self.build_lib) / "vllm_musa")
+
+    @staticmethod
+    def _write_build_stamp(dest: Path):
+        """Record the target arch into ``dest`` so the runtime can check it.
+
+        Without this the only symptom of installing a wheel built for another
+        arch is a wrong result: the kernel loads, ``musaDeviceSynchronize``
+        returns success, and the output buffer is left untouched.
+        """
+        stamp = ta_build.write_build_stamp(
+            Path(dest),
+            [MTGPU_TARGET],
+            fp8=ENABLE_FP8,
+            compiler=_mcc_version_string(),
+            source=MTGPU_TARGET_SOURCE,
+        )
+        print(f"Wrote MUSA build stamp: {stamp} (target={MTGPU_TARGET})")
 
     @staticmethod
     def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):

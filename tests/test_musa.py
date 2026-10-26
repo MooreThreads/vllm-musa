@@ -590,31 +590,67 @@ class TestMUSAPlatformBase:
         monkeypatch.setattr(flash_attn, "version", missing_package)
         assert not flash_attn._has_supported_fa3_scheduler_layout()
 
+    @staticmethod
+    def _spec(arch_name: str, arch_code: int):
+        from torchada.musa.device import MusaDeviceSpec
+
+        return MusaDeviceSpec(
+            device_capability=(arch_code // 100, (arch_code % 100) // 10),
+            arch_code=arch_code,
+            arch_name=arch_name,
+            mp_count=56,
+            warp_size=32 if arch_code == 310 else 128,
+            total_memory=1 << 30,
+            l2_cache_size=1 << 20,
+            shared_memory_per_block=1 << 16,
+            shared_memory_per_multiprocessor=1 << 16,
+            regs_per_multiprocessor=1 << 16,
+            max_threads_per_block=1024,
+            max_threads_per_multiprocessor=2048,
+            device_name="test device",
+        )
+
+    def _supports_fp8(self, arch_name: str, arch_code: int, stamp):
+        """Ask the platform with the device and the build stamp both pinned.
+
+        ``supports_fp8`` answers from the arch's explicit capability set and the
+        build stamp, never from a capability ordering, so the test has to drive
+        those two rather than ``get_device_capability``.
+        """
+        from unittest.mock import patch
+
+        from vllm_musa import device_spec
+        from vllm_musa.platform import MUSAPlatformBase
+
+        with (
+            patch.object(
+                device_spec, "current_device_spec", return_value=self._spec(arch_name, arch_code)
+            ),
+            patch.object(device_spec, "read_build_stamp", return_value=stamp),
+        ):
+            return MUSAPlatformBase.supports_fp8()
+
     def test_supports_fp8_for_musa_3_1(self):
-        """Test that FP8 is supported on MUSA capability 3.1."""
-        from vllm.platforms.interface import DeviceCapability
+        """mp_31 has native FP8, so a build that carries it advertises FP8."""
+        from torchada.musa.build import BuildStamp
 
-        from vllm_musa.platform import MUSAPlatformBase
+        assert self._supports_fp8("mp_31", 310, BuildStamp(("mp_31",), fp8=True)) is True
 
-        with patch.object(
-            MUSAPlatformBase,
-            "get_device_capability",
-            return_value=DeviceCapability(3, 1),
-        ):
-            assert MUSAPlatformBase.supports_fp8() is True
+    def test_supports_fp8_needs_an_arch_that_has_it(self):
+        """An arch without the instructions cannot answer True for any build."""
+        from torchada.musa.build import BuildStamp
 
-    def test_supports_fp8_rejects_pre_3_1(self):
-        """Test that pre-3.1 MUSA capability does not support FP8."""
-        from vllm.platforms.interface import DeviceCapability
+        assert self._supports_fp8("mp_30", 300, BuildStamp(("mp_30",), fp8=True)) is False
 
-        from vllm_musa.platform import MUSAPlatformBase
+    def test_supports_fp8_needs_a_build_that_carries_it(self):
+        """Advertise FP8 only when both the arch and the build have it."""
+        from torchada.musa.build import BuildStamp
 
-        with patch.object(
-            MUSAPlatformBase,
-            "get_device_capability",
-            return_value=DeviceCapability(3, 0),
-        ):
-            assert MUSAPlatformBase.supports_fp8() is False
+        assert self._supports_fp8("mp_31", 310, BuildStamp(("mp_31",), fp8=False)) is False
+
+    def test_supports_fp8_without_a_stamp_answers_from_the_arch(self):
+        """An editable install has no stamp; the arch still decides."""
+        assert self._supports_fp8("mp_31", 310, None) is True
 
     def test_support_hybrid_kv_cache(self):
         """Test that support_hybrid_kv_cache returns True."""
