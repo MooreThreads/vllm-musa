@@ -92,22 +92,17 @@ def read_build_stamp() -> Optional[_torchada_build.BuildStamp]:
 def _assert_build_targets_device(spec: MusaDeviceSpec) -> None:
     """Fail closed when the extension was built for a different arch.
 
-    The comparison is ``torchada.musa.build``'s; what stays here is the warning
-    for the case that module deliberately treats as *unknown*.  An editable or
-    source install has no stamp, and staying silent would hide the fact that the
-    check is simply off for this process.
+    One call to the shared module: it reads this package's stamp, compares it and
+    names this package in the message.  ``warn_when_unstamped`` is set because an
+    editable install has no stamp, and staying silent would hide the fact that the
+    only check that catches a wrong-arch wheel is off for this process.
     """
-    stamp = read_build_stamp()
-    if stamp is None:
-        logger.warning_once(
-            "No MUSA build stamp found (%s); the extension's target arch cannot "
-            "be checked against device %s. Set MTGPU_TARGET and rebuild to "
-            "enable the check.",
-            _BUILD_STAMP_MODULE,
-            spec.arch_name,
-        )
-        return
-    _torchada_build.assert_build_targets_device(spec, stamp)
+    _torchada_build.assert_build_targets_device(
+        spec,
+        module_name=_BUILD_STAMP_MODULE,
+        name="vllm_musa",
+        warn_when_unstamped=True,
+    )
 
 
 def get_device_spec(device_id: Optional[int] = None) -> Optional[MusaDeviceSpec]:

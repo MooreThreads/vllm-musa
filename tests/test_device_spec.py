@@ -7,6 +7,9 @@ device-probing helper is exercised through a fake properties object.
 
 from __future__ import annotations
 
+import sys
+import types
+
 import pytest
 
 from torchada.musa import build as ta_build
@@ -282,9 +285,10 @@ def test_a_build_target_mismatch_is_not_swallowed(monkeypatch) -> None:
 
     ta_device._probe_device_spec.cache_clear()
     monkeypatch.setattr(ta_device, "_get_properties", lambda device_id: Props())
-    monkeypatch.setattr(
-        device_spec, "read_build_stamp", lambda: ta_build.BuildStamp(("mp_22",))
-    )
+    stamp = types.ModuleType("vllm_musa._build_stamp")
+    stamp.MTGPU_TARGETS = ("mp_22",)
+    stamp.ENABLE_FP8 = False
+    monkeypatch.setitem(sys.modules, "vllm_musa._build_stamp", stamp)
 
     with pytest.raises(device_spec.MusaBuildTargetMismatch, match="mp_22"):
         device_spec.get_device_spec(0)
