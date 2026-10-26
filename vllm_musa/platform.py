@@ -926,7 +926,7 @@ class MUSAPlatformBase(Platform):
         if spec is None or not spec.supports(MusaFeature.NATIVE_FP8):
             return False
         stamp = read_build_stamp()
-        return True if stamp is None else bool(stamp["fp8"])
+        return True if stamp is None else bool(stamp.fp8)
 
     @classmethod
     def use_custom_allreduce(cls) -> bool:

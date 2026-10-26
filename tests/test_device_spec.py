@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import pytest
 
+from torchada.musa import build as ta_build
+from torchada.musa import device as ta_device
+
 from vllm_musa import device_spec
 from vllm_musa.device_spec import (
     NATIVE_FP8_ARCHS,
@@ -79,9 +82,10 @@ def test_unvalidated_arch_fails_closed(
 
 
 def test_arch_code_and_name_derivation() -> None:
-    assert device_spec._arch_code(3, 1) == 310
-    assert device_spec._arch_code(4, 2) == 420
-    assert device_spec._arch_name(2, 2) == "mp_22"
+    """Both spellings of an arch come from the shared module, not a local copy."""
+    assert device_spec.arch_code(3, 1) == 310
+    assert device_spec.arch_code(4, 2) == 420
+    assert device_spec.arch_name(2, 2) == "mp_22"
 
 
 def test_the_compile_key_ignores_the_multiprocessor_count() -> None:
@@ -132,7 +136,7 @@ def test_get_device_spec_builds_from_device_properties(monkeypatch) -> None:
         name = "MTT S5000"
         uuid = None
 
-    monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: FakeProps())
+    monkeypatch.setattr(ta_device, "_get_properties", lambda device_id: FakeProps())
     device_spec.clear_device_spec_cache()
 
     spec = get_device_spec(0)
@@ -152,7 +156,7 @@ def test_get_device_spec_returns_none_when_probe_fails(monkeypatch) -> None:
     def boom(device_id: int):
         raise RuntimeError("device not ready")
 
-    monkeypatch.setattr(device_spec, "_get_properties", boom)
+    monkeypatch.setattr(ta_device, "_get_properties", boom)
     device_spec.clear_device_spec_cache()
 
     assert get_device_spec(0) is None
@@ -241,8 +245,8 @@ def test_a_failed_probe_is_not_cached(monkeypatch) -> None:
             raise RuntimeError("device not ready")
         return Properties()
 
-    device_spec._probe_device_spec.cache_clear()
-    monkeypatch.setattr(device_spec, "_get_properties", flaky)
+    ta_device._probe_device_spec.cache_clear()
+    monkeypatch.setattr(ta_device, "_get_properties", flaky)
     monkeypatch.setattr(device_spec, "read_build_stamp", lambda: None)
 
     assert device_spec.get_device_spec(0) is None
@@ -253,16 +257,36 @@ def test_a_failed_probe_is_not_cached(monkeypatch) -> None:
 
 
 def test_a_build_target_mismatch_is_not_swallowed(monkeypatch) -> None:
-    """A wrong-arch wheel must not be reported as "no validated device"."""
-    mismatch = device_spec.MusaBuildTargetMismatch("built for mp_22")
+    """A wrong-arch wheel must not be reported as "no validated device".
 
-    def boom(device_id):
-        raise mismatch
+    The check lives in ``vllm_musa.device_spec`` (the shared module only compares
+    when asked), so this drives the real path: a stamp for another arch plus a
+    probe that succeeds.  Folding the mismatch into ``False`` would leave the
+    wrong binary running the generic kernels of the same wrong binary.
+    """
 
-    device_spec._probe_device_spec.cache_clear()
-    monkeypatch.setattr(device_spec, "_probe_device_spec", boom)
+    class Props:
+        major = 3
+        minor = 1
+        name = "MTT S5000"
+        multi_processor_count = 56
+        warp_size = 32
+        total_memory = 80 << 30
+        L2_cache_size = 8 << 20
+        shared_memory_per_block = 48 << 10
+        shared_memory_per_multiprocessor = 256 << 10
+        regs_per_multiprocessor = 65536
+        max_threads_per_block = 1024
+        max_threads_per_multiprocessor = 2048
+        uuid = None
 
-    with pytest.raises(device_spec.MusaBuildTargetMismatch):
+    ta_device._probe_device_spec.cache_clear()
+    monkeypatch.setattr(ta_device, "_get_properties", lambda device_id: Props())
+    monkeypatch.setattr(
+        device_spec, "read_build_stamp", lambda: ta_build.BuildStamp(("mp_22",))
+    )
+
+    with pytest.raises(device_spec.MusaBuildTargetMismatch, match="mp_22"):
         device_spec.get_device_spec(0)
-    with pytest.raises(device_spec.MusaBuildTargetMismatch):
+    with pytest.raises(device_spec.MusaBuildTargetMismatch, match="mp_22"):
         device_spec.is_validated_device(0)

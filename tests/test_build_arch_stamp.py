@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from torchada.musa import build as ta_build
+from torchada.musa import device as ta_device
+
 from vllm_musa import device_spec
 
 _SETUP_PY = Path(__file__).resolve().parent.parent / "setup.py"
@@ -66,7 +69,7 @@ def stamp(monkeypatch):
 
 @pytest.fixture
 def spec(monkeypatch):
-    monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: _FakeProps())
+    monkeypatch.setattr(ta_device, "_get_properties", lambda device_id: _FakeProps())
     device_spec.clear_device_spec_cache()
     yield device_spec.get_device_spec(0)
     device_spec.clear_device_spec_cache()
@@ -101,13 +104,13 @@ def test_matching_build_is_accepted(stamp, spec) -> None:
     stamp(("mp_31",))
 
     assert spec.arch_name == "mp_31"
-    assert device_spec.read_build_stamp()["targets"] == ("mp_31",)
+    assert device_spec.read_build_stamp().targets == ("mp_31",)
 
 
 def test_wrong_arch_build_is_refused(stamp, monkeypatch) -> None:
     """A binary for another arch must be an error, not a wrong number."""
     stamp(("mp_22",))
-    monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: _FakeProps())
+    monkeypatch.setattr(ta_device, "_get_properties", lambda device_id: _FakeProps())
     device_spec.clear_device_spec_cache()
 
     with pytest.raises(RuntimeError, match="built for MUSA arch mp_22"):
@@ -116,7 +119,7 @@ def test_wrong_arch_build_is_refused(stamp, monkeypatch) -> None:
 
 def test_fat_build_accepts_either_arch(stamp, monkeypatch) -> None:
     stamp(("mp_21", "mp_31"))
-    monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: _FakeProps())
+    monkeypatch.setattr(ta_device, "_get_properties", lambda device_id: _FakeProps())
     device_spec.clear_device_spec_cache()
 
     assert device_spec.get_device_spec(0).arch_name == "mp_31"
@@ -133,7 +136,7 @@ def test_missing_stamp_is_unknown_not_a_mismatch(monkeypatch, spec) -> None:
 
 def test_stamp_without_fp8_warns_but_does_not_fail(stamp, monkeypatch) -> None:
     stamp(("mp_31",), fp8=False)
-    monkeypatch.setattr(device_spec, "_get_properties", lambda device_id: _FakeProps())
+    monkeypatch.setattr(ta_device, "_get_properties", lambda device_id: _FakeProps())
     device_spec.clear_device_spec_cache()
 
     spec = device_spec.get_device_spec(0)
@@ -159,6 +162,7 @@ def _stamp_writer(tmp_path):
     (tmp_path / "vllm_musa").mkdir()
     namespace = {
         "Path": Path,
+        "ta_build": ta_build,
         "MTGPU_TARGET": "mp_31",
         "ENABLE_FP8": True,
         "MTGPU_TARGET_SOURCE": "device",
