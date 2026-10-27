@@ -27,10 +27,12 @@ def _musa_fused_allreduce_rms_norm_impl(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Runtime implementation: use the registered MUSA JIT fused kernel."""
     comm = get_musa_jit_custom_allreduce_comm(comm_id)
-    result = comm.fused_allreduce_rmsnorm(input, weight, float(eps))
+    kwargs = {"gemma": True} if gemma else {}
+    result = comm.fused_allreduce_rmsnorm(input, weight, float(eps), **kwargs)
     if result is None:
         raise RuntimeError(
             "MUSA fused allreduce-rmsnorm requires the registered communicator "
@@ -44,8 +46,9 @@ def _musa_fused_allreduce_rms_norm_fake(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    del weight, eps, comm_id
+    del weight, eps, comm_id, gemma
     return torch.empty_like(input), torch.empty_like(input)
 
 
@@ -55,14 +58,18 @@ def _musa_fused_allreduce_residual_rms_norm_impl(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Runtime implementation: use the registered MUSA JIT residual fused kernel."""
     comm = get_musa_jit_custom_allreduce_comm(comm_id)
+    kwargs = {"gemma": True} if gemma else {}
     result = comm.fused_allreduce_residual_rmsnorm(
-        input, residual, weight, float(eps)
+        input, residual, weight, float(eps), **kwargs
     )
     if result is None:
-        reason_fn = getattr(comm, "reject_fused_allreduce_residual_rmsnorm_reason", None)
+        reason_fn = getattr(
+            comm, "reject_fused_allreduce_residual_rmsnorm_reason", None
+        )
         reason = (
             reason_fn(input, residual, weight)
             if callable(reason_fn)
@@ -82,14 +89,18 @@ def _musa_fused_allreduce_residual_rms_norm_no_raw_impl(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Runtime implementation for residual fused kernel without raw CAR output."""
     comm = get_musa_jit_custom_allreduce_comm(comm_id)
+    kwargs = {"gemma": True} if gemma else {}
     result = comm.fused_allreduce_residual_rmsnorm_no_raw(
-        input, residual, weight, float(eps)
+        input, residual, weight, float(eps), **kwargs
     )
     if result is None:
-        reason_fn = getattr(comm, "reject_fused_allreduce_residual_rmsnorm_reason", None)
+        reason_fn = getattr(
+            comm, "reject_fused_allreduce_residual_rmsnorm_reason", None
+        )
         reason = (
             reason_fn(input, residual, weight)
             if callable(reason_fn)
@@ -109,8 +120,9 @@ def _musa_fused_allreduce_residual_rms_norm_fake(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    del residual, weight, eps, comm_id
+    del residual, weight, eps, comm_id, gemma
     return torch.empty_like(input), torch.empty_like(input), torch.empty_like(input)
 
 
@@ -120,8 +132,9 @@ def _musa_fused_allreduce_residual_rms_norm_no_raw_fake(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    del residual, weight, eps, comm_id
+    del residual, weight, eps, comm_id, gemma
     return torch.empty_like(input), torch.empty_like(input)
 
 
@@ -148,9 +161,7 @@ except RuntimeError as exc:
     # The module can be imported more than once in plugin-heavy processes.
     if "musa_fused_allreduce_residual_rms_norm" not in str(exc):
         raise
-    logger.debug(
-        "MUSA fused allreduce-residual-rmsnorm custom op already registered"
-    )
+    logger.debug("MUSA fused allreduce-residual-rmsnorm custom op already registered")
 
 
 try:
@@ -173,12 +184,14 @@ def musa_fused_allreduce_rms_norm(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.ops.vllm.musa_fused_allreduce_rms_norm(
         input,
         weight,
         eps,
         comm_id,
+        gemma,
     )
 
 
@@ -188,6 +201,7 @@ def musa_fused_allreduce_residual_rms_norm(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     return torch.ops.vllm.musa_fused_allreduce_residual_rms_norm(
         input,
@@ -195,6 +209,7 @@ def musa_fused_allreduce_residual_rms_norm(
         weight,
         eps,
         comm_id,
+        gemma,
     )
 
 
@@ -204,6 +219,7 @@ def musa_fused_allreduce_residual_rms_norm_no_raw(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw(
         input,
@@ -211,4 +227,5 @@ def musa_fused_allreduce_residual_rms_norm_no_raw(
         weight,
         eps,
         comm_id,
+        gemma,
     )

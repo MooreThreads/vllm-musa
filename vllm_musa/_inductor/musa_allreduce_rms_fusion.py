@@ -24,6 +24,7 @@ import operator
 from typing import Any
 
 import torch
+from torch._higher_order_ops.auto_functionalize import auto_functionalized
 import torch._inductor.pattern_matcher as pm
 import torch.fx as fx
 from torch._subclasses.fake_tensor import FakeTensor
@@ -260,6 +261,7 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
         self.max_token_num: int | None = None
         self.max_tokens_by_comm: int | None = None
         self.jit_comm_max_size: int | None = None
+        self.supports_fused_gemma_rmsnorm = False
         if not current_platform.is_musa():
             return
 
@@ -304,6 +306,15 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
             return
 
         jit_comm = getattr(ca_comm, "_jit_comm", None)
+        if not self._fused_capability_enabled(jit_comm):
+            logger.warning_once(
+                "MUSA allreduce-rmsnorm fusion disabled: the active "
+                "communicator does not support fused AR+RMSNorm."
+            )
+            return
+        self.supports_fused_gemma_rmsnorm = (
+            getattr(jit_comm, "supports_fused_gemma_rmsnorm", False) is True
+        )
         self.jit_comm_id = getattr(jit_comm, "_comm_id", None)
         if self.jit_comm_id is None:
             logger.warning_once(
@@ -359,6 +370,14 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
             self.comm_id,
             self.jit_comm_id,
         )
+
+    @staticmethod
+    def _fused_capability_enabled(comm: Any) -> bool:
+        """Honor the inner communicator's capability, with a compatible v1 default."""
+        if comm is None:
+            return False
+        capability = getattr(comm, "supports_fused_rmsnorm", True)
+        return isinstance(capability, bool) and capability
 
     @staticmethod
     def _max_fusable_tokens(
@@ -418,6 +437,7 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
             "max_token_num": self.max_token_num,
             "max_tokens_by_comm": self.max_tokens_by_comm,
             "jit_comm_max_size": self.jit_comm_max_size,
+            "supports_fused_gemma_rmsnorm": self.supports_fused_gemma_rmsnorm,
         }
         if not self.disabled:
             state.update(
@@ -466,8 +486,24 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
     @classmethod
     def _is_fused_add_rms_norm_node(cls, node: fx.Node) -> bool:
         return (
-            node.op == 'call_function'
-            and 'fused_add_rms_norm.default' in cls._target_name(node)
+            node.op == "call_function"
+            and "fused_add_rms_norm.default" in cls._target_name(node)
+        ) or cls._is_musa_gemma_fused_add_node(node)
+
+    @staticmethod
+    def _is_musa_gemma_fused_add_node(node: fx.Node) -> bool:
+        return (
+            node.op == "call_function"
+            and node.target is auto_functionalized
+            and len(node.args) == 1
+            and node.args[0]
+            is getattr(
+                getattr(torch.ops.vllm, "musa_csrc_fused_add_rmsnorm", None),
+                "default",
+                None,
+            )
+            and set(node.kwargs) == {"input", "residual", "weight", "eps", "gemma"}
+            and node.kwargs["gemma"] is True
         )
 
     @classmethod
@@ -498,6 +534,7 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
         weight: Any,
         eps: Any,
         use_raw: bool,
+        gemma: bool = False,
     ) -> tuple[fx.Node, fx.Node, fx.Node | None]:
         """Insert the fused AR+RMSNorm op and publish its ``meta["val"]``.
 
@@ -520,13 +557,14 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                 "_manual_residual_inputs_supported should have rejected these inputs"
             )
 
+        kwargs = {"gemma": True} if gemma else {}
         if use_raw:
             out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default(
-                fakes[0], fakes[1], fakes[2], float(eps), self.comm_id
+                fakes[0], fakes[1], fakes[2], float(eps), self.comm_id, **kwargs
             )
         else:
             out = torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default(
-                fakes[0], fakes[1], fakes[2], float(eps), self.comm_id
+                fakes[0], fakes[1], fakes[2], float(eps), self.comm_id, **kwargs
             )
 
         with graph.inserting_before(before):
@@ -534,6 +572,7 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                 fused = graph.call_function(
                     torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default,
                     args=(car.args[0], residual, weight, eps, self.comm_id),
+                    kwargs=kwargs,
                 )
                 fused_rms = graph.call_function(
                     operator.getitem, args=(fused, 0)
@@ -548,6 +587,7 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                 fused = graph.call_function(
                     torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default,
                     args=(car.args[0], residual, weight, eps, self.comm_id),
+                    kwargs=kwargs,
                 )
                 fused_rms = graph.call_function(
                     operator.getitem, args=(fused, 0)
@@ -709,7 +749,23 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                 if self._is_fused_add_rms_norm_node(user)
             ]
             for fused_add in fused_add_users:
-                fused_add_args = self._fused_add_rms_norm_args(fused_add, car)
+                gemma = self._is_musa_gemma_fused_add_node(fused_add)
+                if gemma:
+                    if (
+                        not self.supports_fused_gemma_rmsnorm
+                        or fused_add.kwargs["input"] is not car
+                    ):
+                        continue
+                    fused_add_args = (
+                        fused_add.kwargs["residual"],
+                        fused_add.kwargs["weight"],
+                        fused_add.kwargs["eps"],
+                        None,
+                    )
+                    if car in fused_add_args[:2]:
+                        continue
+                else:
+                    fused_add_args = self._fused_add_rms_norm_args(fused_add, car)
                 if fused_add_args is None:
                     continue
                 residual, weight, eps, variance_size = fused_add_args
@@ -725,8 +781,9 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                     user: self._getitem_index(user, fused_add)
                     for user in output_users
                 }
+                output_slots = (1, 2) if gemma else (0, 1)
                 if not output_users or any(
-                    index not in (0, 1) for index in output_indices.values()
+                    index not in output_slots for index in output_indices.values()
                 ):
                     continue
 
@@ -734,15 +791,33 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                     user for user in list(car.users) if user is not fused_add
                 ]
                 use_raw = bool(raw_users)
-
-                fused_rms, fused_residual, fused_raw = (
-                    self._insert_fused_ar_rmsnorm(
-                        graph, fused_add, car, residual, weight, eps, use_raw
+                insert_before = fused_add
+                if gemma and raw_users:
+                    positions = {node: index for index, node in enumerate(graph.nodes)}
+                    insert_before = min(
+                        [fused_add, *raw_users], key=positions.__getitem__
                     )
+                    if any(
+                        positions[node] >= positions[insert_before]
+                        for node in (car.args[0], residual, weight)
+                    ):
+                        continue
+
+                fused_rms, fused_residual, fused_raw = self._insert_fused_ar_rmsnorm(
+                    graph,
+                    insert_before,
+                    car,
+                    residual,
+                    weight,
+                    eps,
+                    use_raw,
+                    gemma=gemma,
                 )
 
                 for user, index in output_indices.items():
-                    replacement = fused_rms if index == 0 else fused_residual
+                    replacement = (
+                        fused_rms if index == output_slots[0] else fused_residual
+                    )
                     user.replace_all_uses_with(replacement)
                 if fused_raw is not None:
                     for user in raw_users:

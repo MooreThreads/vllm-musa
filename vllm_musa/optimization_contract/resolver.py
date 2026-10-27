@@ -367,6 +367,19 @@ def resolve_optimization_contract(
             supported_features=contract.supported_features | {feature},
             preferred_features=contract.preferred_features | {feature},
         )
+
+    # Platform-wide rule: every tensor-parallel, non-pooling model reaches the
+    # custom all-reduce seam, so the v2 implementation is *available* to all of
+    # them regardless of family.  Availability is not preference: the v2 kernel
+    # measured no throughput gain on S5000, so it is not added to
+    # ``preferred_features`` here.  A caller opts in through the documented
+    # override, and the override is refused when this feature is unsupported.
+    if execution.tensor_parallel_size > 1 and not execution.is_pooling_model:
+        feature = OptimizationFeature.MUSA_CAR_V2_ALL_REDUCE
+        contract = replace(
+            contract,
+            supported_features=contract.supported_features | {feature},
+        )
     return contract
 
 

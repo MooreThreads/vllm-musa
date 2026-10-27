@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ctypes
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from enum import IntEnum
+from typing import Any, ClassVar, NamedTuple, Optional
 
 import torch
 import torch.distributed as dist
@@ -11,7 +13,10 @@ from torch.distributed import ProcessGroup
 from vllm.logger import init_logger
 from vllm.utils.torch_utils import direct_register_custom_op
 
+from vllm_musa.distributed.device_communicators import car_decision_trace as car_trace
 from vllm_musa.jit_kernel.csrc import allreduce as jit_ar
+from vllm_musa.jit_kernel.csrc.allreduce import AllReduceAlgo
+from vllm_musa.optimization_contract import Fuse_CAR_RMSnorm as fused_car_policy
 from vllm_musa.optimization_contract import (
     ModelFamily,
     OptimizationFeature,
@@ -32,6 +37,43 @@ _MAX_GRAPH_RANK_DATA_BYTES = 8 * 1024 * 1024
 _MAX_RANKS = 8
 _MU_POINTER_ATTRIBUTE_RANGE_START_ADDR = 11
 _GRAPH_STAGING_ALIGNMENT = 256
+
+# Optional v2 (upstream SGLang) all-reduce implementation.  The switch is
+# explicit and read once at construction: ``=1`` builds the v2 communicator,
+# ``=0`` keeps v1.  Only when the variable is unset does the optimization
+# contract contribute a default, so a policy change never shadows an explicit
+# choice made by a run.
+_CUSTOM_AR_V2_ENV = "VLLM_MUSA_CUSTOM_AR_V2"
+_CUSTOM_AR_V2_ON = ("1", "true", "yes", "on")
+_CUSTOM_AR_V2_OFF = ("0", "false", "no", "off")
+
+
+def _contract_prefers_v2() -> bool:
+    """Default implementation choice, asked of the optimization contract."""
+    try:
+        from vllm.config import get_current_vllm_config_or_none
+
+        vllm_config = get_current_vllm_config_or_none()
+    except (ImportError, RuntimeError):
+        return False
+    if vllm_config is None:
+        return False
+    contract = resolve_optimization_contract(vllm_config)
+    return contract.prefers(OptimizationFeature.MUSA_CAR_V2_ALL_REDUCE)
+
+
+def _custom_ar_v2_enabled() -> bool:
+    """Decide the all-reduce implementation once, at construction time.
+
+    ``VLLM_MUSA_CUSTOM_AR_V2=1`` -> v2, ``=0`` -> v1.  Unset -> the contract
+    default, which is v1 because v2 measured no throughput gain on S5000.
+    """
+    raw = os.environ.get(_CUSTOM_AR_V2_ENV, "").strip().lower()
+    if raw in _CUSTOM_AR_V2_ON:
+        return True
+    if raw in _CUSTOM_AR_V2_OFF:
+        return False
+    return _contract_prefers_v2()
 
 
 cudaError_t = ctypes.c_int
@@ -277,8 +319,13 @@ def _musa_jit_fused_allreduce_rmsnorm(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     comm = get_musa_jit_custom_allreduce_comm(comm_id)
+    if gemma:
+        if not getattr(comm, "supports_fused_gemma_rmsnorm", False):
+            raise RuntimeError("Gemma AR+RMSNorm requires a capable v2 communicator")
+        return comm._fused_allreduce_rmsnorm_impl(input, weight, float(eps), gemma=True)
     return comm._fused_allreduce_rmsnorm_impl(input, weight, float(eps))
 
 
@@ -287,8 +334,9 @@ def _musa_jit_fused_allreduce_rmsnorm_fake(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    _ = weight, eps, comm_id
+    _ = weight, eps, comm_id, gemma
     return torch.empty_like(input), torch.empty_like(input)
 
 
@@ -305,8 +353,15 @@ def _musa_jit_fused_allreduce_residual_rmsnorm(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     comm = get_musa_jit_custom_allreduce_comm(comm_id)
+    if gemma:
+        if not getattr(comm, "supports_fused_gemma_rmsnorm", False):
+            raise RuntimeError("Gemma AR+RMSNorm requires a capable v2 communicator")
+        return comm._fused_allreduce_residual_rmsnorm_impl(
+            input, residual, weight, float(eps), gemma=True
+        )
     return comm._fused_allreduce_residual_rmsnorm_impl(
         input, residual, weight, float(eps)
     )
@@ -318,8 +373,15 @@ def _musa_jit_fused_allreduce_residual_rmsnorm_no_raw(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     comm = get_musa_jit_custom_allreduce_comm(comm_id)
+    if gemma:
+        if not getattr(comm, "supports_fused_gemma_rmsnorm", False):
+            raise RuntimeError("Gemma AR+RMSNorm requires a capable v2 communicator")
+        return comm._fused_allreduce_residual_rmsnorm_no_raw_impl(
+            input, residual, weight, float(eps), gemma=True
+        )
     return comm._fused_allreduce_residual_rmsnorm_no_raw_impl(
         input, residual, weight, float(eps)
     )
@@ -331,8 +393,9 @@ def _musa_jit_fused_allreduce_residual_rmsnorm_fake(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    _ = residual, weight, eps, comm_id
+    _ = residual, weight, eps, comm_id, gemma
     return torch.empty_like(input), torch.empty_like(input), torch.empty_like(input)
 
 
@@ -342,8 +405,9 @@ def _musa_jit_fused_allreduce_residual_rmsnorm_no_raw_fake(
     weight: torch.Tensor,
     eps: float,
     comm_id: int,
+    gemma: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    _ = residual, weight, eps, comm_id
+    _ = residual, weight, eps, comm_id, gemma
     return torch.empty_like(input), torch.empty_like(input)
 
 
@@ -1138,6 +1202,23 @@ class _MusaJitCustomAllreduceImpl:
         )
 
     def should_custom_ar(self, inp: torch.Tensor) -> bool:
+        use = self._should_custom_ar_gates(inp)
+        if _is_torch_compiling():
+            return use
+        capturing = (
+            car_trace.enabled()
+            and self._IS_CAPTURING
+            and self._is_current_stream_capturing()
+        )
+        car_trace.record(
+            "gate",
+            "v1",
+            ("capture:" if capturing else "eager:") + ("car" if use else "fallback"),
+            inp.numel() * inp.element_size(),
+        )
+        return use
+
+    def _should_custom_ar_gates(self, inp: torch.Tensor) -> bool:
         if self.disabled:
             return False
         if (
@@ -1354,9 +1435,9 @@ class _MusaJitCustomAllreduceImpl:
         if self._IS_CAPTURING and self._use_registered_graph_input(input):
             return self._graph_custom_all_reduce_impl(input)
         out = torch.empty_like(input)
-        shot = jit_ar.preferred_shot(
-            self.world_size, input.numel() * input.element_size()
-        )
+        nbytes = input.numel() * input.element_size()
+        shot = jit_ar.preferred_shot(self.world_size, nbytes)
+        car_trace.record("algo", "v1", f"shot{shot}", nbytes)
         if self._use_graph_staging_arena:
             (
                 rank_data,
@@ -1777,15 +1858,27 @@ class MusaJitCustomAllreduce:
     ) -> None:
         self.group = group
         self.device = device
-        self._jit_comm: _MusaJitCustomAllreduceImpl | None = None
+        self._jit_comm: _MusaJitCustomAllreduceImpl | Any | None = None
         del symm_mem_enabled
 
+        # The implementation swap happens here, at construction, mirroring the
+        # upstream ``dispatch_custom_allreduce()``: the environment variable
+        # decides once which implementation is built, and from then on the
+        # caller only sees that one set of methods -- the hot path never
+        # branches between v1 and v2.
         try:
-            self._jit_comm = _MusaJitCustomAllreduceImpl(
-                group=group,
-                device=device,
-                max_size=max_size,
-            )
+            if _custom_ar_v2_enabled():
+                self._jit_comm = _MusaCustomAllreduceV2Impl(
+                    group=group,
+                    device=device,
+                    max_size=max_size,
+                )
+            else:
+                self._jit_comm = _MusaJitCustomAllreduceImpl(
+                    group=group,
+                    device=device,
+                    max_size=max_size,
+                )
         except Exception:
             logger.exception("Failed to initialize MUSA JIT custom all-reduce.")
 
@@ -1801,8 +1894,9 @@ class MusaJitCustomAllreduce:
 
         if self._jit_available:
             logger.info_once(
-                "Using MUSA JIT custom all-reduce for eager and eligible CUDA "
-                "graph paths."
+                "Using MUSA JIT custom all-reduce (%s) for eager and eligible "
+                "CUDA graph paths.",
+                "v2" if _custom_ar_v2_enabled() else "v1",
             )
 
     @property
@@ -1823,6 +1917,13 @@ class MusaJitCustomAllreduce:
 
     def should_custom_ar(self, inp: torch.Tensor) -> bool:
         return self._jit_available and self._jit_comm.should_custom_ar(inp)
+
+    @property
+    def supports_fused_gemma_rmsnorm(self) -> bool:
+        return bool(
+            self._jit_available
+            and getattr(self._jit_comm, "supports_fused_gemma_rmsnorm", False)
+        )
 
     def should_fused_allreduce_rmsnorm(
         self, inp: torch.Tensor, weight: torch.Tensor
@@ -1859,8 +1960,14 @@ class MusaJitCustomAllreduce:
         return None
 
     def fused_allreduce_rmsnorm(
-        self, input: torch.Tensor, weight: torch.Tensor, eps: float
+        self, input: torch.Tensor, weight: torch.Tensor, eps: float, gemma: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        if gemma:
+            if not self.supports_fused_gemma_rmsnorm:
+                return None
+            return self._jit_comm.fused_allreduce_rmsnorm(
+                input, weight, eps, gemma=True
+            )
         if self._jit_available and self._jit_comm.should_fused_allreduce_rmsnorm(
             input, weight
         ):
@@ -1882,7 +1989,14 @@ class MusaJitCustomAllreduce:
         residual: torch.Tensor,
         weight: torch.Tensor,
         eps: float,
+        gemma: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+        if gemma:
+            if not self.supports_fused_gemma_rmsnorm:
+                return None
+            return self._jit_comm.fused_allreduce_residual_rmsnorm(
+                input, residual, weight, eps, gemma=True
+            )
         if (
             self._jit_available
             and self._jit_comm.should_fused_allreduce_residual_rmsnorm(
@@ -1907,7 +2021,14 @@ class MusaJitCustomAllreduce:
         residual: torch.Tensor,
         weight: torch.Tensor,
         eps: float,
+        gemma: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        if gemma:
+            if not self.supports_fused_gemma_rmsnorm:
+                return None
+            return self._jit_comm.fused_allreduce_residual_rmsnorm_no_raw(
+                input, residual, weight, eps, gemma=True
+            )
         if (
             self._jit_available
             and self._jit_comm.should_fused_allreduce_residual_rmsnorm(
@@ -1954,3 +2075,1399 @@ def maybe_musa_jit_logits_all_gather(
     if output is not None:
         logger.info_once("Using MUSA JIT IPC all-gather for TP logits.")
     return output
+
+
+# ==========================================================================
+# v2 implementation: runtime bindings, ported object layer, and the
+# implementation class that the facade selects at construction time.
+# ==========================================================================
+
+cudaMemcpyHostToDevice = 1
+cudaMemcpyDeviceToDevice = 3
+
+
+def _as_void_p(value):
+    """Return ``value`` as a ``ctypes.c_void_p`` without double-wrapping."""
+    if isinstance(value, ctypes.c_void_p):
+        return value
+    if isinstance(value, int):
+        return ctypes.c_void_p(value)
+    data_ptr = getattr(value, "data_ptr", None)
+    if callable(data_ptr):
+        return ctypes.c_void_p(int(data_ptr()))
+    return ctypes.cast(value, ctypes.c_void_p)
+
+
+class _MusaRTLibraryV2(_MusaRTLibrary):
+    """Give the v2 object a CUDA-name runtime surface, reusing v1's bindings."""
+
+    def __init__(self, so_file: str = "libmusart.so") -> None:
+        super().__init__(so_file)
+        if "cudaMemcpy" not in self.funcs:
+            spec = _Function(
+                "cudaMemcpy",
+                cudaError_t,
+                [
+                    ctypes.c_void_p,
+                    ctypes.c_void_p,
+                    ctypes.c_size_t,
+                    ctypes.c_uint,
+                ],
+            )
+            func = getattr(self.lib, spec.name)
+            func.restype = spec.restype
+            func.argtypes = spec.argtypes
+            self.funcs[spec.name] = func
+
+    # ---- API names of the upstream v2 implementation ----------------------
+    def cudaMalloc(self, size: int) -> ctypes.c_void_p:
+        return self.malloc(int(size))
+
+    def cudaFree(self, ptr) -> None:
+        self.free(ptr)
+
+    def cudaMemset(self, ptr, value: int, count: int) -> None:
+        self.memset(ptr, int(value), int(count))
+
+    def cudaIpcGetMemHandle(self, ptr) -> cudaIpcMemHandle_t:
+        return self.ipc_get_mem_handle(ptr)
+
+    def cudaIpcOpenMemHandle(self, handle: cudaIpcMemHandle_t) -> ctypes.c_void_p:
+        return self.ipc_open_mem_handle(handle)
+
+    def cudaIpcCloseMemHandle(self, ptr) -> None:
+        self.ipc_close_mem_handle(ptr)
+
+    def cudaMemcpy(
+        self, dst, src, count: int, kind: int = cudaMemcpyHostToDevice
+    ) -> None:
+        # The v2 object passes ``ctypes.c_void_p`` for both ends (it builds the
+        # host staging buffer itself), while tensors and plain ints also reach
+        # this shim.  Normalise instead of re-wrapping, because wrapping an
+        # existing c_void_p raises "cannot be converted to pointer".
+        self.check(
+            self.funcs["cudaMemcpy"](
+                _as_void_p(dst),
+                _as_void_p(src),
+                int(count),
+                int(kind),
+            )
+        )
+
+
+__all__ = [
+    "_MusaRTLibraryV2",
+    "cudaMemcpyHostToDevice",
+    "cudaMemcpyDeviceToDevice",
+    "cudaIpcMemHandle_t",
+]
+
+
+CudaRTLibrary = _MusaRTLibraryV2
+
+requires_cuda_workspace_preflight = False
+
+
+class AllReduceFusionPattern(IntEnum):
+    kARResidualRMSNorm = 0
+
+
+class MusaAllReduceFusionWorkspace:
+    backend = "musa_custom_ar_v2"
+
+    def __init__(
+        self,
+        coordinator,
+        world_size: int,
+        rank: int,
+        max_token_num: int,
+        hidden_dim: int,
+        dtype: torch.dtype,
+    ) -> None:
+        self.coordinator = coordinator
+        self.world_size = world_size
+        self.rank = rank
+        self.max_token_num = max_token_num
+        self.hidden_dim = hidden_dim
+        self.dtype = dtype
+
+    def is_buffer_size_sufficient(
+        self,
+        *,
+        tp_size: int,
+        num_tokens: int,
+        hidden_dim: int,
+        dtype: torch.dtype,
+        use_oneshot: bool | None = None,
+    ) -> bool:
+        del use_oneshot
+        ca_comm = self.coordinator.ca_comm
+        return (
+            ca_comm is not None
+            and not ca_comm.disabled
+            and tp_size == self.world_size
+            and num_tokens <= self.max_token_num
+            and hidden_dim == self.hidden_dim
+            and dtype == self.dtype
+            and num_tokens * hidden_dim * dtype.itemsize <= ca_comm.max_size
+        )
+
+    def destroy(self) -> None:
+        # The GroupCoordinator owns the communicator and its IPC allocation.
+        self.coordinator = None
+
+
+def _find_group_coordinator(device_group, world_size: int, rank: int):
+    from sglang.srt.distributed import (
+        get_attn_tp_group,
+        get_moe_ep_group,
+        get_moe_tp_group,
+        get_tp_group,
+    )
+
+    getters = (get_attn_tp_group, get_moe_ep_group, get_moe_tp_group, get_tp_group)
+    for getter in getters:
+        try:
+            coordinator = getter()
+        except AssertionError:
+            continue
+        if (
+            coordinator.device_group is device_group
+            and coordinator.world_size == world_size
+            and coordinator.rank_in_group == rank
+        ):
+            return coordinator
+    raise RuntimeError(
+        "MUSA allreduce-fusion workspace could not find the matching "
+        f"GroupCoordinator for rank={rank}, world_size={world_size}"
+    )
+
+
+def create_allreduce_fusion_workspace(
+    *,
+    backend: str,
+    world_size: int,
+    rank: int,
+    max_token_num: int,
+    hidden_dim: int,
+    dtype: torch.dtype,
+    force_oneshot_support: bool = False,
+    group=None,
+    **kwargs,
+) -> MusaAllReduceFusionWorkspace:
+    del force_oneshot_support, kwargs
+    if backend != "trtllm":
+        raise ValueError(f"Unsupported MUSA allreduce-fusion backend: {backend}")
+    if group is None:
+        raise ValueError("MUSA allreduce-fusion workspace requires a device group")
+    coordinator = _find_group_coordinator(group, world_size, rank)
+    ca_comm = coordinator.ca_comm
+    if ca_comm is None or ca_comm.disabled:
+        raise RuntimeError("MUSA custom allreduce v2 communicator is unavailable")
+    return MusaAllReduceFusionWorkspace(
+        coordinator, world_size, rank, max_token_num, hidden_dim, dtype
+    )
+
+
+def allreduce_fusion(
+    *,
+    input: torch.Tensor,
+    workspace: MusaAllReduceFusionWorkspace,
+    pattern: AllReduceFusionPattern,
+    residual_out: torch.Tensor,
+    norm_out: torch.Tensor,
+    residual_in: torch.Tensor,
+    rms_gamma: torch.Tensor,
+    rms_eps: float,
+    launch_with_pdl: bool = True,
+    trigger_completion_at_end: bool = False,
+    use_oneshot: bool | None = None,
+    fp32_acc: bool = False,
+) -> bool:
+    del launch_with_pdl, trigger_completion_at_end, use_oneshot, fp32_acc
+    if pattern != AllReduceFusionPattern.kARResidualRMSNorm:
+        raise ValueError(f"Unsupported MUSA allreduce-fusion pattern: {pattern}")
+    ca_comm = workspace.coordinator.ca_comm
+    result = ca_comm.fused_allreduce_rmsnorm(
+        input,
+        residual_in,
+        rms_gamma,
+        rms_eps,
+        norm_out=norm_out,
+        residual_out=residual_out,
+    )
+    return result is not None
+
+
+class ConfigResult(NamedTuple):
+    num_blocks: int
+    num_threads: int
+
+
+def _align(value: int, alignment: int = 128) -> int:
+    return (value + alignment - 1) // alignment * alignment
+
+
+def _handle_to_list(handle: cudaIpcMemHandle_t) -> list[int]:
+    return list(bytes(handle))
+
+
+def _handle_from_list(values: list[int]) -> cudaIpcMemHandle_t:
+    raw = bytes(int(value) & 0xFF for value in values)
+    if len(raw) != ctypes.sizeof(cudaIpcMemHandle_t):
+        raise ValueError(
+            "Invalid MUSA IPC handle size: "
+            f"{len(raw)} != {ctypes.sizeof(cudaIpcMemHandle_t)}"
+        )
+    return cudaIpcMemHandle_t.from_buffer_copy(raw)
+
+
+class _AllReduceData(ctypes.Structure):
+    """Host-side rank descriptor matching CUDA's ``AllReduceData`` layout."""
+
+    _fields_ = [("input", ctypes.c_void_p * 8)]
+
+
+class MusaCustomAllReduceV2Obj:
+    """MUSA implementation of CUDA custom-all-reduce v2's operator ABI.
+
+    The public ``CustomAllReduceV2`` Python control plane owns process-group
+    coordination and calls this object through the same methods as the CUDA
+    TVM-FFI object. Storage, MUSA IPC, and kernel selection remain backend
+    details here. CUDA Graph input registration follows the shared v2 ABI.
+    """
+
+    supported_world_sizes = (2, 4, 6, 8)
+    # Consumed by the shared CustomAllReduceV2._determine_algo() control plane.
+    # S5000 thresholds are selected from eager-mode crossover measurements.
+    # Pull covers TP2/TP4 payloads; TP4/TP6 switch to two-shot for larger
+    # payloads. Push remains available through an explicit algorithm override.
+    mode_configs: ClassVar[dict[int, tuple[int, int]]] = {
+        2: (0, 1 << 60),
+        4: (0, 256 * 1024),
+        6: (0, 256 * 1024),
+        8: (0, 0),
+    }
+
+    def __init__(
+        self,
+        rank: int,
+        world_size: int,
+        pull_buffer_bytes: int,
+        push_buffer_bytes: int,
+        graph_input_count: int,
+        *,
+        max_pull_blocks: int | None = None,
+        max_push_blocks: int | None = None,
+    ) -> None:
+        del max_pull_blocks, max_push_blocks
+        if world_size not in self.supported_world_sizes:
+            raise ValueError(
+                f"MUSA custom all-reduce v2 does not support world_size={world_size}"
+            )
+        if not 0 <= rank < world_size:
+            raise ValueError(f"Invalid rank={rank} for world_size={world_size}")
+
+        self.rank = int(rank)
+        self.world_size = int(world_size)
+        self._pull_buffer_bytes = int(pull_buffer_bytes)
+        self._push_buffer_bytes = int(push_buffer_bytes)
+        self._opened_ipc_ptrs: dict[bytes, int] = {}
+        self._graph_input_count = int(graph_input_count)
+        self._is_graph_capturing = False
+        self._graph_capture_inputs: list[int] = []
+        self._cum_registered_count = 0
+        self._push_launchers = {}
+        self._registered_launchers = {}
+        self._unregistered_launchers = {}
+        self._shot_cache: dict[tuple[int, AllReduceAlgo], int] = {}
+        self._closed = False
+        self.disabled = True
+
+        # MUSA push uses two staging epochs and one slot per source rank.
+        self._push_storage_bytes = jit_ar.push_buffer_bytes(
+            self._push_buffer_bytes, self.world_size
+        )
+        ar_signal_bytes = jit_ar.allreduce_v2_meta_size()
+        fused_signal_bytes = jit_ar.allreduce_v2_meta_size()
+        # Match CUDA v2's controller layout: push counters are independent,
+        # while one-shot and two-shot share one pull semaphore protocol. The
+        # fused protocol gets a disjoint signal/scratch region in this same IPC
+        # allocation because its barrier generations have a different lifetime.
+        self._push_signal_offset = 0
+        self._pull_signal_offset = _align(self._push_signal_offset + ar_signal_bytes)
+        # Registered two-shot and fused kernels address scratch as
+        # ``signal + 1``. Keep both reservations disjoint from each other and
+        # from staging data.
+        self._scratch_bytes = self._pull_buffer_bytes
+        self._fused_signal_offset = _align(
+            self._pull_signal_offset + ar_signal_bytes + self._scratch_bytes
+        )
+        self._pull_buffer_offset = _align(
+            self._fused_signal_offset + fused_signal_bytes + self._scratch_bytes
+        )
+        # CUDA v2 keeps pull payload and push sentinel-ring storage disjoint.
+        # Pull writes are arbitrary nonzero values and would otherwise look
+        # like already-published push packets after an algorithm transition.
+        self._push_buffer_offset = _align(
+            self._pull_buffer_offset + self._pull_buffer_bytes
+        )
+        storage_bytes = self._push_buffer_offset + self._push_storage_bytes
+
+        # This module is MUSA-only.  Keep the runtime-neutral current-device
+        # lookup, but use the MUSA device type so allocations do not dispatch
+        # to CUDA's ``aten::empty`` backend.
+        device = torch.device("musa", torch.get_device_module().current_device())
+        self._device = device
+        self._runtime = CudaRTLibrary()
+        # share_storage() has no offset field, so this must be a runtime
+        # allocation whose data pointer is also its IPC allocation base.  A
+        # caching-allocator tensor may be a suballocation and is not valid for
+        # this ABI.
+        self._storage_allocation = self._runtime.cudaMalloc(storage_bytes)
+        self._runtime.cudaMemset(self._storage_allocation, 0, storage_bytes)
+        self._graph_rank_data = torch.zeros(
+            (self._graph_input_count, 8), dtype=torch.int64, device=device
+        )
+        self._storage_ptr = int(self._storage_allocation.value)
+        self._self_push_signal_ptr = self._storage_ptr + self._push_signal_offset
+        self._self_pull_signal_ptr = self._storage_ptr + self._pull_signal_offset
+        self._self_fused_signal_ptr = self._storage_ptr + self._fused_signal_offset
+        self._self_buffer_ptr = self._storage_ptr + self._pull_buffer_offset
+        self._self_push_buffer_ptr = self._storage_ptr + self._push_buffer_offset
+        self._rank_data_cpu: torch.Tensor | None = None
+        self._rank_data_device: torch.Tensor | None = None
+        self._push_rank_data_device: torch.Tensor | None = None
+        self._push_signal_ptrs_cpu: torch.Tensor | None = None
+        self._pull_signal_ptrs_cpu: torch.Tensor | None = None
+        self._pull_config = ConfigResult(0, 0)
+        # Fused RMSNorm shares the v2 pull workspace and owns only its protocol
+        # state inside the same allocation. Its capacity therefore follows the
+        # pull workspace even if a caller configures a larger push workspace.
+        self.max_size = self._pull_buffer_bytes
+        self._fused_signal_ptrs_cpu: torch.Tensor | None = None
+        self._fused_signal_ptrs: list[int] = []
+        self._pull_buffer_ptrs: list[int] = []
+        self._fused_rmsnorm = MusaCustomAllReduceV2RMSNorm(self)
+        jit_ar.ensure_compiled_v2(self.world_size, jit_ar.SHOT_ONE_STAGE)
+
+    def share_storage(self) -> list[int]:
+        handle = self._runtime.cudaIpcGetMemHandle(ctypes.c_void_p(self._storage_ptr))
+        return _handle_to_list(handle)
+
+    def post_init(self, handles: list[list[int]]) -> None:
+        if len(handles) != self.world_size:
+            raise ValueError(
+                f"Expected {self.world_size} storage handles, got {len(handles)}"
+            )
+        storage_ptrs: list[int] = []
+        for peer_rank, values in enumerate(handles):
+            if peer_rank == self.rank:
+                storage_ptrs.append(self._storage_ptr)
+                continue
+            key = bytes(int(value) & 0xFF for value in values)
+            opened = self._opened_ipc_ptrs.get(key)
+            if opened is None:
+                opened = int(
+                    self._runtime.cudaIpcOpenMemHandle(_handle_from_list(values)).value
+                )
+                self._opened_ipc_ptrs[key] = opened
+            storage_ptrs.append(opened)
+
+        buffer_ptrs = [ptr + self._pull_buffer_offset for ptr in storage_ptrs]
+        push_buffer_ptrs = [ptr + self._push_buffer_offset for ptr in storage_ptrs]
+        buffer_ptrs.extend([0] * (8 - self.world_size))
+        push_buffer_ptrs.extend([0] * (8 - self.world_size))
+        push_signal_ptrs = [ptr + self._push_signal_offset for ptr in storage_ptrs]
+        pull_signal_ptrs = [ptr + self._pull_signal_offset for ptr in storage_ptrs]
+        fused_signal_ptrs = [ptr + self._fused_signal_offset for ptr in storage_ptrs]
+        self._rank_data_cpu = torch.tensor(buffer_ptrs, dtype=torch.int64)
+        self._rank_data_device = torch.tensor(
+            buffer_ptrs, dtype=torch.int64, device=self._device
+        )
+        # Polling push consumes a stable device descriptor. Keeping this in
+        # the communicator workspace avoids passing RankData by value to every
+        # kernel (64 bytes/thread of private spill on MP31).
+        self._push_rank_data_device = torch.tensor(
+            push_buffer_ptrs, dtype=torch.int64, device=self._device
+        )
+        self._push_signal_ptrs_cpu = torch.tensor(push_signal_ptrs, dtype=torch.int64)
+        self._pull_signal_ptrs_cpu = torch.tensor(pull_signal_ptrs, dtype=torch.int64)
+        self._fused_signal_ptrs_cpu = torch.tensor(fused_signal_ptrs, dtype=torch.int64)
+        self._fused_signal_ptrs = fused_signal_ptrs
+        self._pull_buffer_ptrs = buffer_ptrs[: self.world_size]
+        self.disabled = False
+
+    def set_cuda_graph_capture(self, is_capturing: bool) -> None:
+        self._is_graph_capturing = bool(is_capturing)
+
+    def _allocation_base_and_offset(self, ptr: int) -> tuple[int, int]:
+        lib = ctypes.CDLL("libmusa.so")
+        get_attribute = lib.muPointerGetAttribute
+        get_attribute.restype = ctypes.c_int
+        get_attribute.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_ulonglong,
+        ]
+        base_ptr = ctypes.c_void_p()
+        error = get_attribute(
+            ctypes.byref(base_ptr),
+            11,  # MU_POINTER_ATTRIBUTE_RANGE_START_ADDR
+            ctypes.c_ulonglong(ptr),
+        )
+        if error != 0 or base_ptr.value is None:
+            raise RuntimeError(f"muPointerGetAttribute failed: {error}")
+        base = int(base_ptr.value)
+        return base, ptr - base
+
+    def share_graph_inputs(self):
+        result = []
+        handle_cache: dict[int, list[int]] = {}
+        for ptr in self._graph_capture_inputs[self._cum_registered_count :]:
+            base, offset = self._allocation_base_and_offset(ptr)
+            handle = handle_cache.get(base)
+            if handle is None:
+                handle = _handle_to_list(
+                    self._runtime.cudaIpcGetMemHandle(ctypes.c_void_p(base))
+                )
+                handle_cache[base] = handle
+            result.append((offset, handle))
+        return result
+
+    def register_inputs(self, rank_inputs) -> None:
+        if len(rank_inputs) != self.world_size:
+            raise ValueError(
+                f"Expected graph inputs from {self.world_size} ranks, "
+                f"got {len(rank_inputs)}"
+            )
+        count = len(self._graph_capture_inputs) - self._cum_registered_count
+        if count == 0:
+            return
+        if any(len(inputs) != count for inputs in rank_inputs):
+            raise ValueError("MUSA custom AR v2 graph input counts differ across ranks")
+
+        data = (_AllReduceData * count)()
+        for index in range(count):
+            row = data[index].input
+            for peer_rank, inputs in enumerate(rank_inputs):
+                offset, handle_values = inputs[index]
+                if peer_rank == self.rank:
+                    ptr = self._graph_capture_inputs[self._cum_registered_count + index]
+                else:
+                    key = bytes(int(value) & 0xFF for value in handle_values)
+                    base = self._opened_ipc_ptrs.get(key)
+                    if base is None:
+                        base = int(
+                            self._runtime.cudaIpcOpenMemHandle(
+                                _handle_from_list(handle_values)
+                            ).value
+                        )
+                        self._opened_ipc_ptrs[key] = base
+                    ptr = base + int(offset)
+                row[peer_rank] = ctypes.c_void_p(ptr)
+
+        begin = self._cum_registered_count
+        end = begin + count
+        # Match CUDA's native register_graph_buffers contract.  The rank
+        # table is a tiny host-to-device descriptor update; using a
+        # synchronous runtime memcpy makes this copy complete before the
+        # next graph replay without a device-wide synchronize.
+        dst = ctypes.c_void_p(
+            self._graph_rank_data.data_ptr() + begin * ctypes.sizeof(_AllReduceData)
+        )
+        self._runtime.cudaMemcpy(
+            dst,
+            ctypes.cast(data, ctypes.c_void_p),
+            ctypes.sizeof(data),
+            cudaMemcpyHostToDevice,
+        )
+        self._cum_registered_count = end
+
+    def _check_ready(self) -> tuple[torch.Tensor, torch.Tensor]:
+        if (
+            self._rank_data_cpu is None
+            or self._rank_data_device is None
+            or self._push_rank_data_device is None
+            or self._push_signal_ptrs_cpu is None
+            or self._pull_signal_ptrs_cpu is None
+        ):
+            raise RuntimeError("MUSA custom all-reduce v2 post_init() was not called")
+        return self._rank_data_cpu, self._pull_signal_ptrs_cpu
+
+    def _select_shot(self, nbytes: int, algo: AllReduceAlgo) -> int:
+        if not isinstance(algo, AllReduceAlgo):
+            raise TypeError(f"Unsupported custom all-reduce v2 algorithm: {algo}")
+        key = (int(nbytes), algo)
+        cached = self._shot_cache.get(key)
+        if cached is not None:
+            return cached
+
+        if jit_ar.is_shot_forced():
+            shot = jit_ar.preferred_shot(self.world_size, nbytes)
+        elif algo == AllReduceAlgo.ONE_SHOT_PUSH:
+            shot = jit_ar.SHOT_PUSH
+        elif algo == AllReduceAlgo.ONE_SHOT_PULL:
+            shot = jit_ar.SHOT_ONE_STAGE
+        else:
+            # SHOT_TWO_STAGE_512 is a launch-shape/kernel variant of the v2
+            # TWO_SHOT_PULL algorithm, not a separate algorithm selector.
+            if self.world_size == 8 or (self.world_size == 4 and nbytes <= 512 * 1024):
+                shot = jit_ar.SHOT_TWO_STAGE_512
+            else:
+                shot = jit_ar.SHOT_TWO_STAGE
+        is_push = shot in (jit_ar.SHOT_PUSH, jit_ar.SHOT_PUSH_WIDE)
+        required = (
+            jit_ar.push_buffer_bytes(nbytes, self.world_size) if is_push else nbytes
+        )
+        # Pull payload and push ring have independent capacities and storage.
+        capacity = self._push_storage_bytes if is_push else self._pull_buffer_bytes
+        if required > capacity:
+            raise RuntimeError(
+                f"MUSA custom AR v2 algorithm {algo.name} needs {required} bytes, "
+                f"but its workspace has {capacity}"
+            )
+        self._shot_cache[key] = shot
+        return shot
+
+    def all_reduce(self, input: torch.Tensor, algo: AllReduceAlgo) -> torch.Tensor:
+        rank_data, signal_ptrs = self._check_ready()
+        if input.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+            raise TypeError(f"Unsupported MUSA custom AR dtype: {input.dtype}")
+        if input.device != self._device:
+            raise ValueError(
+                f"MUSA custom AR v2 expected input on {self._device}, "
+                f"got {input.device}"
+            )
+        if not input.is_contiguous():
+            raise ValueError("MUSA custom AR v2 input must be contiguous")
+        nbytes = input.numel() * input.element_size()
+        if nbytes % 16 != 0:
+            raise ValueError(
+                f"MUSA custom AR v2 input bytes must be a multiple of 16: {nbytes}"
+            )
+        if input.data_ptr() % 16 != 0:
+            raise ValueError("MUSA custom AR v2 input pointer must be 16-byte aligned")
+        if input.numel() > (1 << 31) - 1:
+            raise ValueError("MUSA custom AR v2 input exceeds its int32 item limit")
+        if (
+            self._is_graph_capturing
+            and self.world_size == 4
+            and 256 * 1024 < nbytes <= 512 * 1024
+        ):
+            # TP4 graph replay uses the registered two-shot-512 kernel only
+            # for the middle payload range; smaller payloads stay one-shot
+            # pull to avoid forcing a slower two-shot decode path.
+            algo = AllReduceAlgo.TWO_SHOT_PULL
+        shot = self._select_shot(nbytes, algo)
+        graph_launch = (
+            self._is_graph_capturing
+            and torch.get_device_module().is_current_stream_capturing()
+        )
+        # Match CUDA v2: registered one-shot pull writes a distinct output,
+        # while registered two-shot broadcasts reduced shards back into each
+        # rank's graph input and therefore remains in-place.
+        output = (
+            torch.empty_like(input)
+            if graph_launch and shot == jit_ar.SHOT_ONE_STAGE
+            else input
+        )
+        if shot in (jit_ar.SHOT_PUSH, jit_ar.SHOT_PUSH_WIDE):
+            assert self._push_signal_ptrs_cpu is not None
+            launch_signal_ptrs = self._push_signal_ptrs_cpu
+            self_signal_ptr = self._self_push_signal_ptr
+            self_buffer_ptr = self._self_push_buffer_ptr
+        else:
+            launch_signal_ptrs = signal_ptrs
+            self_signal_ptr = self._self_pull_signal_ptr
+            self_buffer_ptr = self._self_buffer_ptr
+
+        if shot in (jit_ar.SHOT_PUSH, jit_ar.SHOT_PUSH_WIDE):
+            assert self._push_rank_data_device is not None
+            launcher = self._push_launchers.get(shot)
+            if launcher is None:
+                launcher = jit_ar.launch_device_descriptor_func(self.world_size, shot)
+                self._push_launchers[shot] = launcher
+            launcher(
+                self._push_rank_data_device,
+                launch_signal_ptrs,
+                output,
+                self_signal_ptr,
+                self.rank,
+                self.world_size,
+                shot,
+            )
+        elif graph_launch:
+            index = len(self._graph_capture_inputs)
+            if index >= self._graph_input_count:
+                raise RuntimeError(
+                    "MUSA custom AR v2 graph pointer table overflow: "
+                    f"{index} >= {self._graph_input_count}"
+                )
+            self._graph_capture_inputs.append(int(input.data_ptr()))
+            launcher = self._registered_launchers.get(shot)
+            if launcher is None:
+                launcher = jit_ar.launch_registered_pybind_func(self.world_size, shot)
+                self._registered_launchers[shot] = launcher
+            launcher(
+                self._graph_rank_data[index],
+                launch_signal_ptrs,
+                output,
+                self_signal_ptr,
+                self.rank,
+                self.world_size,
+                shot,
+            )
+        else:
+            launcher = self._unregistered_launchers.get(shot)
+            if launcher is None:
+                launcher = jit_ar.launch_unregistered_pybind_func(self.world_size, shot)
+                self._unregistered_launchers[shot] = launcher
+            launcher(
+                rank_data,
+                launch_signal_ptrs,
+                input,
+                output,
+                self_signal_ptr,
+                self_buffer_ptr,
+                self._push_buffer_bytes,
+                self.rank,
+                self.world_size,
+                shot,
+            )
+        return output
+
+    def fused_allreduce_rmsnorm(
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
+        *,
+        norm_out: torch.Tensor | None = None,
+        residual_out: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """FlashInfer-compatible AR + residual + RMSNorm operator ABI."""
+        return self._fused_rmsnorm.fused_allreduce_rmsnorm(
+            input,
+            residual,
+            weight,
+            eps,
+            norm_out=norm_out,
+            residual_out=residual_out,
+        )
+
+    def fused_allreduce_gemma_dual_rmsnorm(
+        self,
+        input_: torch.Tensor,
+        residual_: torch.Tensor,
+        post_weight_: torch.Tensor,
+        next_weight_: torch.Tensor,
+        post_eps: float,
+        next_eps: float,
+        *,
+        attention: bool,
+        scalar_: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        return self._fused_rmsnorm.fused_allreduce_gemma_dual_rmsnorm(
+            input_,
+            residual_,
+            post_weight_,
+            next_weight_,
+            post_eps,
+            next_eps,
+            attention=attention,
+            scalar_=scalar_,
+        )
+
+    def config_pull(self, num_blocks: int = -1, num_threads: int = -1) -> ConfigResult:
+        old = self._pull_config
+        self._pull_config = ConfigResult(
+            old.num_blocks if num_blocks == -1 else num_blocks,
+            old.num_threads if num_threads == -1 else num_threads,
+        )
+        return old
+
+    def free(self, group: torch.distributed.ProcessGroup) -> None:
+        if self._closed:
+            return
+        if dist.is_initialized():
+            dist.barrier(group=group)
+        for ptr in self._opened_ipc_ptrs.values():
+            self._runtime.cudaIpcCloseMemHandle(ctypes.c_void_p(ptr))
+        self._opened_ipc_ptrs.clear()
+        self._runtime.cudaFree(self._storage_allocation)
+        self._rank_data_device = None
+        self._push_rank_data_device = None
+        self._graph_rank_data = None
+        self._push_launchers.clear()
+        self._registered_launchers.clear()
+        self._unregistered_launchers.clear()
+        self._shot_cache.clear()
+        self._fused_rmsnorm._launchers.clear()
+        self._fused_signal_ptrs_cpu = None
+        self.disabled = True
+        self._closed = True
+
+
+def get_musa_custom_all_reduce_cls():
+    return MusaCustomAllReduceV2Obj
+
+
+# Upstream's MUSA default pull workspace (the ``_init_config`` path).
+_DEFAULT_PULL_BYTES = 512 * 1024 * 1024
+# Upstream hard-codes this for the graph input pointer table.
+_GRAPH_INPUT_COUNT = 131072
+
+
+def _is_torch_compiling() -> bool:
+    try:
+        return bool(torch.compiler.is_compiling())
+    except Exception:
+        try:
+            return bool(torch._dynamo.is_compiling())
+        except Exception:
+            return False
+
+
+def _is_current_stream_capturing() -> bool:
+    for module_name in ("musa", "cuda"):
+        module = getattr(torch, module_name, None)
+        check = getattr(module, "is_current_stream_capturing", None)
+        if check is None:
+            continue
+        try:
+            return bool(check())
+        except Exception:
+            continue
+    return False
+
+
+def _is_weak_contiguous(tensor: torch.Tensor) -> bool:
+    """Same contract as upstream's ``is_weak_contiguous``."""
+    if tensor.is_contiguous():
+        return True
+    storage = tensor.untyped_storage()
+    return tensor.storage_offset() + tensor.numel() == (
+        storage.nbytes() // tensor.element_size()
+    )
+
+
+class _MusaCustomAllreduceV2Impl:
+    """v2 all-reduce with the interface ``MusaJitCustomAllreduce`` delegates to."""
+
+    _MAX_CAR_SIZE = _DEFAULT_PULL_BYTES
+
+    def __init__(
+        self,
+        group: ProcessGroup,
+        device: int | str | torch.device,
+        max_size: int = _DEFAULT_PULL_BYTES,
+    ) -> None:
+        self.disabled = True
+        self.group = group
+        self.device = device
+        self._IS_CAPTURING = False
+        self.rank = dist.get_rank(group=group)
+        self.world_size = dist.get_world_size(group=group)
+
+        mode_config = MusaCustomAllReduceV2Obj.mode_configs.get(self.world_size)
+        if mode_config is None:
+            raise RuntimeError(
+                "MUSA custom all-reduce v2 supports world sizes "
+                f"{sorted(MusaCustomAllReduceV2Obj.mode_configs)} only, "
+                f"got {self.world_size}"
+            )
+        self._push_threshold, self._pull_threshold = (
+            int(mode_config[0]),
+            int(mode_config[1]),
+        )
+        # Upstream sizes the push ring from the push threshold, which is 0 for
+        # the world sizes here; push needs an explicit override to run.
+        self.max_push_size = self._push_threshold
+        self.max_pull_size = int(max_size)
+        self.max_size = max(self.max_pull_size, self.max_push_size)
+        self._algo_override: AllReduceAlgo | None = None
+
+        self.obj = MusaCustomAllReduceV2Obj(
+            rank=self.rank,
+            world_size=self.world_size,
+            pull_buffer_bytes=self.max_pull_size,
+            push_buffer_bytes=self.max_push_size,
+            graph_input_count=_GRAPH_INPUT_COUNT,
+        )
+        handles: list[Any] = [None] * self.world_size
+        dist.all_gather_object(handles, self.obj.share_storage(), group=group)
+        self.obj.post_init(handles)
+        # Reuse the existing CAR custom op: ``vllm.musa_jit_custom_all_reduce``
+        # calls back into ``_custom_all_reduce_impl`` through a comm_id, so
+        # Dynamo only sees one opaque operator and never traces data_ptr() or
+        # ctypes, which it cannot compile.
+        self._comm_id = _register_comm(self)
+        self.disabled = False
+        logger.info_once(
+            "MUSA custom all-reduce v2 enabled: world_size=%d pull_bytes=%d "
+            "push_bytes=%d push_threshold=%d pull_threshold=%d "
+            "(payloads above the push threshold take ONE_SHOT_PULL)",
+            self.world_size,
+            self.max_pull_size,
+            self.max_push_size,
+            self._push_threshold,
+            self._pull_threshold,
+        )
+
+    # -- algorithm selection -------------------------------------------------
+    def override_algo(self, algo: Optional[AllReduceAlgo]) -> None:
+        """Explicit algorithm override, mirroring upstream's ``override_algo``."""
+        self._algo_override = algo
+
+    def _pick_algo(self, nbytes: int) -> AllReduceAlgo:
+        push_threshold = min(self._push_threshold, self.max_push_size)
+        pull_threshold = min(self._pull_threshold, self.max_pull_size)
+        if self._algo_override is not None:
+            algo = self._algo_override
+        elif nbytes <= push_threshold:
+            algo = AllReduceAlgo.ONE_SHOT_PUSH
+        elif nbytes <= pull_threshold:
+            algo = AllReduceAlgo.ONE_SHOT_PULL
+        else:
+            algo = AllReduceAlgo.TWO_SHOT_PULL
+        car_trace.record("algo", "v2", algo.name.lower(), nbytes)
+        return algo
+
+    # -- public surface used by MusaJitCustomAllreduce -----------------------
+    def should_custom_ar(self, inp: torch.Tensor) -> bool:
+        use = self._should_custom_ar_gates(inp)
+        if _is_torch_compiling():
+            return use
+        capturing = (
+            car_trace.enabled()
+            and self._IS_CAPTURING
+            and _is_current_stream_capturing()
+        )
+        car_trace.record(
+            "gate",
+            "v2",
+            ("capture:" if capturing else "eager:") + ("car" if use else "fallback"),
+            inp.numel() * inp.element_size(),
+        )
+        return use
+
+    def _should_custom_ar_gates(self, inp: torch.Tensor) -> bool:
+        """Rule A, kept identical to the v1 gate set.
+
+        v1 additionally carries DeepSeek-V4-only graph guards; those are inert
+        for the models measured here, so both arms accept the same calls.
+        """
+        if self.disabled:
+            return False
+        if inp.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+            return False
+        inp_size = inp.numel() * inp.element_size()
+        if inp_size % 16 != 0 or inp_size > self.max_size:
+            return False
+        return inp.is_contiguous()
+
+    def custom_all_reduce(self, input: torch.Tensor) -> torch.Tensor:
+        if self._IS_CAPTURING:
+            if not _is_current_stream_capturing():
+                # Graph warmup must not really communicate, matching the
+                # v1/vLLM warmup semantics.
+                return torch.empty_like(input)
+            return torch.ops.vllm.musa_jit_custom_all_reduce(input, self._comm_id)
+        if _is_torch_compiling():
+            # Show Dynamo a registered operator in the graph rather than the
+            # Python/ctypes implementation.
+            return torch.ops.vllm.musa_jit_custom_all_reduce(input, self._comm_id)
+        return self._custom_all_reduce_impl(input)
+
+    def _custom_all_reduce_impl(self, input: torch.Tensor) -> torch.Tensor:
+        nbytes = input.numel() * input.element_size()
+        algo = self._pick_algo(nbytes)
+        output = self.obj.all_reduce(input, algo)
+        return output if isinstance(output, torch.Tensor) else torch.from_dlpack(output)
+
+    @contextmanager
+    def capture(self):
+        if self.disabled:
+            yield
+            return
+        self._IS_CAPTURING = True
+        try:
+            self.obj.set_cuda_graph_capture(True)
+            yield
+        finally:
+            self.obj.set_cuda_graph_capture(False)
+            self._IS_CAPTURING = False
+        if _is_current_stream_capturing():
+            raise RuntimeError(
+                "Cannot register MUSA custom AR v2 graph inputs while capturing"
+            )
+        pairs = self.obj.share_graph_inputs()
+        handles = [handle for _, handle in pairs]
+        offsets = [offset for offset, _ in pairs]
+        handles_all = self._share_list(handles)
+        offsets_all = self._share_list(offsets)
+        self.obj.register_inputs(
+            [list(zip(o, h)) for o, h in zip(offsets_all, handles_all)]
+        )
+        logger.info("Registering %d MUSA custom AR v2 graph addresses", len(pairs))
+
+    def _share_list(self, values: list[int]) -> list[list[int]]:
+        tensor = torch.tensor(values, dtype=torch.int64, device="cpu")
+        gathered = [torch.empty_like(tensor) for _ in range(self.world_size)]
+        dist.all_gather(gathered, tensor, group=self.group)
+        return [g.tolist() for g in gathered]
+
+    def close(self) -> None:
+        if not getattr(self, "disabled", True) and hasattr(self, "obj"):
+            self.obj.free(self.group)
+        comm_id = getattr(self, "_comm_id", None)
+        if comm_id is not None:
+            _COMM_REGISTRY.pop(comm_id, None)
+            self._comm_id = None
+        self.disabled = True
+
+    @property
+    def supports_fused_rmsnorm(self) -> bool:
+        return bool(
+            not self.disabled
+            and fused_car_policy.dispatch_enabled()
+            and getattr(jit_ar, "V2_FUSED_SUPPORTS_RAW", False)
+        )
+
+    @property
+    def supports_fused_gemma_rmsnorm(self) -> bool:
+        return self.supports_fused_rmsnorm
+
+    def _reject_fused_allreduce_rmsnorm_reason(
+        self, inp: torch.Tensor, weight: torch.Tensor
+    ) -> str | None:
+        if not self.supports_fused_rmsnorm:
+            return "v2 fused AR+RMSNorm is unavailable or disabled"
+        return self.obj._fused_rmsnorm.rejection_reason(inp, None, weight)
+
+    def _reject_fused_allreduce_residual_rmsnorm_reason(
+        self, inp: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor
+    ) -> str | None:
+        if not self.supports_fused_rmsnorm:
+            return "v2 fused AR+RMSNorm is unavailable or disabled"
+        return self.obj._fused_rmsnorm.rejection_reason(inp, residual, weight)
+
+    def should_fused_allreduce_rmsnorm(
+        self, inp: torch.Tensor, weight: torch.Tensor
+    ) -> bool:
+        return self._reject_fused_allreduce_rmsnorm_reason(inp, weight) is None
+
+    def should_fused_allreduce_residual_rmsnorm(
+        self, inp: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor
+    ) -> bool:
+        return (
+            self._reject_fused_allreduce_residual_rmsnorm_reason(inp, residual, weight)
+            is None
+        )
+
+    def fused_allreduce_rmsnorm(
+        self, input: torch.Tensor, weight: torch.Tensor, eps: float, gemma: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        if not self.should_fused_allreduce_rmsnorm(input, weight):
+            return None
+        if self._IS_CAPTURING and not _is_current_stream_capturing():
+            self.obj._fused_rmsnorm.prepare(
+                input, None, need_raw=True, capturing=True, gemma=gemma
+            )
+            return torch.empty_like(input), torch.empty_like(input)
+        if self._IS_CAPTURING or _is_torch_compiling():
+            return torch.ops.vllm.musa_jit_fused_allreduce_rmsnorm(
+                input, weight, float(eps), self._comm_id, gemma
+            )
+        return self._fused_allreduce_rmsnorm_impl(input, weight, eps, gemma=gemma)
+
+    def fused_allreduce_residual_rmsnorm(
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
+        gemma: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+        if not self.should_fused_allreduce_residual_rmsnorm(input, residual, weight):
+            return None
+        if self._IS_CAPTURING and not _is_current_stream_capturing():
+            self.obj._fused_rmsnorm.prepare(
+                input, residual, need_raw=True, capturing=True, gemma=gemma
+            )
+            return tuple(torch.empty_like(input) for _ in range(3))
+        if self._IS_CAPTURING or _is_torch_compiling():
+            return torch.ops.vllm.musa_jit_fused_allreduce_residual_rmsnorm(
+                input, residual, weight, float(eps), self._comm_id, gemma
+            )
+        return self._fused_allreduce_residual_rmsnorm_impl(
+            input, residual, weight, eps, gemma=gemma
+        )
+
+    def fused_allreduce_residual_rmsnorm_no_raw(
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
+        gemma: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        if not self.should_fused_allreduce_residual_rmsnorm(input, residual, weight):
+            return None
+        if self._IS_CAPTURING and not _is_current_stream_capturing():
+            self.obj._fused_rmsnorm.prepare(
+                input, residual, need_raw=False, capturing=True, gemma=gemma
+            )
+            return torch.empty_like(input), torch.empty_like(input)
+        if self._IS_CAPTURING or _is_torch_compiling():
+            return torch.ops.vllm.musa_jit_fused_allreduce_residual_rmsnorm_no_raw(
+                input, residual, weight, float(eps), self._comm_id, gemma
+            )
+        return self._fused_allreduce_residual_rmsnorm_no_raw_impl(
+            input, residual, weight, eps, gemma=gemma
+        )
+
+    def _fused_result(
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor | None,
+        weight: torch.Tensor,
+        eps: float,
+        *,
+        need_raw: bool,
+        gemma: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        result = self.obj._fused_rmsnorm.run(
+            input, residual, weight, eps, need_raw=need_raw, gemma=gemma
+        )
+        if car_trace.enabled():
+            self._last_fused_dispatch = self.obj._fused_rmsnorm._last_dispatch
+        if result is not None:
+            self._last_fused_execution = "fused"
+            return result
+        self._last_fused_execution = "fallback"
+        # Shape-dependent policy fallback keeps the v2 collective and the
+        # composed operation's dtype boundaries inside the opaque graph op.
+        from vllm import ir
+
+        reduced = self._custom_all_reduce_impl(input.clone())
+        if gemma:
+            weight = weight.to(torch.float32) + 1.0
+        if residual is None:
+            normalized = ir.ops.rms_norm(reduced, weight, eps)
+            residual_out = reduced
+        else:
+            normalized, residual_out = ir.ops.fused_add_rms_norm(
+                reduced.clone(), residual.clone(), weight, eps
+            )
+        return normalized, residual_out, reduced if need_raw else None
+
+    def _fused_allreduce_rmsnorm_impl(
+        self, input: torch.Tensor, weight: torch.Tensor, eps: float, gemma: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        normalized, _, reduced = self._fused_result(
+            input, None, weight, eps, need_raw=True, gemma=gemma
+        )
+        assert reduced is not None
+        return normalized, reduced
+
+    def _fused_allreduce_residual_rmsnorm_impl(
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
+        gemma: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        normalized, residual_out, reduced = self._fused_result(
+            input, residual, weight, eps, need_raw=True, gemma=gemma
+        )
+        assert reduced is not None
+        return normalized, residual_out, reduced
+
+    def _fused_allreduce_residual_rmsnorm_no_raw_impl(
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
+        gemma: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        normalized, residual_out, _ = self._fused_result(
+            input, residual, weight, eps, need_raw=False, gemma=gemma
+        )
+        return normalized, residual_out
+
+    def should_custom_all_gather(
+        self,
+        input: torch.Tensor,
+        dim: int = -1,
+        output_dtype: torch.dtype | None = None,
+    ) -> bool:
+        return False
+
+    def custom_all_gather(
+        self,
+        input: torch.Tensor,
+        dim: int = -1,
+        output_dtype: torch.dtype | None = None,
+    ) -> torch.Tensor | None:
+        raise NotImplementedError(
+            "custom all-gather is not implemented for MUSA custom AR v2"
+        )
+
+
+class MusaCustomAllReduceV2RMSNorm:
+    """Fused v2 launches using communicator-owned IPC and graph registrations."""
+
+    def __init__(self, owner: MusaCustomAllReduceV2Obj) -> None:
+        self._owner = owner
+        device_module = torch.get_device_module()
+        self._mp_count = int(
+            device_module.get_device_properties(owner._device).multi_processor_count
+        )
+        self._launchers: dict[tuple, Any] = {}
+
+    def rejection_reason(
+        self, input: torch.Tensor, residual: torch.Tensor | None, weight: torch.Tensor
+    ) -> str | None:
+        owner = self._owner
+        if owner.disabled or not fused_car_policy.dispatch_enabled():
+            return "v2 fused dispatch is disabled"
+        if input.dtype not in (torch.float16, torch.bfloat16):
+            return "v2 fused dispatch requires fp16 or bf16"
+        if input.dim() != 2 or input.shape[0] <= 0:
+            return "v2 fused dispatch requires nonempty two-dimensional input"
+        if input.shape[1] % 8 or input.shape[1] <= 0:
+            return "v2 fused dispatch requires hidden dimension divisible by eight"
+        if not input.is_contiguous() or input.device != owner._device:
+            return "v2 fused input must be contiguous on the communicator device"
+        if (
+            input.numel() > _INT32_MAX
+            or input.numel() * input.element_size() > owner.max_size
+        ):
+            return "v2 fused input exceeds workspace capacity"
+        if weight.dim() != 1 or weight.numel() != input.shape[1]:
+            return "v2 fused weight shape does not match the input"
+        if weight.dtype not in (input.dtype, torch.float32):
+            return "v2 RMSNorm requires a matching or fp32 weight dtype"
+        for tensor in (weight, residual):
+            if tensor is None:
+                continue
+            if tensor.device != input.device:
+                return "v2 fused tensors must share a device"
+            if tensor is residual and tensor.dtype != input.dtype:
+                return "v2 fused residual must match the input dtype"
+            if not tensor.is_contiguous():
+                return "v2 fused tensors must be contiguous"
+        if residual is not None and residual.shape != input.shape:
+            return "v2 fused residual shape does not match the input"
+        return None
+
+    def prepare(
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor | None,
+        *,
+        need_raw: bool,
+        capturing: bool,
+        gemma: bool = False,
+    ) -> tuple[Any, Any] | None:
+        rows, hidden = map(int, input.shape)
+        token_2stage = fused_car_policy.resolve_token_2stage(
+            self._owner.world_size, hidden, -1, rows
+        )
+        decision = fused_car_policy.resolve_fused_car_rmsnorm(
+            mp_count=self._mp_count,
+            world_size=self._owner.world_size,
+            rows=rows,
+            hidden_size=hidden,
+            token_2stage=bool(token_2stage),
+            graph_rank_data=capturing,
+        )
+        if car_trace.enabled():
+            self._last_policy_label = fused_car_policy.decision_label(decision)
+        if (
+            decision is None
+            or decision.kernel is fused_car_policy.CustomARKernel.FALLBACK
+        ):
+            return None
+        registered = bool(capturing and decision.graph_rank_data)
+        key = (
+            rows,
+            hidden,
+            decision,
+            registered,
+            residual is not None,
+            need_raw,
+            gemma,
+        )
+        launcher = self._launchers.get(key)
+        if launcher is None:
+            launcher = jit_ar.v2_fused_allreduce_rmsnorm_func(
+                self._owner.world_size,
+                hidden,
+                rows,
+                row_kernel=decision.kernel
+                is not fused_car_policy.CustomARKernel.GENERIC,
+                graph_rank_data=registered,
+                short_rows=(
+                    decision.tuned_module
+                    if decision.kernel is not fused_car_policy.CustomARKernel.GENERIC
+                    else decision.short_rows_module
+                ),
+                small_rows=decision.small_rows_module,
+                token_2stage_override=int(decision.token_2stage),
+                row_warp_inv_rms_override=decision.row_warp_inv_rms,
+                mp_count=self._mp_count,
+                need_raw=need_raw,
+                has_residual=residual is not None,
+                gemma=gemma,
+            )
+            self._launchers[key] = launcher
+        return decision, launcher
+
+    def _dispatch_snapshot(
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor | None,
+        need_raw: bool,
+        capturing: bool,
+        gemma: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "backend": "v2",
+            "execution": "fallback",
+            "rows": int(input.shape[0]),
+            "hidden": int(input.shape[1]),
+            "need_raw": need_raw,
+            "has_residual": residual is not None,
+            "gemma": gemma,
+            "phase": "capture" if capturing else "eager",
+            "registered": False,
+            "policy_label": "no-rule",
+            "launcher_symbol": "unfused_v2_ir",
+            "effective_config": {},
+            "jit_cflags": [],
+        }
+
+    def run(
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor | None,
+        weight: torch.Tensor,
+        eps: float,
+        *,
+        need_raw: bool,
+        gemma: bool = False,
+        norm_out: torch.Tensor | None = None,
+        residual_out: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None] | None:
+        reason = self.rejection_reason(input, residual, weight)
+        if reason is not None:
+            raise ValueError(reason)
+        capturing = _is_current_stream_capturing()
+        if car_trace.enabled():
+            self._last_dispatch = self._dispatch_snapshot(
+                input, residual, need_raw, capturing, gemma
+            )
+        if weight.dtype != input.dtype:
+            if car_trace.enabled():
+                self._last_dispatch["policy_label"] = "fp32_weight"
+            return None
+        prepared = self.prepare(
+            input, residual, need_raw=need_raw, capturing=capturing, gemma=gemma
+        )
+        if prepared is None:
+            if car_trace.enabled():
+                self._last_dispatch["policy_label"] = self._last_policy_label
+            return None
+        decision, launcher = prepared
+        for output in (norm_out, residual_out):
+            if output is not None and (
+                output.shape != input.shape
+                or output.dtype != input.dtype
+                or output.device != input.device
+                or not output.is_contiguous()
+            ):
+                raise ValueError("v2 fused output must match the contiguous input")
+        if norm_out is None:
+            norm_out = torch.empty_like(input)
+        if residual_out is None:
+            residual_out = torch.empty_like(input)
+        raw_out = torch.empty_like(input) if need_raw else None
+        owner = self._owner
+        registered = bool(capturing and decision.graph_rank_data)
+        rank_data = owner._rank_data_device
+        if registered:
+            index = len(owner._graph_capture_inputs)
+            if index >= owner._graph_input_count:
+                raise RuntimeError("MUSA fused RMSNorm graph pointer table overflow")
+            rank_data = owner._graph_rank_data[index]
+            owner._graph_capture_inputs.append(int(input.data_ptr()))
+        launcher(
+            rank_data,
+            owner._fused_signal_ptrs_cpu,
+            input,
+            residual,
+            residual_out,
+            norm_out,
+            weight,
+            raw_out,
+            owner._self_fused_signal_ptr,
+            owner._self_buffer_ptr,
+            owner.max_size,
+            owner.rank,
+            owner.world_size,
+            float(eps),
+        )
+        if car_trace.enabled():
+            effective = getattr(launcher, "launch_config", decision)
+            self._last_dispatch.update(
+                execution="fused",
+                registered=registered,
+                policy_label=fused_car_policy.decision_label(decision),
+                launcher_symbol=getattr(launcher, "kernel_symbol", "unknown"),
+                effective_config={
+                    key: getattr(value, "value", value)
+                    for key, value in vars(effective).items()
+                },
+                jit_cflags=list(getattr(launcher, "jit_cflags", ())),
+            )
+            phase = "capture" if capturing else "eager"
+            car_trace.record(
+                "host_launch",
+                "fuse_car_rmsnorm_v2",
+                f"{phase}:registered={int(registered)}:raw={int(need_raw)}:"
+                + getattr(launcher, "kernel_symbol", "unknown")
+                + ":"
+                + getattr(launcher, "launch_config", decision).name_suffix(),
+                input.numel() * input.element_size(),
+            )
+        return norm_out, residual_out, raw_out
+
+    def fused_allreduce_rmsnorm(
+        self,
+        input: torch.Tensor,
+        residual: torch.Tensor,
+        weight: torch.Tensor,
+        eps: float,
+        *,
+        norm_out: torch.Tensor | None = None,
+        residual_out: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        result = self.run(
+            input,
+            residual,
+            weight,
+            eps,
+            need_raw=False,
+            norm_out=norm_out,
+            residual_out=residual_out,
+        )
+        return None if result is None else result[:2]
+
+    def fused_allreduce_gemma_dual_rmsnorm(self, *args, **kwargs):
+        raise NotImplementedError("v2 Gemma dual RMSNorm is not enabled")

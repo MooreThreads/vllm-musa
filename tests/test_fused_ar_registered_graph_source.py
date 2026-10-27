@@ -19,7 +19,7 @@ FUSED_OPS = ROOT / "vllm_musa/fused_allreduce_rmsnorm_ops.py"
 FUSION_PASS = ROOT / "vllm_musa/_inductor/musa_allreduce_rms_fusion.py"
 PASS_MANAGER_PATCH = ROOT / (
     "vllm_musa/patches/series/"
-    "0003-MUSA-vllm.compilation.passes.pass_manager.patch"
+    "0001-MUSA-base-platform-port.patch"
 )
 
 
@@ -60,6 +60,7 @@ def _isolated_fusion_helpers(torch_namespace: object, fx_namespace: object) -> t
     assert len(fusion_classes) == 1
     fusion_class = fusion_classes[0]
     helper_names = {
+        "_fused_capability_enabled",
         "_is_add_node",
         "_max_fusable_tokens",
         "is_applicable_for_range",
@@ -95,7 +96,12 @@ def _isolated_fusion_helpers(torch_namespace: object, fx_namespace: object) -> t
     helper_class.end_lineno = fusion_class.end_lineno
     helper_class.end_col_offset = fusion_class.end_col_offset
     module = ast.fix_missing_locations(ast.Module(body=[helper_class], type_ignores=[]))
-    namespace = {"torch": torch_namespace, "fx": fx_namespace}
+    namespace = {
+        "torch": torch_namespace,
+        "fx": fx_namespace,
+        # Bind the isolated helper to the test tensor type used by CPU checks.
+        "FakeTensor": _FakeTensor,
+    }
     exec(compile(module, str(FUSION_PASS), "exec"), namespace)
     return namespace["_IsolatedFusionHelpers"]
 
@@ -255,6 +261,37 @@ def test_fusion_uses_standard_pass_and_runtime_capability_gates() -> None:
     assert "if self.disabled:" in comm_source
     assert "if self.tp_size <= 1:" in fusion_source
     assert "_graph_registered_input_eligible" in comm_source
+    assert "_fused_capability_enabled" in fusion_source
+
+
+def test_fused_capability_gate_enables_v1_default_and_v2_switch() -> None:
+    (
+        torch_namespace,
+        fx_namespace,
+        _,
+        _,
+        _,
+        _,
+    ) = _fake_fusion_namespaces()
+    helpers = _isolated_fusion_helpers(torch_namespace, fx_namespace)
+
+    class V1Communicator:
+        pass
+
+    class V2Communicator:
+        supports_fused_rmsnorm = True
+
+    class DisabledV2Communicator:
+        supports_fused_rmsnorm = False
+
+    class InvalidCommunicator:
+        supports_fused_rmsnorm = 1
+
+    assert helpers._fused_capability_enabled(V1Communicator())
+    assert helpers._fused_capability_enabled(V2Communicator())
+    assert not helpers._fused_capability_enabled(DisabledV2Communicator())
+    assert not helpers._fused_capability_enabled(InvalidCommunicator())
+    assert not helpers._fused_capability_enabled(None)
 
 
 def test_python_registered_path_uses_shared_graph_lifecycle() -> None:
