@@ -18,17 +18,17 @@ from vllm_musa import device_spec
 _SETUP_PY = Path(__file__).resolve().parent.parent / "setup.py"
 
 
-def _setup_arch_table() -> dict[str, dict[str, bool]]:
-    """Read ``ARCH_BUILD_CAPABILITIES`` out of setup.py without executing it."""
-    tree = ast.parse(_SETUP_PY.read_text())
-    for node in tree.body:
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and getattr(node.targets[0], "id", None) == "ARCH_BUILD_CAPABILITIES"
-        ):
-            return ast.literal_eval(node.value)
-    raise AssertionError("ARCH_BUILD_CAPABILITIES not found in setup.py")
+def _setup_reads_the_shared_table() -> bool:
+    """Whether ``setup.py`` resolves its arch through ``torchada.musa``.
+
+    ``setup.py`` cannot import the package it is building, which is why it used to
+    carry its own ``ARCH_BUILD_CAPABILITIES`` copy of the FP8 table.  It no longer
+    can: the per-arch facts live in ``torchada.musa.targets``, and reading them from
+    there is what makes a second, drifting copy impossible.  This asserts the shape
+    of that delegation without executing the file.
+    """
+    source = _SETUP_PY.read_text()
+    return "ta_build.resolve_targets(" in source and "ARCH_BUILD_CAPABILITIES" not in source
 
 
 class _FakeProps:
@@ -75,29 +75,22 @@ def spec(monkeypatch):
     device_spec.clear_device_spec_cache()
 
 
-def test_setup_fp8_table_matches_runtime_arch_set() -> None:
-    """setup.py and device_spec must not disagree about which arch has FP8.
+def test_setup_has_no_second_arch_table() -> None:
+    """One table, in ``torchada.musa.targets``: setup.py must not keep a copy.
 
-    setup.py cannot import the package it is building, so the two tables are
-    duplicated by necessity; this is the thing that keeps them equal.
+    The table it used to hold is exactly how a wheel could be stamped for an arch
+    whose FP8 sources were not compiled.
     """
-    table = _setup_arch_table()
-    built_with_fp8 = {
-        arch for arch, caps in table.items() if caps.get("native_fp8")
+    assert _setup_reads_the_shared_table()
+
+
+def test_every_arch_the_runtime_knows_is_selectable_at_build_time() -> None:
+    """A stamp can only name an arch ``resolve_targets`` accepts, so both must agree."""
+    known = set(ta_build.resolve_targets("mp_31").names) | {
+        name for name in ("mp_10", "mp_21", "mp_22", "mp_31", "mp_32")
     }
-    runtime = {f"mp_{code // 10}" for code in device_spec.NATIVE_FP8_ARCHS}
 
-    assert built_with_fp8 == runtime, (
-        "setup.py ARCH_BUILD_CAPABILITIES and device_spec.NATIVE_FP8_ARCHS "
-        f"disagree: build={sorted(built_with_fp8)} runtime={sorted(runtime)}"
-    )
-
-
-def test_setup_table_covers_every_validated_arch() -> None:
-    table = _setup_arch_table()
-    validated = {f"mp_{code // 10}" for code in device_spec.VALIDATED_MUSA_ARCHS}
-
-    assert validated <= set(table)
+    assert {f"mp_{code // 10}" for code in device_spec.VALIDATED_MUSA_ARCHS} <= known
 
 
 def test_matching_build_is_accepted(stamp, spec) -> None:
@@ -141,7 +134,7 @@ def test_stamp_without_fp8_warns_but_does_not_fail(stamp, monkeypatch) -> None:
 
     spec = device_spec.get_device_spec(0)
 
-    assert spec.supports(device_spec.MusaFeature.NATIVE_FP8)
+    assert spec.supports_native_fp8
 
 
 def _stamp_writer(tmp_path):

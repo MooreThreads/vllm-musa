@@ -259,34 +259,18 @@ EXTRA_LINK_ARGS = [
     "-lmublasLt",
 ]
 
-# Detect MTGPU target architecture
-#: Per-arch build capabilities.  The build-time half of the same fact that
-#: ``vllm_musa/device_spec.py::NATIVE_FP8_ARCHS`` records at runtime; setup.py
-#: cannot import the package it is building, so the two are kept in sync by
-#: ``tests/test_build_arch_stamp.py``.
-#:
-#: This is a table, not ``MTGPU_TARGET == "mp_31"``, because the equality is
-#: indistinguishable from an ordering: when mp_32 lands it would silently build
-#: without FP8 even though the arch has it.
-ARCH_BUILD_CAPABILITIES = {
-    "mp_21": {"native_fp8": False},
-    "mp_22": {"native_fp8": False},
-    "mp_31": {"native_fp8": True},
-}
-
-# The selection rules live in a module so they can be tested without building:
-# ``MTGPU_TARGET`` takes one arch or several (``mp_31`` / ``mp_21,mp_22``), and a
-# disagreement with ``TORCH_MUSA_ARCH_LIST`` -- the variable ``torch_musa`` turns
-# into ``--offload-arch`` -- is refused instead of producing a wheel whose stamp
-# and object code name different hardware.
-_build_arch_spec = importlib.util.spec_from_file_location(
-    "vllm_musa_build_arch", Path(__file__).parent / "vllm_musa" / "_build_arch.py"
-)
-_build_arch = importlib.util.module_from_spec(_build_arch_spec)
-# Register before executing: dataclasses look their module up in sys.modules.
-sys.modules[_build_arch_spec.name] = _build_arch
-_build_arch_spec.loader.exec_module(_build_arch)
-
+# Which arch(es) this wheel targets.
+#
+# ``MTGPU_TARGET`` takes one arch or several (``mp_31`` / ``mp_21,mp_22``).  The
+# rules live in ``torchada.musa.build`` -- the same module that writes the stamp
+# and that a JIT build uses -- because two copies of "which arch is this" is how
+# the stamp and ``--offload-arch`` end up naming different hardware.  In particular
+# a selection that disagrees with ``TORCH_MUSA_ARCH_LIST`` is refused here: that is
+# the variable ``torch_musa`` turns into ``--offload-arch``, and on MUSA a wheel
+# from one arch running on another does not fault, it returns wrong numbers.
+#
+# ``torchada.musa.targets`` supplies the per-arch facts (native FP8, FP4,
+# validated), so this file no longer keeps a second copy of that table.
 _device_arch = None
 if torch.musa.is_available():
     try:
@@ -296,26 +280,25 @@ if torch.musa.is_available():
         print(f"Warning: Failed to detect GPU properties: {e}")
 
 try:
-    ARCH_SELECTION = _build_arch.resolve(
-        os.environ.get(_build_arch.TARGET_ENV),
+    BUILD_TARGETS = ta_build.resolve_targets(
+        os.environ.get(ta_build.TARGET_ENV),
         device_arch=_device_arch,
-        capabilities=ARCH_BUILD_CAPABILITIES,
     )
-    _declared_arch_list = _build_arch.resolve_compiler_arch_list(
-        os.environ.get(_build_arch.COMPILER_LIST_ENV), ARCH_SELECTION
+    _declared_arch_list = ta_build.compiler_arch_list(
+        os.environ.get(ta_build.COMPILER_ARCH_LIST_ENV), BUILD_TARGETS
     )
-except _build_arch.ArchBuildError as e:
+except ta_build.MusaTargetSelectionError as e:
     print(f"ERROR: {e}")
     sys.exit(1)
 
-MTGPU_TARGETS = list(ARCH_SELECTION.targets)
-MTGPU_TARGET = ARCH_SELECTION.display
-MTGPU_TARGET_SOURCE = ARCH_SELECTION.source
+MTGPU_TARGETS = list(BUILD_TARGETS.names)
+MTGPU_TARGET = BUILD_TARGETS.display
+MTGPU_TARGET_SOURCE = BUILD_TARGETS.source
 # ``torch_musa``'s extension builder reads this at extension-construction time and
 # turns it into one ``--offload-arch`` per arch, so it must be set before the
 # extensions below are created.  mcc accepts the flag repeatedly and bundles the
 # result into a single __CLANG_OFFLOAD_BUNDLE__, which is the fat binary.
-os.environ[_build_arch.COMPILER_LIST_ENV] = _declared_arch_list
+os.environ[ta_build.COMPILER_ARCH_LIST_ENV] = _declared_arch_list
 
 if MTGPU_TARGET_SOURCE == "environment":
     print(f"Using MTGPU_TARGET from environment: {MTGPU_TARGET}")
@@ -329,10 +312,10 @@ else:
         f"derived from a device. Building for the default {MTGPU_TARGET}. "
         f"Set MTGPU_TARGET explicitly to build for another arch."
     )
-if ARCH_SELECTION.is_fat:
+if BUILD_TARGETS.is_fat:
     print(
         f"WARNING: building a fat binary for {MTGPU_TARGET}; every arch gets the "
-        f"same -DENABLE_FP8={ARCH_SELECTION.fp8} and the same tactics."
+        f"same -DENABLE_FP8={BUILD_TARGETS.fp8} and the same tactics."
     )
 print(f"TORCH_MUSA_ARCH_LIST={_declared_arch_list} (--offload-arch per arch)")
 
@@ -352,7 +335,7 @@ MCC_FLAGS = [
     "-DUSE_MUSA",
 ]
 
-ENABLE_FP8 = ARCH_SELECTION.fp8
+ENABLE_FP8 = BUILD_TARGETS.fp8
 if ENABLE_FP8:
     MCC_FLAGS.append("-DENABLE_FP8")
 

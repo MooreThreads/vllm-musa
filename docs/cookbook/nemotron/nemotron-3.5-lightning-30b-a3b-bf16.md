@@ -31,7 +31,7 @@ per-token decode latency.
 
 - vLLM-MUSA v0.28.0-dev with Nemotron-3.5 support. The two log lines under
   Configuration notes confirm that the image carries it.
-- torchada 0.1.95, as pinned by this branch. It ships the S5000 fused-MoE
+- torchada 0.1.104, as pinned by this branch. It ships the S5000 fused-MoE
   configuration for this checkpoint's expert shape
   (`E=128,N=1856,device_name=MTT_S5000.json`).
 - The checkpoint mounted at

@@ -912,36 +912,49 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def supports_fp8(cls) -> bool:
-        # Native FP8 needs both halves: an arch that has the instructions and a
-        # build that carries the kernels (`-DENABLE_FP8`, recorded in the build
-        # stamp).  Answering from the arch alone advertises FP8 on a bf16-only
-        # wheel, where every FP8 path then falls back at runtime.
-        from vllm_musa.device_spec import (
-            MusaFeature,
-            current_device_spec,
-            read_build_stamp,
-        )
+        # Two questions, asked in order.  The arch: does it have the instructions
+        # (an explicit set, never a capability ordering)?  The wheel: was it built
+        # with `-DENABLE_FP8`, which the stamp records and the arch cannot imply?
+        # Today `resolve_targets` derives that flag from the same table, so on
+        # mp_31 the stamp half is always True -- it is kept because it is the only
+        # record of what the .so actually compiled, and it is what stops a
+        # bf16-only build from advertising FP8 kernels it does not contain.
+        from vllm_musa.device_spec import current_device_spec, read_build_stamp
 
         spec = current_device_spec()
-        if spec is None or not spec.supports(MusaFeature.NATIVE_FP8):
+        if spec is None or not spec.supports_native_fp8:
             return False
         stamp = read_build_stamp()
         return True if stamp is None else bool(stamp.fp8)
 
     @classmethod
     def supports_fp4(cls) -> bool:
-        """Whether the device executes FP4 arithmetic, S5000 included.
+        """Whether the device executes FP4 arithmetic. No MUSA arch does, S5000 included.
 
-        Named after ``supports_fp8`` and answered from an explicit empty set, so
-        every arch says ``False`` today.  This is deliberately *not*
-        ``supports_mx()``: MX is upstream's block-scaled-type hook, and an MX FP4
-        checkpoint runs here through dequantisation, on any arch.  Confusing the
-        two would advertise FP4 kernels that do not exist.
+        Named after ``supports_fp8`` and answered from the explicit empty set in
+        ``torchada.musa.targets``, so this stays ``False`` until an arch actually has
+        the instructions.  It is deliberately *not* ``supports_mx()``: MX is upstream's
+        block-scaled-type hook, and an MX FP4 checkpoint already runs here through
+        dequantisation on any arch, so answering from that would advertise FP4 kernels
+        that do not exist.
         """
-        from vllm_musa.device_spec import MusaFeature, current_device_spec
+        from vllm_musa.device_spec import current_device_spec
 
         spec = current_device_spec()
-        return spec is not None and spec.supports(MusaFeature.NATIVE_FP4)
+        return spec is not None and spec.supports_native_fp4
+
+    @classmethod
+    def is_validated_musa_target(cls, device_id: int = 0) -> bool:
+        """Whether the tuned kernels have been validated on this device's arch.
+
+        The one question that used to be spelled ``capability >= (3, 1)`` at six call
+        sites: it is an identity check against the validated-arch set, never an
+        ordering, because MUSA's axes do not order (warp width, FP8 and the
+        multiprocessor count all move independently).
+        """
+        from vllm_musa.device_spec import is_validated_arch
+
+        return is_validated_arch(device_id)
 
     @classmethod
     def use_custom_allreduce(cls) -> bool:

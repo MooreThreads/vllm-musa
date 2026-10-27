@@ -23,7 +23,7 @@ SUPPORTED_MUSA_STACKS = {
             "torchaudio==2.11.0.post2+musa5.2.0",
             "deep_ep==1.1.0+musa5.2.0torch2.11.0.post2",
         ),
-        "torchada": "torchada==0.1.95",
+        "torchada": "torchada==0.1.104",
     },
 }
 
@@ -63,7 +63,7 @@ def test_supported_musa_stack_contract_cases_are_explicit():
     )
     assert (
         SUPPORTED_MUSA_STACKS["torch==2.11.0.post2+musa5.2.0"]["torchada"]
-        == "torchada==0.1.95"
+        == "torchada==0.1.104"
     )
     assert (
         "torchvision==0.24.1.post1+musa5.2.0"
@@ -84,7 +84,7 @@ def test_torchada_floor_is_consistent():
     assert expected["torchada"] in common_requirements
     for readme_name in ("README.md", "README_CN.md"):
         readme = (ROOT / readme_name).read_text()
-        assert "torchada 0.1.95" in readme
+        assert "torchada 0.1.104" in readme
 
 
 def _dockerfile_run_commands(dockerfile: str) -> list[str]:

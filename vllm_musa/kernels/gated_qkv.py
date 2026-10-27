@@ -19,8 +19,6 @@ from vllm import ir
 from vllm.platforms import current_platform
 from vllm.triton_utils import tl, triton
 
-from vllm_musa.device_spec import is_validated_device
-
 _HEAD_DIM = 256
 _ROTARY_DIM = 64
 _ROTARY_HALF = _ROTARY_DIM // 2
@@ -174,7 +172,7 @@ def _supports_gated_qkv(
         and mrope_interleaved
         and is_neox_style
         and weight_offset == 1.0
-        and is_validated_device(device_id)
+        and current_platform.is_validated_musa_target(device_id)
         and packed_qkv.dtype == torch.bfloat16
         and q_weight.dtype == packed_qkv.dtype
         and k_weight.dtype == packed_qkv.dtype

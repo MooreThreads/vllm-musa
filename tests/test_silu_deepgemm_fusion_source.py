@@ -99,7 +99,8 @@ def test_contract_auto_enablement_is_limited_to_the_validated_scope():
     assert "VLLM_MUSA_CUSTOM_OP_USE_NATIVE" not in pass_manager_source
     assert "policy.prefers_feature(" in pass_manager_source
     assert "QWEN3_DENSE_FP8_POST_GRAD_FUSIONS" in pass_manager_source
-    assert "_has_validated_musa_device_capability()" in pass_manager_source
-    assert "torch.musa.current_device()" in pass_manager_source
-    assert "torch.musa.get_device_capability(device_id)" in pass_manager_source
-    assert "current_platform.is_device_capability" not in pass_manager_source
+    assert "current_platform.is_validated_musa_target()" in pass_manager_source
+    # The capability question is the platform's; the pass manager must not compare a
+    # capability tuple of its own (MUSA's axes do not order).
+    assert "torch.musa.get_device_capability" not in pass_manager_source
+    assert "is_device_capability" not in pass_manager_source

@@ -3,6 +3,7 @@
 
 from vllm.compilation.passes.pass_manager import PostGradPassManager
 from vllm.config import VllmConfig, set_current_vllm_config
+from vllm.platforms import current_platform
 from vllm.logger import init_logger
 
 from vllm_musa.model_executor.kernels.linear.scaled_mm.deep_gemm import (
@@ -13,18 +14,6 @@ from .rms_deepgemm_fusion import MusaRMSDeepGemmFusionPass
 from .silu_deepgemm_fusion import MusaSiluDeepGemmFusionPass
 
 logger = init_logger(__name__)
-
-
-def _has_validated_musa_device_capability() -> bool:
-    """Whether the current logical device is a validated MUSA target.
-
-    The comparison is an identity check on the arch code (see
-    ``vllm_musa.device_spec``), never an ordering: MUSA capabilities are not
-    monotonic, so "at least (3, 1)" is not a meaningful question.
-    """
-    from vllm_musa.device_spec import is_validated_device
-
-    return is_validated_device()
 
 
 def _is_dense_model(config: VllmConfig) -> bool:
@@ -63,7 +52,7 @@ class MusaPostGradPassManager(PostGradPassManager):
         if (
             _silu_deepgemm_fusion_requested(config)
             and _is_dense_model(config)
-            and _has_validated_musa_device_capability()
+            and current_platform.is_validated_musa_target()
             and _use_row_major_activation_scales(False)
             and self.pass_config.fuse_act_quant
         ):
@@ -73,7 +62,7 @@ class MusaPostGradPassManager(PostGradPassManager):
         if (
             _rms_deepgemm_fusion_requested(config)
             and _is_dense_model(config)
-            and _has_validated_musa_device_capability()
+            and current_platform.is_validated_musa_target()
             and _use_row_major_activation_scales(False)
             and self.pass_config.fuse_norm_quant
         ):

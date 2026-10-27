@@ -3,7 +3,7 @@
 
 This module used to carry its own device probe, capability sets, build-stamp
 reader and arch-mismatch check.  The same facts decide kernel selection in
-vLLM-MUSA, SGLang and MATE, the three copies had drifted, and a wrong-arch cubin
+vLLM-MUSA, SGLang and MATE, the three copies had drifted, and a wrong-arch mubin
 does not fault on MUSA — it returns wrong numbers — so the probing half now lives
 in ``torchada.musa`` (0.1.104 and later).
 
@@ -49,11 +49,12 @@ except ImportError as exc:  # pragma: no cover - a pre-release install
         "`pip install -e <torchada checkout> --no-deps --no-build-isolation`."
     ) from None
 from torchada.musa.build import MusaBuildTargetMismatch
+from torchada.musa.build import assert_build_matches_device as _assert_build_matches_device
 from torchada.musa.device import (  # noqa: F401 - re-exported for call sites
+    NATIVE_FP4_ARCHS,
     NATIVE_FP8_ARCHS,
     VALIDATED_MUSA_ARCHS,
     MusaDeviceSpec,
-    MusaFeature,
     arch_code,
     arch_name,
     clear_device_spec_cache,
@@ -64,7 +65,7 @@ from torchada.musa.device import get_device_spec as _probed_device_spec
 __all__ = [
     "MusaBuildTargetMismatch",
     "MusaDeviceSpec",
-    "MusaFeature",
+    "NATIVE_FP4_ARCHS",
     "NATIVE_FP8_ARCHS",
     "VALIDATED_MUSA_ARCHS",
     "arch_code",
@@ -72,7 +73,7 @@ __all__ = [
     "clear_device_spec_cache",
     "current_device_spec",
     "get_device_spec",
-    "is_validated_device",
+    "is_validated_arch",
     "read_build_stamp",
 ]
 
@@ -105,7 +106,7 @@ def _assert_build_targets_device(spec: MusaDeviceSpec) -> None:
     editable install has no stamp, and staying silent would hide the fact that the
     only check that catches a wrong-arch wheel is off for this process.
     """
-    _torchada_build.assert_build_targets_device(
+    _assert_build_matches_device(
         spec,
         module_name=_BUILD_STAMP_MODULE,
         name="vllm_musa",
@@ -131,12 +132,14 @@ def current_device_spec() -> Optional[MusaDeviceSpec]:
     return get_device_spec(None)
 
 
-def is_validated_device(device_id: Optional[int] = None) -> bool:
-    """Whether the arch of ``device_id`` is one the tuned paths were validated on.
+def is_validated_arch(device_id: Optional[int] = None) -> bool:
+    """Whether the tuned kernels have been validated on this device's arch.
 
-    A build/device mismatch is raised, not folded into ``False``: gating an
-    optimized kernel off would leave a wrong-arch binary running the generic path,
-    which is still the wrong binary.
+    Unlike ``torchada.musa.device.is_validated_arch``, this routes through *this*
+    module's probe, so the build/device check has already run by the time the answer
+    is produced: a wrong-arch wheel raises instead of quietly disabling every tuned
+    path and running the generic kernels of the same wrong binary.  That is the
+    whole reason this package wraps the shared answer instead of re-exporting it.
     """
     try:
         spec = current_device_spec() if device_id is None else get_device_spec(device_id)

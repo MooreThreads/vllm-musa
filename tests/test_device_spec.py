@@ -20,7 +20,6 @@ from vllm_musa.device_spec import (
     NATIVE_FP8_ARCHS,
     VALIDATED_MUSA_ARCHS,
     MusaDeviceSpec,
-    MusaFeature,
     get_device_spec,
 )
 
@@ -51,8 +50,8 @@ def test_s5000_spec_is_validated_and_has_native_fp8() -> None:
 
     assert spec.is_validated
     assert spec.supports_native_fp8
-    assert spec.supports(MusaFeature.VALIDATED_TARGET)
-    assert spec.supports(MusaFeature.NATIVE_FP8)
+    assert spec.is_validated
+    assert spec.supports_native_fp8
 
 
 @pytest.mark.parametrize(
@@ -81,7 +80,7 @@ def test_unvalidated_arch_fails_closed(
 
     assert not spec.is_validated
     assert not spec.supports_native_fp8
-    assert not spec.supports(MusaFeature.VALIDATED_TARGET)
+    assert not spec.is_validated
 
 
 def test_arch_code_and_name_derivation() -> None:
@@ -115,12 +114,15 @@ def test_explicit_sets_are_the_source_of_truth() -> None:
     assert 420 not in VALIDATED_MUSA_ARCHS
 
 
-def test_unknown_feature_is_rejected() -> None:
-    class NotAFeature:
-        pass
+def test_every_capability_question_comes_from_the_table() -> None:
+    """No `supports(anything)` dispatch: the answers are named properties."""
 
-    with pytest.raises(ValueError):
-        make_spec().supports(NotAFeature())  # type: ignore[arg-type]
+    spec = make_spec()
+
+    assert spec.is_validated is True
+    assert spec.supports_native_fp8 is True
+    assert spec.supports_native_fp4 is False
+    assert not hasattr(spec, "supports")
 
 
 def test_get_device_spec_builds_from_device_properties(monkeypatch) -> None:
@@ -250,7 +252,9 @@ def test_a_failed_probe_is_not_cached(monkeypatch) -> None:
 
     ta_device._probe_device_spec.cache_clear()
     monkeypatch.setattr(ta_device, "_get_properties", flaky)
-    monkeypatch.setattr(device_spec, "read_build_stamp", lambda: None)
+    # The build/device check reads the stamp through torchada's reader, not this
+    # module's cached wrapper, so patch the reader the check actually calls.
+    monkeypatch.setattr(ta_build, "read_build_stamp", lambda *a, **k: None)
 
     assert device_spec.get_device_spec(0) is None
     recovered = device_spec.get_device_spec(0)
@@ -293,4 +297,4 @@ def test_a_build_target_mismatch_is_not_swallowed(monkeypatch) -> None:
     with pytest.raises(device_spec.MusaBuildTargetMismatch, match="mp_22"):
         device_spec.get_device_spec(0)
     with pytest.raises(device_spec.MusaBuildTargetMismatch, match="mp_22"):
-        device_spec.is_validated_device(0)
+        device_spec.is_validated_arch(0)
