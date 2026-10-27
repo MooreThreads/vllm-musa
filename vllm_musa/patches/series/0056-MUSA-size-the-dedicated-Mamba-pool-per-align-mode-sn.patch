@@ -19,9 +19,9 @@ size, so the startup check and --max-model-len auto-fit could pass while the
 real attention pool was short of one full-length request. Charge the whole
 fixed Mamba pool plus the minimum attention capacity, as 0.28 does.
 ---
- tests/v1/core/test_kv_cache_utils.py |  97 ++++++++++++++++++
- vllm/v1/core/kv_cache_utils.py       | 148 +++++++++++++++++++++++----
- 2 files changed, 225 insertions(+), 20 deletions(-)
+ tests/v1/core/test_kv_cache_utils.py |  97 +++++++++++++
+ vllm/v1/core/kv_cache_utils.py       | 206 ++++++++++++++++++++++++---
+ 2 files changed, 283 insertions(+), 20 deletions(-)
 
 diff --git a/tests/v1/core/test_kv_cache_utils.py b/tests/v1/core/test_kv_cache_utils.py
 index b06479f1ca..2475bf5777 100644
@@ -132,7 +132,7 @@ index b06479f1ca..2475bf5777 100644
  def test_none_hash(monkeypatch, hash_fn):
      import vllm.v1.core.kv_cache_utils
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index 506e8ceb25..5f2c4d7dd3 100644
+index 506e8ceb25..0233c752ee 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
 @@ -1599,6 +1599,54 @@ def _musa_separate_pool_eligible(vllm_config, kv_cache_groups) -> bool:
@@ -215,7 +215,35 @@ index 506e8ceb25..5f2c4d7dd3 100644
      )
      mamba_num_blocks = max_num_seqs * mamba_blocks_per_request + 1
      mamba_layers = [ln for g in mamba_groups for ln in g.layer_names]
-@@ -2343,16 +2389,32 @@ def get_kv_cache_groups(
+@@ -1703,6 +1749,27 @@ def validate_kv_cache_layout(
+         )
+ 
+ 
++def _musa_attention_specs_uniform(attention_specs: dict) -> bool:
++    """Whether the non-Mamba specs can share one attention KV tensor.
++
++    The separated MUSA allocator builds one tensor per page-size group and
++    views it with the first spec's dtype and geometry, so layers that differ in
++    dtype, block size, page size or head geometry cannot share a group.
++    """
++    signatures = {
++        (
++            type(spec),
++            getattr(spec, "dtype", None),
++            spec.block_size,
++            spec.page_size_bytes,
++            getattr(spec, "num_kv_heads", None),
++            getattr(spec, "head_size", None),
++        )
++        for spec in attention_specs.values()
++    }
++    return len(signatures) == 1
++
++
+ def get_kv_cache_config_from_groups(
+     vllm_config: VllmConfig,
+     kv_cache_groups: list[KVCacheGroupSpec],
+@@ -2343,16 +2410,69 @@ def get_kv_cache_groups(
          ]
          return packed_groups
  
@@ -235,14 +263,51 @@ index 506e8ceb25..5f2c4d7dd3 100644
 +    # allocator accounts for both families. Without this, align mode inflates
 +    # the attention page by the Mamba/attention page ratio and loses most of
 +    # the KV token capacity.
-+    if (
++    mamba_specs = {
++        name: spec
++        for name, spec in filtered_spec.items()
++        if isinstance(spec, MambaSpec)
++    }
++    attention_specs = {
++        name: spec
++        for name, spec in filtered_spec.items()
++        if not isinstance(spec, MambaSpec)
++    }
++    separate_pools = (
 +        not hidden_specs
 +        and vllm_config.kv_transfer_config is None
 +        and musa_mamba_separate_pool_enabled()
-+        and any(isinstance(spec, MambaSpec) for spec in filtered_spec.values())
-+        and any(not isinstance(spec, MambaSpec) for spec in filtered_spec.values())
-+    ):
-+        groups = _get_kv_cache_groups_uniform_page_size(filtered_spec)
++        and bool(mamba_specs)
++        and bool(attention_specs)
++    )
++    if separate_pools and not _musa_attention_specs_uniform(attention_specs):
++        # A heterogeneous attention cache (FP8 KV with skipped layers, or MLA
++        # next to non-MLA) cannot share one attention tensor: the KV view is
++        # built with a single dtype and geometry per group, so mixing them
++        # overflows the allocation. Fail here with an actionable message
++        # instead of aborting inside KV tensor allocation.
++        raise ValueError(
++            "MUSA: the dedicated Mamba pool cannot mix attention KV dtypes or "
++            "geometries in one page group (for example --kv-cache-dtype fp8 "
++            "with --kv-cache-dtype-skip-layers); use a uniform attention KV "
++            "dtype"
++        )
++    if separate_pools:
++        # Keep the recurrent-state page independent from the attention pages,
++        # but still unify the attention specs among themselves: a
++        # heterogeneous hybrid (FP8 KV with skipped layers, or MLA next to
++        # non-MLA) must reach one attention page size, otherwise the separated
++        # allocator cannot place them in one attention group.
++        try:
++            attention_specs = unify_kv_cache_spec_page_size(attention_specs)
++        except NotImplementedError:
++            fallback_groups = _try_get_full_allocation_fallback_groups(kv_cache_spec)
++            if fallback_groups is None:
++                raise
++            return fallback_groups
++        groups = _get_kv_cache_groups_uniform_page_size(
++            {**mamba_specs, **attention_specs}
++        )
 +    else:
 +        # Prefer preserving each layer's cache semantics. If physical pages
 +        # cannot be unified, try a supported allocation-only fallback before
@@ -258,7 +323,7 @@ index 506e8ceb25..5f2c4d7dd3 100644
  
      # Add hidden-state layers back with page aligned to the common page.
      if hidden_specs:
-@@ -2479,11 +2541,57 @@ def _max_memory_usage_bytes_from_groups(
+@@ -2479,11 +2599,57 @@ def _max_memory_usage_bytes_from_groups(
  
      Each group independently claims blocks from the shared pool, so a request consumes
      the sum of the per-group block counts, i.e. ``bytes_per_block * total_blocks``.

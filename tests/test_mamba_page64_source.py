@@ -74,5 +74,25 @@ def test_group_builder_keeps_attention_page_independent():
     bypass = _read_entry("0056")
     assert "musa_mamba_separate_pool_enabled()" in bypass
     assert "and vllm_config.kv_transfer_config is None" in bypass
-    assert "isinstance(spec, MambaSpec)" in bypass
-    assert "not isinstance(spec, MambaSpec) for spec in filtered_spec.values()" in bypass
+    assert "mamba_specs = {" in bypass
+    assert "attention_specs = {" in bypass
+    # The recurrent-state page stays independent from the attention pages, but
+    # the attention specs are still unified among themselves: a heterogeneous
+    # hybrid (FP8 KV with skipped layers, or MLA next to non-MLA) must reach
+    # one attention page size.
+    assert (
+        "attention_specs = unify_kv_cache_spec_page_size(attention_specs)"
+        in bypass
+    )
+    assert "{**mamba_specs, **attention_specs}" in bypass
+    # A heterogeneous attention cache cannot share one attention tensor, so it
+    # must fall back to the shared page size with an explicit warning instead
+    # of failing later in KV tensor allocation.
+    assert "def _musa_attention_specs_uniform(attention_specs: dict) -> bool:" in bypass
+    assert (
+        "if separate_pools and not _musa_attention_specs_uniform(attention_specs):"
+        in bypass
+    )
+    assert "cannot mix attention KV dtypes" in bypass
+    assert "--kv-cache-dtype-skip-layers" in bypass
+    assert "raise ValueError(" in bypass
