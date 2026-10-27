@@ -39,7 +39,15 @@ from typing import Optional
 
 from vllm.logger import init_logger
 
-from torchada.musa import build as _torchada_build
+try:
+    from torchada.musa import build as _torchada_build
+except ImportError as exc:  # pragma: no cover - a pre-release install
+    raise RuntimeError(
+        "vllm-musa needs torchada>=0.1.104: this module re-exports the device facts "
+        "that release moved into torchada.musa. Install that release, or torchada "
+        "from its branch with "
+        "`pip install -e <torchada checkout> --no-deps --no-build-isolation`."
+    ) from None
 from torchada.musa.build import MusaBuildTargetMismatch
 from torchada.musa.device import (  # noqa: F401 - re-exported for call sites
     NATIVE_FP8_ARCHS,

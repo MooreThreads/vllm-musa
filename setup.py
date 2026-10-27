@@ -14,7 +14,18 @@ from pathlib import Path
 # Activate MUSA patches before importing the torch ecosystem.
 import torchada  # noqa: F401
 import torch
-from torchada.musa import build as ta_build
+
+try:
+    from torchada.musa import build as ta_build
+except ImportError as exc:  # pragma: no cover - a pre-release install
+    raise RuntimeError(
+        "vllm-musa needs torchada>=0.1.104 (it provides torchada.musa, the shared "
+        "device facts and build stamp). requirements/common.txt pins it, and that "
+        "release has to exist before an index install can resolve it; until then "
+        "install torchada from the branch: "
+        "`pip install -e <torchada checkout> --no-deps --no-build-isolation`. "
+        "Found an older torchada."
+    ) from None
 
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
