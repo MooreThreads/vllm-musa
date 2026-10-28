@@ -16,12 +16,22 @@
 # set of two-digit codes and compares sets, so separators and the dotted form do
 # not matter while a genuinely different arch does.
 #
-# Run it directly to check a set before building a fat image:
+# Run it directly to check a set before building a fat image.  The three values come
+# from the environment, or from the three arguments, so a caller that computes them
+# need not set anything:
 #
 #   MTGPU_TARGET=mp_21,mp_22 TORCH_MUSA_ARCH_LIST='21;22' \
 #     MATE_MUSA_ARCH_LIST='2.1;2.2' docker/verify_musa_arch.sh
+#   docker/verify_musa_arch.sh mp_21,mp_22 '21;22' '2.1;2.2'
+#
+# ``torchada.musa.build.arch_list_forms()`` returns the three spellings from one
+# list, which is how a build script should produce these values.
 
 set -euo pipefail
+
+MTGPU_TARGET="${1:-${MTGPU_TARGET:-}}"
+TORCH_MUSA_ARCH_LIST="${2:-${TORCH_MUSA_ARCH_LIST:-}}"
+MATE_MUSA_ARCH_LIST="${3:-${MATE_MUSA_ARCH_LIST:-}}"
 
 # One normaliser per spelling: commas/semicolons/spaces separate entries, and
 # MATE additionally writes the code with a dot ("3.1").
@@ -69,3 +79,4 @@ if [ "${mate_codes}" != "${target_codes}" ]; then
 fi
 
 echo "MUSA arch selectors agree on ${target_codes}"
+echo "  MTGPU_TARGET=${MTGPU_TARGET} TORCH_MUSA_ARCH_LIST=${TORCH_MUSA_ARCH_LIST} MATE_MUSA_ARCH_LIST=${MATE_MUSA_ARCH_LIST}"

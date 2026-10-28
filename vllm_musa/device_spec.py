@@ -58,7 +58,6 @@ from torchada.musa.device import (  # noqa: F401 - re-exported for call sites
     arch_name,
     clear_device_spec_cache,
 )
-from torchada.musa.device import current_device_spec as _probed_current_device_spec
 from torchada.musa.device import get_device_spec as _probed_device_spec
 
 __all__ = [
