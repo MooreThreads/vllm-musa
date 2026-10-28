@@ -1,19 +1,24 @@
 {
-  "_schema": 2,
+  "_schema": 3,
   "kernel": "moe",
   "_doc": [
     "Expert-block tiling for the fused MoE kernel, one entry per measured key.",
-    "Keys are (arch, mp_count, m_range); the lookup tries the exact bin, then the arch, then the (null, null) row.",
+    "A row is a `match` pattern over arch / mp_count / graph_capture / shape / m_range; an omitted dimension is a wildcard and the most specific match wins.",
+    "A row that constrains anything must carry a `note` saying how it was measured; only an all-wildcard row may be generic.",
     "m_range is the band of per-expert rows the numbers were measured for; null means every M.",
     "One band is one compiled variant, so the table is also the list of variants to build - do not add a row per M value.",
     "Only measured numbers belong here: a guessed tiling looks tuned and makes the table lie."
   ],
   "tactics": [
     {
-      "arch": null,
-      "mp_count": null,
-      "m_range": null,
-      "values": {"block_m": 64, "block_n": 64, "block_k": 32, "split_k": 1, "num_stages": 3},
+      "match": {},
+      "values": {
+        "block_m": 64,
+        "block_n": 64,
+        "block_k": 32,
+        "split_k": 1,
+        "num_stages": 3
+      },
       "note": "generic starting tactic; not tuned for any MUSA bin yet"
     }
   ]

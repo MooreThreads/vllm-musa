@@ -1,9 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """Loading, validating and looking up the tactic tables.
 
-A table is ``tactics/<kernel>.json``: a list of entries, each keyed by the three
-things that can change the answer -- the arch, the multiprocessor count, and the
-band of M it was measured for -- and holding the tactic's values.
+A table is ``tactics/<kernel>.json``: a list of entries, each an optional
+*pattern* (``match``) over the things that can change the answer, plus the values
+that pattern answers with.
+
+The pattern exists because the dimensions that matter are not the same for every
+kernel.  A MoE table needs the arch, the multiprocessor count and a band of M; the
+split-K table needs the projection's ``(N, K)`` and whether the launch is inside a
+graph capture, and does not care about the arch yet.  Rather than add a column and
+a rung of the ladder for each new kernel, an entry lists only the dimensions it
+really constrains and every other dimension is a wildcard.  The entry whose
+pattern is the most specific about a given problem wins, which is what lets a
+table say "this bin, for these M" and still keep one generic row underneath --
+or, in the split-K case, no generic row at all, so an unseen shape fails closed.
 
 Why a band and not a ``M -> config`` grid like vLLM and SGLang use: those two
 compile with Triton on first call, so a grid of twenty M rows costs nothing until
@@ -12,16 +22,17 @@ that has to be built ahead of time.  A band *is* one compiled variant, so the
 table doubles as the list of variants to build; a per-M grid would silently imply
 thousands.
 
-Why the arch and the multiprocessor count are both in the key: S5000 ships 48,
-52, 56 and 60 multiprocessor bins (MUSA-100006), and the tuned numbers differ
-between them while ``arch_name`` stays ``mp_31``.  vLLM's config filename carries
-only a device *name*, which is why it has to rewrite H200 family names by hand
+Why the arch and the multiprocessor count are both available: S5000 ships 48, 52,
+56 and 60 multiprocessor bins (MUSA-100006), and the tuned numbers differ between
+them while ``arch_name`` stays ``mp_31``.  vLLM's config filename carries only a
+device *name*, which is why it has to rewrite H200 family names by hand
 (``fused_moe.py:1003-1005``); a key that omits a dimension has to be patched
 later.
 
-Validation happens at load time, not at launch: a duplicate key, an overlapping
-band, an unknown value key or a schema that does not match is an error here,
-where the file and the index can be named.
+Validation happens at load time, not at launch: an ambiguous pair (two patterns
+that can answer the same problem with the same specificity), an unknown match
+key, a malformed band, an unknown value key, a schema that does not match -- all
+are errors here, where the file and the row index can be named.
 """
 
 from __future__ import annotations
@@ -36,11 +47,14 @@ from .values import Tactic, tactic_class
 
 __all__ = [
     "DEFAULT_DIR",
+    "MATCH_KEYS",
     "SCHEMA_VERSION",
     "TacticEntry",
+    "TacticMatch",
     "TacticNotFound",
     "load",
     "lookup",
+    "lookup_entry",
     "table_path",
 ]
 
@@ -49,38 +63,100 @@ DEFAULT_DIR = Path(__file__).resolve().parent
 #: Bumped when an entry's shape changes.  A table from another schema is refused
 #: rather than half-read: silently ignoring an unknown key is how a "tuned" table
 #: becomes a generic one without anyone noticing.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+#: The match keys a table may use.  Each one is a question the resolver can ask
+#: of a :class:`~.problem.TuningProblem`; a kernel that needs a new question adds
+#: it here and in :meth:`TacticMatch.matches`.
+MATCH_KEYS = ("arch", "mp_count", "graph_capture", "shape", "m_range")
 
 
 class TacticNotFound(LookupError):
-    """No tactic for the requested problem and the caller offered no default."""
+    """No tactic matches the problem and the caller offered no default."""
+
+
+@dataclass(frozen=True)
+class TacticMatch:
+    """The pattern an entry answers for.  ``None`` on a field means "any"."""
+
+    arch: str | None = None
+    mp_count: int | None = None
+    graph_capture: bool | None = None
+    #: ``(N, K)`` of the projection, for kernels whose numbers depend on it.
+    shape: tuple[int, int] | None = None
+    #: Inclusive band of per-expert rows (``TuningProblem.tuning_m``).
+    m_range: tuple[int, int] | None = None
+
+    @property
+    def specificity(self) -> int:
+        """How many dimensions this pattern pins down."""
+        return sum(
+            value is not None
+            for value in (
+                self.arch,
+                self.mp_count,
+                self.graph_capture,
+                self.shape,
+                self.m_range,
+            )
+        )
+
+    def matches(self, problem: TuningProblem) -> bool:
+        if self.arch is not None and self.arch != problem.arch_name:
+            return False
+        if self.mp_count is not None and self.mp_count != problem.mp_count:
+            return False
+        if self.graph_capture is not None:
+            if self.graph_capture != problem.graph_capture:
+                return False
+        if self.shape is not None:
+            if self.shape != (problem.layer.shape_n, problem.layer.shape_k):
+                return False
+        if self.m_range is not None:
+            low, high = self.m_range
+            if not low <= problem.tuning_m <= high:
+                return False
+        return True
+
+    def intersects(self, other: TacticMatch) -> bool:
+        """Whether some problem could match both patterns."""
+        for left, right in (
+            (self.arch, other.arch),
+            (self.mp_count, other.mp_count),
+            (self.graph_capture, other.graph_capture),
+            (self.shape, other.shape),
+        ):
+            if left is not None and right is not None and left != right:
+                return False
+        if self.m_range is not None and other.m_range is not None:
+            return (
+                self.m_range[0] <= other.m_range[1]
+                and other.m_range[0] <= self.m_range[1]
+            )
+        return True
+
+    def describe(self) -> str:
+        parts = []
+        if self.arch is not None:
+            parts.append(self.arch)
+        if self.mp_count is not None:
+            parts.append(f"mp{self.mp_count}")
+        if self.graph_capture is not None:
+            parts.append("capture" if self.graph_capture else "eager")
+        if self.shape is not None:
+            parts.append(f"{self.shape[0]}x{self.shape[1]}")
+        if self.m_range is not None:
+            parts.append(f"m{self.m_range[0]}..{self.m_range[1]}")
+        return "/".join(parts) if parts else "any"
 
 
 @dataclass(frozen=True)
 class TacticEntry:
-    """One row of a table: the key it answers for, and the values it holds."""
+    """One row of a table: the pattern it answers, and the values it holds."""
 
-    arch: str | None
-    mp_count: int | None
-    m_range: tuple[int, int] | None
+    match: TacticMatch
     tactic: Tactic
     note: str = ""
-
-    @property
-    def key(self) -> tuple[str | None, int | None, tuple[int, int] | None]:
-        return (self.arch, self.mp_count, self.m_range)
-
-    def covers(self, m: int) -> bool:
-        if self.m_range is None:
-            return True
-        low, high = self.m_range
-        return low <= m <= high
-
-    def describe(self) -> str:
-        arch = self.arch if self.arch is not None else "*"
-        mp = f"mp{self.mp_count}" if self.mp_count is not None else "any-mp"
-        band = f"m{self.m_range[0]}..{self.m_range[1]}" if self.m_range else "any-m"
-        return f"{arch}/{mp}/{band}"
 
 
 def table_path(kernel: str, directory: Path | None = None) -> Path:
@@ -94,8 +170,7 @@ def _parse_band(raw: Any, where: str) -> tuple[int, int] | None:
         not isinstance(raw, (list, tuple))
         or len(raw) != 2
         or not all(
-            isinstance(value, int) and not isinstance(value, bool)
-            for value in raw
+            isinstance(value, int) and not isinstance(value, bool) for value in raw
         )
     ):
         raise ValueError(
@@ -110,13 +185,66 @@ def _parse_band(raw: Any, where: str) -> tuple[int, int] | None:
     return (low, high)
 
 
-def _overlaps(a: tuple[int, int], b: tuple[int, int]) -> bool:
-    return a[0] <= b[1] and b[0] <= a[1]
+def _parse_shape(raw: Any, where: str) -> tuple[int, int] | None:
+    if raw is None:
+        return None
+    if (
+        not isinstance(raw, (list, tuple))
+        or len(raw) != 2
+        or not all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in raw
+        )
+    ):
+        raise ValueError(
+            f"{where}: 'shape' must be null or a [N, K] pair of integers, got {raw!r}"
+        )
+    shape = (int(raw[0]), int(raw[1]))
+    if shape[0] <= 0 or shape[1] <= 0:
+        raise ValueError(f"{where}: 'shape' must be positive, got {shape}")
+    return shape
 
 
-def load(
-    kernel: str, directory: Path | None = None
-) -> list[TacticEntry]:
+def _parse_match(raw: Any, where: str) -> TacticMatch:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"{where}: 'match' must be an object, got {type(raw).__name__}"
+        )
+    unknown = sorted(set(raw) - set(MATCH_KEYS))
+    if unknown:
+        raise ValueError(
+            f"{where}: unknown match key(s) {unknown}; known keys are "
+            f"{list(MATCH_KEYS)}"
+        )
+    arch = raw.get("arch")
+    if arch is not None:
+        if not isinstance(arch, str):
+            raise ValueError(f"{where}: 'arch' must be a string or null, got {arch!r}")
+        if arch == "default":
+            raise ValueError(
+                f"{where}: 'arch' is null for the table-wide fallback; the string "
+                "'default' was the schema-1 spelling and is not an arch name"
+            )
+    mp_count = raw.get("mp_count")
+    if mp_count is not None and (
+        not isinstance(mp_count, int) or isinstance(mp_count, bool)
+    ):
+        raise ValueError(f"{where}: 'mp_count' must be an integer or null")
+    graph_capture = raw.get("graph_capture")
+    if graph_capture is not None and not isinstance(graph_capture, bool):
+        raise ValueError(f"{where}: 'graph_capture' must be a boolean or null")
+    return TacticMatch(
+        arch=arch,
+        mp_count=mp_count,
+        graph_capture=graph_capture,
+        shape=_parse_shape(raw.get("shape"), where),
+        m_range=_parse_band(raw.get("m_range"), where),
+    )
+
+
+def load(kernel: str, directory: Path | None = None) -> list[TacticEntry]:
     """Read and validate ``<kernel>.json``, returning its entries in file order."""
     path = table_path(kernel, directory)
     if not path.is_file():
@@ -148,75 +276,58 @@ def load(
         at = f"{where}: tactic #{index}"
         if not isinstance(item, dict):
             raise ValueError(f"{at} must be an object, got {type(item).__name__}")
-        arch = item.get("arch")
-        if arch is not None and not isinstance(arch, str):
-            raise ValueError(f"{at}: 'arch' must be a string or null, got {arch!r}")
-        if "default" == arch:
-            raise ValueError(
-                f"{at}: 'arch' is null for the table-wide fallback; the string "
-                "'default' was the schema-1 spelling and is not an arch name"
-            )
-        mp_count = item.get("mp_count")
-        if mp_count is not None and (
-            not isinstance(mp_count, int) or isinstance(mp_count, bool)
-        ):
-            raise ValueError(
-                f"{at}: 'mp_count' must be an integer or null, got {mp_count!r}"
-            )
-        band = _parse_band(item.get("m_range"), at)
+        match = _parse_match(item.get("match"), at)
         tactic = cls.from_values(item.get("values"), where=at)
         note = item.get("note", "")
         if not isinstance(note, str):
             raise ValueError(f"{at}: 'note' must be a string")
-        if arch is not None and not note.strip():
+        if match.specificity and not note.strip():
             raise ValueError(
-                f"{at}: a row for arch {arch!r} must carry a non-empty 'note' saying "
-                "how it was measured. Only the table-wide (null, null) row may be "
-                "generic: a measured-looking row without provenance is how a table "
-                "starts lying."
+                f"{at}: a row that constrains {match.describe()} must carry a "
+                "non-empty 'note' saying how it was measured. Only an all-wildcard "
+                "row may be generic: a measured-looking row without provenance is "
+                "how a table starts lying."
             )
-        entry = TacticEntry(
-            arch=arch, mp_count=mp_count, m_range=band, tactic=tactic, note=note
-        )
+        entry = TacticEntry(match=match, tactic=tactic, note=note)
         for earlier in parsed:
-            if earlier.key == entry.key:
-                raise ValueError(
-                    f"{where}: duplicate tactic for {entry.describe()}"
-                )
-            if (
-                earlier.arch == entry.arch
-                and earlier.mp_count == entry.mp_count
-                and earlier.m_range is not None
-                and entry.m_range is not None
-                and _overlaps(earlier.m_range, entry.m_range)
-            ):
-                raise ValueError(
-                    f"{where}: {earlier.describe()} and {entry.describe()} overlap; "
-                    "two rows cannot answer the same M"
-                )
-            if (earlier.arch, earlier.mp_count) == (entry.arch, entry.mp_count) and (
-                earlier.m_range is None or entry.m_range is None
-            ):
-                raise ValueError(
-                    f"{where}: {entry.describe()} is redundant with "
-                    f"{earlier.describe()}; an entry without a band already covers "
-                    "every M at that specificity"
-                )
+            if earlier.match.intersects(entry.match):
+                if earlier.match.specificity == entry.match.specificity:
+                    raise ValueError(
+                        f"{where}: {entry.match.describe()} and "
+                        f"{earlier.match.describe()} can both answer the same "
+                        "problem with the same specificity; one of them must "
+                        "constrain another dimension"
+                    )
         parsed.append(entry)
-
     return parsed
 
 
-def _keys_for(problem: TuningProblem) -> list[tuple[str | None, int | None]]:
-    """The ``(arch, mp_count)`` rungs to try, most specific first."""
-    arch, mp = problem.arch_name or None, problem.mp_count
-    rungs: list[tuple[str | None, int | None]] = []
-    if arch is not None:
-        if mp is not None:
-            rungs.append((arch, mp))
-        rungs.append((arch, None))
-    rungs.append((None, None))
-    return rungs
+def lookup_entry(
+    kernel: str,
+    problem: TuningProblem,
+    directory: Path | None = None,
+) -> TacticEntry:
+    """The most specific entry matching ``problem``, or raise :class:`TacticNotFound`.
+
+    Callers that need the pattern (to read the M band it was measured for) use
+    this; callers that only need the numbers use :func:`lookup`.
+    """
+    entries = load(kernel, directory)
+    matching = [entry for entry in entries if entry.match.matches(problem)]
+    if not matching:
+        known = ", ".join(entry.match.describe() for entry in entries)
+        raise TacticNotFound(
+            f"no tactic for kernel {kernel!r} on arch={problem.arch_name!r} "
+            f"mp_count={problem.mp_count} shape="
+            f"{problem.layer.shape_n}x{problem.layer.shape_k} "
+            f"capture={problem.graph_capture} m={problem.tuning_m}; the table at "
+            f"{table_path(kernel, directory)} covers {known}. Add a measured entry "
+            "for this key, or pass default= where a generic tactic is known to be "
+            "fine."
+        )
+    # Validation forbids two matches of equal specificity, so the maximum is
+    # unique; picking it is the whole precedence rule.
+    return max(matching, key=lambda entry: entry.match.specificity)
 
 
 def lookup(
@@ -224,29 +335,5 @@ def lookup(
     problem: TuningProblem,
     directory: Path | None = None,
 ) -> Tactic:
-    """The table's answer for ``problem``, or raise :class:`TacticNotFound`."""
-    entries = load(kernel, directory)
-    m = problem.tuning_m
-    tried: list[str] = []
-    for arch, mp in _keys_for(problem):
-        candidates = [
-            entry for entry in entries if (entry.arch, entry.mp_count) == (arch, mp)
-        ]
-        covering = [entry for entry in candidates if entry.covers(m)]
-        if covering:
-            # The band is part of the key, so at most one entry can cover a given
-            # M after validation; sort by specificity anyway so the error is not
-            # the only thing that is deterministic.
-            covering.sort(
-                key=lambda entry: (entry.m_range is None, entry.m_range or (0, 0))
-            )
-            return covering[0].tactic
-        tried.extend(entry.describe() for entry in candidates)
-    tried.append(f"table-wide fallback for m={m}")
-    raise TacticNotFound(
-        f"no tactic for kernel {kernel!r} on arch={problem.arch_name!r} "
-        f"mp_count={problem.mp_count} m={m} (tuning_m={m}); the table at "
-        f"{table_path(kernel, directory)} has {', '.join(tried) or 'no entries'}. "
-        "Add a measured entry for this bin, or pass default= where a generic "
-        "tactic is known to be fine."
-    )
+    """The most specific tactic matching ``problem``, or raise ``TacticNotFound``."""
+    return lookup_entry(kernel, problem, directory).tactic

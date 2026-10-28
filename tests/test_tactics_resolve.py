@@ -44,11 +44,25 @@ def write_table(directory: Path, entries: list[dict]) -> Path:
     return path
 
 
-def entry(values: dict, *, arch=None, mp_count=None, m_range=None, note="") -> dict:
-    return {
+def entry(
+    values: dict,
+    *,
+    arch=None,
+    mp_count=None,
+    m_range=None,
+    shape=None,
+    graph_capture=None,
+    note="",
+) -> dict:
+    match = {
         "arch": arch,
         "mp_count": mp_count,
         "m_range": m_range,
+        "shape": shape,
+        "graph_capture": graph_capture,
+    }
+    return {
+        "match": {k: v for k, v in match.items() if v is not None},
         "values": values,
         "note": note,
     }

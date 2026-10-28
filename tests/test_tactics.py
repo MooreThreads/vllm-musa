@@ -49,11 +49,25 @@ def write_table(
     return path
 
 
-def entry(values: dict, *, arch=None, mp_count=None, m_range=None, note="") -> dict:
-    return {
+def entry(
+    values: dict,
+    *,
+    arch=None,
+    mp_count=None,
+    m_range=None,
+    shape=None,
+    graph_capture=None,
+    note="",
+) -> dict:
+    match = {
         "arch": arch,
         "mp_count": mp_count,
         "m_range": m_range,
+        "shape": shape,
+        "graph_capture": graph_capture,
+    }
+    return {
+        "match": {k: v for k, v in match.items() if v is not None},
         "values": values,
         "note": note,
     }
@@ -154,6 +168,12 @@ def test_the_schema_1_default_arch_sentinel_is_refused(tmp_path: Path) -> None:
         tactics.load("moe", tmp_path)
 
 
+def test_an_unknown_match_key_is_rejected(tmp_path: Path) -> None:
+    write_table(tmp_path, [{"match": {"sm_count": 60}, "values": MOE_DEFAULT}])
+    with pytest.raises(ValueError, match="unknown match key"):
+        tactics.load("moe", tmp_path)
+
+
 def test_duplicate_keys_are_rejected(tmp_path: Path) -> None:
     write_table(
         tmp_path,
@@ -174,13 +194,12 @@ def test_overlapping_bands_at_one_specificity_are_rejected(tmp_path: Path) -> No
             entry(MOE_MP56, arch="mp_31", mp_count=56, m_range=[16, 64], note="b"),
         ],
     )
-    with pytest.raises(ValueError, match="overlap"):
+    with pytest.raises(ValueError, match="same problem"):
         tactics.load("moe", tmp_path)
 
 
-def test_a_band_row_beside_a_bandless_row_at_one_specificity_is_rejected(
-    tmp_path: Path,
-) -> None:
+def test_a_banded_row_shadows_the_bandless_row_beneath_it(tmp_path: Path) -> None:
+    """A more specific row wins; the wildcard stays for everything else."""
     write_table(
         tmp_path,
         [
@@ -188,8 +207,83 @@ def test_a_band_row_beside_a_bandless_row_at_one_specificity_is_rejected(
             entry(MOE_MP56, arch="mp_31", mp_count=56, m_range=[1, 16], note="b"),
         ],
     )
-    with pytest.raises(ValueError, match="redundant"):
-        tactics.load("moe", tmp_path)
+    assert tactics.lookup("moe", problem(m=8), tmp_path) == MoeTactic.from_values(
+        MOE_MP56
+    )
+    assert tactics.lookup("moe", problem(m=17), tmp_path) == MoeTactic.from_values(
+        MOE_DEFAULT
+    )
+
+
+def test_a_bin_row_shadows_the_arch_row_beneath_it(tmp_path: Path) -> None:
+    write_table(
+        tmp_path,
+        [
+            entry(MOE_MP56, arch="mp_31", note="measured on 56; assumed for 48-60"),
+            entry(
+                MOE_DEFAULT, arch="mp_31", mp_count=60, note="measured on 10.20.36.7"
+            ),
+        ],
+    )
+    at_60 = tactics.lookup("moe", problem(spec=Spec(mp_count=60)), tmp_path)
+    at_56 = tactics.lookup("moe", problem(spec=Spec(mp_count=56)), tmp_path)
+    assert at_60 == MoeTactic.from_values(MOE_DEFAULT)
+    assert at_56 == MoeTactic.from_values(MOE_MP56)
+
+
+def test_the_projection_shape_can_be_part_of_the_match(tmp_path: Path) -> None:
+    write_table(
+        tmp_path,
+        [
+            entry(MOE_DEFAULT, arch="mp_31", note="arch-wide"),
+            entry(
+                MOE_MP56,
+                arch="mp_31",
+                shape=[4096, 4096],
+                note="measured for one projection on mp_31",
+            ),
+        ],
+    )
+    assert tactics.lookup("moe", problem(), tmp_path) == MoeTactic.from_values(MOE_MP56)
+    other = TuningProblem(
+        layer=tactics.LayerShape(
+            shape_n=1024, shape_k=4096, dtype="bf16", weight_dtype="fp8"
+        ),
+        m=8,
+        device=tactics.DeviceProfile.from_spec(Spec()),
+    )
+    assert tactics.lookup("moe", other, tmp_path) == MoeTactic.from_values(MOE_DEFAULT)
+
+
+def test_the_capture_mode_can_be_part_of_the_match(tmp_path: Path) -> None:
+    write_table(
+        tmp_path,
+        [
+            entry(MOE_DEFAULT, arch="mp_31", note="arch-wide"),
+            entry(
+                MOE_MP56,
+                arch="mp_31",
+                graph_capture=True,
+                note="captured: 59 rows, not 192",
+            ),
+        ],
+    )
+
+    def captured() -> TuningProblem:
+        return TuningProblem(
+            layer=tactics.LayerShape(
+                shape_n=4096, shape_k=4096, dtype="bf16", weight_dtype="fp8"
+            ),
+            m=8,
+            device=tactics.DeviceProfile.from_spec(Spec()),
+            graph_capture=True,
+        )
+
+    got = tactics.lookup("moe", captured(), tmp_path)
+    assert got == MoeTactic.from_values(MOE_MP56)
+    assert tactics.lookup("moe", problem(), tmp_path) == MoeTactic.from_values(
+        MOE_DEFAULT
+    )
 
 
 def test_a_measured_row_must_carry_a_note(tmp_path: Path) -> None:
@@ -274,14 +368,26 @@ def test_a_moe_problem_is_keyed_on_rows_per_expert(tmp_path: Path) -> None:
 def test_the_shipped_tables_parse_and_resolve() -> None:
     for kernel in tactics.REGISTRY:
         assert tactics.load(kernel), kernel
-    # The shipped tables carry one generic row each, and it is the only row that
-    # is allowed to be generic: that is what makes an untuned bin resolvable
-    # today without pretending it was measured.
-    for kernel in tactics.REGISTRY:
-        generic = [row for row in tactics.load(kernel) if row.arch is None]
+
+
+def test_the_generic_tables_carry_exactly_one_all_wildcard_row() -> None:
+    """A generic row is what makes an untuned bin resolvable without pretending.
+
+    ``fp8_block_splitk`` is the deliberate exception: it has no wildcard row, so
+    an unseen projection fails closed instead of picking a tiling measured for a
+    different shape.
+    """
+    for kernel in ("moe", "rmsnorm"):
+        generic = [
+            row for row in tactics.load(kernel) if row.match.specificity == 0
+        ]
         assert len(generic) == 1, kernel
-        assert generic[0].mp_count is None and generic[0].m_range is None
         assert "not tuned" in generic[0].note
+    assert not [
+        row
+        for row in tactics.load("fp8_block_splitk")
+        if row.match.specificity == 0
+    ]
 
 
 def test_the_package_ships_the_tables() -> None:

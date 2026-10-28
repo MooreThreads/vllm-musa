@@ -15,17 +15,18 @@ same problem always resolves to the same tactic -- which is what makes the table
 testable without a GPU and enumerable offline for a bin this machine does not
 have.
 
-The lookup ladder, in order, is:
+Each table row is a *pattern* (:class:`TacticMatch`) over the dimensions that can
+change the answer -- arch, multiprocessor count, capture mode, projection shape,
+M band -- where an omitted dimension is a wildcard.  The most specific matching
+pattern wins; two patterns of equal specificity that could answer the same problem
+are refused at load time.  The ladder, in order, is:
 
-1. ``(arch_name, mp_count)`` with an M band covering the problem
-2. ``(arch_name, mp_count)`` with no band
-3. ``(arch_name, null)`` with or without a band
-4. ``(null, null)`` -- the table's own fallback
-5. the caller's ``default=``  -- explicit opt-in
-6. :class:`TacticNotFound`
+1. the most specific matching row
+2. the caller's ``default=``  -- explicit opt-in
+3. :class:`TacticNotFound`
 
-A table may carry a ``(null, null)`` row, and then it always answers; without
-one, an untuned bin fails closed.  That is the difference between "we decided a
+A table may carry an all-wildcard row, and then it always answers; without one, an
+untuned bin fails closed.  That is the difference between "we decided a
 generic tactic is fine here" and "nobody got to this bin yet", and keeping them
 distinguishable is the whole point: on S5000 a wrong tiling is a 2x regression
 that looks like a hardware limit, and nobody re-reads a tuning table for an arch
@@ -50,14 +51,24 @@ from .problem import (
 from .resolve import COMPUTED_FALLBACKS, computed_fallback, resolve_tactic
 from .tables import (
     DEFAULT_DIR,
+    MATCH_KEYS,
     SCHEMA_VERSION,
     TacticEntry,
+    TacticMatch,
     TacticNotFound,
     load,
     lookup,
+    lookup_entry,
     table_path,
 )
-from .values import REGISTRY, MoeTactic, RmsnormTactic, Tactic, tactic_class
+from .values import (
+    REGISTRY,
+    Fp8BlockSplitkTactic,
+    MoeTactic,
+    RmsnormTactic,
+    Tactic,
+    tactic_class,
+)
 
 __all__ = [
     "COMPUTED_FALLBACKS",
@@ -65,8 +76,10 @@ __all__ = [
     "DENSE",
     "MOE_CONTIGUOUS",
     "MOE_MASKED",
+    "MATCH_KEYS",
     "MoeTactic",
     "REGISTRY",
+    "Fp8BlockSplitkTactic",
     "RmsnormTactic",
     "SCHEMA_VERSION",
     "ComputeSemantics",
@@ -74,11 +87,13 @@ __all__ = [
     "LayerShape",
     "Tactic",
     "TacticEntry",
+    "TacticMatch",
     "TacticNotFound",
     "TuningProblem",
     "computed_fallback",
     "load",
     "lookup",
+    "lookup_entry",
     "resolve_tactic",
     "table_path",
     "tactic_class",

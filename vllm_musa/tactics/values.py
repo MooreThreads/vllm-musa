@@ -19,6 +19,7 @@ from dataclasses import dataclass, fields
 from typing import Any, ClassVar, TypeVar
 
 __all__ = [
+    "Fp8BlockSplitkTactic",
     "MoeTactic",
     "REGISTRY",
     "RmsnormTactic",
@@ -103,6 +104,22 @@ class MoeTactic(Tactic):
 
 
 @dataclass(frozen=True)
+class Fp8BlockSplitkTactic(Tactic):
+    """Split-K tiling for the 32x32-block FP8 GEMM at small M."""
+
+    KERNEL: ClassVar[str] = "fp8_block_splitk"
+
+    split: int
+    block_n: int
+    num_warps: int
+    unroll: int
+    tile_m: int
+
+    def __post_init__(self) -> None:
+        _require_positive(self)
+
+
+@dataclass(frozen=True)
 class RmsnormTactic(Tactic):
     """Row-block and vector width for the RMSNorm kernel."""
 
@@ -118,6 +135,7 @@ class RmsnormTactic(Tactic):
 #: ``kernel name -> tactic class``.  The loader reads it, so a new kernel is a
 #: subclass plus this entry and nothing else.
 REGISTRY: dict[str, type[Tactic]] = {
+    Fp8BlockSplitkTactic.KERNEL: Fp8BlockSplitkTactic,
     MoeTactic.KERNEL: MoeTactic,
     RmsnormTactic.KERNEL: RmsnormTactic,
 }

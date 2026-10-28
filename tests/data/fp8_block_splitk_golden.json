@@ -1,0 +1,249 @@
+{
+ "_doc": "Captured from vllm_musa/kernels/fp8_block_splitk.py at 0b155a2618, before the tactic-table migration: for each (N, K) and each capture mode, the config tuple and the inclusive row range that admits it. Behaviour must be identical after the migration.",
+ "grid": {
+  "rows": [
+   1,
+   400
+  ]
+ },
+ "shapes": {
+  "1792x5120": [
+   {
+    "capturing": false,
+    "config": [
+     16,
+     64,
+     4,
+     2,
+     2,
+     59,
+     32
+    ],
+    "admitted": [
+     2,
+     192
+    ]
+   },
+   {
+    "capturing": true,
+    "config": [
+     16,
+     64,
+     4,
+     2,
+     2,
+     59,
+     32
+    ],
+    "admitted": [
+     2,
+     59
+    ]
+   }
+  ],
+  "576x5120": [
+   {
+    "capturing": false,
+    "config": [
+     16,
+     64,
+     4,
+     2,
+     4,
+     64,
+     16
+    ],
+    "admitted": [
+     4,
+     320
+    ]
+   },
+   {
+    "capturing": true,
+    "config": [
+     16,
+     64,
+     4,
+     2,
+     4,
+     64,
+     16
+    ],
+    "admitted": [
+     4,
+     64
+    ]
+   }
+  ],
+  "1024x4096": [
+   {
+    "capturing": false,
+    "config": [
+     16,
+     64,
+     4,
+     2,
+     3,
+     191,
+     16
+    ],
+    "admitted": [
+     3,
+     320
+    ]
+   },
+   {
+    "capturing": true,
+    "config": [
+     16,
+     64,
+     4,
+     2,
+     3,
+     191,
+     16
+    ],
+    "admitted": [
+     3,
+     191
+    ]
+   }
+  ],
+  "4096x1280": [
+   {
+    "capturing": false,
+    "config": [
+     8,
+     64,
+     4,
+     1,
+     4,
+     59,
+     32
+    ],
+    "admitted": [
+     4,
+     96
+    ]
+   },
+   {
+    "capturing": true,
+    "config": [
+     8,
+     64,
+     4,
+     1,
+     4,
+     59,
+     32
+    ],
+    "admitted": [
+     4,
+     59
+    ]
+   }
+  ],
+  "5120x1024": [
+   {
+    "capturing": false,
+    "config": [
+     8,
+     64,
+     4,
+     2,
+     4,
+     48,
+     16
+    ],
+    "admitted": [
+     4,
+     48
+    ]
+   },
+   {
+    "capturing": true,
+    "config": [
+     8,
+     64,
+     4,
+     2,
+     4,
+     48,
+     16
+    ],
+    "admitted": [
+     4,
+     48
+    ]
+   }
+  ],
+  "5120x15360": [
+   {
+    "capturing": false,
+    "config": [
+     8,
+     64,
+     4,
+     2,
+     2,
+     64,
+     16
+    ],
+    "admitted": [
+     2,
+     96
+    ]
+   },
+   {
+    "capturing": true,
+    "config": [
+     8,
+     64,
+     4,
+     2,
+     2,
+     64,
+     16
+    ],
+    "admitted": [
+     2,
+     64
+    ]
+   }
+  ],
+  "25600x768": [
+   {
+    "capturing": false,
+    "config": [
+     2,
+     64,
+     4,
+     1,
+     2,
+     32,
+     16
+    ],
+    "admitted": [
+     2,
+     32
+    ]
+   },
+   {
+    "capturing": true,
+    "config": [
+     2,
+     64,
+     4,
+     1,
+     2,
+     32,
+     16
+    ],
+    "admitted": [
+     2,
+     32
+    ]
+   }
+  ]
+ }
+}

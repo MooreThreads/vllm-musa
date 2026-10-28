@@ -174,6 +174,11 @@ class TuningProblem:
     m: int
     compute: ComputeSemantics = field(default_factory=ComputeSemantics)
     device: DeviceProfile | None = None
+    #: Whether the launch happens inside a graph capture.  The best tactic can
+    #: differ from the eager one (a split-K reduction is one more launch to
+    #: capture, and a deeper pipeline costs registers the capture cannot hide),
+    #: so it is part of the problem rather than a global the resolver reads.
+    graph_capture: bool = False
 
     def __post_init__(self) -> None:
         if self.m <= 0:

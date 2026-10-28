@@ -17,35 +17,16 @@ import os
 import torch
 from vllm.triton_utils import tl, triton
 
+from vllm_musa.tactics.selectors.fp8_block_splitk import config_for
+
 _FP8_MAX = 448.0
 _QUANT_EPS = 1e-10
 BLOCK_M = 16
 
-# (SPLIT, BLOCK_N, num_warps, UNROLL, MIN_ROWS, MAX_ROWS, TILE_M) measured on MTT
-# S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections, keyed by (N, K). The
-# reduction is a second launch, so below MIN_ROWS the single-kernel GEMV wins; past
-# MAX_ROWS the BF16 GEMM of fp8_block_bf16 or the block GEMM does. TILE_M rows per
-# program where that pads no more rows than BLOCK_M-row tiles. MAX_ROWS holds while
-# a CUDA graph is captured (decode); eager steps, prefill included, use
-# _EAGER_MAX_ROWS, past which the block GEMM runs up to fp8_block_bf16.MIN_ROWS.
-_CONFIGS = {
-    (1792, 5120): (16, 64, 4, 2, 2, 59, 32),
-    (576, 5120): (16, 64, 4, 2, 4, 64, 16),
-    (1024, 4096): (16, 64, 4, 2, 3, 191, 16),
-    (4096, 1280): (8, 64, 4, 1, 4, 59, 32),
-    (5120, 1024): (8, 64, 4, 2, 4, 48, 16),
-    (5120, 15360): (8, 64, 4, 2, 2, 64, 16),
-    (25600, 768): (2, 64, 4, 1, 2, 32, 16),
-}
-_EAGER_MAX_ROWS = {
-    (1792, 5120): 192,
-    (576, 5120): 320,
-    (1024, 4096): 320,
-    (4096, 1280): 96,
-    (5120, 1024): 48,
-    (5120, 15360): 96,
-    (25600, 768): 32,
-}
+# The tuned numbers live in ``tactics/fp8_block_splitk.json``, keyed by projection
+# shape, capture mode and row band; ``tactics.selectors.fp8_block_splitk`` turns a
+# matched row into the tuple this module launches with.  What stays here is what
+# needs a tensor: the dtype, stride and scale checks below.
 _ENABLED = os.environ.get("VLLM_MUSA_FP8_SPLITK_MM", "1") != "0"
 
 
@@ -135,19 +116,15 @@ def _fp8_block_splitk_reduce_kernel(
 def fp8_block_splitk_config(
     weight: torch.Tensor, weight_scale: torch.Tensor, rows: int
 ) -> tuple[int, int, int, int, int, int, int] | None:
-    """Measured config for ``rows`` activation rows, or None when the GEMM does not apply."""
+    """Measured config for ``rows`` rows, or None when the GEMM does not apply."""
     if not _ENABLED or weight.dim() != 2:
         return None
-    shape = tuple(weight.shape)
-    config = _CONFIGS.get(shape)
+    n, k = weight.shape
+    config = config_for(
+        n, k, rows, graph_capture=torch.cuda.is_current_stream_capturing()
+    )
     if config is None:
         return None
-    max_rows = config[5]
-    if not torch.cuda.is_current_stream_capturing():
-        max_rows = _EAGER_MAX_ROWS[shape]
-    if not config[4] <= rows <= max_rows:
-        return None
-    n, k = weight.shape
     if (
         weight.dtype != torch.float8_e4m3fn
         or weight_scale.dtype != torch.float32
