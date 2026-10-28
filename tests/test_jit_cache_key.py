@@ -37,8 +37,11 @@ def test_fat_build_is_refused_for_single_arch_templates(monkeypatch) -> None:
 
 
 def test_single_arch_define_matches_the_device(monkeypatch) -> None:
-    monkeypatch.setenv("VLLM_MUSA_ARCH_LIST", "32")
-    assert jit.musa_arch_define() == "-D__MUSA_ARCH_LIST__=320"
+    # An arch other than the one this host has, so a device-defaulted answer
+    # could not pass by accident; ``22`` because only supported arches are
+    # selectable and ``32`` is not one of them.
+    monkeypatch.setenv("VLLM_MUSA_ARCH_LIST", "22")
+    assert jit.musa_arch_define() == "-D__MUSA_ARCH_LIST__=220"
 
 
 def test_no_silent_mp31_fallback(monkeypatch) -> None:
@@ -79,7 +82,7 @@ def test_build_tag_distinguishes_arches_and_compilers(monkeypatch) -> None:
     monkeypatch.setattr(ta_build, "mcc_version", lambda *a, **k: "5.2.0")
     monkeypatch.setenv("VLLM_MUSA_ARCH_LIST", "31")
     a = jit.build_tag()
-    monkeypatch.setenv("VLLM_MUSA_ARCH_LIST", "32")
+    monkeypatch.setenv("VLLM_MUSA_ARCH_LIST", "22")
     b = jit.build_tag()
     monkeypatch.setattr(ta_build, "mcc_version", lambda *a, **k: "5.3.0")
     c = jit.build_tag()

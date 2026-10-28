@@ -159,6 +159,7 @@ def _stamp_writer(tmp_path):
         "MTGPU_TARGET": "mp_31",
         "MTGPU_TARGETS": ["mp_31"],
         "ENABLE_FP8": True,
+        "ENABLE_FP4": False,
         "MTGPU_TARGET_SOURCE": "device",
         "_mcc_version_string": lambda: "5.2.0",
         "__file__": str(tmp_path / "setup.py"),
@@ -182,6 +183,7 @@ def test_setup_writes_a_stamp_the_runtime_can_read(tmp_path) -> None:
 
     assert rendered["MTGPU_TARGETS"] == ("mp_31",)
     assert rendered["ENABLE_FP8"] is True
+    assert rendered["ENABLE_FP4"] is False
     assert rendered["MCC_VERSION"] == "5.2.0"
     assert rendered["TARGET_SOURCE"] == "device"
 

@@ -938,10 +938,19 @@ class MUSAPlatformBase(Platform):
         dequantisation on any arch, so answering from that would advertise FP4 kernels
         that do not exist.
         """
-        from vllm_musa.device_spec import current_device_spec
+        from vllm_musa.device_spec import current_device_spec, read_build_stamp
 
         spec = current_device_spec()
-        return spec is not None and spec.supports_native_fp4
+        if spec is None or not spec.supports_native_fp4:
+            return False
+        stamp = read_build_stamp()
+        return True if stamp is None else bool(stamp.fp4)
+
+    # --- MUSA-only helpers -------------------------------------------------
+    # Not part of the upstream ``Platform`` interface: nothing above calls these,
+    # and upstream has no equivalent.  They live here because the call sites are in
+    # this package's kernels and passes, and they read as questions the platform
+    # answers (see ``supports_fp8`` / ``supports_fp4`` above).
 
     @classmethod
     def is_validated_musa_target(cls, device_id: Optional[int] = None) -> bool:

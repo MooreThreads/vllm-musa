@@ -702,6 +702,42 @@ class TestMUSAPlatformBase:
         with patch.object(device_spec, "current_device_spec", return_value=spec):
             assert MUSAPlatformBase.supports_fp4() is False
 
+    def test_supports_fp4_answers_the_same_two_halves_as_fp8(self):
+        """The stamp records what the .so carries, so the arch alone cannot answer."""
+        from unittest.mock import patch
+
+        from torchada.musa.build import BuildStamp
+
+        from vllm_musa import device_spec
+        from vllm_musa.platform import MUSAPlatformBase
+
+        # An arch with FP4 and a build without it: the device can, this wheel cannot.
+        # A stand-in, because no arch in the table has FP4 yet and the real spec
+        # derives that answer from the table rather than carrying it as a field.
+        from types import SimpleNamespace
+
+        spec = SimpleNamespace(
+            arch_name="mp_41", arch_code=410, supports_native_fp4=True
+        )
+        with (
+            patch.object(device_spec, "current_device_spec", return_value=spec),
+            patch.object(
+                device_spec,
+                "read_build_stamp",
+                return_value=BuildStamp(("mp_41",), fp4=False),
+            ),
+        ):
+            assert MUSAPlatformBase.supports_fp4() is False
+        with (
+            patch.object(device_spec, "current_device_spec", return_value=spec),
+            patch.object(
+                device_spec,
+                "read_build_stamp",
+                return_value=BuildStamp(("mp_41",), fp4=True),
+            ),
+        ):
+            assert MUSAPlatformBase.supports_fp4() is True
+
     def test_support_hybrid_kv_cache(self):
         """Test that support_hybrid_kv_cache returns True."""
         from vllm_musa.platform import MUSAPlatformBase

@@ -118,43 +118,6 @@ def test_shipped_tables_parse_and_resolve() -> None:
         assert tactics.select(kernel, arch_name="mp_22", mp_count=48)
 
 
-def test_describe_lists_every_entry(tmp_path) -> None:
-    _write(
-        tmp_path,
-        "demo",
-        [
-            {"arch": "mp_31", "mp_count": 56, "values": {"block_m": 128}, "note": "tuned"},
-            {"arch": "default", "mp_count": None, "values": {"block_m": 32}},
-        ],
-    )
-
-    text = tactics.describe("demo", tmp_path)
-
-    assert "mp_31/mp56" in text and "tuned" in text and "default" in text
-
-
-def test_module_entry_point_prints_a_table(capsys) -> None:
-    """`python -m vllm_musa.tactics <kernel>` must work; the guard cannot."""
-    assert tactics.main(["moe"]) == 0
-    assert "moe" in capsys.readouterr().out
-
-
-def test_module_entry_point_without_arguments_shows_usage(capsys) -> None:
-    assert tactics.main([]) == 2
-    out = capsys.readouterr().out
-    assert "usage: python -m vllm_musa.tactics" in out
-    assert "moe" in out
-
-
-def test_package_main_module_exists() -> None:
-    """`-m` dispatches to ``vllm_musa.tactics.__main__``, not to ``__init__``."""
-    import importlib.util
-
-    spec = importlib.util.find_spec("vllm_musa.tactics.__main__")
-    assert spec is not None and spec.origin is not None
-    assert spec.origin.endswith("__main__.py")
-
-
 def test_package_data_ships_the_tables() -> None:
     """The tables are data files; without this they never reach a wheel."""
     import re

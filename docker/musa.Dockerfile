@@ -240,21 +240,11 @@ ENV MTGPU_TARGET=${MTGPU_TARGET} \
     TORCH_MUSA_ARCH_LIST=${TORCH_MUSA_ARCH_LIST} \
     MATE_MUSA_ARCH_LIST=${MATE_MUSA_ARCH_LIST}
 
-# Normalise every spelling to a sorted set of two-digit codes, then compare sets.
-RUN set -eux; \
-    target_codes="$(echo "${MTGPU_TARGET}" | tr ',;' '\n\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e 's/^mp_//' | sort -u | paste -sd';')"; \
-    torch_codes="$(echo "${TORCH_MUSA_ARCH_LIST}" | tr ',;' '\n\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e 's/^mp_//' | sort -u | paste -sd';')"; \
-    mate_codes="$(echo "${MATE_MUSA_ARCH_LIST}" | tr ',;' '\n\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e 's/\.//g' | sort -u | paste -sd';')"; \
-    test -n "${target_codes}"; \
-    for code in $(echo "${target_codes}" | tr ';' ' '); do \
-      case "${code}" in \
-        [0-9]*) ;; \
-        *) echo "MTGPU_TARGET must be mp_<code>, got ${MTGPU_TARGET}"; exit 1;; \
-      esac; \
-    done; \
-    test "${torch_codes}" = "${target_codes}" || { echo "MTGPU_TARGET=${MTGPU_TARGET} != TORCH_MUSA_ARCH_LIST=${TORCH_MUSA_ARCH_LIST}"; exit 1; }; \
-    test "${mate_codes}" = "${target_codes}" || { echo "MTGPU_TARGET=${MTGPU_TARGET} != MATE_MUSA_ARCH_LIST=${MATE_MUSA_ARCH_LIST}"; exit 1; }; \
-    echo "MUSA arch selectors agree on ${target_codes}"
+# The check itself is a script, so it can be run (and tested) outside the build:
+# refusing a disagreeing set is worth being able to check on the host that is about
+# to build, not only inside a layer that fails ten minutes in.
+COPY docker/verify_musa_arch.sh /usr/local/bin/verify-musa-arch
+RUN bash /usr/local/bin/verify-musa-arch
 
 # vllm-musa Python deps, installed before the source copy so the layers cache.
 # Split across two indexes (per the MUSA release_5.2.0 wheel guide):

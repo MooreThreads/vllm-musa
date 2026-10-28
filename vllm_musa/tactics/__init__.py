@@ -169,39 +169,3 @@ def select_for_device(
         default=default,
         directory=directory,
     )
-
-
-def describe(kernel: str, directory: Path | None = None) -> str:
-    """Human-readable table, for logs and for ``python -m`` troubleshooting."""
-    table = load(kernel, directory)
-    lines = [f"{kernel} ({len(table)} tactics)"]
-    for (arch, mp), entry in sorted(
-        table.items(), key=lambda kv: (kv[0][0], kv[0][1] or 0)
-    ):
-        bin_name = f"{arch}/mp{mp}" if mp is not None else arch
-        note = f"  # {entry.note}" if entry.note else ""
-        lines.append(f"  {bin_name:<16} {entry.values}{note}")
-    return "\n".join(lines)
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    """``python -m vllm_musa.tactics <kernel>...``: dump the tables.
-
-    Kept as a function so ``__main__.py`` can call it; a bare
-    ``if __name__ == "__main__"`` guard here would never fire, because ``-m``
-    dispatches to the package's ``__main__`` module.
-    """
-    import sys
-
-    names = list(sys.argv[1:] if argv is None else argv)
-    if not names:
-        available = sorted(p.stem for p in TACTICS_DIR.glob("*.json"))
-        print(f"usage: python -m vllm_musa.tactics <kernel> [{', '.join(available)}]")
-        return 2
-    for name in names:
-        print(describe(name))
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover - direct script execution
-    raise SystemExit(main())

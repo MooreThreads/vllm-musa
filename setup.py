@@ -338,6 +338,11 @@ ENABLE_FP8 = BUILD_TARGETS.fp8
 if ENABLE_FP8:
     MCC_FLAGS.append("-DENABLE_FP8")
 
+# No arch has FP4 yet, so there is no flag to add; it is still recorded in the
+# stamp and read back by ``supports_fp4``, which asks both halves like ``fp8``
+# does.  When the first FP4 arch arrives only this block changes.
+ENABLE_FP4 = BUILD_TARGETS.fp4
+
 COMPILE_ARGS = {
     "mcc": MCC_FLAGS,
     "cxx": CXX_FLAGS,
@@ -442,6 +447,7 @@ class _CustomBuildExt(BuildExtension):
             Path(dest),
             MTGPU_TARGETS,
             fp8=ENABLE_FP8,
+            fp4=ENABLE_FP4,
             compiler=_mcc_version_string(),
             source=MTGPU_TARGET_SOURCE,
         )
