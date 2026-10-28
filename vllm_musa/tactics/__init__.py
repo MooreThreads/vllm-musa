@@ -4,168 +4,97 @@
 A *tactic* is a choice that is correct on every arch but fastest on one: tile
 shape, block size, split-K factor, pipeline depth.  The code that applies a
 tactic is the same everywhere; only the numbers differ.  Keeping the numbers in
-``tactics/*.json`` (keyed by arch and multiprocessor count) instead of in ``if``
-chains means supporting a new arch is a data change, and a missing entry is a
-loud lookup failure rather than a slow default inherited by accident.
+``tactics/*.json`` instead of in ``if`` chains means supporting a new arch is a
+data change, and a missing entry is a loud lookup failure rather than a slow
+default inherited by accident.
 
-The lookup ladder, in order, is:
+The decisions are a pure function of :class:`~.problem.TuningProblem`: the
+layer's shape, the batch size, the compute semantics the caller needs, and the
+device profile.  Nothing here reads the environment or the current device, so the
+same problem always resolves to the same tactic -- which is what makes the tables
+testable without a GPU and enumerable offline for a bin this machine does not
+have.
 
-1. ``(arch_name, mp_count)`` -- the exact bin
-2. ``(arch_name, None)``      -- the arch
-3. ``("default", None)``      -- the table's own fallback
-4. the caller's ``default=``  -- explicit opt-in
-5. :class:`TacticNotFound`
+Each table row is a *pattern* (:class:`TacticMatch`) over the dimensions that can
+change the answer -- arch, multiprocessor count, capture mode, projection shape,
+M band -- where an omitted dimension is a wildcard.  The most specific matching
+pattern wins; two patterns of equal specificity that could answer the same problem
+are refused at load time.  The ladder, in order, is:
 
-Anything past 4 is the caller saying "a generic tactic is fine here"; a caller
-that does not say so gets an error rather than an unvalidated guess.  This is
-deliberate: on S5000 a wrong tiling is a 2x regression that looks like a
-hardware limit, and nobody re-reads a tuning table for an arch they just
-enabled.
+1. the most specific matching row
+2. the caller's ``default=``  -- explicit opt-in
+3. :class:`TacticNotFound`
+
+A table may carry an all-wildcard row, and then it always answers; without one, an
+untuned bin fails closed.  That is the difference between "we decided a
+generic tactic is fine here" and "nobody got to this bin yet", and keeping them
+distinguishable is the whole point: on S5000 a wrong tiling is a 2x regression
+that looks like a hardware limit, and nobody re-reads a tuning table for an arch
+they just enabled.
+
+Every row that claims an arch must carry a ``note`` saying how it was measured.
+Only the ``(null, null)`` row may be generic, so provenance cannot silently go
+missing.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Optional
+from .problem import (
+    DENSE,
+    MOE_CONTIGUOUS,
+    MOE_MASKED,
+    ComputeSemantics,
+    DeviceProfile,
+    LayerShape,
+    TuningProblem,
+)
+from .resolve import COMPUTED_FALLBACKS, computed_fallback, resolve_tactic
+from .tables import (
+    DEFAULT_DIR,
+    MATCH_KEYS,
+    SCHEMA_VERSION,
+    TacticEntry,
+    TacticMatch,
+    TacticNotFound,
+    load,
+    lookup,
+    lookup_entry,
+    table_path,
+)
+from .values import (
+    REGISTRY,
+    Fp8BlockSplitkTactic,
+    MoeTactic,
+    RmsnormTactic,
+    Tactic,
+    tactic_class,
+)
 
-TACTICS_DIR = Path(__file__).resolve().parent
-SCHEMA_VERSION = 1
-
-#: Arch whose numbers are the fallback when a table has no ``default`` entry.
-DEFAULT_ARCH = "default"
-
-
-class TacticNotFound(LookupError):
-    """No tactic for the requested device and the caller offered no default."""
-
-
-@dataclass(frozen=True)
-class TacticEntry:
-    arch: str
-    mp_count: Optional[int]
-    values: dict[str, Any]
-    note: str = ""
-
-
-def _ladder(arch_name: str, mp_count: Optional[int]) -> list[tuple[str, Optional[int]]]:
-    keys: list[tuple[str, Optional[int]]] = [(arch_name, mp_count)]
-    if mp_count is not None:
-        keys.append((arch_name, None))
-    keys.append((DEFAULT_ARCH, None))
-    return keys
-
-
-def _table_path(kernel: str, directory: Path | None) -> Path:
-    return (TACTICS_DIR if directory is None else directory) / f"{kernel}.json"
-
-
-def load(
-    kernel: str, directory: Path | None = None
-) -> dict[tuple[str, Optional[int]], TacticEntry]:
-    """Load ``<kernel>.json`` into a ``(arch, mp_count) -> entry`` map."""
-    directory = TACTICS_DIR if directory is None else directory
-    path = directory / f"{kernel}.json"
-    if not path.is_file():
-        raise TacticNotFound(f"no tactic table for kernel {kernel!r}: {path} is missing")
-
-    with path.open() as handle:
-        raw = json.load(handle)
-
-    if raw.get("_schema") != SCHEMA_VERSION:
-        raise ValueError(
-            f"{path}: unsupported tactic schema {raw.get('_schema')!r}, "
-            f"expected {SCHEMA_VERSION}"
-        )
-    if raw.get("kernel") != kernel:
-        raise ValueError(
-            f"{path}: table says kernel {raw.get('kernel')!r}, "
-            f"expected {kernel!r}"
-        )
-
-    table: dict[tuple[str, Optional[int]], TacticEntry] = {}
-    entries = raw.get("tactics", [])
-    if not isinstance(entries, list):
-        raise ValueError(f"{path}: 'tactics' must be a list, got {type(entries).__name__}")
-    for index, item in enumerate(entries):
-        try:
-            key = (item["arch"], item.get("mp_count"))
-            entry = TacticEntry(
-                arch=item["arch"],
-                mp_count=item.get("mp_count"),
-                values=dict(item["values"]),
-                note=item.get("note", ""),
-            )
-        except (KeyError, TypeError, AttributeError) as exc:
-            raise ValueError(
-                f"{path}: tactic #{index} is malformed ({exc!r}); each entry needs "
-                "'arch' and a 'values' mapping"
-            ) from exc
-        if key in table:
-            raise ValueError(
-                f"{path}: duplicate tactic for arch={key[0]} "
-                f"mp_count={key[1]}"
-            )
-        table[key] = entry
-    if not table:
-        raise ValueError(f"{path}: table defines no tactics")
-    return table
-
-
-def select(
-    kernel: str,
-    *,
-    arch_name: str,
-    mp_count: Optional[int] = None,
-    default: dict[str, Any] | None = None,
-    directory: Path | None = None,
-) -> dict[str, Any]:
-    """Return the tactic values for this device, or raise.
-
-    ``default`` is the caller stating that a generic tactic is acceptable; pass
-    it only where that is true, because it is what silences the failure for an
-    arch nobody has tuned.
-    """
-    table = load(kernel, directory)
-    tried: list[str] = []
-    for arch, mp in _ladder(arch_name, mp_count):
-        entry = table.get((arch, mp))
-        if entry is not None:
-            return entry.values
-        tried.append(f"{arch}/mp{mp}" if mp is not None else f"{arch}")
-
-    if default is not None:
-        return dict(default)
-
-    raise TacticNotFound(
-        f"no tactic for kernel {kernel!r} on {arch_name} "
-        f"(mp_count={mp_count}); tried {', '.join(tried)}. Add an entry to "
-        f"{_table_path(kernel, directory)} with the measured numbers for this "
-        "arch, or pass default= where a generic tactic is known to be fine."
-    )
-
-
-def select_for_device(
-    kernel: str,
-    *,
-    default: dict[str, Any] | None = None,
-    directory: Path | None = None,
-) -> dict[str, Any]:
-    """``select`` for the device this process is running on.
-
-    ``arch_name`` and ``mp_count`` come from the device, not from an environment
-    variable or from ``torch_musa.get_arch_list()``, which reports the arch the
-    wheel was built for.  The multiprocessor count is what tells two bins of one
-    arch apart, which is why it is part of the key.
-    """
-    from vllm_musa.device_spec import current_device_spec
-
-    spec = current_device_spec()
-    return select(
-        kernel,
-        arch_name=spec.arch_name,
-        mp_count=spec.mp_count,
-        default=default,
-        directory=directory,
-    )
+__all__ = [
+    "COMPUTED_FALLBACKS",
+    "DEFAULT_DIR",
+    "DENSE",
+    "MOE_CONTIGUOUS",
+    "MOE_MASKED",
+    "MATCH_KEYS",
+    "MoeTactic",
+    "REGISTRY",
+    "Fp8BlockSplitkTactic",
+    "RmsnormTactic",
+    "SCHEMA_VERSION",
+    "ComputeSemantics",
+    "DeviceProfile",
+    "LayerShape",
+    "Tactic",
+    "TacticEntry",
+    "TacticMatch",
+    "TacticNotFound",
+    "TuningProblem",
+    "computed_fallback",
+    "load",
+    "lookup",
+    "lookup_entry",
+    "resolve_tactic",
+    "table_path",
+    "tactic_class",
+]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -238,22 +239,48 @@ def test_native_moe_gemv_matches_triton(tokens) -> None:
 
 
 SPLITK = ROOT / "vllm_musa" / "kernels" / "fp8_block_splitk.py"
+SPLITK_TABLE = ROOT / "vllm_musa" / "tactics" / "fp8_block_splitk.json"
 BF16 = ROOT / "vllm_musa" / "kernels" / "fp8_block_bf16.py"
 MOE_MMA = ROOT / "vllm_musa" / "kernels" / "fp8_moe_mma.py"
 
 
+def _splitk_rows() -> list[dict]:
+    """The split-K table as rows: shape, capture mode, band and the values."""
+    raw = json.loads(SPLITK_TABLE.read_text(encoding="utf-8"))
+    rows = []
+    for item in raw["tactics"]:
+        match = item["match"]
+        low, high = match["m_range"]
+        rows.append(
+            {
+                "shape": tuple(match["shape"]),
+                "capturing": match["graph_capture"],
+                "low": low,
+                "high": high,
+                **item["values"],
+            }
+        )
+    return rows
+
+
 def test_splitk_configs_tile_k_and_keep_one_row_on_the_gemv() -> None:
-    configs = _literal(SPLITK, "_CONFIGS")
-    eager_max_rows = _literal(SPLITK, "_EAGER_MAX_ROWS")
-    assert set(eager_max_rows) == set(configs)
-    for (n, k), config in configs.items():
-        split, block_n, warps, unroll, min_rows, max_rows, tile_m = config
-        assert k % (split * 32 * unroll) == 0
-        assert 2 <= min_rows <= 16 <= max_rows
-        assert 16 <= eager_max_rows[(n, k)]
-        assert tile_m in (16, 32)
+    rows = _splitk_rows()
+    for row in rows:
+        n, k = row["shape"]
+        assert k % (row["split"] * 32 * row["unroll"]) == 0
+        assert 2 <= row["low"] <= 16 <= row["high"]
+        assert row["tile_m"] in (16, 32)
+    # Every projection is measured in both capture modes: an eager launch admits
+    # more rows than a captured one, so one row cannot serve both.
+    by_shape: dict = {}
+    for row in rows:
+        by_shape.setdefault(row["shape"], set()).add(row["capturing"])
+    assert all(modes == {False, True} for modes in by_shape.values())
+    # The dispatch reads the table instead of two dicts, and the capture question
+    # is asked once, where the problem is built.
     source = _function(SPLITK, "fp8_block_splitk_config")
-    assert "config[4] <= rows <= max_rows" in source
+    assert "config_for(" in source
+    assert "torch.cuda.is_current_stream_capturing()" in source
 
 
 def test_splitk_row_tiles_add_no_padding() -> None:
@@ -269,14 +296,19 @@ def test_splitk_row_tiles_add_no_padding() -> None:
 
 
 def test_bf16_gemm_rows_start_past_the_splitk_rows() -> None:
-    configs = _literal(SPLITK, "_CONFIGS")
-    eager_max_rows = _literal(SPLITK, "_EAGER_MAX_ROWS")
+    rows = _splitk_rows()
     min_rows = _literal(BF16, "MIN_ROWS")
     by_shape = _literal(BF16, "_MIN_ROWS_BY_SHAPE")
-    assert set(by_shape) <= set(configs)
-    for shape, config in configs.items():
-        assert by_shape.get(shape, min_rows) > config[5]
-        assert min_rows > eager_max_rows[shape]
+    captured_max = {
+        row["shape"]: row["high"] for row in rows if row["capturing"]
+    }
+    eager_max = {row["shape"]: row["high"] for row in rows if not row["capturing"]}
+    assert set(by_shape) <= set(captured_max)
+    # Inside a capture the two paths meet: bf16 starts one row past split-K.
+    for shape, high in captured_max.items():
+        assert by_shape.get(shape, min_rows) > high
+    # Eagerly, the split-K rows end well below where bf16 takes over.
+    assert min_rows > max(eager_max.values())
     assert all(rows <= min_rows for rows in by_shape.values())
     source = _function(BF16, "fp8_block_bf16_supported")
     assert "_MIN_ROWS_BY_SHAPE.get((n, k), MIN_ROWS)" in source
@@ -294,7 +326,9 @@ def test_bf16_gemm_rows_start_past_the_splitk_rows() -> None:
 
 
 @pytest.mark.parametrize(
-    "shape", sorted(_literal(SPLITK, "_CONFIGS")), ids=lambda s: f"{s[0]}x{s[1]}"
+    "shape",
+    sorted({row["shape"] for row in _splitk_rows()}),
+    ids=lambda s: f"{s[0]}x{s[1]}",
 )
 @pytest.mark.parametrize("capturing", [False, True])
 def test_measured_rows_apply_only_in_graph_capture(
@@ -308,10 +342,9 @@ def test_measured_rows_apply_only_in_graph_capture(
     monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: capturing)
     weight = torch.empty(shape, dtype=torch.float8_e4m3fn)
     scale = torch.empty((shape[0] // 32, shape[1] // 32), dtype=torch.float32)
-    if capturing:
-        splitk_max, bf16_min = sk._CONFIGS[shape][5], bf._MIN_ROWS_BY_SHAPE[shape]
-    else:
-        splitk_max, bf16_min = sk._EAGER_MAX_ROWS[shape], bf.MIN_ROWS
+    band = {row["capturing"]: row for row in _splitk_rows() if row["shape"] == shape}
+    splitk_max = band[capturing]["high"]
+    bf16_min = bf._MIN_ROWS_BY_SHAPE[shape] if capturing else bf.MIN_ROWS
     assert sk.fp8_block_splitk_config(weight, scale, splitk_max) is not None
     assert sk.fp8_block_splitk_config(weight, scale, splitk_max + 1) is None
     assert not bf.fp8_block_bf16_supported(weight, scale, bf16_min - 1)

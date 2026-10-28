@@ -1,0 +1,305 @@
+{
+  "_schema": 3,
+  "kernel": "fp8_block_splitk",
+  "_doc": [
+    "Split-K tiling for the 32x32-block FP8 GEMM, keyed by projection shape, capture mode and row band.",
+    "Two rows per shape because the band differs: a captured launch admits fewer rows than an eager one.",
+    "There is deliberately no all-wildcard row: an unseen projection must fail closed, because the split-K path only wins for the shapes below."
+  ],
+  "tactics": [
+    {
+      "match": {
+        "shape": [
+          1792,
+          5120
+        ],
+        "graph_capture": false,
+        "m_range": [
+          2,
+          192
+        ]
+      },
+      "values": {
+        "split": 16,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 2,
+        "tile_m": 32
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          1792,
+          5120
+        ],
+        "graph_capture": true,
+        "m_range": [
+          2,
+          59
+        ]
+      },
+      "values": {
+        "split": 16,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 2,
+        "tile_m": 32
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          576,
+          5120
+        ],
+        "graph_capture": false,
+        "m_range": [
+          4,
+          320
+        ]
+      },
+      "values": {
+        "split": 16,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 2,
+        "tile_m": 16
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          576,
+          5120
+        ],
+        "graph_capture": true,
+        "m_range": [
+          4,
+          64
+        ]
+      },
+      "values": {
+        "split": 16,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 2,
+        "tile_m": 16
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          1024,
+          4096
+        ],
+        "graph_capture": false,
+        "m_range": [
+          3,
+          320
+        ]
+      },
+      "values": {
+        "split": 16,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 2,
+        "tile_m": 16
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          1024,
+          4096
+        ],
+        "graph_capture": true,
+        "m_range": [
+          3,
+          191
+        ]
+      },
+      "values": {
+        "split": 16,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 2,
+        "tile_m": 16
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          4096,
+          1280
+        ],
+        "graph_capture": false,
+        "m_range": [
+          4,
+          96
+        ]
+      },
+      "values": {
+        "split": 8,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 1,
+        "tile_m": 32
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          4096,
+          1280
+        ],
+        "graph_capture": true,
+        "m_range": [
+          4,
+          59
+        ]
+      },
+      "values": {
+        "split": 8,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 1,
+        "tile_m": 32
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          5120,
+          1024
+        ],
+        "graph_capture": false,
+        "m_range": [
+          4,
+          48
+        ]
+      },
+      "values": {
+        "split": 8,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 2,
+        "tile_m": 16
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          5120,
+          1024
+        ],
+        "graph_capture": true,
+        "m_range": [
+          4,
+          48
+        ]
+      },
+      "values": {
+        "split": 8,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 2,
+        "tile_m": 16
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          5120,
+          15360
+        ],
+        "graph_capture": false,
+        "m_range": [
+          2,
+          96
+        ]
+      },
+      "values": {
+        "split": 8,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 2,
+        "tile_m": 16
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          5120,
+          15360
+        ],
+        "graph_capture": true,
+        "m_range": [
+          2,
+          64
+        ]
+      },
+      "values": {
+        "split": 8,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 2,
+        "tile_m": 16
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          25600,
+          768
+        ],
+        "graph_capture": false,
+        "m_range": [
+          2,
+          32
+        ]
+      },
+      "values": {
+        "split": 2,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 1,
+        "tile_m": 16
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    },
+    {
+      "match": {
+        "shape": [
+          25600,
+          768
+        ],
+        "graph_capture": true,
+        "m_range": [
+          2,
+          32
+        ]
+      },
+      "values": {
+        "split": 2,
+        "block_n": 64,
+        "num_warps": 4,
+        "unroll": 1,
+        "tile_m": 16
+      },
+      "note": "measured on MTT S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections; carried over from the pre-table constants at 0b155a2618, so this row is as good as that measurement and no better"
+    }
+  ]
+}
