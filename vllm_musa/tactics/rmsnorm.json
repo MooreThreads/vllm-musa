@@ -1,14 +1,15 @@
 {
-  "_schema": 1,
+  "_schema": 2,
   "kernel": "rmsnorm",
   "_doc": [
     "Row-block size and vector width for the RMSNorm JIT kernel.",
-    "Same entry rules as moe.json: measured numbers only, default is the last resort."
+    "Same keys and same rules as moe.json, including the required (null, null) row."
   ],
   "tactics": [
     {
-      "arch": "default",
+      "arch": null,
       "mp_count": null,
+      "m_range": null,
       "values": {"rows_per_block": 8, "vector_width": 8},
       "note": "generic starting tactic; not tuned for any MUSA bin yet"
     }

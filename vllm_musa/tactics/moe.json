@@ -1,16 +1,18 @@
 {
-  "_schema": 1,
+  "_schema": 2,
   "kernel": "moe",
   "_doc": [
-    "Expert-block tiling for the fused MoE kernel.",
-    "Add an entry per measured bin: {\"arch\": \"mp_31\", \"mp_count\": 56, \"values\": {...}, \"note\": \"<how it was measured>\"}.",
-    "An entry with \"mp_count\": null applies to the whole arch; \"arch\": \"default\" is the last resort.",
-    "Only entries with measured evidence belong here - a guessed tiling is worse than the generic path, because it looks tuned."
+    "Expert-block tiling for the fused MoE kernel, one entry per measured key.",
+    "Keys are (arch, mp_count, m_range); the lookup tries the exact bin, then the arch, then the (null, null) row.",
+    "m_range is the band of per-expert rows the numbers were measured for; null means every M.",
+    "One band is one compiled variant, so the table is also the list of variants to build - do not add a row per M value.",
+    "Only measured numbers belong here: a guessed tiling looks tuned and makes the table lie."
   ],
   "tactics": [
     {
-      "arch": "default",
+      "arch": null,
       "mp_count": null,
+      "m_range": null,
       "values": {"block_m": 64, "block_n": 64, "block_k": 32, "split_k": 1, "num_stages": 3},
       "note": "generic starting tactic; not tuned for any MUSA bin yet"
     }
