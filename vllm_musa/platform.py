@@ -8,7 +8,7 @@ import os
 from collections.abc import Callable
 from functools import cache, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
 from packaging.version import Version
 
@@ -944,13 +944,14 @@ class MUSAPlatformBase(Platform):
         return spec is not None and spec.supports_native_fp4
 
     @classmethod
-    def is_validated_musa_target(cls, device_id: int = 0) -> bool:
+    def is_validated_musa_target(cls, device_id: Optional[int] = None) -> bool:
         """Whether the tuned kernels have been validated on this device's arch.
 
-        The one question that used to be spelled ``capability >= (3, 1)`` at six call
-        sites: it is an identity check against the validated-arch set, never an
-        ordering, because MUSA's axes do not order (warp width, FP8 and the
-        multiprocessor count all move independently).
+        An identity check against the validated-arch set, never an ordering: MUSA's
+        axes do not order (warp width, FP8 and the multiprocessor count all move
+        independently).  ``device_id=None`` asks about the current device, the same
+        one ``supports_fp8()`` above asks about, so two gates in one process cannot
+        answer for different GPUs on a heterogeneous node.
         """
         from vllm_musa.device_spec import is_validated_arch
 

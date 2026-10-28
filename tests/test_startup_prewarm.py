@@ -46,6 +46,23 @@ def test_auto_policy_variants_depend_on_the_rotary_width() -> None:
     assert rope.reachable_store_hints(None) == ("stwb", "stcg")
 
 
+def test_a_pinned_store_hint_is_the_only_variant_built(monkeypatch) -> None:
+    """A pinned hint is what every request asks for, so the auto pair would mis-warm."""
+    monkeypatch.setenv("VLLM_MUSA_ROPE_STORE_HINT", "stcs")
+    assert rope.reachable_store_hints(64) == ("stcs",)
+
+    monkeypatch.setenv("VLLM_MUSA_ROPE_STORE_HINT", "auto")
+    assert rope.reachable_store_hints(64) == ("stwb", "stcg")
+
+
+def test_the_arch_tag_accepts_an_arch_this_process_cannot_see(monkeypatch) -> None:
+    """The failure message offers `VLLM_MUSA_ARCH_LIST`; it has to work."""
+    monkeypatch.delenv("MATE_MUSA_ARCH_LIST", raising=False)
+    monkeypatch.setenv("VLLM_MUSA_ARCH_LIST", "22")
+
+    assert rope._musa_arch_tag() == "mp22"
+
+
 def test_rope_prewarm_never_blocks_startup(monkeypatch) -> None:
     """A prewarm failure must degrade to the lazy path, not abort the plugin."""
 

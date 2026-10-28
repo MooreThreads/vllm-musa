@@ -667,6 +667,29 @@ class TestMUSAPlatformBase:
         with patch.object(device_spec, "current_device_spec", return_value=spec):
             assert MUSAPlatformBase.supports_fp4() is False
 
+    def test_the_validated_target_question_asks_the_current_device(self):
+        """No argument means "the device this process runs on", like supports_fp8."""
+        from unittest.mock import patch
+
+        from vllm_musa import device_spec
+        from vllm_musa.platform import MUSAPlatformBase
+
+        spec = self._spec("mp_31", 310)
+        seen: list = []
+
+        def current():
+            seen.append("current")
+            return spec
+
+        with (
+            patch.object(device_spec, "current_device_spec", current),
+            patch.object(
+                device_spec, "get_device_spec", lambda device_id: seen.append(device_id)
+            ),
+        ):
+            assert MUSAPlatformBase.is_validated_musa_target() is True
+        assert seen == ["current"], "an indexed probe would answer for another GPU"
+
     def test_supports_fp4_is_false_even_on_a_future_fp8_arch(self):
         """No FP8-to-FP4 implication: the sets are independent."""
         from unittest.mock import patch

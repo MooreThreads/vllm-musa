@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Per-architecture MUSA hardware facts, provided by :mod:`torchada.musa`.
 
-This module used to carry its own device probe, capability sets, build-stamp
-reader and arch-mismatch check.  The same facts decide kernel selection in
-vLLM-MUSA, SGLang and MATE, the three copies had drifted, and a wrong-arch mubin
-does not fault on MUSA — it returns wrong numbers — so the probing half now lives
-in ``torchada.musa`` (0.1.104 and later).
+The probing half — device probe, capability sets, build-stamp reader and the
+arch-mismatch check — lives in ``torchada.musa`` (0.1.104 and later), because the
+same facts decide kernel selection in vLLM-MUSA, SGLang and MATE, and a
+wrong-arch mubin does not fault on MUSA: it returns wrong numbers.
 
 What stays here is the wiring this package needs on top of it:
 

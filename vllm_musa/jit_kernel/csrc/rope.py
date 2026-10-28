@@ -43,17 +43,16 @@ def _store_hint(num_tokens: int, rot_dim: int) -> str:
 
 
 def _musa_arch_tag() -> str:
-    """Arch tag for the module name, from the device spec (fail closed)."""
-    from vllm_musa.device_spec import current_device_spec
+    """Arch tag for the module name, from the rule every JIT build already follows.
 
-    spec = current_device_spec()
-    if spec is None:
-        raise RuntimeError(
-            "cannot determine the MUSA arch for the rotary-embedding JIT build; "
-            "the kernel name is arch-qualified so a guess here would pin a wrong "
-            "binary into the cache. Set VLLM_MUSA_ARCH_LIST (e.g. '31')."
-        )
-    return spec.arch_name.replace("_", "")  # "mp_31" -> "mp31"
+    The kernel name is arch-qualified, so a guess here would pin a binary built for
+    another card into the cache and reuse it, and on MUSA that returns wrong numbers.
+    ``jit._build_targets`` is the one place that decides: the framework env wins, the
+    device answers next, and neither answering is a refusal rather than a default.
+    """
+    from vllm_musa.jit_kernel.csrc.jit import _build_targets
+
+    return _build_targets().names[0].replace("_", "")  # "mp_31" -> "mp31"
 
 
 #: Store-hint variants the auto policy can select (see :func:`_store_hint`).
@@ -84,7 +83,17 @@ def prewarm_rope_modules(rot_dim: int | None = None) -> list[str]:
 
 
 def reachable_store_hints(rot_dim: int | None = None) -> tuple[str, ...]:
-    """Store-hint variants ``_store_hint`` can return for this rotary width."""
+    """Store-hint variants ``_store_hint`` can return for this rotary width.
+
+    A pinned ``VLLM_MUSA_ROPE_STORE_HINT`` collapses the set to that one value:
+    prewarming the auto pair while every request asks for ``stcs`` still builds the
+    variant it needs mid-serving, which is the cost this exists to avoid.
+    """
+    pinned = os.getenv("VLLM_MUSA_ROPE_STORE_HINT", "auto").lower()
+    if pinned in {"default", "stwb", "stcg", "stcs"}:
+        return (pinned,)
+    if pinned != "auto":
+        return ("stwb",)  # _store_hint falls back to stwb for an unknown value
     if rot_dim is not None and rot_dim != 64:
         return ("stwb",)
     return _ROPE_STORE_HINTS
