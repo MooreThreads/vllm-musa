@@ -52,7 +52,7 @@ class MusaPostGradPassManager(PostGradPassManager):
         if (
             _silu_deepgemm_fusion_requested(config)
             and _is_dense_model(config)
-            and current_platform.is_validated_musa_target()
+            and current_platform.supports_tuned_kernels()
             and _use_row_major_activation_scales(False)
             and self.pass_config.fuse_act_quant
         ):
@@ -62,7 +62,7 @@ class MusaPostGradPassManager(PostGradPassManager):
         if (
             _rms_deepgemm_fusion_requested(config)
             and _is_dense_model(config)
-            and current_platform.is_validated_musa_target()
+            and current_platform.supports_tuned_kernels()
             and _use_row_major_activation_scales(False)
             and self.pass_config.fuse_norm_quant
         ):

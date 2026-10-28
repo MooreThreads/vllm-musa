@@ -3,11 +3,12 @@
   "kernel": "rmsnorm",
   "_doc": [
     "Row-block size and vector width for the RMSNorm JIT kernel.",
-    "Same entry rules as moe.json: measured numbers only, default is the last resort."
+    "Same entry rules as moe.json: measured numbers only, and \"arch\": null is the last resort.",
+    "Values are checked against RmsnormTactic in tactics/__init__.py."
   ],
   "tactics": [
     {
-      "arch": "default",
+      "arch": null,
       "mp_count": null,
       "values": {"rows_per_block": 8, "vector_width": 8},
       "note": "generic starting tactic; not tuned for any MUSA bin yet"

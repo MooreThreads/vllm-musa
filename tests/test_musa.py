@@ -687,7 +687,7 @@ class TestMUSAPlatformBase:
                 device_spec, "get_device_spec", lambda device_id: seen.append(device_id)
             ),
         ):
-            assert MUSAPlatformBase.is_validated_musa_target() is True
+            assert MUSAPlatformBase.supports_tuned_kernels() is True
         assert seen == ["current"], "an indexed probe would answer for another GPU"
 
     def test_supports_fp4_is_false_even_on_a_future_fp8_arch(self):

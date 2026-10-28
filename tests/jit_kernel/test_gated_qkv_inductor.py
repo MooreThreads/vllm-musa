@@ -275,10 +275,10 @@ def test_gated_qkv_inductor_support_scope(monkeypatch) -> None:
     def fail_capability_query(*args, **kwargs):
         pytest.fail("non-MUSA inputs must not query MUSA device capability")
 
-    # The capability query the kernel makes is `current_platform.is_validated_musa_target`;
+    # The capability query the kernel makes is `current_platform.supports_tuned_kernels`;
     # `current_platform` here left the mock unconsulted.
     monkeypatch.setattr(
-        gated_qkv.current_platform, "is_validated_musa_target", fail_capability_query
+        gated_qkv.current_platform, "supports_tuned_kernels", fail_capability_query
     )
     assert not _supports_gated_qkv(*unsupported)
 

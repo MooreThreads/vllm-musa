@@ -4,12 +4,13 @@
   "_doc": [
     "Expert-block tiling for the fused MoE kernel.",
     "Add an entry per measured bin: {\"arch\": \"mp_31\", \"mp_count\": 56, \"values\": {...}, \"note\": \"<how it was measured>\"}.",
-    "An entry with \"mp_count\": null applies to the whole arch; \"arch\": \"default\" is the last resort.",
+    "An entry with \"mp_count\": null applies to the whole arch; \"arch\": null is the last resort.",
+    "Values are checked against MoeTactic in tactics/__init__.py: an unknown knob is an error, not a silently ignored field.",
     "Only entries with measured evidence belong here - a guessed tiling is worse than the generic path, because it looks tuned."
   ],
   "tactics": [
     {
-      "arch": "default",
+      "arch": null,
       "mp_count": null,
       "values": {"block_m": 64, "block_n": 64, "block_k": 32, "split_k": 1, "num_stages": 3},
       "note": "generic starting tactic; not tuned for any MUSA bin yet"

@@ -2378,7 +2378,7 @@ def _musa_fused_experts_impl_dispatch(
         # Identity check on the arch (see vllm_musa/device_spec.py): MUSA
         # capabilities are not ordered, so an unvalidated arch must fall back
         # rather than compare >= a threshold.
-        if current_platform.is_validated_musa_target(device_index):
+        if current_platform.supports_tuned_kernels(device_index):
             # The calibrated GEMV sweeps use router weights after the expert
             # projection.  Fail closed for the alternate input-weighting
             # contract until it has its own exact policy key and evidence.

@@ -953,7 +953,7 @@ class MUSAPlatformBase(Platform):
     # answers (see ``supports_fp8`` / ``supports_fp4`` above).
 
     @classmethod
-    def is_validated_musa_target(cls, device_id: Optional[int] = None) -> bool:
+    def supports_tuned_kernels(cls, device_id: Optional[int] = None) -> bool:
         """Whether the tuned kernels have been validated on this device's arch.
 
         An identity check against the validated-arch set, never an ordering: MUSA's
