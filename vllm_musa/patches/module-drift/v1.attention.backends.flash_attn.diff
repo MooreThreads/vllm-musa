@@ -63,7 +63,7 @@
  import vllm.envs as envs
  from vllm.config import (
      VllmConfig,
-@@ -65,335 +24,288 @@
+@@ -65,335 +24,290 @@
      get_dcp_world_size_and_rank,
  )
  from vllm.logger import init_logger
@@ -149,14 +149,16 @@
 +# `(-1, -1)` is MATE's spelling of full attention and the default layer window.
 +FULL_ATTENTION_WINDOW: tuple[int, int] = (-1, -1)
 +
-+# One AOT scheduler slot per attention kind is opt-in: it buys a prebuilt split
-+# plan per layer, but it also costs one `get_scheduler_metadata` refresh and one
-+# host-to-device copy of the plan per window per decode step. Measured on
-+# gemma-3-270m (18 layers, 5 sliding : 1 full, window 512) that refresh is
-+# ~1.0 ms/step/window, which doubles decode TPOT at 512+128 tokens; upstream's
-+# single-slot behaviour is therefore kept unless this is explicitly enabled.
-+# Flip the default only with a measurement from a model large enough that the
-+# better split plan outweighs the per-step refresh.
++# One AOT scheduler slot per attention kind is opt-in. Building the extra plan is
++# cheap: on gemma-3-270m (18 layers, 5 sliding : 1 full, window 512) one
++# `get_scheduler_metadata` call costs ~40 us and the copy into its persistent
++# buffer ~26 us per step, ~1.5% of a 4.4 ms decode step. What costs is
++# *consuming* a prebuilt plan in a sliding-window layer, which loses to letting
++# MATE self-schedule that layer: decode TPOT at 512/128 tokens is 4.4 ms with
++# upstream's single slot, 7.5 ms with a one-split window plan and 9.0 ms with
++# the default split budget, and a 4096-token prefill is ~8% slower. Mixing a
++# primary plan with a self-scheduled window is worse still (57 ms/step), so the
++# choice stays model-wide the way upstream shapes it.
 +_AOT_PER_WINDOW_ENABLED = os.environ.get("VLLM_MUSA_FA3_AOT_PER_WINDOW", "0") != "0"
 +
 +
@@ -653,7 +655,7 @@
          return True
 
      @classmethod
-@@ -408,8 +320,9 @@
+@@ -408,8 +322,9 @@
 
      @classmethod
      def supports_per_head_quant_scales(cls) -> bool:
@@ -665,7 +667,7 @@
 
      @staticmethod
      def get_impl_cls() -> type["FlashAttentionImpl"]:
-@@ -419,29 +332,60 @@
+@@ -419,29 +334,60 @@
      def get_builder_cls() -> type["FlashAttentionMetadataBuilder"]:
          return FlashAttentionMetadataBuilder
 
@@ -742,7 +744,7 @@
 
      @classmethod
      def supports_sink(cls) -> bool:
-@@ -451,7 +395,7 @@
+@@ -451,7 +397,7 @@
 
      @classmethod
      def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
@@ -751,7 +753,7 @@
 
      @classmethod
      def supports_combination(
-@@ -466,46 +410,11 @@
+@@ -466,46 +412,11 @@
          use_mm_prefix: bool,
          device_capability: DeviceCapability,
      ) -> str | None:
@@ -801,7 +803,7 @@
          return None
 
 
-@@ -527,69 +436,113 @@
+@@ -527,69 +438,113 @@
      block_table: torch.Tensor
      slot_mapping: torch.Tensor
 
@@ -966,7 +968,7 @@
 
 
  class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetadata]):
-@@ -618,64 +571,17 @@
+@@ -618,64 +573,17 @@
      )
      supports_update_block_table: bool = True
 
@@ -1036,7 +1038,7 @@
 
      def __init__(
          self,
-@@ -691,50 +597,22 @@
+@@ -691,50 +599,22 @@
          self.compilation_config = vllm_config.compilation_config
          self.attention_config = vllm_config.attention_config
 
@@ -1093,7 +1095,7 @@
          self.cp_kv_cache_interleave_size = (
              self.parallel_config.cp_kv_cache_interleave_size
          )
-@@ -743,6 +621,16 @@
+@@ -743,6 +623,16 @@
              self.compilation_config.cudagraph_mode.has_full_cudagraphs()
          )
          self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
@@ -1110,7 +1112,7 @@
 
          if self.use_full_cuda_graph and self.aot_schedule:
              # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
-@@ -765,46 +653,48 @@
+@@ -765,46 +655,48 @@
              self.max_num_splits = (
                  self.attention_config.flash_attn_max_num_splits_for_cuda_graph
              )
@@ -1192,7 +1194,7 @@
 
      def build(
          self,
-@@ -812,7 +702,8 @@
+@@ -812,7 +704,8 @@
          common_attn_metadata: CommonAttentionMetadata,
          fast_build: bool = False,
      ) -> FlashAttentionMetadata:
@@ -1202,7 +1204,7 @@
          iterations i.e. spec-decode
          """
          num_reqs = common_attn_metadata.num_reqs
-@@ -825,27 +716,76 @@
+@@ -825,27 +718,76 @@
          slot_mapping = common_attn_metadata.slot_mapping
          causal = common_attn_metadata.causal
 
@@ -1299,7 +1301,7 @@
 
          max_num_splits = 0  # 0 means use FA3's heuristics, not CG compatible
          if (
-@@ -857,100 +797,320 @@
+@@ -857,100 +799,320 @@
              # usage, because the intermediate buffers of size [num_splits,
              # num_heads, num_tokens, head_size] are allocated. Therefore,
              # we only set num_splits when using cuda graphs.
@@ -1694,7 +1696,7 @@
 
          attn_metadata = FlashAttentionMetadata(
              num_actual_tokens=num_actual_tokens,
-@@ -958,62 +1118,32 @@
+@@ -958,62 +1120,32 @@
              query_start_loc=query_start_loc,
              max_seq_len=max_seq_len,
              seq_lens=seq_lens,
@@ -1775,7 +1777,7 @@
          return attn_metadata
 
      def update_block_table(
-@@ -1024,34 +1154,18 @@
+@@ -1024,34 +1156,18 @@
      ) -> FlashAttentionMetadata:
          new_metadata = copy.copy(metadata)
          new_metadata.block_table = blk_table
@@ -1815,7 +1817,7 @@
 
      def __init__(
          self,
-@@ -1090,89 +1204,62 @@
+@@ -1090,89 +1206,62 @@
          self.num_queries_per_kv = self.num_heads // self.num_kv_heads
 
          self.attn_type = attn_type
@@ -1936,7 +1938,7 @@
 
      def forward(
          self,
-@@ -1182,36 +1269,31 @@
+@@ -1182,36 +1271,31 @@
          value: torch.Tensor,
          kv_cache: torch.Tensor,
          attn_metadata: FlashAttentionMetadata,
@@ -1981,7 +1983,7 @@
 
          if output_scale is not None or output_block_scale is not None:
              raise NotImplementedError(
-@@ -1248,181 +1330,695 @@
+@@ -1248,181 +1332,695 @@
                  layer,
              )
 
@@ -2845,7 +2847,7 @@
 
      def do_kv_cache_update(
          self,
-@@ -1437,9 +2033,7 @@
+@@ -1437,9 +2035,7 @@
              # we use direct Q, K, V tensors without caching
              return
 
@@ -2856,7 +2858,7 @@
          key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
          # Reshape the input keys and values and store them in the cache.
-@@ -1460,182 +2054,6 @@
+@@ -1460,182 +2056,6 @@
              layer._v_scale,
          )
 
@@ -3039,7 +3041,7 @@
      def _forward_encoder_attention(
          self,
          query: torch.Tensor,
-@@ -1654,14 +2072,13 @@
+@@ -1654,14 +2074,13 @@
              output: shape = [num_encoder_tokens, num_heads, head_size]
              attn_metadata: Encoder attention metadata
              layer: The attention layer
@@ -3058,7 +3060,7 @@
              raise NotImplementedError(
                  "quantization is not supported for encoder attention"
              )
-@@ -1672,203 +2089,198 @@
+@@ -1672,203 +2091,198 @@
          max_seqlen_q = attn_metadata.max_query_len
          max_seqlen_k = attn_metadata.max_query_len
 

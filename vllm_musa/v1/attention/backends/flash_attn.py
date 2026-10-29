@@ -74,14 +74,16 @@ logger = init_logger(__name__)
 # `(-1, -1)` is MATE's spelling of full attention and the default layer window.
 FULL_ATTENTION_WINDOW: tuple[int, int] = (-1, -1)
 
-# One AOT scheduler slot per attention kind is opt-in: it buys a prebuilt split
-# plan per layer, but it also costs one `get_scheduler_metadata` refresh and one
-# host-to-device copy of the plan per window per decode step. Measured on
-# gemma-3-270m (18 layers, 5 sliding : 1 full, window 512) that refresh is
-# ~1.0 ms/step/window, which doubles decode TPOT at 512+128 tokens; upstream's
-# single-slot behaviour is therefore kept unless this is explicitly enabled.
-# Flip the default only with a measurement from a model large enough that the
-# better split plan outweighs the per-step refresh.
+# One AOT scheduler slot per attention kind is opt-in. Building the extra plan is
+# cheap: on gemma-3-270m (18 layers, 5 sliding : 1 full, window 512) one
+# `get_scheduler_metadata` call costs ~40 us and the copy into its persistent
+# buffer ~26 us per step, ~1.5% of a 4.4 ms decode step. What costs is
+# *consuming* a prebuilt plan in a sliding-window layer, which loses to letting
+# MATE self-schedule that layer: decode TPOT at 512/128 tokens is 4.4 ms with
+# upstream's single slot, 7.5 ms with a one-split window plan and 9.0 ms with
+# the default split budget, and a 4096-token prefill is ~8% slower. Mixing a
+# primary plan with a self-scheduled window is worse still (57 ms/step), so the
+# choice stays model-wide the way upstream shapes it.
 _AOT_PER_WINDOW_ENABLED = os.environ.get("VLLM_MUSA_FA3_AOT_PER_WINDOW", "0") != "0"
 
 
