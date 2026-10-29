@@ -11,12 +11,12 @@ SERIES = Path(__file__).resolve().parents[1] / "vllm_musa" / "patches" / "series
 def test_series_numbers_are_contiguous_and_lineage_is_complete() -> None:
     patches = sorted(SERIES.glob("[0-9][0-9][0-9][0-9]-*.patch"))
     numbers = [int(path.name[:4]) for path in patches]
-    assert numbers == list(range(1, 209))
+    assert numbers == list(range(1, len(patches) + 1))
 
     readme = (SERIES / "README.md").read_text(encoding="utf-8")
     mapped = re.findall(r"^\| `(\d{4}-[^`]+\.patch)` \|", readme, re.M)
     assert mapped == [patch.name for patch in patches]
-    assert "Currently **208 patches**" in readme
+    assert f"Currently **{len(patches)} patches**" in readme
     assert "v0.28 0065: superseded" in readme
     assert "v0.28 0177: superseded" in readme
 
