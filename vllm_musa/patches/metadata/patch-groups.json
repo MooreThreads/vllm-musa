@@ -1,437 +1,440 @@
 {
-  "schema_version": 1,
-  "groups": [
-    {
-      "id": "compilation",
-      "purpose": "MUSA compiler, IR lowering, and graph compatibility",
-      "patches": [
-        "0001",
-        "0002",
-        "0003",
-        "0004",
-        "0019",
-        "0026",
-        "0050",
-        "0075",
-        "0076",
-        "0105",
-        "0121",
-        "0128",
-        "0164",
-        "0168",
-        "0172",
-        "0177",
-        "0208"
-      ],
-      "depends_on": [],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "musa_runtime"
-      ]
-    },
-    {
-      "id": "distributed",
-      "purpose": "Device communication, collectives, and expert transport",
-      "patches": [
-        "0005",
-        "0006",
-        "0037",
-        "0052",
-        "0115",
-        "0131",
-        "0146",
-        "0176"
-      ],
-      "depends_on": [],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "native_build",
-        "musa_runtime"
-      ]
-    },
-    {
-      "id": "attention",
-      "purpose": "Attention backends, MLA kernels, and sparse indexer",
-      "patches": [
-        "0007",
-        "0013",
-        "0021",
-        "0022",
-        "0023",
-        "0024",
-        "0025",
-        "0053",
-        "0054",
-        "0063",
-        "0074",
-        "0080",
-        "0081",
-        "0084",
-        "0104",
-        "0110",
-        "0113",
-        "0114",
-        "0130",
-        "0132",
-        "0135",
-        "0136",
-        "0138",
-        "0139",
-        "0140",
-        "0143",
-        "0144",
-        "0148",
-        "0151",
-        "0152",
-        "0169",
-        "0170",
-        "0173",
-        "0174",
-        "0180",
-        "0184",
-        "0187",
-        "0188",
-        "0190",
-        "0191",
-        "0192",
-        "0198"
-      ],
-      "depends_on": [
-        "compilation"
-      ],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "musa_runtime",
-        "model_runtime"
-      ]
-    },
-    {
-      "id": "moe",
-      "purpose": "MoE routing, activation, quantization and expert execution",
-      "patches": [
-        "0008",
-        "0009",
-        "0011",
-        "0012",
-        "0055",
-        "0064",
-        "0073",
-        "0079",
-        "0091",
-        "0096",
-        "0102",
-        "0103",
-        "0141",
-        "0166",
-        "0167"
-      ],
-      "depends_on": [
-        "native-build"
-      ],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "musa_runtime"
-      ]
-    },
-    {
-      "id": "deepseek-v4",
-      "purpose": "DeepSeek-V4 model load, MoE, and decode data path",
-      "patches": [
-        "0010",
-        "0014",
-        "0015",
-        "0016",
-        "0017",
-        "0020",
-        "0057",
-        "0065",
-        "0066",
-        "0067",
-        "0068",
-        "0082",
-        "0085",
-        "0095",
-        "0097",
-        "0098",
-        "0101",
-        "0106",
-        "0134",
-        "0142",
-        "0149",
-        "0150",
-        "0179",
-        "0181",
-        "0182",
-        "0183",
-        "0185",
-        "0186",
-        "0189",
-        "0193",
-        "0194",
-        "0195",
-        "0196",
-        "0197",
-        "0201"
-      ],
-      "depends_on": [
-        "attention"
-      ],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "musa_runtime",
-        "model_runtime"
-      ]
-    },
-    {
-      "id": "profiling",
-      "purpose": "Profiler hooks and runtime diagnostics",
-      "patches": [
-        "0018"
-      ],
-      "depends_on": [],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "musa_runtime"
-      ]
-    },
-    {
-      "id": "qwen",
-      "purpose": "Qwen model fast paths, sampling, and vision execution",
-      "patches": [
-        "0027",
-        "0033",
-        "0034",
-        "0035",
-        "0069",
-        "0083",
-        "0086",
-        "0087",
-        "0088",
-        "0089",
-        "0090",
-        "0093",
-        "0099",
-        "0125"
-      ],
-      "depends_on": [
-        "moe"
-      ],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "musa_runtime",
-        "model_runtime"
-      ]
-    },
-    {
-      "id": "speculative",
-      "purpose": "Draft model, rejection, DSpark and adaptive verification",
-      "patches": [
-        "0028",
-        "0029",
-        "0030",
-        "0031",
-        "0111",
-        "0129",
-        "0133",
-        "0147",
-        "0199",
-        "0200"
-      ],
-      "depends_on": [
-        "attention"
-      ],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "musa_runtime",
-        "model_runtime"
-      ]
-    },
-    {
-      "id": "sampling-runner",
-      "purpose": "General model-runner, sampling and GPU-worker contracts",
-      "patches": [
-        "0032",
-        "0036",
-        "0070",
-        "0165",
-        "0175"
-      ],
-      "depends_on": [
-        "compilation"
-      ],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "musa_runtime"
-      ]
-    },
-    {
-      "id": "native-build",
-      "purpose": "Native extension, ABI, and platform build contracts",
-      "patches": [
-        "0038",
-        "0039",
-        "0040",
-        "0041",
-        "0042",
-        "0043",
-        "0044",
-        "0045",
-        "0046",
-        "0047",
-        "0048",
-        "0049",
-        "0058",
-        "0059",
-        "0060",
-        "0061",
-        "0071",
-        "0072",
-        "0100",
-        "0107",
-        "0116",
-        "0127",
-        "0156",
-        "0163",
-        "0178",
-        "0202",
-        "0203"
-      ],
-      "depends_on": [],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "verify",
-        "native_build"
-      ]
-    },
-    {
-      "id": "quantization",
-      "purpose": "FP8 and W4A16 weight, activation and linear kernels",
-      "patches": [
-        "0051",
-        "0062",
-        "0153",
-        "0154",
-        "0155",
-        "0157",
-        "0158",
-        "0159"
-      ],
-      "depends_on": [
-        "native-build"
-      ],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "native_build",
-        "musa_runtime"
-      ]
-    },
-    {
-      "id": "mamba",
-      "purpose": "Mamba/GDN/SSD cache, graph, and sequence processing",
-      "patches": [
-        "0056",
-        "0077",
-        "0078",
-        "0092",
-        "0094",
-        "0108",
-        "0109",
-        "0112",
-        "0119",
-        "0120",
-        "0122",
-        "0123",
-        "0124",
-        "0126",
-        "0137",
-        "0171",
-        "0204",
-        "0206",
-        "0207"
-      ],
-      "depends_on": [
-        "compilation"
-      ],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "musa_runtime",
-        "model_runtime"
-      ]
-    },
-    {
-      "id": "multimodal",
-      "purpose": "Multimodal OCR, vision, and positional embedding",
-      "patches": [
-        "0117",
-        "0145",
-        "0160",
-        "0161",
-        "0162",
-        "0205"
-      ],
-      "depends_on": [
-        "attention"
-      ],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "musa_runtime",
-        "model_runtime"
-      ]
-    },
-    {
-      "id": "mooncake",
-      "purpose": "Mooncake KV transfer and transport integration",
-      "patches": [
-        "0118"
-      ],
-      "depends_on": [
-        "attention",
-        "mamba"
-      ],
-      "required_checks": [
-        "series",
-        "replay",
-        "round_trip",
-        "source_contract",
-        "mooncake_runtime"
-      ]
-    }
-  ]
+ "schema_version": 1,
+ "groups": [
+  {
+   "id": "compilation",
+   "purpose": "MUSA compiler, IR lowering, and graph compatibility",
+   "patches": [
+    "0001",
+    "0002",
+    "0003",
+    "0004",
+    "0019",
+    "0026",
+    "0050",
+    "0075",
+    "0076",
+    "0105",
+    "0121",
+    "0128",
+    "0164",
+    "0168",
+    "0172",
+    "0177",
+    "0208"
+   ],
+   "depends_on": [],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "musa_runtime"
+   ]
+  },
+  {
+   "id": "distributed",
+   "purpose": "Device communication, collectives, and expert transport",
+   "patches": [
+    "0005",
+    "0006",
+    "0037",
+    "0052",
+    "0115",
+    "0131",
+    "0146",
+    "0176"
+   ],
+   "depends_on": [],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "native_build",
+    "musa_runtime"
+   ]
+  },
+  {
+   "id": "attention",
+   "purpose": "Attention backends, MLA kernels, and sparse indexer",
+   "patches": [
+    "0007",
+    "0013",
+    "0021",
+    "0022",
+    "0023",
+    "0024",
+    "0025",
+    "0053",
+    "0054",
+    "0063",
+    "0074",
+    "0080",
+    "0081",
+    "0084",
+    "0104",
+    "0110",
+    "0113",
+    "0114",
+    "0130",
+    "0132",
+    "0135",
+    "0136",
+    "0138",
+    "0139",
+    "0140",
+    "0143",
+    "0144",
+    "0148",
+    "0151",
+    "0152",
+    "0169",
+    "0170",
+    "0173",
+    "0174",
+    "0180",
+    "0184",
+    "0187",
+    "0188",
+    "0190",
+    "0191",
+    "0192",
+    "0198"
+   ],
+   "depends_on": [
+    "compilation"
+   ],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "musa_runtime",
+    "model_runtime"
+   ]
+  },
+  {
+   "id": "moe",
+   "purpose": "MoE routing, activation, quantization and expert execution",
+   "patches": [
+    "0008",
+    "0009",
+    "0011",
+    "0012",
+    "0055",
+    "0064",
+    "0073",
+    "0079",
+    "0091",
+    "0096",
+    "0102",
+    "0103",
+    "0141",
+    "0166",
+    "0167"
+   ],
+   "depends_on": [
+    "native-build"
+   ],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "musa_runtime"
+   ]
+  },
+  {
+   "id": "deepseek-v4",
+   "purpose": "DeepSeek-V4 model load, MoE, and decode data path",
+   "patches": [
+    "0010",
+    "0014",
+    "0015",
+    "0016",
+    "0017",
+    "0020",
+    "0057",
+    "0065",
+    "0066",
+    "0067",
+    "0068",
+    "0082",
+    "0085",
+    "0095",
+    "0097",
+    "0098",
+    "0101",
+    "0106",
+    "0134",
+    "0142",
+    "0149",
+    "0150",
+    "0179",
+    "0181",
+    "0182",
+    "0183",
+    "0185",
+    "0186",
+    "0189",
+    "0193",
+    "0194",
+    "0195",
+    "0196",
+    "0197",
+    "0201"
+   ],
+   "depends_on": [
+    "attention"
+   ],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "musa_runtime",
+    "model_runtime"
+   ]
+  },
+  {
+   "id": "profiling",
+   "purpose": "Profiler hooks and runtime diagnostics",
+   "patches": [
+    "0018"
+   ],
+   "depends_on": [],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "musa_runtime"
+   ]
+  },
+  {
+   "id": "qwen",
+   "purpose": "Qwen model fast paths, sampling, and vision execution",
+   "patches": [
+    "0027",
+    "0033",
+    "0034",
+    "0035",
+    "0069",
+    "0083",
+    "0086",
+    "0087",
+    "0088",
+    "0089",
+    "0090",
+    "0093",
+    "0099",
+    "0125"
+   ],
+   "depends_on": [
+    "moe"
+   ],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "musa_runtime",
+    "model_runtime"
+   ]
+  },
+  {
+   "id": "speculative",
+   "purpose": "Draft model, rejection, DSpark and adaptive verification",
+   "patches": [
+    "0028",
+    "0029",
+    "0030",
+    "0031",
+    "0111",
+    "0129",
+    "0133",
+    "0147",
+    "0199",
+    "0200"
+   ],
+   "depends_on": [
+    "attention"
+   ],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "musa_runtime",
+    "model_runtime"
+   ]
+  },
+  {
+   "id": "sampling-runner",
+   "purpose": "General model-runner, sampling and GPU-worker contracts",
+   "patches": [
+    "0032",
+    "0036",
+    "0070",
+    "0165",
+    "0175"
+   ],
+   "depends_on": [
+    "compilation"
+   ],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "musa_runtime"
+   ]
+  },
+  {
+   "id": "native-build",
+   "purpose": "Native extension, ABI, and platform build contracts",
+   "patches": [
+    "0038",
+    "0039",
+    "0040",
+    "0041",
+    "0042",
+    "0043",
+    "0044",
+    "0045",
+    "0046",
+    "0047",
+    "0048",
+    "0049",
+    "0058",
+    "0059",
+    "0060",
+    "0061",
+    "0071",
+    "0072",
+    "0100",
+    "0107",
+    "0116",
+    "0127",
+    "0156",
+    "0163",
+    "0178",
+    "0202",
+    "0203"
+   ],
+   "depends_on": [],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "verify",
+    "native_build"
+   ]
+  },
+  {
+   "id": "quantization",
+   "purpose": "FP8 and W4A16 weight, activation and linear kernels",
+   "patches": [
+    "0051",
+    "0062",
+    "0153",
+    "0154",
+    "0155",
+    "0157",
+    "0158",
+    "0159"
+   ],
+   "depends_on": [
+    "native-build"
+   ],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "native_build",
+    "musa_runtime"
+   ]
+  },
+  {
+   "id": "mamba",
+   "purpose": "Mamba/GDN/SSD cache, graph, and sequence processing",
+   "patches": [
+    "0056",
+    "0077",
+    "0078",
+    "0092",
+    "0094",
+    "0108",
+    "0109",
+    "0112",
+    "0119",
+    "0120",
+    "0122",
+    "0123",
+    "0124",
+    "0126",
+    "0137",
+    "0171",
+    "0204",
+    "0206",
+    "0207",
+    "0209",
+    "0210",
+    "0211"
+   ],
+   "depends_on": [
+    "compilation"
+   ],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "musa_runtime",
+    "model_runtime"
+   ]
+  },
+  {
+   "id": "multimodal",
+   "purpose": "Multimodal OCR, vision, and positional embedding",
+   "patches": [
+    "0117",
+    "0145",
+    "0160",
+    "0161",
+    "0162",
+    "0205"
+   ],
+   "depends_on": [
+    "attention"
+   ],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "musa_runtime",
+    "model_runtime"
+   ]
+  },
+  {
+   "id": "mooncake",
+   "purpose": "Mooncake KV transfer and transport integration",
+   "patches": [
+    "0118"
+   ],
+   "depends_on": [
+    "attention",
+    "mamba"
+   ],
+   "required_checks": [
+    "series",
+    "replay",
+    "round_trip",
+    "source_contract",
+    "mooncake_runtime"
+   ]
+  }
+ ]
 }

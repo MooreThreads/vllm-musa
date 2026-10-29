@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 28 Oct 2026 16:44:42 +0800
+Subject: [PATCH] MUSA: route Mamba2 SSD to FlashInfer
+
+---
+ .../layers/mamba/mamba_mixer2.py              |  2 +
+ .../layers/mamba/ops/ssd_combined.py          | 43 +++++++++++++++++++
+ 2 files changed, 45 insertions(+)
+
+diff --git a/vllm/model_executor/layers/mamba/mamba_mixer2.py b/vllm/model_executor/layers/mamba/mamba_mixer2.py
+index 88170321fe..bee3aef37d 100644
+--- a/vllm/model_executor/layers/mamba/mamba_mixer2.py
++++ b/vllm/model_executor/layers/mamba/mamba_mixer2.py
+@@ -696,6 +696,7 @@ class MambaMixer2(MambaBase, PluggableLayer):
+                     dt_softplus=True,
+                     dt_limit=(0.0, float("inf")),
+                     state_dtype=ssm_state_dtype,
++                    backend=self.mamba_config.backend.value,
+                 )
+             except Exception:
+                 logger.warning(
+@@ -870,6 +871,7 @@ class MambaMixer2(MambaBase, PluggableLayer):
+                 dt_limit=(0.0, float("inf")),
+                 out=preallocated_ssm_out_p.view(num_prefill_tokens, -1, self.head_dim),
+                 state_dtype=ssm_state.dtype,
++                backend=self.mamba_config.backend.value,
+             )
+ 
+             # update ssm states
+diff --git a/vllm/model_executor/layers/mamba/ops/ssd_combined.py b/vllm/model_executor/layers/mamba/ops/ssd_combined.py
+index 581cd8bb6d..07c70cc8dd 100644
+--- a/vllm/model_executor/layers/mamba/ops/ssd_combined.py
++++ b/vllm/model_executor/layers/mamba/ops/ssd_combined.py
+@@ -174,6 +174,7 @@ def mamba_chunk_scan_combined_varlen(
+     dt_limit=(0.0, float("inf")),
+     return_intermediate_states=False,
+     state_dtype=None,
++    backend=None,
+ ):
+     """Argument:
+         x: (seqlen, nheads, headdim)
+@@ -200,6 +201,48 @@ def mamba_chunk_scan_combined_varlen(
+     assert cu_seqlens is not None, "cu_seqlens must be provided assuming varlen input"
+     assert seq_idx is not None
+ 
++    if (
++        x.device.type == "musa"
++        and backend == "flashinfer"
++        and not return_intermediate_states
++    ):
++        # MATE's packed SSD pipeline behind flashinfer.mamba. Everything the
++        # reference path computes is forwarded by name, because upstream
++        # FlashInfer orders `initial_states, dt_softplus, dt_limit` while MATE
++        # orders `dt_softplus, dt_limit, initial_states`; a positional forward
++        # silently binds dt_limit's tuple where the kernel reads the states.
++        #
++        # `return_intermediate_states` is the prefix-cache checkpoint form.
++        # Its per-chunk state buffer is consumed by `store_prefill_checkpoint`
++        # in vLLM's own layout, so a checkpointed prefill stays on the
++        # reference path until that buffer is proven interchangeable. The
++        # caller sets the flag from `checkpoint_chunk_idx is not None`; every
++        # non-checkpointed prefill routes here.
++        from flashinfer.mamba.ssd_combined import (
++            ssd_combined_fwd_varlen as flashinfer_ssd_combined_fwd_varlen,
++        )
++
++        return flashinfer_ssd_combined_fwd_varlen(
++            x=x,
++            dt=dt,
++            A=A,
++            B=B,
++            C=C,
++            chunk_size=chunk_size,
++            cu_seqlens=cu_seqlens,
++            cu_chunk_seqlens=cu_chunk_seqlens,
++            last_chunk_indices=last_chunk_indices,
++            seq_idx=seq_idx,
++            out=out,
++            D=D,
++            z=z,
++            dt_bias=dt_bias,
++            initial_states=initial_states,
++            dt_softplus=dt_softplus,
++            dt_limit=dt_limit,
++            state_dtype=state_dtype,
++        )
++
+     varlen_states = _mamba_chunk_scan_combined_fwd(
+         x,
+         dt,
