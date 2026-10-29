@@ -54,6 +54,7 @@ def test_musa_qwen_family_gate(architectures, expected: bool) -> None:
         ({"use_full_cuda_graph": False}, False),
         ({"common_prefix_len": 1}, False),
         ({"dcp_world_size": 2}, False),
+        ({"num_attention_windows": 2}, False),
         ({"graph_num_reqs": 63, "graph_num_decodes": 63}, False),
         ({"graph_num_decodes": 63}, False),
         ({"graph_num_tokens": 63, "graph_num_decode_tokens": 63}, False),
@@ -71,6 +72,7 @@ def test_qwen_direct_decode_schedule_gate(kwargs, expected: bool) -> None:
         "use_full_cuda_graph": True,
         "common_prefix_len": 0,
         "dcp_world_size": 1,
+        "num_attention_windows": 1,
         "graph_num_reqs": 64,
         "graph_num_decodes": 64,
         "graph_num_tokens": 64,
@@ -106,6 +108,9 @@ def _make_graph_size_64_builder(*, is_qwen_family: bool):
     builder = object.__new__(FlashAttentionMetadataBuilder)
     builder.aot_schedule = True
     builder.aot_sliding_window = (-1, -1)
+    builder.aot_window_layouts = ((-1, -1),)
+    builder._kind_scheduler_metadata_buffers = {}
+    builder.vllm_config = SimpleNamespace()
     builder.use_full_cuda_graph = True
     builder.max_cudagraph_size = 64
     builder.max_num_splits = 32

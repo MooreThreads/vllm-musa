@@ -1,6 +1,6 @@
 --- upstream
 +++ musa
-@@ -1,58 +1,16 @@
+@@ -1,58 +1,17 @@
  # SPDX-License-Identifier: Apache-2.0
 +# 2026 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
@@ -8,6 +8,7 @@
 
  import copy
 -import functools
++import os
  from dataclasses import dataclass
 +from importlib.metadata import PackageNotFoundError, version
  from typing import Any, ClassVar
@@ -62,7 +63,7 @@
  import vllm.envs as envs
  from vllm.config import (
      VllmConfig,
-@@ -65,335 +23,270 @@
+@@ -65,335 +24,290 @@
      get_dcp_world_size_and_rank,
  )
  from vllm.logger import init_logger
@@ -144,6 +145,22 @@
 -        softcap: float
 -        is_single_batch: bool
 -        num_splits: int
++# MUSA: the attention window is the identity of an AOT scheduler-metadata slot.
++# `(-1, -1)` is MATE's spelling of full attention and the default layer window.
++FULL_ATTENTION_WINDOW: tuple[int, int] = (-1, -1)
++
++# One AOT scheduler slot per attention kind is opt-in. Building the extra plan is
++# cheap: on gemma-3-270m (18 layers, 5 sliding : 1 full, window 512) one
++# `get_scheduler_metadata` call costs ~40 us and the copy into its persistent
++# buffer ~26 us per step, ~1.5% of a 4.4 ms decode step. What costs is
++# *consuming* a prebuilt plan in a sliding-window layer, which loses to letting
++# MATE self-schedule that layer: decode TPOT at 512/128 tokens is 4.4 ms with
++# upstream's single slot, 7.5 ms with a one-split window plan and 9.0 ms with
++# the default split budget, and a 4096-token prefill is ~8% slower. Mixing a
++# primary plan with a self-scheduled window is worse still (57 ms/step), so the
++# choice stays model-wide the way upstream shapes it.
++_AOT_PER_WINDOW_ENABLED = os.environ.get("VLLM_MUSA_FA3_AOT_PER_WINDOW", "0") != "0"
++
 +
 +def reject_per_sequence_causal(attn_metadata: Any) -> None:
 +    """Refuse the per-request causal mask MATE's FA3 wrapper cannot express.
@@ -181,6 +198,7 @@
 +    use_full_cuda_graph: bool,
 +    common_prefix_len: int,
 +    dcp_world_size: int,
++    num_attention_windows: int,
 +    graph_num_reqs: int,
 +    graph_num_decodes: int,
 +    graph_num_tokens: int,
@@ -196,6 +214,9 @@
 +        and use_full_cuda_graph
 +        and common_prefix_len == 0
 +        and dcp_world_size == 1
++        # The direct path hands every layer the same prebuilt schedule, so it
++        # is only sound for a model with a single attention window.
++        and num_attention_windows == 1
 +        and graph_num_reqs == 64
 +        and graph_num_decodes == graph_num_reqs
 +        and graph_num_tokens == graph_num_reqs
@@ -634,7 +655,7 @@
          return True
 
      @classmethod
-@@ -408,8 +301,9 @@
+@@ -408,8 +322,9 @@
 
      @classmethod
      def supports_per_head_quant_scales(cls) -> bool:
@@ -646,7 +667,7 @@
 
      @staticmethod
      def get_impl_cls() -> type["FlashAttentionImpl"]:
-@@ -419,29 +313,60 @@
+@@ -419,29 +334,60 @@
      def get_builder_cls() -> type["FlashAttentionMetadataBuilder"]:
          return FlashAttentionMetadataBuilder
 
@@ -723,7 +744,7 @@
 
      @classmethod
      def supports_sink(cls) -> bool:
-@@ -451,7 +376,7 @@
+@@ -451,7 +397,7 @@
 
      @classmethod
      def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
@@ -732,7 +753,7 @@
 
      @classmethod
      def supports_combination(
-@@ -466,46 +391,11 @@
+@@ -466,46 +412,11 @@
          use_mm_prefix: bool,
          device_capability: DeviceCapability,
      ) -> str | None:
@@ -782,7 +803,7 @@
          return None
 
 
-@@ -527,69 +417,56 @@
+@@ -527,69 +438,113 @@
      block_table: torch.Tensor
      slot_mapping: torch.Tensor
 
@@ -821,6 +842,13 @@
 -
      # Optional aot scheduling
      scheduler_metadata: torch.Tensor | None = None
++    # MUSA: one AOT schedule per attention window, keyed by the layer's window.
++    # `scheduler_metadata` stays the primary-window slot (which is full
++    # attention unless a sliding window is the only kind in the model); the map
++    # is only populated when the model mixes attention windows (hybrid full +
++    # SWA) and is None otherwise, so single-window models keep the upstream
++    # fast path.
++    kind_scheduler_metadata: dict[tuple[int, int], torch.Tensor] | None = None
 +    prefix_scheduler_metadata: torch.Tensor | None = None
      max_num_splits: int = 0
 
@@ -840,34 +868,76 @@
 -    rswa_prefix_lens: torch.Tensor | None = None
 -    rswa_window: int | None = None
 -    rswa_window_tensor: torch.Tensor | None = None
+-
+-
+-def _get_sliding_window_configs(
++    def scheduler_metadata_for(
++        self, window: tuple[int, int] | None
++    ) -> torch.Tensor | None:
++        """AOT schedule for the layer whose attention window is ``window``.
++
++        ``None`` means "this layer has no prebuilt schedule": MATE then derives
++        one inside the wrapper, which is slower but always correct. A layer
++        whose window is missing from a populated map must NOT fall back to
++        another window's schedule - that schedule was built from different
++        visible-KV bounds, so its split count describes a different problem.
++        """
++        kind = self.kind_scheduler_metadata
++        if kind is None:
++            return self.scheduler_metadata
++        return kind.get(_normalize_attention_window(window))
++
 +    causal: bool = True
 +
 +    # MUSA: pure-prefill batch with no cached prefix (every context_len == 0),
 +    # so prefill attention reads contiguous K/V (no block_table) and mate routes
 +    # to the faster mubin TCE flash-attention.
 +    prefill_no_prefix: bool = False
-
-
- def _get_sliding_window_configs(
++
++
++def _normalize_attention_window(window: tuple[int, int] | None) -> tuple[int, int]:
++    """Normalize the "no window" spelling, and nothing else.
++
++    Only ``None`` maps onto full attention. Every other tuple stays its own
++    scheduler kind, including ``(-1, 0)``: it is unbounded on the left but
++    bounded on the right, which is the same visible-KV set under a causal mask
++    and a different one without, so it must not silently share a slot.
++    """
++    if window is None:
++        return FULL_ATTENTION_WINDOW
++    return (int(window[0]), int(window[1]))
++
++
++def _get_attention_window_layouts(
      vllm_config: VllmConfig,
- ) -> set[tuple[int, int] | None]:
+-) -> set[tuple[int, int] | None]:
 -    """Get the set of all sliding window configs used in the model.
 -
 -    Only inspects FlashAttentionImpl layers, including implementations wrapped
 -    by a composite backend. Other backends (e.g. TurboQuant, MLA) use their own
 -    metadata builders and are skipped.
--    """
-+    """Get the set of FlashAttention sliding window configs used in the model."""
-     sliding_window_configs: set[tuple[int, int] | None] = set()
++) -> tuple[tuple[int, int], ...]:
++    """AOT-relevant attention windows, full attention first.
++
++    A hybrid model (gemma2/3/4, gpt-oss, qwen3-next/3.5, mimo, ...) mixes
++    full-attention layers with sliding-window layers, and MATE's scheduler
++    output depends on the window: the window bounds the visible KV blocks, which
++    bounds ``num_n_blocks`` and therefore the split count. One schedule cannot
++    serve both kinds.
++
++    Only paged-KV layers participate. An encoder-only or encoder layer never
++    reads a KV-cache schedule, so it must not add a layout - and with a
++    per-layer window of ``(w - 1, w - 1)`` it would otherwise be mistaken for a
++    distinct decoder window.
+     """
+-    sliding_window_configs: set[tuple[int, int] | None] = set()
++    layouts: set[tuple[int, int]] = set()
      layers = get_layers_from_vllm_config(vllm_config, Attention)
      for layer in layers.values():
 -        for impl in layer.impl.get_impl_variants():
 -            if isinstance(impl, FlashAttentionImpl):
 -                sliding_window_configs.add(impl.sliding_window)
-+        if not isinstance(layer.impl, FlashAttentionImpl):
-+            continue
-+        sliding_window_configs.add(layer.impl.sliding_window)
-     return sliding_window_configs
+-    return sliding_window_configs
 -
 -
 -def _maybe_symmetrize_window(
@@ -882,10 +952,23 @@
 -    if window is not None and window[0] >= 0 and window[1] == 0 and non_causal:
 -        return (window[0], window[0])
 -    return window
++        impl = layer.impl
++        if not isinstance(impl, FlashAttentionImpl):
++            continue
++        if impl.attn_type in (AttentionType.ENCODER_ONLY, AttentionType.ENCODER):
++            continue
++        layouts.add(_normalize_attention_window(impl.sliding_window))
++    if not layouts:
++        # No paged-KV layer found (profiling/encoder-only config): behave like
++        # upstream's single full-attention slot.
++        layouts.add(FULL_ATTENTION_WINDOW)
++    # Full attention first so `aot_sliding_window` keeps its upstream meaning
++    # (the window that also serves the cascade and DCP schedules).
++    return tuple(sorted(layouts, key=lambda w: (w[0] >= 0, w)))
 
 
  class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetadata]):
-@@ -618,64 +495,17 @@
+@@ -618,64 +573,17 @@
      )
      supports_update_block_table: bool = True
 
@@ -955,7 +1038,7 @@
 
      def __init__(
          self,
-@@ -691,50 +521,22 @@
+@@ -691,50 +599,22 @@
          self.compilation_config = vllm_config.compilation_config
          self.attention_config = vllm_config.attention_config
 
@@ -1012,7 +1095,7 @@
          self.cp_kv_cache_interleave_size = (
              self.parallel_config.cp_kv_cache_interleave_size
          )
-@@ -743,6 +545,16 @@
+@@ -743,6 +623,16 @@
              self.compilation_config.cudagraph_mode.has_full_cudagraphs()
          )
          self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
@@ -1029,7 +1112,7 @@
 
          if self.use_full_cuda_graph and self.aot_schedule:
              # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
-@@ -765,46 +577,38 @@
+@@ -765,46 +655,48 @@
              self.max_num_splits = (
                  self.attention_config.flash_attn_max_num_splits_for_cuda_graph
              )
@@ -1098,10 +1181,20 @@
 -            self.mm_prefix_query_ranges_gpu = torch.empty(
 -                (max_num_tokens, 2), dtype=torch.int32, device=self.device
 -            )
++        # MUSA: every attention window the model schedules AOT for, resolved on
++        # the first AOT build (the Attention layers exist by then). The full
++        # attention window is first when the model has one.
++        self.aot_window_layouts: tuple[tuple[int, int], ...] | None = None
++        # Persistent per-window schedule buffers, used with full cudagraphs so
++        # every captured graph reads a fixed address. Allocated on the first
++        # build (before capture), never inside a capture region.
++        self._kind_scheduler_metadata_buffers: dict[
++            tuple[int, int], torch.Tensor
++        ] = {}
 
      def build(
          self,
-@@ -812,7 +616,8 @@
+@@ -812,7 +704,8 @@
          common_attn_metadata: CommonAttentionMetadata,
          fast_build: bool = False,
      ) -> FlashAttentionMetadata:
@@ -1111,7 +1204,7 @@
          iterations i.e. spec-decode
          """
          num_reqs = common_attn_metadata.num_reqs
-@@ -825,11 +630,25 @@
+@@ -825,27 +718,76 @@
          slot_mapping = common_attn_metadata.slot_mapping
          causal = common_attn_metadata.causal
 
@@ -1120,6 +1213,7 @@
 -        aot_schedule = (
 -            self.aot_schedule and not fast_build and not envs.VLLM_BATCH_INVARIANT
 -        )
+-
 +        # ==================== MUSA ADAPTATION ====================
 +        num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens = (
 +            split_decodes_and_prefills(
@@ -1139,10 +1233,75 @@
 +
 +        # the overhead of the aot schedule is not worth it for spec-decode
 +        aot_schedule = self.aot_schedule and not fast_build
-
++
++        if self.aot_window_layouts is None and aot_schedule:
++            # For the AOT scheduler we need the sliding window values of every
++            # layer. We have to populate this on the first build() call so the
++            # layers are constructed (cannot populate) in __init__. Resolve on
++            # the first build that actually schedules AOT: a fast_build first
++            # call (spec decode) must not pin the layouts to full attention.
++            #
++            # Upstream disabled AOT outright here when a model had more than one
++            # sliding-window config, which costs every hybrid full+SWA model
++            # (gemma2/3/4, gpt-oss, qwen3-next/3.5, mimo, ...) the prebuilt
++            # schedule on every layer. MUSA instead keeps one schedule per
++            # distinct attention window and lets each layer pick its own.
++            layouts = _get_attention_window_layouts(self.vllm_config)
++            self.aot_window_layouts = layouts
++            self.aot_sliding_window = layouts[0]
++            if len(layouts) > 1 and (
++                self.dcp_world_size > 1 or not _AOT_PER_WINDOW_ENABLED
++            ):
++                # DCP builds one two-sided schedule for a single attention
++                # window and every layer reads that one slot. A window-mixed
++                # model would silently feed the SWA layers a full-attention
++                # schedule, so keep the previous single-slot behaviour (AOT off)
++                # until the DCP path grows per-side, per-window slots.
++                self.aot_schedule = False
++                aot_schedule = False
++                self.aot_window_layouts = (FULL_ATTENTION_WINDOW,)
++                self.aot_sliding_window = FULL_ATTENTION_WINDOW
++                logger.info_once(
++                    "MUSA FA3: %d attention windows on DCP=%d with per-window AOT "
++                    "enabled=%s keeps AOT scheduling disabled.",
++                    len(layouts),
++                    self.dcp_world_size,
++                    _AOT_PER_WINDOW_ENABLED,
++                    scope="local",
++                )
++            elif len(layouts) > 1:
++                logger.info_once(
++                    "MUSA FA3 AOT scheduling across %d attention windows: %s",
++                    len(layouts),
++                    layouts,
++                    scope="local",
++                )
          if self.aot_sliding_window is None:
-             self.aot_sliding_window = (-1, -1)
-@@ -857,100 +676,263 @@
+-            self.aot_sliding_window = (-1, -1)
+-            # For the AOT scheduler we need the sliding window value to be
+-            # constant for all layers to. We have to populate this on the first
+-            # build() call so the layers are constructed (cannot populate)
+-            # in __init__.
+-            if aot_schedule:
+-                sliding_window_configs = _get_sliding_window_configs(self.vllm_config)
+-                if len(sliding_window_configs) == 1:
+-                    sliding_window_config = sliding_window_configs.pop()
+-                    if sliding_window_config is not None:
+-                        self.aot_sliding_window = sliding_window_config
+-                elif len(sliding_window_configs) > 1:
+-                    self.aot_schedule = False
+-                    aot_schedule = False
++            # Layouts are resolved together with the primary window, but keep
++            # this consistent in case a build arrives with them preset.
++            self.aot_sliding_window = (
++                self.aot_window_layouts[0]
++                if self.aot_window_layouts
++                else FULL_ATTENTION_WINDOW
++            )
+
+         max_num_splits = 0  # 0 means use FA3's heuristics, not CG compatible
+         if (
+@@ -857,100 +799,320 @@
              # usage, because the intermediate buffers of size [num_splits,
              # num_heads, num_tokens, head_size] are allocated. Therefore,
              # we only set num_splits when using cuda graphs.
@@ -1215,6 +1374,7 @@
 +            use_full_cuda_graph=self.use_full_cuda_graph,
 +            common_prefix_len=common_prefix_len,
 +            dcp_world_size=self.dcp_world_size,
++            num_attention_windows=len(self.aot_window_layouts or (None,)),
 +            graph_num_reqs=num_reqs,
 +            graph_num_decodes=num_decodes,
 +            graph_num_tokens=num_actual_tokens,
@@ -1229,7 +1389,13 @@
 +            )
 +
 +        def schedule(
-+            batch_size, cu_query_lens, max_query_len, seqlens, max_seq_len, causal
++            batch_size,
++            cu_query_lens,
++            max_query_len,
++            seqlens,
++            max_seq_len,
++            causal,
++            window_size=None,
 +        ):
 +            cache_dtype = self.cache_config.cache_dtype
 +            if cache_dtype.startswith("fp8"):
@@ -1251,7 +1417,11 @@
 +                    cu_seqlens_q=cu_query_lens,
 +                    page_size=self.block_size,
 +                    causal=causal,
-+                    window_size=self.aot_sliding_window,
++                    window_size=(
++                        self.aot_sliding_window
++                        if window_size is None
++                        else window_size
++                    ),
 +                    num_splits=max_num_splits,
 +                )
 +            return None
@@ -1387,6 +1557,9 @@
 +                and 1 <= max_seq_len <= 4096
 +                and causal
 +                and self.aot_sliding_window == (-1, -1)
++                # The direct builder writes the full-attention layout only, so
++                # it must not run for a window-mixed model.
++                and self.aot_window_layouts == (FULL_ATTENTION_WINDOW,)
 +                and self._sm_count_query_succeeded
 +                and self._sm_count == 60
 +                and 1 <= max_num_splits <= 60
@@ -1477,10 +1650,53 @@
 +                # output buffer.
 +                self.scheduler_metadata[n:] = 0
 +            scheduler_metadata = self.scheduler_metadata[:n]
++
++        # ==================== MUSA ADAPTATION ====================
++        # Hybrid full + sliding-window models need one schedule per window: the
++        # window bounds the visible KV blocks, so a schedule built for full
++        # attention over-splits an SWA layer and vice versa. Each extra kind gets
++        # the same treatment as the primary slot (persistent buffer copy when
++        # capturing graphs, fixed split budget).
++        kind_scheduler_metadata: dict[tuple[int, int], torch.Tensor] | None = None
++        if (
++            scheduler_metadata is not None
++            and self.aot_window_layouts is not None
++            and len(self.aot_window_layouts) > 1
++            and not direct_metadata_built
++            and not use_cascade
++            and self.dcp_world_size <= 1
++        ):
++            kind_scheduler_metadata = {}
++            for window in self.aot_window_layouts:
++                if window == self.aot_sliding_window:
++                    kind_scheduler_metadata[window] = scheduler_metadata
++                    continue
++                window_metadata = schedule(
++                    batch_size=num_reqs,
++                    cu_query_lens=query_start_loc,
++                    max_query_len=max_query_len,
++                    seqlens=seq_lens,
++                    max_seq_len=max_seq_len,
++                    causal=causal,
++                    window_size=window,
++                )
++                if window_metadata is None:
++                    continue
++                if self.use_full_cuda_graph:
++                    slot = self._kind_scheduler_metadata_buffers.get(window)
++                    if slot is None:
++                        slot = torch.zeros_like(self.scheduler_metadata)
++                        self._kind_scheduler_metadata_buffers[window] = slot
++                    m = window_metadata.shape[0]
++                    slot[:m] = window_metadata
++                    slot[m:] = 0
++                    window_metadata = slot[:m]
++                kind_scheduler_metadata[window] = window_metadata
++        # ========================== END ==========================
 
          attn_metadata = FlashAttentionMetadata(
              num_actual_tokens=num_actual_tokens,
-@@ -958,62 +940,31 @@
+@@ -958,62 +1120,32 @@
              query_start_loc=query_start_loc,
              max_seq_len=max_seq_len,
              seq_lens=seq_lens,
@@ -1506,6 +1722,7 @@
 +            use_cascade=use_cascade,
 +            common_prefix_len=common_prefix_len,
              scheduler_metadata=scheduler_metadata,
++            kind_scheduler_metadata=kind_scheduler_metadata,
 +            cu_prefix_query_lens=cu_prefix_query_lens,
 +            prefix_kv_lens=prefix_kv_lens,
 +            suffix_kv_lens=suffix_kv_lens,
@@ -1560,7 +1777,7 @@
          return attn_metadata
 
      def update_block_table(
-@@ -1024,34 +975,18 @@
+@@ -1024,34 +1156,18 @@
      ) -> FlashAttentionMetadata:
          new_metadata = copy.copy(metadata)
          new_metadata.block_table = blk_table
@@ -1600,7 +1817,7 @@
 
      def __init__(
          self,
-@@ -1090,89 +1025,57 @@
+@@ -1090,89 +1206,62 @@
          self.num_queries_per_kv = self.num_heads // self.num_kv_heads
 
          self.attn_type = attn_type
@@ -1712,11 +1929,16 @@
 -            )
 +        # ==================== MUSA ADAPTATION ====================
 +        self.dcp_combine = dcp_a2a_lse_reduce if dcp_a2a else _musa_cp_lse_ag_out_rs
++        # The AOT scheduler-metadata slot this layer reads is identified by its
++        # own attention window, keyed exactly as the builder keyed it.
++        self._scheduler_metadata_window = _normalize_attention_window(
++            self.sliding_window
++        )
 +        # ========================== END ==========================
 
      def forward(
          self,
-@@ -1182,36 +1085,31 @@
+@@ -1182,36 +1271,31 @@
          value: torch.Tensor,
          kv_cache: torch.Tensor,
          attn_metadata: FlashAttentionMetadata,
@@ -1761,7 +1983,7 @@
 
          if output_scale is not None or output_block_scale is not None:
              raise NotImplementedError(
-@@ -1248,181 +1146,688 @@
+@@ -1248,181 +1332,695 @@
                  layer,
              )
 
@@ -1805,7 +2027,12 @@
 +            max_seqlen_q = attn_metadata.max_query_len
 +            max_seqlen_k = attn_metadata.max_seq_len
 +            block_table = attn_metadata.block_table
-+            scheduler_metadata = attn_metadata.scheduler_metadata
++            # MUSA: hybrid full+SWA models carry one AOT schedule per window;
++            # select this layer's own slot. Single-window models resolve to the
++            # same tensor as `attn_metadata.scheduler_metadata`.
++            scheduler_metadata = attn_metadata.scheduler_metadata_for(
++                self._scheduler_metadata_window
++            )
 +
 +            descale_shape = (cu_seqlens_q.shape[0] - 1, self.num_kv_heads)
 +
@@ -1870,7 +2097,7 @@
 +                        q_descale=layer._q_scale.expand(decode_descale_shape),
 +                        k_descale=layer._k_scale.expand(decode_descale_shape),
 +                        v_descale=layer._v_scale.expand(decode_descale_shape),
-+                        scheduler_metadata=attn_metadata.scheduler_metadata,
++                        scheduler_metadata=scheduler_metadata,
 +                        num_splits=attn_metadata.max_num_splits,
 +                    )
 +                    output[:num_decode_tokens] = decode_output
@@ -2208,6 +2435,8 @@
 +            block_table=attn_metadata.block_table,
 +            softcap=self.logits_soft_cap,
 +            return_softmax_lse=True,
++            # DCP builds a single two-sided schedule and never carries a
++            # per-window map (the builder keeps AOT off for window-mixed models).
 +            scheduler_metadata=attn_metadata.scheduler_metadata,
 +            q_descale=q_descale,
 +            k_descale=k_descale,
@@ -2618,7 +2847,7 @@
 
      def do_kv_cache_update(
          self,
-@@ -1437,9 +1842,7 @@
+@@ -1437,9 +2035,7 @@
              # we use direct Q, K, V tensors without caching
              return
 
@@ -2629,7 +2858,7 @@
          key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
          # Reshape the input keys and values and store them in the cache.
-@@ -1460,182 +1863,6 @@
+@@ -1460,182 +2056,6 @@
              layer._v_scale,
          )
 
@@ -2812,7 +3041,7 @@
      def _forward_encoder_attention(
          self,
          query: torch.Tensor,
-@@ -1654,14 +1881,13 @@
+@@ -1654,14 +2074,13 @@
              output: shape = [num_encoder_tokens, num_heads, head_size]
              attn_metadata: Encoder attention metadata
              layer: The attention layer
@@ -2831,7 +3060,7 @@
              raise NotImplementedError(
                  "quantization is not supported for encoder attention"
              )
-@@ -1672,203 +1898,198 @@
+@@ -1672,203 +2091,198 @@
          max_seqlen_q = attn_metadata.max_query_len
          max_seqlen_k = attn_metadata.max_query_len
 
