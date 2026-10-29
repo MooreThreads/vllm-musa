@@ -33,6 +33,9 @@ def _make_builder(flash_attn):
     builder.max_num_splits = 32
     builder.aot_schedule = True
     builder.aot_sliding_window = (-1, -1)
+    builder.aot_window_layouts = ((-1, -1),)
+    builder._kind_scheduler_metadata_buffers = {}
+    builder.vllm_config = SimpleNamespace()
     builder._sm_count = 60
     builder._sm_count_query_succeeded = True
     builder._use_qwen_single_request_scheduler_lookup = True
