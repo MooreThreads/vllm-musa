@@ -465,9 +465,11 @@ class FlashAttentionMetadata:
     # Optional aot scheduling
     scheduler_metadata: torch.Tensor | None = None
     # MUSA: one AOT schedule per attention window, keyed by the layer's window.
-    # `scheduler_metadata` stays the full-attention slot; the map is only
-    # populated when the model mixes attention windows (hybrid full + SWA) and
-    # is None otherwise, so single-window models keep the upstream fast path.
+    # `scheduler_metadata` stays the primary-window slot (which is full
+    # attention unless a sliding window is the only kind in the model); the map
+    # is only populated when the model mixes attention windows (hybrid full +
+    # SWA) and is None otherwise, so single-window models keep the upstream
+    # fast path.
     kind_scheduler_metadata: dict[tuple[int, int], torch.Tensor] | None = None
     prefix_scheduler_metadata: torch.Tensor | None = None
     max_num_splits: int = 0
@@ -497,17 +499,16 @@ class FlashAttentionMetadata:
 
 
 def _normalize_attention_window(window: tuple[int, int] | None) -> tuple[int, int]:
-    """Collapse the "no window" spellings onto full attention.
+    """Normalize the "no window" spelling, and nothing else.
 
-    Only the genuinely unbounded forms collapse. A partially bounded window
-    such as ``(-1, 5)`` is a different schedule kind and must stay distinct.
+    Only ``None`` maps onto full attention. Every other tuple stays its own
+    scheduler kind, including ``(-1, 0)``: it is unbounded on the left but
+    bounded on the right, which is the same visible-KV set under a causal mask
+    and a different one without, so it must not silently share a slot.
     """
     if window is None:
         return FULL_ATTENTION_WINDOW
-    window = (int(window[0]), int(window[1]))
-    if window in (FULL_ATTENTION_WINDOW, (-1, 0)):
-        return FULL_ATTENTION_WINDOW
-    return window
+    return (int(window[0]), int(window[1]))
 
 
 def _get_attention_window_layouts(

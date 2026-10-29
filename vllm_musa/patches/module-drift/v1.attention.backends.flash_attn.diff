@@ -801,7 +801,7 @@
          return None
 
 
-@@ -527,69 +436,112 @@
+@@ -527,69 +436,113 @@
      block_table: torch.Tensor
      slot_mapping: torch.Tensor
 
@@ -841,9 +841,11 @@
      # Optional aot scheduling
      scheduler_metadata: torch.Tensor | None = None
 +    # MUSA: one AOT schedule per attention window, keyed by the layer's window.
-+    # `scheduler_metadata` stays the full-attention slot; the map is only
-+    # populated when the model mixes attention windows (hybrid full + SWA) and
-+    # is None otherwise, so single-window models keep the upstream fast path.
++    # `scheduler_metadata` stays the primary-window slot (which is full
++    # attention unless a sliding window is the only kind in the model); the map
++    # is only populated when the model mixes attention windows (hybrid full +
++    # SWA) and is None otherwise, so single-window models keep the upstream
++    # fast path.
 +    kind_scheduler_metadata: dict[tuple[int, int], torch.Tensor] | None = None
 +    prefix_scheduler_metadata: torch.Tensor | None = None
      max_num_splits: int = 0
@@ -892,17 +894,16 @@
 +
 +
 +def _normalize_attention_window(window: tuple[int, int] | None) -> tuple[int, int]:
-+    """Collapse the "no window" spellings onto full attention.
++    """Normalize the "no window" spelling, and nothing else.
 +
-+    Only the genuinely unbounded forms collapse. A partially bounded window
-+    such as ``(-1, 5)`` is a different schedule kind and must stay distinct.
++    Only ``None`` maps onto full attention. Every other tuple stays its own
++    scheduler kind, including ``(-1, 0)``: it is unbounded on the left but
++    bounded on the right, which is the same visible-KV set under a causal mask
++    and a different one without, so it must not silently share a slot.
 +    """
 +    if window is None:
 +        return FULL_ATTENTION_WINDOW
-+    window = (int(window[0]), int(window[1]))
-+    if window in (FULL_ATTENTION_WINDOW, (-1, 0)):
-+        return FULL_ATTENTION_WINDOW
-+    return window
++    return (int(window[0]), int(window[1]))
 +
 +
 +def _get_attention_window_layouts(
@@ -965,7 +966,7 @@
 
 
  class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetadata]):
-@@ -618,64 +570,17 @@
+@@ -618,64 +571,17 @@
      )
      supports_update_block_table: bool = True
 
@@ -1035,7 +1036,7 @@
 
      def __init__(
          self,
-@@ -691,50 +596,22 @@
+@@ -691,50 +597,22 @@
          self.compilation_config = vllm_config.compilation_config
          self.attention_config = vllm_config.attention_config
 
@@ -1092,7 +1093,7 @@
          self.cp_kv_cache_interleave_size = (
              self.parallel_config.cp_kv_cache_interleave_size
          )
-@@ -743,6 +620,16 @@
+@@ -743,6 +621,16 @@
              self.compilation_config.cudagraph_mode.has_full_cudagraphs()
          )
          self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
@@ -1109,7 +1110,7 @@
 
          if self.use_full_cuda_graph and self.aot_schedule:
              # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
-@@ -765,46 +652,48 @@
+@@ -765,46 +653,48 @@
              self.max_num_splits = (
                  self.attention_config.flash_attn_max_num_splits_for_cuda_graph
              )
@@ -1191,7 +1192,7 @@
 
      def build(
          self,
-@@ -812,7 +701,8 @@
+@@ -812,7 +702,8 @@
          common_attn_metadata: CommonAttentionMetadata,
          fast_build: bool = False,
      ) -> FlashAttentionMetadata:
@@ -1201,7 +1202,7 @@
          iterations i.e. spec-decode
          """
          num_reqs = common_attn_metadata.num_reqs
-@@ -825,27 +715,76 @@
+@@ -825,27 +716,76 @@
          slot_mapping = common_attn_metadata.slot_mapping
          causal = common_attn_metadata.causal
 
@@ -1298,7 +1299,7 @@
 
          max_num_splits = 0  # 0 means use FA3's heuristics, not CG compatible
          if (
-@@ -857,100 +796,320 @@
+@@ -857,100 +797,320 @@
              # usage, because the intermediate buffers of size [num_splits,
              # num_heads, num_tokens, head_size] are allocated. Therefore,
              # we only set num_splits when using cuda graphs.
@@ -1693,7 +1694,7 @@
 
          attn_metadata = FlashAttentionMetadata(
              num_actual_tokens=num_actual_tokens,
-@@ -958,62 +1117,32 @@
+@@ -958,62 +1118,32 @@
              query_start_loc=query_start_loc,
              max_seq_len=max_seq_len,
              seq_lens=seq_lens,
@@ -1774,7 +1775,7 @@
          return attn_metadata
 
      def update_block_table(
-@@ -1024,34 +1153,18 @@
+@@ -1024,34 +1154,18 @@
      ) -> FlashAttentionMetadata:
          new_metadata = copy.copy(metadata)
          new_metadata.block_table = blk_table
@@ -1814,7 +1815,7 @@
 
      def __init__(
          self,
-@@ -1090,89 +1203,62 @@
+@@ -1090,89 +1204,62 @@
          self.num_queries_per_kv = self.num_heads // self.num_kv_heads
 
          self.attn_type = attn_type
@@ -1935,7 +1936,7 @@
 
      def forward(
          self,
-@@ -1182,36 +1268,31 @@
+@@ -1182,36 +1269,31 @@
          value: torch.Tensor,
          kv_cache: torch.Tensor,
          attn_metadata: FlashAttentionMetadata,
@@ -1980,7 +1981,7 @@
 
          if output_scale is not None or output_block_scale is not None:
              raise NotImplementedError(
-@@ -1248,181 +1329,695 @@
+@@ -1248,181 +1330,695 @@
                  layer,
              )
 
@@ -2844,7 +2845,7 @@
 
      def do_kv_cache_update(
          self,
-@@ -1437,9 +2032,7 @@
+@@ -1437,9 +2033,7 @@
              # we use direct Q, K, V tensors without caching
              return
 
@@ -2855,7 +2856,7 @@
          key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
          # Reshape the input keys and values and store them in the cache.
-@@ -1460,182 +2053,6 @@
+@@ -1460,182 +2054,6 @@
              layer._v_scale,
          )
 
@@ -3038,7 +3039,7 @@
      def _forward_encoder_attention(
          self,
          query: torch.Tensor,
-@@ -1654,14 +2071,13 @@
+@@ -1654,14 +2072,13 @@
              output: shape = [num_encoder_tokens, num_heads, head_size]
              attn_metadata: Encoder attention metadata
              layer: The attention layer
@@ -3057,7 +3058,7 @@
              raise NotImplementedError(
                  "quantization is not supported for encoder attention"
              )
-@@ -1672,203 +2088,198 @@
+@@ -1672,203 +2089,198 @@
          max_seqlen_q = attn_metadata.max_query_len
          max_seqlen_k = attn_metadata.max_query_len
 

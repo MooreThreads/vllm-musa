@@ -180,12 +180,15 @@ def _layer(*, window, attn_type=None):
 # --------------------------------------------------------------------------- #
 # layout scan
 # --------------------------------------------------------------------------- #
-def test_window_normalization_collapses_every_full_spelling():
+def test_window_normalization_only_maps_the_none_spelling():
     assert flash_attn._normalize_attention_window(None) == FULL
     assert flash_attn._normalize_attention_window((-1, -1)) == FULL
-    assert flash_attn._normalize_attention_window((-1, 0)) == FULL
     assert flash_attn._normalize_attention_window(SWA_128) == SWA_128
     assert flash_attn._normalize_attention_window((15, 15)) == (15, 15)
+    # Right-bounded means right-bounded: same visible KV only under a causal
+    # mask, so it must stay a distinct kind rather than share a slot.
+    assert flash_attn._normalize_attention_window((-1, 0)) == (-1, 0)
+    assert flash_attn._normalize_attention_window((0, -1)) == (0, -1)
 
 
 def test_layouts_are_deduplicated_and_full_attention_first(monkeypatch):
