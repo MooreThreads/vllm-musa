@@ -12,7 +12,11 @@ What stays here is the wiring this package needs on top of it:
 * the build/device check *inside* the probe, so a wrong-arch install fails at the
   first question asked about the device rather than at an arbitrary later call;
 * the policy that an absent stamp warns, because the comparison it would have
-  performed is the only thing that catches a wrong-arch wheel.
+  performed is the only thing that catches a wrong-arch wheel;
+* the list of arches *this project's* tuned kernels have been validated on.  That is
+  not a hardware fact: a shared table cannot say which kernel, version or input
+  contract was validated, so the answer lives here and names the run that
+  justifies each entry.
 
 The two rules the shared module enforces, restated because they are load-bearing
 here — see ``torchada/src/torchada/musa/device.py`` for the full reasoning:
@@ -21,8 +25,9 @@ here — see ``torchada/src/torchada/musa/device.py`` for the full reasoning:
    ``mp_31``), native FP8 (a per-target build define) and the multiprocessor
    count (48/52/56/60, varying *within* one arch) move independently, so
    ``(3, 1)`` must never be compared as "at least as new as".
-2. A capability question is answered from an explicit set, so an arch nobody has
-   validated answers ``False`` rather than landing on a side of a comparison.
+2. A capability question is answered from an explicit set or an exactly named
+   feature, so an arch nobody has validated answers ``False`` rather than landing on
+   a side of a comparison.
 
 Note on ``project`` vs. runtime arch: ``torch_musa.get_arch_list()`` reports the
 arches the **wheel was built for** (``['31']`` on the 5.2.0 wheel), not the arch
@@ -48,11 +53,12 @@ except ImportError as exc:  # pragma: no cover - a pre-release install
         "`pip install -e <torchada checkout> --no-deps --no-build-isolation`."
     ) from None
 from torchada.musa.build import MusaBuildTargetMismatch
-from torchada.musa.build import assert_build_matches_device as _assert_build_matches_device
+from torchada.musa.build import (
+    assert_build_matches_device as _assert_build_matches_device,
+)
 from torchada.musa.device import (  # noqa: F401 - re-exported for call sites
     NATIVE_FP4_ARCHS,
     NATIVE_FP8_ARCHS,
-    VALIDATED_MUSA_ARCHS,
     MusaDeviceSpec,
     arch_code,
     arch_name,
@@ -66,6 +72,7 @@ __all__ = [
     "NATIVE_FP4_ARCHS",
     "NATIVE_FP8_ARCHS",
     "VALIDATED_MUSA_ARCHS",
+    "VALIDATED_ARCHES",
     "arch_code",
     "arch_name",
     "clear_device_spec_cache",
@@ -74,6 +81,21 @@ __all__ = [
     "is_validated_arch",
     "read_build_stamp",
 ]
+
+#: Arch codes on which this project's tuned kernels have been run and validated, with
+#: the run that justifies each entry.  Keyed by ``arch_code`` (``310``), not by name, so
+#: a card whose ``major.minor`` maps to a listed arch matches without parsing strings.
+#:
+#: torchada answers what the hardware is; this answers what *we* have validated.  The
+#: two are separate on purpose: the FP8 paths, the chunked-min-p sampler and the tuning
+#: tables here are this project's code, and an arch added for another project's kernels
+#: must not enable them.
+VALIDATED_ARCHES = {
+    310: "S5000 (mp_31), PH1 kernels and sampler, validated on a leased S5000",
+}
+
+#: The arch codes behind :data:`VALIDATED_ARCHES`, as the set call sites compare with.
+VALIDATED_MUSA_ARCHS = frozenset(VALIDATED_ARCHES)
 
 # ``init_logger`` (not stdlib) because its ``warning_once`` is what keeps the
 # missing-stamp notice to one line per process; an editable install would
@@ -131,18 +153,21 @@ def current_device_spec() -> Optional[MusaDeviceSpec]:
 
 
 def is_validated_arch(device_id: Optional[int] = None) -> bool:
-    """Whether the tuned kernels have been validated on this device's arch.
+    """Whether this project's tuned kernels have been validated on this device's arch.
 
-    Unlike ``torchada.musa.device.is_validated_arch``, this routes through *this*
-    module's probe, so the build/device check has already run by the time the answer
-    is produced: a wrong-arch wheel raises instead of quietly disabling every tuned
-    path and running the generic kernels of the same wrong binary.  That is the
-    whole reason this package wraps the shared answer instead of re-exporting it.
+    Two things this is not.  It is not a torchada answer -- ``torchada.musa`` reports
+    the hardware, and the validation policy for *these* kernels is
+    :data:`VALIDATED_ARCHES` above.  And it does not route around the build/device
+    check: the probe below is this module's, so a wrong-arch wheel raises instead of
+    quietly disabling every tuned path and running the generic kernels of the same
+    wrong binary.
     """
     try:
-        spec = current_device_spec() if device_id is None else get_device_spec(device_id)
+        spec = (
+            current_device_spec() if device_id is None else get_device_spec(device_id)
+        )
     except MusaBuildTargetMismatch:
         raise
     except Exception:  # noqa: BLE001 - a failed probe must not enable anything
         return False
-    return spec is not None and spec.is_validated
+    return spec is not None and spec.arch_code in VALIDATED_ARCHES

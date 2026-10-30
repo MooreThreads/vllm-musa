@@ -194,14 +194,18 @@ VLLM_STABLE_CSRC_SOURCES = [
     str(_VLLM_REPO.source_dir / "csrc/attention/merge_attn_states.cu"),
     str(_VLLM_REPO.source_dir / "csrc/sampler.cu"),
     str(_VLLM_REPO.source_dir / "csrc/topk.cu"),
-    str(_VLLM_REPO.source_dir
-        / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"),
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"
+    ),
     # Layernorm+quant fusion kernels (rms_norm_static_fp8_quant,
     # fused_add_rms_norm_static_fp8_quant, rms_norm_dynamic_per_token_quant,
     # rms_norm_per_block_quant): emitted by the rms_quant_fusion compile pass.
     str(_VLLM_REPO.source_dir / "csrc/layernorm_quant_kernels.cu"),
-    str(_VLLM_REPO.source_dir
-        / "csrc/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu"),
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu"
+    ),
     str(_VLLM_REPO.source_dir / "csrc/quantization/activation_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/custom_all_reduce.cu"),
     str(_VLLM_REPO.source_dir / "csrc/minimax_reduce_rms_kernel.cu"),
@@ -268,8 +272,9 @@ EXTRA_LINK_ARGS = [
 # the variable ``torch_musa`` turns into ``--offload-arch``, and on MUSA a wheel
 # from one arch running on another does not fault, it returns wrong numbers.
 #
-# ``torchada.musa.targets`` supplies the per-arch facts (native FP8, FP4,
-# validated), so this file no longer keeps a second copy of that table.
+# ``torchada.musa.targets`` supplies the per-arch hardware facts (native FP8, FP4,
+# the packed 4-bit SQMMA atom), so this file no longer keeps a second copy of that
+# table.
 _device_arch = None
 if torch.musa.is_available():
     try:
@@ -283,6 +288,11 @@ try:
         os.environ.get(ta_build.TARGET_ENV),
         device_arch=_device_arch,
     )
+    # ``-DENABLE_FP8`` is one flag for the whole compilation and this tree compiles
+    # the FP8 sources unconditionally, so a set of arches that disagree is refused
+    # here.  Resolving the set is torchada's job; this policy is ours, which is why
+    # it is a separate call rather than a parameter of ``resolve_targets``.
+    ta_build.uniform_native_fp8(BUILD_TARGETS)
     _declared_arch_list = ta_build.compiler_arch_list(
         os.environ.get(ta_build.COMPILER_ARCH_LIST_ENV), BUILD_TARGETS
     )
@@ -448,7 +458,7 @@ class _CustomBuildExt(BuildExtension):
             MTGPU_TARGETS,
             fp8=ENABLE_FP8,
             fp4=ENABLE_FP4,
-            compiler=_mcc_version_string(),
+            compiler_version=_mcc_version_string(),
             source=MTGPU_TARGET_SOURCE,
         )
         print(f"Wrote MUSA build stamp: {stamp} (target={MTGPU_TARGET})")

@@ -34,6 +34,7 @@ def make_spec(**overrides) -> MusaDeviceSpec:
         total_memory=85804969984,
         l2_cache_size=60 * 1024 * 1024,
         shared_memory_per_block=196608,
+        shared_memory_per_block_optin=196608,
         shared_memory_per_multiprocessor=196608,
         regs_per_multiprocessor=131072,
         max_threads_per_block=1024,
@@ -45,13 +46,14 @@ def make_spec(**overrides) -> MusaDeviceSpec:
     return MusaDeviceSpec(**base)
 
 
-def test_s5000_spec_is_validated_and_has_native_fp8() -> None:
+def test_s5000_spec_has_native_fp8_and_is_a_validated_arch() -> None:
+    """The hardware answer comes from torchada; the validated set from this project."""
     spec = make_spec()
 
-    assert spec.is_validated
     assert spec.supports_native_fp8
-    assert spec.is_validated
-    assert spec.supports_native_fp8
+    assert spec.arch_code in VALIDATED_MUSA_ARCHS
+    # No validation verdict on the shared row: it could not say which kernel was run.
+    assert not hasattr(spec, "is_validated")
 
 
 @pytest.mark.parametrize(
@@ -78,9 +80,8 @@ def test_unvalidated_arch_fails_closed(
         warp_size=128 if arch_code != 310 else 32,
     )
 
-    assert not spec.is_validated
     assert not spec.supports_native_fp8
-    assert not spec.is_validated
+    assert spec.arch_code not in VALIDATED_MUSA_ARCHS
 
 
 def test_arch_code_and_name_derivation() -> None:
@@ -119,7 +120,7 @@ def test_every_capability_question_comes_from_the_table() -> None:
 
     spec = make_spec()
 
-    assert spec.is_validated is True
+    assert spec.arch_code in VALIDATED_MUSA_ARCHS
     assert spec.supports_native_fp8 is True
     assert spec.supports_native_fp4 is False
     assert not hasattr(spec, "supports")
@@ -214,9 +215,10 @@ def test_no_new_capability_literal_comparisons() -> None:
             ):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
 
-    assert not offenders, (
-        "capability literals must be replaced by vllm_musa.device_spec:\n"
-        + "\n".join(offenders)
+    assert (
+        not offenders
+    ), "capability literals must be replaced by vllm_musa.device_spec:\n" + "\n".join(
+        offenders
     )
 
 

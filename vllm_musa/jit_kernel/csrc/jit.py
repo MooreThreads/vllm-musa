@@ -54,7 +54,11 @@ def _build_targets() -> ta_build.BuildTargets:
     stamp cannot disagree about what "the target arch" means.
     """
     raw = next(
-        (os.environ[name] for name in ta_build.JIT_ARCH_LIST_ENVS if os.environ.get(name)),
+        (
+            os.environ[name]
+            for name in ta_build.JIT_ARCH_LIST_ENVS
+            if os.environ.get(name)
+        ),
         None,
     )
     device_arch = None
@@ -82,7 +86,7 @@ def _musa_arch_flags() -> list[str]:
     the output buffer is left untouched), so guessing here trades a loud build
     error for a silent numerics bug.
     """
-    return ta_build.arch_flags(_build_targets().names)
+    return ta_build.mcc_arch_flags(_build_targets().names)
 
 
 def musa_arch_codes() -> list[str]:
@@ -95,9 +99,10 @@ def musa_arch_define(name: str = "__MUSA_ARCH_LIST__") -> str:
 
     The template headers compare this macro against a single ``__MUSA_ARCH__``
     value (``== 310``, ``>= 220``), so it cannot express a fat build; the refusal
-    for a multi-arch selection lives in ``torchada.musa.build.arch_define``.
+    for a multi-arch selection lives in
+    ``torchada.musa.build.single_arch_define``.
     """
-    return ta_build.arch_define(name, targets=_build_targets().names)
+    return ta_build.single_arch_define(name, targets=_build_targets().names)
 
 
 def build_tag() -> str:
@@ -107,7 +112,9 @@ def build_tag() -> str:
     both are in the tag and switching either one must not resolve to an existing
     directory.
     """
-    return ta_build.build_tag(_build_targets().names, compiler=ta_build.mcc_version(_mcc()))
+    return ta_build.build_cache_tag(
+        _build_targets().names, compiler_version=ta_build.mcc_version(_mcc())
+    )
 
 
 def _escape(path: Path) -> str:

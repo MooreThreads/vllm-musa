@@ -26,19 +26,27 @@ def _load_device_guard(musa):
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name in helper_names
     ]
+
     # The guard asks vllm_musa.device_spec for the device facts; provide a fake
     # that resolves them through the injected `musa` namespace so these tests
     # keep asserting *which* device id gets queried.
     @cache
     def get_device_spec(device_id: int):
         major, minor = musa.get_device_capability(device_id)
+        # No `is_validated` on the row any more: the hardware answers here, the
+        # validated-arch policy is vllm_musa.device_spec's, and the guard under test
+        # asks it rather than reading a verdict off the shared table.
         return SimpleNamespace(
             device_capability=(major, minor),
-            is_validated=(major, minor) == (3, 1),
+            arch_code=major * 100 + minor * 10,
         )
 
     class MusaBuildTargetMismatch(RuntimeError):
         """Stand-in for the real class: this fake never raises it."""
+
+    def is_validated_arch(device_id: Optional[int] = None) -> bool:
+        spec = get_device_spec(device_id)
+        return spec.device_capability == (3, 1)
 
     namespace = {
         "Optional": Optional,
@@ -46,6 +54,7 @@ def _load_device_guard(musa):
         "cache": cache,
         "torch": SimpleNamespace(device=object, musa=musa),
         "get_device_spec": get_device_spec,
+        "is_validated_arch": is_validated_arch,
     }
     exec(
         compile(ast.Module(body=helpers, type_ignores=[]), source_path, "exec"),
@@ -76,9 +85,11 @@ def test_min_p_dispatch_keeps_the_validated_contract_guard() -> None:
     assert "and 0 < probs.shape[0] <= _QWEN_MIN_P_MAX_BATCH" in source
     assert "and probs.is_contiguous()" in source
     assert "and _is_validated_musa_device(probs.device)" in source
-    # The arch predicate now lives in vllm_musa/device_spec.py; the guard must
-    # ask the spec rather than compare a capability tuple against a literal.
-    assert "spec.is_validated" in source
+    # The arch predicate now lives in vllm_musa/device_spec.py, over this project's
+    # own validated-arch set; the guard must not compare a capability tuple against a
+    # literal, and must not read a validation verdict from the shared hardware row.
+    assert "is_validated_arch(device_id)" in source
+    assert "spec.is_validated" not in source
     assert "== (3, 1)" not in source
     assert "and _is_supported_musa_generator(generator, probs.device)" in source
     assert "musa_chunked_min_p_sampling_from_probs.default" in source

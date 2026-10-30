@@ -28,7 +28,10 @@ def _setup_reads_the_shared_table() -> bool:
     of that delegation without executing the file.
     """
     source = _SETUP_PY.read_text()
-    return "ta_build.resolve_targets(" in source and "ARCH_BUILD_CAPABILITIES" not in source
+    return (
+        "ta_build.resolve_targets(" in source
+        and "ARCH_BUILD_CAPABILITIES" not in source
+    )
 
 
 class _FakeProps:
@@ -124,7 +127,7 @@ def test_missing_stamp_is_unknown_not_a_mismatch(monkeypatch, spec) -> None:
     device_spec.read_build_stamp.cache_clear()
 
     assert device_spec.read_build_stamp() is None
-    assert spec.is_validated  # the spec was still produced
+    assert spec.arch_code in device_spec.VALIDATED_MUSA_ARCHS  # the spec was produced
 
 
 def test_stamp_without_fp8_warns_but_does_not_fail(stamp, monkeypatch) -> None:
@@ -146,8 +149,11 @@ def _stamp_writer(tmp_path):
     """
     tree = ast.parse(_SETUP_PY.read_text())
     node = next(
-        (n for n in ast.walk(tree)
-         if isinstance(n, ast.FunctionDef) and n.name == "_write_build_stamp"),
+        (
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_write_build_stamp"
+        ),
         None,
     )
     assert node is not None, "_write_build_stamp not found in setup.py"
@@ -229,7 +235,8 @@ def test_stamp_reaches_build_lib_not_only_the_source_tree() -> None:
     """
     tree = ast.parse(_SETUP_PY.read_text())
     build_ext = next(
-        n for n in ast.walk(tree)
+        n
+        for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef) and n.name == "build_extensions"
     )
     destinations = [
@@ -251,7 +258,8 @@ def test_the_stamp_writer_takes_its_destination_as_an_argument() -> None:
     """The destination must be a parameter, not the module's own directory."""
     tree = ast.parse(_SETUP_PY.read_text())
     node = next(
-        n for n in ast.walk(tree)
+        n
+        for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef) and n.name == "_write_build_stamp"
     )
     assert [a.arg for a in node.args.args] == ["dest"], ast.dump(node.args)

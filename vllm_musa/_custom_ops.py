@@ -3,7 +3,7 @@ from typing import Optional, Union
 
 import torch
 
-from vllm_musa.device_spec import MusaBuildTargetMismatch, get_device_spec
+from vllm_musa.device_spec import MusaBuildTargetMismatch, is_validated_arch
 
 _QWEN_MIN_P_VOCABS = (151936, 248320)
 _QWEN_MIN_P_MAX_BATCH = 64
@@ -211,8 +211,10 @@ def _is_validated_musa_device(device: torch.device) -> bool:
         device_id = _musa_device_index(device)
         if device_id is None:
             return False
-        spec = get_device_spec(device_id)
-        return spec is not None and spec.is_validated
+        # This project's validation policy, not torchada's: the shared module reports
+        # the hardware, and which arches these tuned kernels were run on is stated in
+        # `device_spec.VALIDATED_ARCHES`.
+        return is_validated_arch(device_id)
     except MusaBuildTargetMismatch:
         raise
     except Exception:
