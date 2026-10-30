@@ -14,6 +14,18 @@ from pathlib import Path
 import torchada  # noqa: F401
 import torch
 
+try:
+    from torchada.musa import build as ta_build
+except ImportError as exc:  # pragma: no cover - a pre-release install
+    raise RuntimeError(
+        "vllm-musa needs torchada>=0.1.104 (it provides torchada.musa, the shared "
+        "device facts and build stamp). requirements/common.txt pins it, and that "
+        "release has to exist before an index install can resolve it; until then "
+        "install torchada from the branch: "
+        "`pip install -e <torchada checkout> --no-deps --no-build-isolation`. "
+        "Found an older torchada."
+    ) from None
+
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
 
@@ -182,14 +194,18 @@ VLLM_STABLE_CSRC_SOURCES = [
     str(_VLLM_REPO.source_dir / "csrc/attention/merge_attn_states.cu"),
     str(_VLLM_REPO.source_dir / "csrc/sampler.cu"),
     str(_VLLM_REPO.source_dir / "csrc/topk.cu"),
-    str(_VLLM_REPO.source_dir
-        / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"),
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"
+    ),
     # Layernorm+quant fusion kernels (rms_norm_static_fp8_quant,
     # fused_add_rms_norm_static_fp8_quant, rms_norm_dynamic_per_token_quant,
     # rms_norm_per_block_quant): emitted by the rms_quant_fusion compile pass.
     str(_VLLM_REPO.source_dir / "csrc/layernorm_quant_kernels.cu"),
-    str(_VLLM_REPO.source_dir
-        / "csrc/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu"),
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu"
+    ),
     str(_VLLM_REPO.source_dir / "csrc/quantization/activation_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/custom_all_reduce.cu"),
     str(_VLLM_REPO.source_dir / "csrc/minimax_reduce_rms_kernel.cu"),
@@ -246,31 +262,71 @@ EXTRA_LINK_ARGS = [
     "-lmublasLt",
 ]
 
-# Detect MTGPU target architecture
-DEFAULT_MTGPU_TARGET = "mp_31"
-MTGPU_TARGET = os.environ.get("MTGPU_TARGET")
-
-if MTGPU_TARGET:
-    print(f"Using MTGPU_TARGET from environment: {MTGPU_TARGET}")
-else:
-    MTGPU_TARGET = DEFAULT_MTGPU_TARGET
-
-if "MTGPU_TARGET" not in os.environ and torch.musa.is_available():
+# Which arch(es) this wheel targets.
+#
+# ``MTGPU_TARGET`` takes one arch or several (``mp_31`` / ``mp_21,mp_22``).  The
+# rules live in ``torchada.musa.build`` -- the same module that writes the stamp
+# and that a JIT build uses -- because two copies of "which arch is this" is how
+# the stamp and ``--offload-arch`` end up naming different hardware.  In particular
+# a selection that disagrees with ``TORCH_MUSA_ARCH_LIST`` is refused here: that is
+# the variable ``torch_musa`` turns into ``--offload-arch``, and on MUSA a wheel
+# from one arch running on another does not fault, it returns wrong numbers.
+#
+# ``torchada.musa.targets`` supplies the per-arch hardware facts (native FP8, FP4,
+# the packed 4-bit SQMMA atom), so this file no longer keeps a second copy of that
+# table.
+_device_arch = None
+if torch.musa.is_available():
     try:
-        device_props = torch.musa.get_device_properties(0)
-        MTGPU_TARGET = f"mp_{device_props.major}{device_props.minor}"
+        _device_props = torch.musa.get_device_properties(0)
+        _device_arch = f"mp_{_device_props.major}{_device_props.minor}"
     except Exception as e:
         print(f"Warning: Failed to detect GPU properties: {e}")
-elif "MTGPU_TARGET" not in os.environ:
-    print(f"Warning: torch.musa not available. Using default target: {MTGPU_TARGET}")
 
-SUPPORTED_MTGPU_TARGETS = ["mp_22", "mp_31"]
-if MTGPU_TARGET not in SUPPORTED_MTGPU_TARGETS:
-    print(
-        f"Warning: Unsupported GPU architecture '{MTGPU_TARGET}'. "
-        f"Expected one of: {SUPPORTED_MTGPU_TARGETS}"
+try:
+    BUILD_TARGETS = ta_build.resolve_targets(
+        os.environ.get(ta_build.TARGET_ENV),
+        device_arch=_device_arch,
     )
+    # ``-DENABLE_FP8`` is one flag for the whole compilation and this tree compiles
+    # the FP8 sources unconditionally, so a set of arches that disagree is refused
+    # here.  Resolving the set is torchada's job; this policy is ours, which is why
+    # it is a separate call rather than a parameter of ``resolve_targets``.
+    ta_build.uniform_native_fp8(BUILD_TARGETS)
+    _declared_arch_list = ta_build.compiler_arch_list(
+        os.environ.get(ta_build.COMPILER_ARCH_LIST_ENV), BUILD_TARGETS
+    )
+except ta_build.MusaTargetSelectionError as e:
+    print(f"ERROR: {e}")
     sys.exit(1)
+
+MTGPU_TARGETS = list(BUILD_TARGETS.names)
+MTGPU_TARGET = BUILD_TARGETS.display
+MTGPU_TARGET_SOURCE = BUILD_TARGETS.source
+# ``torch_musa``'s extension builder reads this at extension-construction time and
+# turns it into one ``--offload-arch`` per arch, so it must be set before the
+# extensions below are created.  mcc accepts the flag repeatedly and bundles the
+# result into a single __CLANG_OFFLOAD_BUNDLE__, which is the fat binary.
+os.environ[ta_build.COMPILER_ARCH_LIST_ENV] = _declared_arch_list
+
+if MTGPU_TARGET_SOURCE == "environment":
+    print(f"Using MTGPU_TARGET from environment: {MTGPU_TARGET}")
+elif MTGPU_TARGET_SOURCE == "device":
+    print(f"Using MTGPU_TARGET detected on the device: {MTGPU_TARGET}")
+else:
+    # Loud on purpose: this is the one path that picks an arch nobody asked for,
+    # and a wrong arch does not fault on MUSA, it returns wrong numbers.
+    print(
+        f"WARNING: torch.musa is not available, so the build target cannot be "
+        f"derived from a device. Building for the default {MTGPU_TARGET}. "
+        f"Set MTGPU_TARGET explicitly to build for another arch."
+    )
+if BUILD_TARGETS.is_fat:
+    print(
+        f"WARNING: building a fat binary for {MTGPU_TARGET}; every arch gets the "
+        f"same -DENABLE_FP8={BUILD_TARGETS.fp8} and the same tactics."
+    )
+print(f"TORCH_MUSA_ARCH_LIST={_declared_arch_list} (--offload-arch per arch)")
 
 MCC_FLAGS = [
     "-DNDEBUG",
@@ -288,8 +344,14 @@ MCC_FLAGS = [
     "-DUSE_MUSA",
 ]
 
-if MTGPU_TARGET == "mp_31":
+ENABLE_FP8 = BUILD_TARGETS.fp8
+if ENABLE_FP8:
     MCC_FLAGS.append("-DENABLE_FP8")
+
+# No arch has FP4 yet, so there is no flag to add; it is still recorded in the
+# stamp and read back by ``supports_fp4``, which asks both halves like ``fp8``
+# does.  When the first FP4 arch arrives only this block changes.
+ENABLE_FP4 = BUILD_TARGETS.fp4
 
 COMPILE_ARGS = {
     "mcc": MCC_FLAGS,
@@ -360,8 +422,46 @@ EXT_MODULES = [
 ]
 
 
+def _mcc_version_string() -> str:
+    """`mcc --version` as recorded in the build stamp ("unknown" if unreadable).
+
+    ``torchada.musa.build.mcc_version`` anchors on the ``mcc version`` line, since
+    ``mcc --version`` prints the clang base version first; ``VLLM_MUSA_MCC`` still
+    overrides the binary.
+    """
+    return ta_build.mcc_version(os.environ.get("VLLM_MUSA_MCC"))
+
+
 class _CustomBuildExt(BuildExtension):
     """Custom build extension that clones third-party repositories before building."""
+
+    def build_extensions(self):
+        super().build_extensions()
+        # Write to the source tree *and* to build_lib.  `build_py` runs before
+        # `build_ext`, so by the time this runs the package has already been
+        # copied into build/lib and a stamp written only to the source tree
+        # never reaches the wheel -- bdist_wheel packs build/lib.
+        self._write_build_stamp(Path(__file__).parent / "vllm_musa")
+        if self.build_lib:
+            self._write_build_stamp(Path(self.build_lib) / "vllm_musa")
+
+    @staticmethod
+    def _write_build_stamp(dest: Path):
+        """Record the target arch into ``dest`` so the runtime can check it.
+
+        Without this the only symptom of installing a wheel built for another
+        arch is a wrong result: the kernel loads, ``musaDeviceSynchronize``
+        returns success, and the output buffer is left untouched.
+        """
+        stamp = ta_build.write_build_stamp(
+            Path(dest),
+            MTGPU_TARGETS,
+            fp8=ENABLE_FP8,
+            fp4=ENABLE_FP4,
+            compiler_version=_mcc_version_string(),
+            source=MTGPU_TARGET_SOURCE,
+        )
+        print(f"Wrote MUSA build stamp: {stamp} (target={MTGPU_TARGET})")
 
     @staticmethod
     def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):

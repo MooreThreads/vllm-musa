@@ -1,7 +1,27 @@
 """Shared helpers for MUSA TileLang kernels."""
 
-import tilelang
-import torch
+import os
+
+# TileLang keeps its own on-disk cache, and it is the one build cache this package
+# does not name itself.  Point it at an arch-and-compiler-qualified directory --
+# the same tag the ninja-built kernels use -- so a cached TileLang module can never
+# be reused across arches, which on MUSA means silently wrong results rather than a
+# failure.  Set before ``import tilelang`` because the library reads the variable at
+# import time; an explicit TILELANG_CACHE_DIR still wins.
+if not os.environ.get("TILELANG_CACHE_DIR"):
+    try:
+        from vllm_musa.jit_kernel.csrc.jit import build_tag, cache_root
+
+        _tilelang_tag = build_tag()
+    except Exception:  # noqa: BLE001 - no device and no arch list: keep the default
+        # TileLang keys its own cache on the compile target, so its default is still
+        # arch-safe; this default only makes the split explicit and inspectable.
+        _tilelang_tag = None
+    if _tilelang_tag:
+        os.environ["TILELANG_CACHE_DIR"] = str(cache_root() / f"tilelang__{_tilelang_tag}")
+
+import tilelang  # noqa: E402 - must follow the cache-dir default above
+import torch  # noqa: E402
 
 tilelang.set_log_level("WARNING")
 

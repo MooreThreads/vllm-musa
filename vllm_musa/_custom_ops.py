@@ -1,8 +1,9 @@
 import logging
-from functools import cache
 from typing import Optional, Union
 
 import torch
+
+from vllm_musa.device_spec import MusaBuildTargetMismatch, is_validated_arch
 
 _QWEN_MIN_P_VOCABS = (151936, 248320)
 _QWEN_MIN_P_MAX_BATCH = 64
@@ -204,20 +205,18 @@ def _musa_device_index(device: torch.device) -> Optional[int]:
         return None
 
 
-@cache
-def _get_musa_device_capability(device_id: int) -> tuple[int, int]:
-    """Query one logical MUSA device and cache successful results."""
-    return torch.musa.get_device_capability(device_id)
-
-
 def _is_validated_musa_device(device: torch.device) -> bool:
-    """Return whether the tensor's device is the validated S5000 target."""
+    """Return whether the tensor's device is a validated MUSA target."""
     try:
         device_id = _musa_device_index(device)
         if device_id is None:
             return False
-        # torch.musa accepts visible logical IDs, matching torch.device.index.
-        return _get_musa_device_capability(device_id) == (3, 1)
+        # This project's validation policy, not torchada's: the shared module reports
+        # the hardware, and which arches these tuned kernels were run on is stated in
+        # `device_spec.VALIDATED_ARCHES`.
+        return is_validated_arch(device_id)
+    except MusaBuildTargetMismatch:
+        raise
     except Exception:
         # A device query can fail while the platform is still initializing.
         # Falling back is safer than selecting an architecture-specialized op.

@@ -221,10 +221,30 @@ FROM devel AS vllm_musa_deps
 # These architecture selectors are consumed only after the MUSA Python stack
 # is installed. Keep them out of base/apt/devel, but retain them in the final
 # image because the vllm-musa JIT uses MATE_MUSA_ARCH_LIST at runtime.
-# torch_musa uses "31"; MATE parses dotted arch tokens such as "3.1".
-ENV MTGPU_TARGET=mp_31 \
-    TORCH_MUSA_ARCH_LIST=31 \
-    MATE_MUSA_ARCH_LIST=3.1
+#
+# The three spellings below describe the SAME SET of arches and must agree; they
+# differ only because three consumers parse them differently:
+#   MTGPU_TARGET          setup.py / vllm_musa _C build   -> "mp_31" or "mp_31,mp_22"
+#   TORCH_MUSA_ARCH_LIST  torch_musa                      -> "31"   or "31;22"
+#   MATE_MUSA_ARCH_LIST   MATE JIT                        -> "3.1"  or "3.1;2.2"
+# A list builds a fat binary (one --offload-arch per arch); the image ships one
+# arch because that is what has been validated, and the plumbing is there for
+# when it is not.  Override all three together (docker build --build-arg ...);
+# the RUN below refuses to build an image whose selectors disagree, because a
+# mismatched set builds for one arch and JIT-compiles for another, and a cubin
+# for the wrong arch does not fault on MUSA - it returns wrong numbers.
+ARG MTGPU_TARGET=mp_31
+ARG TORCH_MUSA_ARCH_LIST=31
+ARG MATE_MUSA_ARCH_LIST=3.1
+ENV MTGPU_TARGET=${MTGPU_TARGET} \
+    TORCH_MUSA_ARCH_LIST=${TORCH_MUSA_ARCH_LIST} \
+    MATE_MUSA_ARCH_LIST=${MATE_MUSA_ARCH_LIST}
+
+# The check itself is a script, so it can be run (and tested) outside the build:
+# refusing a disagreeing set is worth being able to check on the host that is about
+# to build, not only inside a layer that fails ten minutes in.
+COPY docker/verify_musa_arch.sh /usr/local/bin/verify-musa-arch
+RUN bash /usr/local/bin/verify-musa-arch
 
 # vllm-musa Python deps, installed before the source copy so the layers cache.
 # Split across two indexes (per the MUSA release_5.2.0 wheel guide):

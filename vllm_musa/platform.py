@@ -8,7 +8,7 @@ import os
 from collections.abc import Callable
 from functools import cache, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
 from packaging.version import Version
 
@@ -954,7 +954,59 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def supports_fp8(cls) -> bool:
-        return cls.has_device_capability((3, 1))
+        # Two questions, asked in order.  The arch: does it have the instructions
+        # (an explicit set, never a capability ordering)?  The wheel: was it built
+        # with `-DENABLE_FP8`, which the stamp records and the arch cannot imply?
+        # Today `resolve_targets` derives that flag from the same table, so on
+        # mp_31 the stamp half is always True -- it is kept because it is the only
+        # record of what the .so actually compiled, and it is what stops a
+        # bf16-only build from advertising FP8 kernels it does not contain.
+        from vllm_musa.device_spec import current_device_spec, read_build_stamp
+
+        spec = current_device_spec()
+        if spec is None or not spec.supports_native_fp8:
+            return False
+        stamp = read_build_stamp()
+        return True if stamp is None else bool(stamp.fp8)
+
+    @classmethod
+    def supports_fp4(cls) -> bool:
+        """Whether the device executes FP4 arithmetic. No MUSA arch does, S5000 included.
+
+        Named after ``supports_fp8`` and answered from the explicit empty set in
+        ``torchada.musa.targets``, so this stays ``False`` until an arch actually has
+        the instructions.  It is deliberately *not* ``supports_mx()``: MX is upstream's
+        block-scaled-type hook, and an MX FP4 checkpoint already runs here through
+        dequantisation on any arch, so answering from that would advertise FP4 kernels
+        that do not exist.
+        """
+        from vllm_musa.device_spec import current_device_spec, read_build_stamp
+
+        spec = current_device_spec()
+        if spec is None or not spec.supports_native_fp4:
+            return False
+        stamp = read_build_stamp()
+        return True if stamp is None else bool(stamp.fp4)
+
+    # --- MUSA-only helpers -------------------------------------------------
+    # Not part of the upstream ``Platform`` interface: nothing above calls these,
+    # and upstream has no equivalent.  They live here because the call sites are in
+    # this package's kernels and passes, and they read as questions the platform
+    # answers (see ``supports_fp8`` / ``supports_fp4`` above).
+
+    @classmethod
+    def supports_tuned_kernels(cls, device_id: Optional[int] = None) -> bool:
+        """Whether the tuned kernels have been validated on this device's arch.
+
+        An identity check against the validated-arch set, never an ordering: MUSA's
+        axes do not order (warp width, FP8 and the multiprocessor count all move
+        independently).  ``device_id=None`` asks about the current device, the same
+        one ``supports_fp8()`` above asks about, so two gates in one process cannot
+        answer for different GPUs on a heterogeneous node.
+        """
+        from vllm_musa.device_spec import is_validated_arch
+
+        return is_validated_arch(device_id)
 
     @classmethod
     def use_custom_allreduce(cls) -> bool:

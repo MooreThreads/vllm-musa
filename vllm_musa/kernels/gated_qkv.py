@@ -172,7 +172,7 @@ def _supports_gated_qkv(
         and mrope_interleaved
         and is_neox_style
         and weight_offset == 1.0
-        and current_platform.is_device_capability((3, 1), device_id=device_id)
+        and current_platform.supports_tuned_kernels(device_id)
         and packed_qkv.dtype == torch.bfloat16
         and q_weight.dtype == packed_qkv.dtype
         and k_weight.dtype == packed_qkv.dtype

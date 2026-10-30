@@ -169,6 +169,53 @@ def _warmup_paged_mqa_logits_metadata(model: torch.nn.Module) -> None:
         get_paged_mqa_logits_metadata_module(rows)
 
 
+def _rotary_dim(hf_config: object | None = None) -> int | None:
+    """The rotary width the kernel will actually receive, or ``None``.
+
+    Not ``head_dim``: a partial-rotary model (Qwen3.5, Qwen3-Next) reports
+    ``head_dim=256`` with ``partial_rotary_factor=0.25`` and rotates only 64
+    lanes, and ``rope._store_hint`` keys on the rotated width.  Using
+    ``head_dim`` there would skip ``stcg`` for exactly the models that select
+    it, and the build would happen mid-serving after all.
+
+    Only used to skip a store-hint variant the auto policy can never pick; an
+    unknown width keeps both, which is always safe.
+    """
+    try:
+        if hf_config is None:
+            from vllm.config import get_current_vllm_config
+
+            hf_config = get_current_vllm_config().model_config.hf_config
+        head_dim = int(hf_config.head_dim)
+    except Exception:  # noqa: BLE001 - optional acceleration hint
+        return None
+    factor = getattr(hf_config, "partial_rotary_factor", 1.0) or 1.0
+    try:
+        return int(head_dim * float(factor))
+    except (TypeError, ValueError):  # noqa: BLE001 - unusable factor
+        return None
+
+
+def _warmup_rope_store_hints() -> None:
+    """Build every rotary-embedding store-hint variant before serving.
+
+    The cache-store class is chosen from the *runtime* token count
+    (``rope._store_hint``: ``stcg`` for 512..2048 tokens, ``stwb`` otherwise) and
+    is a compile-time constant in the module name, so a server that only ever
+    saw short batches builds the other variant the first time a batch crosses
+    512 tokens - an mcc build in the middle of serving.  Both are built here,
+    ahead of graph capture, and cached afterwards.
+    """
+    try:
+        from vllm_musa.jit_kernel.csrc.rope import prewarm_rope_modules
+
+        built = prewarm_rope_modules(_rotary_dim())
+    except Exception as exc:  # noqa: BLE001 - warmup must not block serving
+        logger.warning("Rotary-embedding warmup skipped: %s", exc)
+        return
+    logger.info("Built MUSA rotary-embedding kernels: %s", ", ".join(built))
+
+
 _upstream_deep_gemm_warmup = (
     vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup
 )
@@ -178,6 +225,7 @@ def deep_gemm_warmup(model: torch.nn.Module, max_tokens: int, pbar=None):
     _upstream_deep_gemm_warmup(model, max_tokens)
     _warmup_bf16_grouped_moe(model, max_tokens)
     _warmup_paged_mqa_logits_metadata(model)
+    _warmup_rope_store_hints()
 
 
 vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup = deep_gemm_warmup
