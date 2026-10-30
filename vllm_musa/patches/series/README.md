@@ -19,7 +19,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **193 patches**, plus **3 upstream entries** in `upstream/`.
+Currently **194 patches**, plus **3 upstream entries** in `upstream/`.
 Graph capture and graph-memory profiling switch the caching allocator to
 ordinary segments, because expandable segments cannot grow during stream
 capture, and replay the full allocator config so other allocator knobs are
@@ -107,6 +107,11 @@ backported DeepSeek-V4 test spec field to the pin's `compress_ratio`.
 The attention page-size fastpath patch keeps Mamba pool admission and GDN
 metadata; see `0192-MUSA-optimize-hybrid-attention-page-size-fastpath.patch`
 for the aligned block-table updates.
+The DeepSeek-OCR entry
+`0194-MUSA-DeepSeek-OCR-model-backend-priority.patch` selects `TRITON_ATTN`
+during model initialization on MUSA when `mm_encoder_attn_backend` is unset.
+Explicit user choices remain authoritative; the platform selector and other
+models retain their existing behavior.
 The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime

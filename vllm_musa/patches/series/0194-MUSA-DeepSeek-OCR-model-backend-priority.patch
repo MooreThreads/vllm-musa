@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 30 Oct 2026 10:00:00 +0800
+Subject: [PATCH] MUSA: select DeepSeek-OCR vision backend in model
+
+Keep the backend choice with the DeepSeek-OCR vision model, following the
+model-local vision backend initialization used by Qwen2-VL. An explicit
+multimodal backend remains authoritative; on MUSA the model defaults its
+FP32 vision path to Triton while other models keep the shared selector.
+
+---
+ vllm/model_executor/models/deepseek_ocr.py | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+--- a/vllm/model_executor/models/deepseek_ocr.py	2026-10-30 09:03:25.408782950 +0800
++++ b/vllm/model_executor/models/deepseek_ocr.py	2026-10-30 09:57:26.691290224 +0800
+@@ -63,6 +63,7 @@
+     AdapterLogitsProcessor,
+     RequestLogitsProcessor,
+ )
++from vllm.v1.attention.backends.registry import AttentionBackendEnum
+ from vllm.v1.worker.encoder_cudagraph_defs import (
+     EncoderCudaGraphCaptureInputs,
+     EncoderCudaGraphConfig,
+@@ -73,6 +74,7 @@
+
+ from .deepencoder import DeepCLIPVisionTransformer, build_sam_vit_b
+ from .deepseek_vl2 import MlpProjector
++from .vision import get_vit_attn_backend
+
+ # The image token id may be various
+ _IMAGE_TOKEN = "<image>"
+@@ -427,6 +429,25 @@
+                 projection_dim=512,
+                 layer_norm_eps=1e-5,
+             )
++            head_size = (
++                clip_vision_config.hidden_size
++                // clip_vision_config.num_attention_heads
++            )
++            if (
++                _is_musa_runtime()
++                and multimodal_config.mm_encoder_attn_backend is None
++            ):
++                multimodal_config.mm_encoder_attn_backend = (
++                    AttentionBackendEnum.TRITON_ATTN
++                )
++            self.attn_backend = get_vit_attn_backend(
++                head_size=head_size,
++                dtype=(
++                    torch.float32
++                    if _is_musa_runtime()
++                    else torch.get_default_dtype()
++                ),
++            )
+             self.vision_model = DeepCLIPVisionTransformer(
+                 config=clip_vision_config,
+                 quant_config=quant_config,
