@@ -73,7 +73,8 @@ def test_report(ms, capsys):
 def test_report_metadata_and_gate_rejects_stale_metadata(ms, capsys, monkeypatch):
     assert ms.main(["report", "--metadata"]) == 0
     output = capsys.readouterr().out
-    assert "208 patches" in output
+    patch_count = len(list((ROOT / "vllm_musa" / "patches" / "series").glob("*.patch")))
+    assert f"{patch_count} patches" in output
     assert "24 legacy omissions" in output
     assert "not pass claims" in output
 

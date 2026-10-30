@@ -41,8 +41,8 @@ that ancestry order but combines only changes that implement one independently
 maintainable feature: custom all-reduce (`0037`), dedicated Mamba pools
 (`0078`), rejection-sampler scalarization (`0111`), and DeepSeek-V4 FP8 expert
 dtype/scale resolution (`0134`). Eight v0.32 native/compatibility adaptations
-follow (`0163`–`0170`), then 38 new or updated v0.32 features
-(`0171`–`0208`). The original cross-version
+follow (`0163`–`0170`), then 39 new or updated v0.32 features
+(`0171`–`0209`). The original cross-version
 DeepSeek-V4/V4.1 aux-stream patch stays in the new group because its v0.28
 segment depends on later v0.32 attention changes; old `0110` remains in the
 legacy group. Old `0137` (Mooncake P/D dedicated Mamba pools) and `0192`
@@ -68,9 +68,9 @@ intermediate patch has its own entry. This records the final v0.32 source
 result, not equivalence across all v0.28 runtime paths.
 
 The 24 old numbers without their own entry are accounted for below. The
-comparison is against the pinned vLLM tree after all 208 patches, not a
-model-level regression. “Folded” identifies the owner of the final source
-change, not proof of equivalent runtime behavior. A blocked/unverified row is
+comparison is against the pinned vLLM tree after the original 208-patch
+baseline, not a model-level regression. “Folded” identifies the owner of the
+final source change, not proof of equivalent runtime behavior. A blocked/unverified row is
 not a canceled feature and must not be restored verbatim without an adapted
 contract and regression.
 
@@ -321,14 +321,24 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0206-MUSA-size-the-dedicated-Mamba-pool-per-align-mode-sn.patch` | v0.32 upstream update | size the dedicated Mamba pool per align-mode snapshot |
 | `0207-MUSA-optimize-hybrid-attention-page-size-fastpath.patch` | v0.32 upstream update | optimize hybrid attention page-size fastpath |
 | `0208-MUSA-handle-expandable-segments-around-graph-capture.patch` | v0.32 upstream update | handle expandable segments around graph capture |
+| `0209-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch` | v0.28 0194 follow-up | DeepSeek-OCR defaults to Triton on MUSA only when no encoder backend is configured. All explicit backend choices and non-MUSA behavior are preserved. |
 
-Currently **208 patches** and **0 upstream entries** in `upstream/`.
+Currently **209 patches** and **0 upstream entries** in `upstream/`.
 
-The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
-vLLM pin. Independent application of upstream's original 58-patch chain and
-this 208-patch chain gives tree `74029b710d1a8d654a4407401a7947a66a81d1b6`.
-This is source equivalence, not a MUSA runtime-readiness claim. Offline replay,
+The original 208-patch baseline was rebased onto vllm-musa `a1153f9f` with
+the same immutable vLLM pin. Independent application of upstream's original
+58-patch chain and that baseline gave tree
+`74029b710d1a8d654a4407401a7947a66a81d1b6`. This historical source-equivalence
+result predates `0209` and is not a MUSA runtime-readiness claim. Offline replay,
 round-trip, metadata and source-contract validation must be repeated after edits.
+
+`0209` applies after `0117` and sets the encoder backend in
+`DeepseekOCRForCausalLM.__init__` before constructing the vision tower, only
+when `mm_encoder_attn_backend` is unset on MUSA. Explicit choices, including
+`FLASH_ATTN`, are not overridden or rejected by this model patch. It retains
+`0117`'s FP32 vision conversion and delegates backend selection and
+logging to the existing `MMEncoderAttention` path. It does not add another
+ViT selector call or change platform-wide policy.
 
 The round-trip holder is produced by applying this exact series to a clean
 checkout at `VLLM_COMMIT`; an already-patched v0.32 checkout with a different
