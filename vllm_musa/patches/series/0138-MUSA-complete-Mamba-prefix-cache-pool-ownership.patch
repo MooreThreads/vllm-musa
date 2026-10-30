@@ -7,11 +7,11 @@ Subject: [PATCH] MUSA: complete Mamba prefix-cache pool ownership
  tests/v1/core/test_prefix_caching.py         | 105 ++++++++++++++++
  vllm/v1/core/block_pool.py                   |  12 +-
  vllm/v1/core/kv_cache_coordinator.py         | 122 ++++++++++++++++++-
- vllm/v1/core/kv_cache_manager.py             |  82 ++++++++++---
+ vllm/v1/core/kv_cache_manager.py             | 120 +++++++++++++++---
  vllm/v1/core/kv_cache_utils.py               |  70 ++++++++---
- vllm/v1/core/sched/scheduler.py              |   4 +-
+ vllm/v1/core/sched/scheduler.py              |  35 +++++-
  vllm/v1/core/single_type_kv_cache_manager.py |  38 +++++-
- 7 files changed, 387 insertions(+), 46 deletions(-)
+ 7 files changed, 456 insertions(+), 46 deletions(-)
 
 diff --git a/tests/v1/core/test_prefix_caching.py b/tests/v1/core/test_prefix_caching.py
 index 13ed7c7b9d..ece9b776fa 100644
@@ -312,7 +312,7 @@ index bf9c8d5ac5..4cee2663dd 100644
          self,
          request_id: str,
 diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
-index 44097c3da2..c64f40e15f 100644
+index 44097c3da2..f15791f52b 100644
 --- a/vllm/v1/core/kv_cache_manager.py
 +++ b/vllm/v1/core/kv_cache_manager.py
 @@ -2,7 +2,7 @@
@@ -324,7 +324,26 @@ index 44097c3da2..c64f40e15f 100644
  from dataclasses import dataclass
  from typing import Literal, overload
  
-@@ -344,6 +344,51 @@ class KVCacheManager:
+@@ -132,6 +132,7 @@ class KVCacheManager:
+         pcp_world_size: int = 1,
+         metrics_collector: KVCacheMetricsCollector | None = None,
+         watermark: float = 0.0,
++        admission_fastpath: bool = False,
+     ) -> None:
+         self.max_model_len = max_model_len
+         # When unset, fall back to `max_model_len` so the recycling-aware cap
+@@ -172,6 +173,10 @@ class KVCacheManager:
+         # admitting waiting/preempted requests, to avoid frequent preemptions.
+         assert watermark >= 0.0, "watermark must be non-negative"
+         self.watermark_blocks = int(watermark * kv_cache_config.num_blocks)
++        # MUSA: model-gated fast path for the per-pool admission gate.
++        # Off unless the optimization contract whitelists this model, so
++        # every other model keeps the original admission behaviour.
++        self._admission_fastpath = admission_fastpath
+         self.kv_cache_event_metadata = tuple(
+             (
+                 get_kv_cache_spec_kind(group.kv_cache_spec).value,
+@@ -344,6 +349,84 @@ class KVCacheManager:
          # Per-group lookups do not detect an uncached shared prefix (boundary 0).
          return blocks, num_local, 0, min(per_group_hits) < num_local
  
@@ -349,6 +368,39 @@ index 44097c3da2..c64f40e15f 100644
 +        Mamba pool returns ``None`` (scheduler backpressure) instead of
 +        raising from ``BlockPool.get_new_blocks``.
 +        """
++        # Skip the per-pool requirement computation when this request
++        # provably allocates no new block: no pool can then be exhausted and
++        # only the reserved+watermark headroom on the main pool still matters.
++        # Requests with fresh prefix-cache hits, external (disaggregated) KV,
++        # partial hits or state blocks reserved for speculative decoding use
++        # extra allocation rules and keep the exact path.
++        managers = self.coordinator.single_type_managers
++        if (
++            self._admission_fastpath
++            and not any(new_computed_blocks)
++            and total_computed_tokens == num_local_computed_tokens
++            and all(request_id in m.req_to_blocks for m in managers)
++        ):
++            # Align-mode Mamba managers size from ``num_tokens_main_model``,
++            # and speculative state blocks and partial hits can add blocks on
++            # top of ``cdiv(tokens, block_size)``, so use the upper bound.
++            tokens = max(num_tokens, num_tokens_main_model)
++            if all(
++                cdiv(tokens, m.block_size)
++                + cdiv(num_encoder_tokens, m.block_size)
++                + getattr(m, "num_speculative_blocks", 0)
++                + (
++                    1
++                    if request_id in getattr(m, "_partial_hit_reqs", {})
++                    else 0
++                )
++                <= len(m.req_to_blocks[request_id])
++                for m in managers
++            ):
++                return self.block_pool.get_num_free_blocks() >= (
++                    reserved_blocks + watermark_blocks
++                )
++
 +        for pool, required_blocks in (
 +            self.coordinator.get_num_blocks_to_allocate_by_pool(
 +                request_id=request_id,
@@ -376,7 +428,7 @@ index 44097c3da2..c64f40e15f 100644
      def allocate_slots(
          self,
          request: Request,
-@@ -476,7 +521,7 @@ class KVCacheManager:
+@@ -476,7 +559,7 @@ class KVCacheManager:
              # First check and fail if the full request sequence won't fit.
              full_num_tokens = min(request.num_tokens, self.max_model_len)
  
@@ -385,7 +437,7 @@ index 44097c3da2..c64f40e15f 100644
                  request_id=request.request_id,
                  num_tokens=full_num_tokens,
                  new_computed_blocks=new_computed_block_list,
-@@ -485,9 +530,9 @@ class KVCacheManager:
+@@ -485,9 +568,9 @@ class KVCacheManager:
                  num_local_computed_tokens=num_local_computed_tokens,
                  num_tokens_main_model=full_num_tokens,
                  apply_admission_cap=True,
@@ -398,7 +450,7 @@ index 44097c3da2..c64f40e15f 100644
                  return None
  
          num_tokens_main_model = total_computed_tokens + num_new_tokens
-@@ -510,7 +555,9 @@ class KVCacheManager:
+@@ -510,7 +593,9 @@ class KVCacheManager:
              num_prompt_tokens=request.num_prompt_tokens,
          )
  
@@ -409,7 +461,7 @@ index 44097c3da2..c64f40e15f 100644
              request_id=request.request_id,
              num_tokens=num_tokens_need_slot,
              new_computed_blocks=new_computed_block_list,
-@@ -519,13 +566,10 @@ class KVCacheManager:
+@@ -519,13 +604,10 @@ class KVCacheManager:
              + num_external_computed_tokens,
              num_local_computed_tokens=num_local_computed_tokens,
              num_tokens_main_model=num_tokens_main_model,
@@ -427,7 +479,7 @@ index 44097c3da2..c64f40e15f 100644
              # Cannot allocate new blocks
              return None
  
-@@ -577,7 +621,7 @@ class KVCacheManager:
+@@ -577,7 +659,7 @@ class KVCacheManager:
          """
          pins = self._partial_tail_pins.pop(request.request_id, None)
          if pins:
@@ -436,7 +488,7 @@ index 44097c3da2..c64f40e15f 100644
          self.coordinator.free(request.request_id)
  
      def remove_skipped_blocks(
-@@ -619,13 +663,17 @@ class KVCacheManager:
+@@ -619,13 +701,17 @@ class KVCacheManager:
              blocks = pins + blocks
          return blocks
  
@@ -455,7 +507,7 @@ index 44097c3da2..c64f40e15f 100644
  
      def reset_prefix_cache(self) -> bool:
          """Reset prefix cache. This function may be used in RLHF
-@@ -636,7 +684,7 @@ class KVCacheManager:
+@@ -636,7 +722,7 @@ class KVCacheManager:
              bool: True if the prefix cache is successfully reset,
              False otherwise.
          """
@@ -464,7 +516,7 @@ index 44097c3da2..c64f40e15f 100644
              return False
          if self.log_stats:
              assert self.prefix_cache_stats is not None
-@@ -875,7 +923,7 @@ class KVCacheManager:
+@@ -875,7 +961,7 @@ class KVCacheManager:
                  block,
                  boundary_tokens,
              ) in mgr.take_pending_partial_tail_offloads():
@@ -569,10 +621,55 @@ index ea87e17bdb..c7dff18cd7 100644
          mamba_num_blocks = (
              vllm_config.scheduler_config.max_num_seqs
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index e4a2132866..f4aa2d26f7 100644
+index e4a2132866..bbd142ace6 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
-@@ -2448,7 +2448,7 @@ class Scheduler(SchedulerInterface):
+@@ -274,6 +274,36 @@ class Scheduler(SchedulerInterface):
+         if hash_block_size is None:
+             hash_block_size = block_size
+         self.hash_block_size = hash_block_size
++        # MUSA: the hybrid-KV admission fast path is only enabled for the
++        # models the optimization contract whitelists (Qwen3.5-0.8B/2B).
++        try:
++            from vllm_musa.optimization_contract import (
++                OptimizationFeature,
++                resolve_optimization_contract,
++            )
++
++            _admission_fastpath = resolve_optimization_contract(
++                vllm_config
++            ).prefers(OptimizationFeature.QWEN35_ADMISSION_FASTPATH)
++        except ImportError:
++            # Pure-upstream tree: vllm_musa is not installed at all.
++            logger.warning(
++                "MUSA hybrid admission fast path disabled: "
++                "vllm_musa optimization contract is not importable"
++            )
++            _admission_fastpath = False
++        except Exception as exc:
++            # vllm_musa is present but the contract could not be resolved.
++            logger.warning(
++                "MUSA hybrid admission fast path disabled: "
++                "optimization contract resolution failed (%s: %s)",
++                type(exc).__name__,
++                exc,
++            )
++            _admission_fastpath = False
++        logger.info(
++            "MUSA hybrid admission fast path enabled=%s", _admission_fastpath
++        )
+         self.kv_cache_manager = KVCacheManager(
+             kv_cache_config=kv_cache_config,
+             max_model_len=self.max_model_len,
+@@ -289,6 +319,7 @@ class Scheduler(SchedulerInterface):
+             hash_block_size=hash_block_size,
+             metrics_collector=self.kv_metrics_collector,
+             watermark=self.scheduler_config.watermark,
++            admission_fastpath=_admission_fastpath,
+         )
+         # Bind GPU block pool to the KV connector. This must happen after
+         # kv_cache_manager is constructed so block_pool is available.
+@@ -2448,7 +2479,7 @@ class Scheduler(SchedulerInterface):
          pool while the step that runs the copy may still be in flight.
          """
          if not self.defer_block_free or fence_seq <= self.processed_step_seq:
@@ -581,7 +678,7 @@ index e4a2132866..f4aa2d26f7 100644
              return
          self.deferred_frees.append((fence_seq, blocks[::-1]))
  
-@@ -2465,7 +2465,7 @@ class Scheduler(SchedulerInterface):
+@@ -2465,7 +2496,7 @@ class Scheduler(SchedulerInterface):
                  break
              _, blocks = self.deferred_frees.popleft()
              # Free in reverse order so that the tail blocks are evicted first.

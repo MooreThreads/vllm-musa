@@ -246,6 +246,18 @@ def _qwen3_dense_fp8_fusions_preferred(
     )
 
 
+_QWEN35_ADMISSION_FASTPATH_MODELS = frozenset(
+    {"qwen3.5-0.8b", "qwen3.5-2b"}
+)
+
+
+def _qwen35_admission_fastpath_preferred(model: ModelSignature) -> bool:
+    return (
+        model.family is ModelFamily.QWEN35_36
+        and model.model_name in _QWEN35_ADMISSION_FASTPATH_MODELS
+    )
+
+
 def _qwen35_gdn_prefill_preferred(
     model: ModelSignature,
     execution: ExecutionSignature,
@@ -321,6 +333,8 @@ def resolve_qwen_contract(
 
     model = replace(model, family=family, role=role)
     preferred: set[OptimizationFeature] = set()
+    if _qwen35_admission_fastpath_preferred(model):
+        preferred.add(OptimizationFeature.QWEN35_ADMISSION_FASTPATH)
     if _has_architecture(model, QWEN_V2_SAMPLING_ARCHITECTURES):
         preferred.add(OptimizationFeature.QWEN_V2_SAMPLING)
     if (
