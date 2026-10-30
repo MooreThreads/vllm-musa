@@ -9,9 +9,9 @@ Subject: [PATCH] MUSA: complete Mamba prefix-cache pool ownership
  vllm/v1/core/kv_cache_coordinator.py         | 122 ++++++++++++++++++-
  vllm/v1/core/kv_cache_manager.py             | 120 +++++++++++++++---
  vllm/v1/core/kv_cache_utils.py               |  70 ++++++++---
- vllm/v1/core/sched/scheduler.py              |  21 +++-
+ vllm/v1/core/sched/scheduler.py              |  35 +++++-
  vllm/v1/core/single_type_kv_cache_manager.py |  38 +++++-
- 7 files changed, 442 insertions(+), 46 deletions(-)
+ 7 files changed, 456 insertions(+), 46 deletions(-)
 
 diff --git a/tests/v1/core/test_prefix_caching.py b/tests/v1/core/test_prefix_caching.py
 index 13ed7c7b9d..ece9b776fa 100644
@@ -621,10 +621,10 @@ index ea87e17bdb..c7dff18cd7 100644
          mamba_num_blocks = (
              vllm_config.scheduler_config.max_num_seqs
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index e4a2132866..ee48377783 100644
+index e4a2132866..bbd142ace6 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
-@@ -274,6 +274,22 @@ class Scheduler(SchedulerInterface):
+@@ -274,6 +274,36 @@ class Scheduler(SchedulerInterface):
          if hash_block_size is None:
              hash_block_size = block_size
          self.hash_block_size = hash_block_size
@@ -639,7 +639,21 @@ index e4a2132866..ee48377783 100644
 +            _admission_fastpath = resolve_optimization_contract(
 +                vllm_config
 +            ).prefers(OptimizationFeature.QWEN35_ADMISSION_FASTPATH)
-+        except Exception:  # pure-upstream tree, or contract unavailable
++        except ImportError:
++            # Pure-upstream tree: vllm_musa is not installed at all.
++            logger.warning(
++                "MUSA hybrid admission fast path disabled: "
++                "vllm_musa optimization contract is not importable"
++            )
++            _admission_fastpath = False
++        except Exception as exc:
++            # vllm_musa is present but the contract could not be resolved.
++            logger.warning(
++                "MUSA hybrid admission fast path disabled: "
++                "optimization contract resolution failed (%s: %s)",
++                type(exc).__name__,
++                exc,
++            )
 +            _admission_fastpath = False
 +        logger.info(
 +            "MUSA hybrid admission fast path enabled=%s", _admission_fastpath
@@ -647,7 +661,7 @@ index e4a2132866..ee48377783 100644
          self.kv_cache_manager = KVCacheManager(
              kv_cache_config=kv_cache_config,
              max_model_len=self.max_model_len,
-@@ -289,6 +305,7 @@ class Scheduler(SchedulerInterface):
+@@ -289,6 +319,7 @@ class Scheduler(SchedulerInterface):
              hash_block_size=hash_block_size,
              metrics_collector=self.kv_metrics_collector,
              watermark=self.scheduler_config.watermark,
@@ -655,7 +669,7 @@ index e4a2132866..ee48377783 100644
          )
          # Bind GPU block pool to the KV connector. This must happen after
          # kv_cache_manager is constructed so block_pool is available.
-@@ -2448,7 +2465,7 @@ class Scheduler(SchedulerInterface):
+@@ -2448,7 +2479,7 @@ class Scheduler(SchedulerInterface):
          pool while the step that runs the copy may still be in flight.
          """
          if not self.defer_block_free or fence_seq <= self.processed_step_seq:
@@ -664,7 +678,7 @@ index e4a2132866..ee48377783 100644
              return
          self.deferred_frees.append((fence_seq, blocks[::-1]))
  
-@@ -2465,7 +2482,7 @@ class Scheduler(SchedulerInterface):
+@@ -2465,7 +2496,7 @@ class Scheduler(SchedulerInterface):
                  break
              _, blocks = self.deferred_frees.popleft()
              # Free in reverse order so that the tail blocks are evicted first.
