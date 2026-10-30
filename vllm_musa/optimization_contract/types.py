@@ -65,6 +65,7 @@ class OptimizationFeature(str, Enum):
     QWEN_V2_GUMBEL = "qwen.v2_gumbel"
     QWEN_TP_LOGITS_IPC_GATHER = "qwen.tp_logits_ipc_gather"
     QWEN_TP4_SHARDED_GUMBEL = "qwen.tp4_sharded_gumbel"
+    QWEN35_ADMISSION_FASTPATH = "qwen3.5_3.6.admission_fastpath"
     QWEN35_SHARED_EXPERT_FOLD = "qwen3.5_3.6.shared_expert_fold"
     QWEN35_INTERLEAVED_MROPE_QK = "qwen3.5_3.6.interleaved_mrope_qk"
     QWEN35_VISION_ROTARY_BF16 = "qwen3.5_3.6.vision_rotary_bf16"
@@ -107,6 +108,7 @@ class ModelSignature:
     index_topk: int | None = None
     quant_block_shape: tuple[int, ...] | None = None
     is_hybrid: bool | None = None
+    model_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

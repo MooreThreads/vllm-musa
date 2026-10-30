@@ -26,6 +26,13 @@ def _normalize_name(value: Any) -> str | None:
     return str(value).lower().split(".")[-1]
 
 
+def _model_name(model_config: Any) -> str | None:
+    value = getattr(model_config, "model", None)
+    if value is None:
+        return None
+    return str(value).rstrip("/").rsplit("/", 1)[-1].casefold()
+
+
 def _int_tuple(value: Any) -> tuple[int, ...] | None:
     if not isinstance(value, (list, tuple)) or not value:
         return None
@@ -208,6 +215,7 @@ def _model_signature(model_config: Any, vllm_config: Any | None) -> ModelSignatu
         index_topk=_int_attr(text_config, "index_topk"),
         quant_block_shape=quant_block_shape,
         is_hybrid=is_hybrid if isinstance(is_hybrid, bool) else None,
+        model_name=_model_name(model_config),
     )
 
 
