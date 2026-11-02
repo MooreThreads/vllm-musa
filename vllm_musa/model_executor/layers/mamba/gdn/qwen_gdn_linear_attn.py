@@ -39,6 +39,26 @@ _MATE_GDN_DECODE_HAS_OUTPUT = (
 )
 
 
+def _mate_state_pool_zero_copy(state: torch.Tensor) -> bool:
+    """Whether mate can read and update this VK state pool in place.
+
+    Mirrors ``mate.gdn_decode._can_use_state_without_copy``: dense per-block
+    layout with a 16-byte aligned page stride and base address. Padded page
+    strides (packed conv/SSM cache) qualify; exotic layouts must be copied.
+    """
+    if state.dim() != 4 or state.dtype not in (torch.float32, torch.bfloat16):
+        return False
+    if state.is_contiguous():
+        return True
+    _, heads, dim_v, dim_k = state.shape
+    return (
+        state.stride()[1:] == (dim_v * dim_k, dim_k, 1)
+        and state.stride(0) >= heads * dim_v * dim_k
+        and state.stride(0) * state.element_size() % 16 == 0
+        and state.data_ptr() % 16 == 0
+    )
+
+
 def _log_once(method_name: str, message: str, *args) -> None:
     log_method = getattr(logger, f"{method_name}_once", None)
     if log_method is None:
@@ -126,9 +146,6 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         # while using the verified functional paths by default.
         self._musa_enable_tilelang_causal_conv = (
             os.environ.get("VLLM_MUSA_ENABLE_TILELANG_CAUSAL_CONV") == "1"
-        )
-        self._musa_enable_mate_gdn_decode = (
-            os.environ.get("VLLM_MUSA_ENABLE_MATE_GDN_DECODE") == "1"
         )
         self.enable_packed_recurrent_decode = (
             self.enable_packed_recurrent_decode
@@ -284,8 +301,6 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         core_attn_out: torch.Tensor,
         attn_metadata,
     ) -> bool:
-        if not self._musa_enable_mate_gdn_decode:
-            return False
         if (
             attn_metadata.spec_sequence_masks is not None
             or attn_metadata.num_decodes <= 0
@@ -365,17 +380,12 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         key = _k.unflatten(-1, (-1, self.head_k_dim)).unsqueeze(1)
         value = _v.unflatten(-1, (-1, self.head_v_dim)).unsqueeze(1)
 
-        # MUSA: the mamba pool is page-aligned (it must not be laid out contiguously,
-        # or its bytes would alias the attention KV in the shared hybrid tensor), so
-        # ssm_state is not contiguous. Gather the active per-sequence states into a
-        # small contiguous buffer for mate's fp32 VK decode (identity mapping), then
-        # scatter the updated states back. This keeps the fast mate kernel without a
-        # whole-pool contiguity copy.
+        # MUSA: mate addresses the state pool through state_indices, so a
+        # page-aligned pool (packed conv/SSM pages, or a dedicated Mamba pool)
+        # decodes in place. Only a layout mate cannot stride over gathers the
+        # active per-sequence states into a contiguous buffer first.
         if ssm_state.dtype == torch.float32:
             try:
-                _musa_sep = self._musa_optimization_contract.prefers(
-                    OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
-                )
                 # MUSA: write the mate decode output straight into the
                 # preallocated core_attn_out buffer (bf16) to skip a per-layer copy.
                 _out_view = core_attn_out[:num_decode_tokens].view(
@@ -384,9 +394,10 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                     self.num_v_heads // self.tp_size,
                     self.head_v_dim,
                 )
-                if _musa_sep and ssm_state.is_contiguous():
-                    # MUSA: separate contiguous mamba pool -> mate decodes in
-                    # place (block b at b*state_numel); no gather/scatter copy.
+                if _mate_state_pool_zero_copy(ssm_state):
+                    # MUSA: mate addresses the state pool through state_indices,
+                    # so padded page strides (packed or dedicated pools) decode
+                    # in place; no gather/scatter copy.
                     mate_kwargs = {
                         "q": query,
                         "k": key,
@@ -407,7 +418,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                     output, _ = gated_delta_rule_decode(**mate_kwargs)
                     _log_once(
                         "info",
-                        "MUSA GDN mate in-place decode active (separate pool)",
+                        "MUSA GDN mate in-place decode active (paged state pool)",
                     )
                 else:
                     active_state = ssm_state[state_indices]
@@ -501,9 +512,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                 g = torch.exp(g).clamp_min(1e-30)
 
             state_indices = non_spec_state_indices_tensor.to(torch.int64)
-            initial_state = ssm_state[state_indices].to(torch.float32)
-            if has_initial_state is not None:
-                initial_state[~has_initial_state, ...] = 0
+            pool_direct = _mate_state_pool_zero_copy(ssm_state)
             # mate compiles the GDN kernel against this dtype; int32 indexing is
             # cheaper and the offsets are bounded by the per-forward token cap.
             cu_seqlens = non_spec_query_start_loc.to(torch.int32)
@@ -515,11 +524,27 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                 "g": g,
                 "beta": beta,
                 "scale": None,
-                "initial_state": initial_state,
                 "output_final_state": True,
                 "cu_seqlens": cu_seqlens,
                 "use_qk_l2norm_in_kernel": True,
             }
+            if pool_direct:
+                # MUSA: hand mate the state pool + slot mapping so the prefill
+                # kernel updates the paged state in place (no gather/scatter).
+                mate_kwargs["initial_state"] = ssm_state
+                mate_kwargs["output_state"] = ssm_state
+                mate_kwargs["state_indices"] = state_indices
+                _log_once(
+                    "info",
+                    "MUSA GDN mate in-place prefill active (paged state pool)",
+                )
+                if has_initial_state is not None:
+                    mate_kwargs["has_initial_state"] = has_initial_state
+            else:
+                initial_state = ssm_state[state_indices].to(torch.float32)
+                if has_initial_state is not None:
+                    initial_state[~has_initial_state, ...] = 0
+                mate_kwargs["initial_state"] = initial_state
             if _MATE_GDN_PREFILL_HAS_IS_LOG_SPACE:
                 mate_kwargs["is_log_space"] = True
 
@@ -529,7 +554,10 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                 mate_kwargs["output"] = out
 
             output, final_state = chunk_gated_delta_rule(**mate_kwargs)
-            ssm_state.index_copy_(0, state_indices, final_state.to(ssm_state.dtype))
+            if not pool_direct:
+                ssm_state.index_copy_(
+                    0, state_indices, final_state.to(ssm_state.dtype)
+                )
             return output.unsqueeze(0)
         except Exception as e:
             _log_once(
