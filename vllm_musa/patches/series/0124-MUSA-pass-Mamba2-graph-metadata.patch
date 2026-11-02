@@ -53,7 +53,7 @@ index 3e7ae905a3..50e045e40b 100644
      def build(
          self,
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 816a9a6b53..839bc9d97e 100644
+index b0c2bdd53f..1b9e0e72dd 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -2564,8 +2564,11 @@ class GPUModelRunner(

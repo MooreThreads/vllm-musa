@@ -153,7 +153,7 @@ index 35cc8cc186..601818173e 100644
  
          vllm_config.validate_block_size()
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 34c72ffcdd..0ff03378c4 100644
+index 5e3545c856..fa62dea5d7 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -1087,9 +1087,11 @@ class GPUModelRunner(

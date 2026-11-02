@@ -38,8 +38,8 @@ a coherent adaptation, or unresolved; the dispositions below distinguish
 these cases instead of treating a missing number as proof of missing code.
 The original base patch was divided by file and hunk ancestry. This pass keeps
 that ancestry order but combines only changes that implement one independently
-maintainable feature: custom all-reduce (`0037`), dedicated Mamba pools
-(`0078`), rejection-sampler scalarization (`0111`), and DeepSeek-V4 FP8 expert
+maintainable feature: custom all-reduce (`0037`),
+rejection-sampler scalarization (`0111`), and DeepSeek-V4 FP8 expert
 dtype/scale resolution (`0134`). Eight v0.32 native/compatibility adaptations
 follow (`0163`–`0170`), then 42 new or updated v0.32 features
 (`0171`–`0212`). The original cross-version
@@ -47,15 +47,13 @@ DeepSeek-V4/V4.1 aux-stream patch stays in the new group because its v0.28
 segment depends on later v0.32 attention changes; old `0110` remains in the
 legacy group. Old `0137` (Mooncake P/D dedicated Mamba pools) and `0192`
 (hybrid attention page-size fast path) have no independent continuation here;
-their v0.32 behavior still requires separate review. The upstream follow-ups
-`0206` and `0207` now change Mamba accounting and hybrid attention page sizing;
+their v0.32 behavior still requires separate review. The upstream follow-up `0200` now changes hybrid attention page sizing;
 the historical observations below describe the earlier baseline, not a measured
 failure of these follow-ups. Hardware validation remains required.
 
 A patch may update several files when they form one atomic feature. The grouped
 entries are intentionally multi-file: `0037` contains
-`csrc/custom_all_reduce.cu` and `.cuh`; `0078` contains the Mamba interface,
-cache utility, and coordinator changes; `0111` contains the coupled rejection
+`csrc/custom_all_reduce.cu` and `.cuh`; `0111` contains the coupled rejection
 sampler Triton changes; and `0134` contains the DeepSeek-V4 MTP, model, and
 DSpark dtype/scale changes. The four runtime/ABI changes at `0058`–`0061`
 remain separate because each has an independent build and rollback boundary.
@@ -68,7 +66,7 @@ intermediate patch has its own entry. This records the final v0.32 source
 result, not equivalence across all v0.28 runtime paths.
 
 The 24 old numbers without their own entry are accounted for below. The
-comparison is against the pinned vLLM tree after all 210 patches, not a
+comparison is against the pinned vLLM tree after all 204 patches, not a
 model-level regression. “Folded” identifies the owner of the final source
 change, not proof of equivalent runtime behavior. A blocked/unverified row is
 not a canceled feature and must not be restored verbatim without an adapted
@@ -189,7 +187,6 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0075-MUSA-allow-Gemma-RMSNorm-residual-donation.patch` | v0.28 0078 | allow Gemma RMSNorm residual donation |
 | `0076-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch` | v0.28 0079 | add gated QKV RMSNorm MRoPE IR |
 | `0077-MUSA-vllm.v1.attention.backends.gdn_attn-conv1d-cpu-.patch` | v0.28 0080 | vllm.v1.attention.backends.gdn_attn conv1d cpu seq_lens |
-| `0078-MUSA-allocate-Mamba-state-in-dedicated-KV-cache-pool.patch` | v0.28 0081 + v0.28 0082 + v0.28 0083 | MUSA: allocate Mamba state in dedicated KV-cache pools |
 | `0079-MUSA-route-group-FP8-quant-to-the-register-resident-.patch` | v0.28 0084 | route group FP8 quant to the register-resident kernel |
 | `0080-MUSA-MUSA-vllm.v1.attention.backends.mla.indexer.patch` | v0.28 0085 | MUSA vllm.v1.attention.backends.mla.indexer |
 | `0081-MUSA-MUSA-model-fuse-QK-RMSNorm-and-MRoPE-for-interl.patch` | v0.28 0086 | MUSA(model): fuse QK-RMSNorm and MRoPE for interleaved MRoPE |
@@ -219,19 +216,15 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0105-MUSA-tolerate-Triton-without-experimental-Gluon.patch` | v0.28 0117 | tolerate Triton without experimental Gluon |
 | `0106-MUSA-hash-fused-MoE-on-Triton-3.2.patch` | v0.28 0120 | hash fused MoE on Triton 3.2 |
 | `0107-MUSA-skip-CUDA-only-FA4-warmup.patch` | v0.28 0121 | skip CUDA-only FA4 warmup |
-| `0108-MUSA-support-Mamba-pools-during-graph-profiling.patch` | v0.28 0122 | support Mamba pools during graph profiling |
 | `0109-MUSA-restore-component-memory-accounting-for-profili.patch` | v0.28 0123 | restore component memory accounting for profiling |
 | `0110-MUSA-route-DSV4-prenorm-through-MATE-DeepGEMM.patch` | v0.28 0124 | route DSV4 prenorm through MATE DeepGEMM |
 | `0111-MUSA-make-rejection-sampling-predicates-scalar-on-Tr.patch` | v0.28 0125 + v0.28 0127 + v0.28 0128 | MUSA: make rejection sampling predicates scalar on Triton |
-| `0112-MUSA-restore-contiguous-segregated-Mamba-cache-pools.patch` | v0.28 0130 | restore contiguous segregated Mamba cache pools |
 | `0113-MUSA-keep-DeepSeek-V4-on-MRV1-by-default.patch` | v0.28 0131 | keep DeepSeek-V4 on MRV1 by default |
 | `0114-MUSA-keep-DeepSeek-V4-hc_head-on-fused-TileLang.patch` | v0.28 0132 | keep DeepSeek-V4 hc_head on fused TileLang |
 | `0115-MUSA-make-DeepEP-Buffer-shutdown-cleanup-compatible.patch` | v0.28 0133 | make DeepEP Buffer shutdown cleanup compatible |
 | `0116-MUSA-bypass-grouped-DeepGEMM-UE8M0-cast-on-MATE-0.2..patch` | v0.28 0134 | bypass grouped DeepGEMM UE8M0 cast on MATE 0.2.6 |
 | `0117-MUSA-fix-DeepSeek-OCR-tokenizer-and-vision-precision.patch` | v0.28 0135 | fix DeepSeek-OCR tokenizer and vision precision |
 | `0118-MUSA-support-KV-first-FlashAttention-in-Mooncake.patch` | v0.28 0136 | support KV-first FlashAttention in Mooncake |
-| `0119-MUSA-complete-Mamba-prefix-cache-pool-ownership.patch` | v0.28 0138 | complete Mamba prefix-cache pool ownership |
-| `0120-MUSA-preserve-dedicated-Mamba-prefix-cache.patch` | v0.28 0138 continued | preserve dedicated Mamba prefix cache |
 | `0121-MUSA-share-Triton-version-check.patch` | v0.28 0141 | share-Triton-version-check |
 | `0122-MUSA-mamba2-ssd-concrete-optional-pointer.patch` | v0.28 0142 | mamba2-ssd-concrete-optional-pointer |
 | `0123-MUSA-mamba2-ssd-gated-fp32-dot.patch` | v0.28 0143 | mamba2-ssd-gated-fp32-dot |
@@ -281,7 +274,7 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0167-MUSA-accept-MUSA-online-quantization-capability.patch` | v0.32 native adaptation | accept MUSA online quantization capability |
 | `0168-MUSA-skip-unavailable-MUSA-Triton-warmup-hook.patch` | v0.32 native adaptation | skip unavailable MUSA Triton warmup hook |
 | `0169-MUSA-export-attention-compatibility-helpers.patch` | v0.32 native adaptation | export attention compatibility helpers |
-| `0170-MUSA-forward-attention-capture-metadata-and-allocate.patch` | v0.32 native adaptation | forward attention capture metadata and allocate separate KV pools |
+| `0170-MUSA-forward-attention-capture-metadata` | v0.32 native adaptation | forward attention capture metadata |
 | `0171-MUSA-skip-unsafe-v2-warmup-for-Qwen3.5-family.patch` | v0.32 new/updated | skip unsafe v2 warmup for Qwen3.5 family |
 | `0172-MUSA-split-chained-boolean-operators-in-Triton-kerne.patch` | v0.32 new/updated | split chained boolean operators in Triton kernels |
 | `0173-MUSA-zero-padded-heads-in-the-BF16-sparse-MLA-prefil.patch` | v0.32 new/updated | zero padded heads in the BF16 sparse MLA prefill |
@@ -315,18 +308,15 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0201-MUSA-keep-DeepSeek-V4-aux-stream-overlap-in-FULL-dec.patch` | v0.32 new/updated | keep DeepSeek-V4 aux-stream overlap in FULL decode graphs |
 | `0202-MUSA-run-on-Python-3.10.patch` | v0.32 new/updated | run on Python 3.10 |
 | `0203-MUSA-keep-the-allocator-settings-while-loading-weigh.patch` | v0.32 new/updated | keep the allocator settings while loading weights |
-| `0204-MUSA-number-warmup-blocks-within-each-dedicated-Mamb.patch` | v0.32 new/updated | number warmup blocks within each dedicated Mamba pool |
 
 | `0205-MUSA-run-the-DiffusionGemma-read-tests-on-MUSA.patch` | v0.32 upstream update | run the DiffusionGemma read tests on MUSA |
-| `0206-MUSA-size-the-dedicated-Mamba-pool-per-align-mode-sn.patch` | v0.32 upstream update | size the dedicated Mamba pool per align-mode snapshot |
-| `0207-MUSA-optimize-hybrid-attention-page-size-fastpath.patch` | v0.32 upstream update | optimize hybrid attention page-size fastpath |
 | `0208-MUSA-handle-expandable-segments-around-graph-capture.patch` | v0.32 upstream update | handle expandable segments around graph capture |
 | `0209-MUSA-route-Mamba2-SSD-to-FlashInfer.patch` | v0.32 new | route the Mamba2 SSD/`--mamba-backend flashinfer` prefill to MATE's `flashinfer.mamba` |
 | `0210-MUSA-initialize-the-Mamba2-profiling-output.patch` | v0.32 new | initialize the supplied Mamba2 output during the profiling run |
 | `0211-MUSA-one-contiguous-block-pool-per-Mamba-state.patch` | v0.32 new | give each Mamba state its own contiguous block pool |
 | `0212-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch` | v0.28 0194 follow-up | DeepSeek-OCR defaults to Triton on MUSA only when no encoder backend is configured. All explicit backend choices and non-MUSA behavior are preserved. |
 
-Currently **212 patches** and **0 upstream entries** in `upstream/`.
+Currently **204 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
