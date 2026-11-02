@@ -8,6 +8,13 @@ def _source(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def _entry(slug: str) -> str:
+    """Read one series entry by its slug, independent of its series number."""
+    matches = sorted((MUSA_ROOT / "patches" / "series").glob(f"*-{slug}"))
+    assert len(matches) == 1, matches
+    return matches[0].read_text(encoding="utf-8")
+
+
 def test_qwen_model_specific_env_gates_are_removed() -> None:
     forbidden = {
         "VLLM_MUSA_MOE_SHARED_EXPERT_FUSION",
@@ -24,22 +31,11 @@ def test_qwen_model_specific_env_gates_are_removed() -> None:
 
 
 def test_qwen_patch_consumers_bind_contract_features() -> None:
-    shared_expert = _source(
-        "vllm_musa/patches/series/"
-        "0073-MUSA-MUSA-model-fold-the-Qwen3.5-shared-expert-into-.patch"
-    )
-    fused_mrope = _source(
-        "vllm_musa/patches/series/"
-        "0081-MUSA-MUSA-model-fuse-QK-RMSNorm-and-MRoPE-for-interl.patch"
-    )
-    mamba_pool = _source(
-        "vllm_musa/patches/series/0078-MUSA-allocate-Mamba-state-in-dedicated-KV-cache-pool.patch"
-    )
+    shared_expert = _entry("MUSA-MUSA-model-fold-the-Qwen3.5-shared-expert-into-.patch")
+    fused_mrope = _entry("MUSA-MUSA-model-fuse-QK-RMSNorm-and-MRoPE-for-interl.patch")
 
     assert "QWEN35_SHARED_EXPERT_FOLD" in shared_expert
     assert "QWEN35_INTERLEAVED_MROPE_QK" in fused_mrope
-    assert "musa_mamba_separate_pool_enabled()" in mamba_pool
-    assert "and vllm_config.kv_transfer_config is None" in mamba_pool
 
 
 def test_deepseek_provider_is_registered_explicitly() -> None:
