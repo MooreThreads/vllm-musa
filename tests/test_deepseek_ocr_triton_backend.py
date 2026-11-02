@@ -12,7 +12,7 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0212-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch"
+    / "0209-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch"
 )
 
 
