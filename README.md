@@ -20,11 +20,20 @@
 
 *New model support images* 🔥
 
+**vLLM**
+
 - [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next`
 - [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash`
 - [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
-- [FLUX.3-Image-Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:flux3`
 - [DiffusionGemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev`
+
+**vLLM-Omni**
+
+- [FLUX.3-Image-Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:flux3`
+- [MAGI-2-Preview](https://huggingface.co/sand-ai/MAGI-2-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:magi-2-preview`
+
+Read the [MAGI-2 Preview on vLLM-Omni blog post](https://vllm.ai/blog/2026-10-12-magi2-preview-musa)
+for the S5000 measurements, the individual PR gains, and the reproduction steps.
 
 These model-specific tags are maintained independently of the release line; we
 do not recommend production use without verifying the exact image and model
