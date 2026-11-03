@@ -30,7 +30,7 @@
 **vLLM-Omni**
 
 - [FLUX.3-Image-Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:flux3`
-- [MAGI-2-Preview](https://huggingface.co/sand-ai/MAGI-2-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:magi-2-preview`
+- [MAGI-2 Preview](https://huggingface.co/sand-ai/MAGI-2-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:magi-2-preview`
 
 Read the [MAGI-2 Preview on vLLM-Omni blog post](https://vllm.ai/blog/2026-10-12-magi2-preview-musa)
 for the S5000 measurements, the individual PR gains, and the reproduction steps.

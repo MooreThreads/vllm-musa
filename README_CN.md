@@ -30,7 +30,7 @@
 **vLLM-Omni**
 
 - [FLUX.3-Image-Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:flux3`
-- [MAGI-2-Preview](https://huggingface.co/sand-ai/MAGI-2-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:magi-2-preview`
+- [MAGI-2 Preview](https://huggingface.co/sand-ai/MAGI-2-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:magi-2-preview`
 
 关于 MAGI-2 Preview 在 S5000 上的测量数据、各项 PR 的收益与复现步骤，请阅读
 [博客：MAGI-2 Preview on vLLM-Omni](https://vllm.ai/blog/2026-10-12-magi2-preview-musa)。
