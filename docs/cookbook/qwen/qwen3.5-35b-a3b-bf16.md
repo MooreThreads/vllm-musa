@@ -19,6 +19,16 @@ BF16 MoE recipe for four S5000 GPUs.
 | Maximum context | 8,192 tokens |
 | Maximum sequences | 192 |
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`Qwen/Qwen3.5-35B-A3B`](https://modelscope.cn/models/Qwen/Qwen3.5-35B-A3B) (ModelScope) @ 712cf74392b05026a6db2bf213d343747d1f6d45 |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 4x S5000 |
+| Served request | 2K/1K, 3K/1K, 3.5K/1K, 4K/1K, 4K/1.5K, 500 prompts each |
+
 ## Launching the server
 
 ```bash

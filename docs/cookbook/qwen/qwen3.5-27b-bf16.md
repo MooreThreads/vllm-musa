@@ -18,6 +18,16 @@ BF16 dense-model recipe for two S5000 GPUs.
 | Maximum context | 7,168 tokens |
 | Maximum sequences | 64 |
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`Qwen/Qwen3.5-27B`](https://modelscope.cn/models/Qwen/Qwen3.5-27B) (ModelScope) @ 8ee5435f4c700c6d8d4bb69efbf2e60c46b3e23e |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 2x S5000 |
+| Served request | 2K/1K, 3K/1K, 3.5K/1K, 4K/1K, 4K/1.5K, 500 prompts each |
+
 ## Launching the server
 
 ```bash

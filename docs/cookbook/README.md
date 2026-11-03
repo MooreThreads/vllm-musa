@@ -28,10 +28,11 @@ release line are intentionally not carried over.
 
 ## OCR Models
 
-See the [OCR cookbook index](ocr/README.md) for the three model recipes.
+See the [OCR cookbook index](ocr/README.md) for the four model recipes.
 
 | Model | Precision | Hardware | Recipe |
 |---|---|---|---|
+| DeepSeek-OCR | BF16 | 1x S5000, TP1 | [Open recipe](ocr/deepseek-ocr-bf16.md) |
 | MinerU2.5-Pro-2605-1.2B | BF16 | 1x S5000, TP1 | [Open recipe](ocr/mineru2.5-pro-2605-1.2b.md) |
 | OvisOCR2 | BF16 | 1x S5000, TP1 | [Open recipe](ocr/ovisocr2-bf16.md) |
 | PaddleOCR-VL-1.6 | BF16 | 1x S5000 recognition, TP1 | [Open recipe](ocr/paddleocr-vl-1.6-bf16.md) |
@@ -41,6 +42,10 @@ See the [OCR cookbook index](ocr/README.md) for the three model recipes.
 | Model | Precision | Hardware | Speculative decoding | Recipe |
 |---|---|---|---|---|
 | Qwen3-8B | FP8 | 1x S5000, TP1 | Off | [Open recipe](qwen/qwen3-8b-fp8.md) |
+| Qwen3.5-0.8B | BF16 | 1x S5000, TP1 | MTP1 | [Open recipe](qwen/qwen3.5-0.8b.md) |
+| Qwen3.5-2B | BF16 | 1x S5000, TP1 | MTP1 | [Open recipe](qwen/qwen3.5-2b.md) |
+| Qwen3.5-4B | BF16 | 1x S5000, TP1 | MTP1 | [Open recipe](qwen/qwen3.5-4b.md) |
+| Qwen3.5-9B | BF16 | 2x S5000, TP2 | MTP1 | [Open recipe](qwen/qwen3.5-9b.md) |
 | Qwen3-VL-8B-Instruct | BF16 | 1x S5000, TP1 | Off | [Open recipe](qwen/qwen3-vl-8b-instruct.md) |
 | Qwen3-VL-8B-Instruct | FP8 | 1x S5000, TP1 | Off | [Open recipe](qwen/qwen3-vl-8b-instruct-fp8.md) |
 | Qwen3-VL-30B-A3B-Instruct | BF16 | 4x S5000, TP4 | Off | [Open recipe](qwen/qwen3-vl-30b-a3b-instruct.md) |
@@ -48,15 +53,19 @@ See the [OCR cookbook index](ocr/README.md) for the three model recipes.
 | Qwen3-VL-32B-Instruct | BF16 | 4x S5000, TP4 | Off | [Open recipe](qwen/qwen3-vl-32b-instruct.md) |
 | Qwen3-VL-32B-Instruct | FP8 | 4x S5000, TP4 | Off | [Open recipe](qwen/qwen3-vl-32b-instruct-fp8.md) |
 | Qwen3.5-27B | BF16 | 2x S5000, TP2 | MTP1 | [Open recipe](qwen/qwen3.5-27b-bf16.md) |
-| Qwen3.5-27B | FP8 | 2x S5000, TP2 | Off | [Open recipe](qwen/qwen3.5-27b-fp8.md) |
+| Qwen3.5-27B | FP8 | 2x S5000, TP2 | MTP1 | [Open recipe](qwen/qwen3.5-27b-fp8.md) |
 | Qwen3.5-35B-A3B | BF16 | 4x S5000, TP4 | MTP3 | [Open recipe](qwen/qwen3.5-35b-a3b-bf16.md) |
 | Qwen3.5-35B-A3B | FP8 | 4x S5000, TP4 | MTP3 | [Open recipe](qwen/qwen3.5-35b-a3b-fp8.md) |
+| Qwen3-Next-80B-A3B-Instruct | BF16 | 8x S5000, TP8 | Off | [Open recipe](qwen/qwen3-next-80b-a3b-instruct.md) |
 | Qwen3.5-122B-A10B | BF16 | 8x S5000, TP8 | MTP3 | [Open recipe](qwen/qwen3.5-122b-a10b-bf16.md) |
+| Qwen3.5-122B-A10B | FP8 | 8x S5000, TP8 | MTP3 | [Open recipe](qwen/qwen3.5-122b-a10b-fp8.md) |
 | Qwen3.5-397B-A17B | FP8 | 8x S5000, TP8 | Off | [Open recipe](qwen/qwen3.5-397b-a17b-fp8.md) |
 | Qwen3.6-27B | BF16 | 2x S5000, TP2 | MTP3 | [Open recipe](qwen/qwen3.6-27b-bf16.md) |
 | Qwen3.6-27B | FP8 | 2x S5000, TP2 | MTP3 | [Open recipe](qwen/qwen3.6-27b-fp8.md) |
 | Qwen3.6-35B-A3B | BF16 | 4x S5000, TP4 | MTP2 | [Open recipe](qwen/qwen3.6-35b-a3b-bf16.md) |
 | Qwen3.6-35B-A3B | FP8 | 4x S5000, TP4 | MTP2 | [Open recipe](qwen/qwen3.6-35b-a3b-fp8.md) |
+| Qwen3.8-27B | BF16 | 2x S5000, TP2 | MTP3 | [Open recipe](qwen/qwen3.8-27b-bf16.md) |
+| Qwen3.8-27B | FP8 | 2x S5000, TP2 | MTP3 | [Open recipe](qwen/qwen3.8-27b-fp8.md) |
 
 ## DeepSeek
 
@@ -82,9 +91,11 @@ template workaround, while GLM-5.2 uses its checkpoint template with
 | Model | Precision | Hardware | Speculative decoding | Recipe |
 |---|---|---|---|---|
 | NVIDIA-Nemotron-3.5-Lightning-30B-A3B | BF16 | 1x S5000, TP1 | MTP6 | [Open recipe](nemotron/nemotron-3.5-lightning-30b-a3b-bf16.md) |
+| NVIDIA-Nemotron-3.5-Lightning-30B-A3B | BF16 | 2x S5000, TP2 | MTP4 | [Open recipe](nemotron/nemotron-3.5-lightning-30b-a3b-bf16.md) |
 
-The Nemotron profile serves one request at a time and targets per-token decode
-latency.
+The TP1 profile serves one request at a time with MTP6 and targets per-token
+decode latency; the TP2 profile serves up to 98 concurrent sequences with
+MTP4.
 
 ## Verify a server
 
