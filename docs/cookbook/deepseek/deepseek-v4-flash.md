@@ -39,6 +39,16 @@ target image before this candidate is promoted to a production recommendation.
 - Both launch profiles use the `/models` mount and the same served model name,
   `DeepSeek-V4-Flash-Base`, so the verification request can be reused.
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`deepseek-ai/DeepSeek-V4-Flash`](https://modelscope.cn/models/deepseek-ai/DeepSeek-V4-Flash) (ModelScope) @ 4e9bb2457e147f6ebfe2a46f3df047dc9869e224 |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 8x S5000 |
+| Served request | 2K/1K, 3K/1K, 3.5K/1K, 4K/1K, 4K/1.5K, 500 prompts each |
+
 ## Launching the server
 
 ### MTP4

@@ -117,6 +117,16 @@ The validated profile leaves `VLLM_MUSA_SPARSE_MLA_TILELANG`,
 indexer provider; it is not a capture-state signal and is not required by this
 profile.
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`ZhipuAI/GLM-5.3`](https://modelscope.cn/models/ZhipuAI/GLM-5.3) (ModelScope) @ 4ed051d0bc96b7224b0de11888cf11ba9b035b7b |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 16x S5000 |
+| Served request | 2K/1K, 3K/1K, 3.5K/1K, 4K/1K, 4K/1.5K, 500 prompts each |
+
 ## Recommended graph profile
 
 Run on the head node:

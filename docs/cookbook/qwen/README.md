@@ -1,10 +1,11 @@
 # Qwen serving recipes
 
 Qwen recipes use the hardware and tensor-parallel size listed on each page.
-The current validated profiles use TP1 for Qwen3-8B, TP2 for Qwen3.5/3.6-27B,
-TP4 for Qwen3.5/3.6-35B-A3B, and TP8 for Qwen3.5-122B-A10B /
-Qwen3.5-397B-A17B. Choose the page that matches both the model version and
-weight precision.
+The current validated profiles use TP1 for Qwen3-8B and the Qwen3.5
+small models (0.8B, 2B, and 4B), TP2 for Qwen3.5-9B and the
+Qwen3.5/3.6/3.8-27B dense checkpoints, TP4 for Qwen3.5/3.6-35B-A3B, and TP8
+for Qwen3.5-122B-A10B, Qwen3.5-397B-A17B, and Qwen3-Next-80B-A3B. Choose the
+page that matches both the model version and weight precision.
 
 > [!NOTE]
 > FP8 and BF16 checkpoints have different memory and speculative-decoding
@@ -16,10 +17,16 @@ weight precision.
 | Model | Precision | Speculative decoding | Recipe |
 |---|---|---|---|
 | Qwen3-8B | FP8 | Off | [Open recipe](qwen3-8b-fp8.md) |
+| Qwen3.5-0.8B | BF16 | MTP1 | [Open recipe](qwen3.5-0.8b.md) |
+| Qwen3.5-2B | BF16 | MTP1 | [Open recipe](qwen3.5-2b.md) |
+| Qwen3.5-4B | BF16 | MTP1 | [Open recipe](qwen3.5-4b.md) |
+| Qwen3.5-9B | BF16 | MTP1 | [Open recipe](qwen3.5-9b.md) |
 | Qwen3.5-27B | BF16 | MTP1 | [Open recipe](qwen3.5-27b-bf16.md) |
-| Qwen3.5-27B | FP8 | Off | [Open recipe](qwen3.5-27b-fp8.md) |
+| Qwen3.5-27B | FP8 | MTP1 | [Open recipe](qwen3.5-27b-fp8.md) |
 | Qwen3.6-27B | BF16 | MTP3 | [Open recipe](qwen3.6-27b-bf16.md) |
 | Qwen3.6-27B | FP8 | MTP3 | [Open recipe](qwen3.6-27b-fp8.md) |
+| Qwen3.8-27B | BF16 | MTP3 | [Open recipe](qwen3.8-27b-bf16.md) |
+| Qwen3.8-27B | FP8 | MTP3 | [Open recipe](qwen3.8-27b-fp8.md) |
 
 ## Vision-language models
 
@@ -38,7 +45,9 @@ weight precision.
 |---|---|---|---|
 | Qwen3.5-35B-A3B | BF16 | MTP3 | [Open recipe](qwen3.5-35b-a3b-bf16.md) |
 | Qwen3.5-35B-A3B | FP8 | MTP3 | [Open recipe](qwen3.5-35b-a3b-fp8.md) |
+| Qwen3-Next-80B-A3B-Instruct | BF16 | Off | [Open recipe](qwen3-next-80b-a3b-instruct.md) |
 | Qwen3.5-122B-A10B | BF16 | MTP3 | [Open recipe](qwen3.5-122b-a10b-bf16.md) |
+| Qwen3.5-122B-A10B | FP8 | MTP3 | [Open recipe](qwen3.5-122b-a10b-fp8.md) |
 | Qwen3.5-397B-A17B | FP8 | Off | [Open recipe](qwen3.5-397b-a17b-fp8.md) |
 | Qwen3.6-35B-A3B | BF16 | MTP2 | [Open recipe](qwen3.6-35b-a3b-bf16.md) |
 | Qwen3.6-35B-A3B | FP8 | MTP2 | [Open recipe](qwen3.6-35b-a3b-fp8.md) |
