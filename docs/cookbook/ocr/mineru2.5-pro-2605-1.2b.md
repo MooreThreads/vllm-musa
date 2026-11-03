@@ -32,6 +32,16 @@ extraction pipeline.
 - `mineru-vl-utils` installed wherever the vLLM engine runs for
   `MinerULogitsProcessor`, and wherever the MinerU client runs.
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`opendatalab/MinerU2.5-Pro-2605-1.2B`](https://modelscope.cn/models/opendatalab/MinerU2.5-Pro-2605-1.2B) (ModelScope) @ a479e052d985bddc3d3fd7a9c9a4dac1edb94797 |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 1x S5000 |
+| Served request | OmniBench |
+
 ## HTTP server
 
 This entry point exposes the vLLM engine through HTTP. Replace `<MODEL_PATH>`

@@ -19,6 +19,16 @@ FP8 vision-language MoE recipe for four S5000 GPUs.
 | Maximum context | 8,192 tokens |
 | Maximum sequences | 64 |
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`Qwen/Qwen3-VL-30B-A3B-Instruct-FP8`](https://modelscope.cn/models/Qwen/Qwen3-VL-30B-A3B-Instruct-FP8) (ModelScope) @ 66db14f1f49ff62a6d525dc6e9309d165fad8b68 |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 4x S5000 |
+| Served request | 2K/1K, 3K/1K, 3.5K/1K, 4K/1K, 4K/1.5K, 500 prompts each |
+
 ## Launching the server
 
 ```bash
