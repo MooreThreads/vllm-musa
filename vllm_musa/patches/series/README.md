@@ -329,8 +329,11 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0202-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch` | v0.28 0194 follow-up | DeepSeek-OCR defaults to Triton on MUSA only when no encoder backend is configured. All explicit backend choices and non-MUSA behavior are preserved. |
 | `0203-MUSA-enable-DeepSeek-V41-packed-W4AFP8-experts.patch` | v0.32 W4AFP8 adaptation | register MUSA `w4afp8` in `get_quantization_config` and return packed INT4 from DeepSeek-V4.1 expert dtype resolution; export from the applied vLLM commits with `musa_sync regen` |
 | `0204-MUSA-overlap-validated-W4AFP8-shared-experts.patch` | v0.32 W4AFP8 optimization | enable contract-gated MUSA shared-expert overlap and synchronize events with the MUSA current stream |
+| `0205-MUSA-route-Qwen4Exp-QSA-through-the-MUSA-backend.patch` | v0.32 new/updated | route Qwen4Exp QSA through the MUSA backend |
+| `0206-MUSA-fix-Qwen4Exp-Triton-3.2-compatibility.patch` | v0.32 new/updated | fix Qwen4Exp Triton 3.2 compatibility (PLE pointers, QSA metadata kernel, indexer block sizes, top-k fallback) |
+| `0207-MUSA-pin-QSA-sparse-attention-to-four-warps.patch` | v0.32 new/updated | pin QSA sparse attention to four warps |
 
-Currently **204 patches** and **0 upstream entries** in `upstream/`.
+Currently **207 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
