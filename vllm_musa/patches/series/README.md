@@ -335,8 +335,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0208-MUSA-bound-the-QSA-cached-rotary-positions.patch` | v0.32 new/updated | bound the QSA cached rotary positions |
 | `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
 | `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
+| `0211-MUSA-keep-fused-MoE-even_Ks-loads-in-bounds.patch` | v0.32 new/updated | mask the fused MoE even_Ks A/B loads under the MUSA pipeliner |
 
-Currently **210 patches** and **0 upstream entries** in `upstream/`.
+Currently **211 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
