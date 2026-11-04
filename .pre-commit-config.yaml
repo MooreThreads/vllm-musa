@@ -6,8 +6,13 @@ repos:
     hooks:
       - id: check-symlinks
       - id: destroyed-symlinks
+      # Series entries are `git format-patch` output: a context line for an
+      # empty source line is a single space, so these hooks would rewrite the
+      # diff. They are byte-pinned by `musa_sync check-series --round-trip`.
       - id: trailing-whitespace
+        exclude: ^vllm_musa/patches/series/.*\.patch$
       - id: end-of-file-fixer
+        exclude: ^vllm_musa/patches/series/.*\.patch$
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-toml

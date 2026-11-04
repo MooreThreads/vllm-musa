@@ -2,3 +2,5 @@
 skip = .git,*.egg-info,*.pyc,__pycache__,build,dist,.ruff_cache,*.so,third_party
 count =
 quiet-level = 3
+# `caf` is the first three bytes of the `caf\xe9` path fixtures.
+ignore-words-list = caf
