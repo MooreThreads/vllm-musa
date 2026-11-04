@@ -2,10 +2,11 @@
 """TileLang sparse paged GQA for the QSA prefill and decode paths.
 
 Both stages gather K/V tile by tile with per-token head-dim-contiguous vector
-loads (the sparse page addresses are constant along the dim axis; the block
-stride comes off the tensor, so a packed KV slab works) and compute
-QK^T / PV with T.gemm; the grouped-query tile is padded to 8 rows to satisfy the
-MUSA MMA M%8 requirement. The online softmax stays in fragments.
+loads (the sparse page addresses are constant along the dim axis; the block and
+page strides come off the tensor, so both a page-contiguous cache and v0.32's
+slab that interleaves K and V for the same token work) and compute QK^T / PV
+with T.gemm; the grouped-query tile is padded to 8 rows to satisfy the MUSA MMA
+M%8 requirement. The online softmax stays in fragments.
 
 A prefill row whose position is below the selection width selects every causal
 token, so it is plain causal attention: when the caller passes the batch layout,
@@ -114,7 +115,6 @@ def _qsa_prefill_kernel(
     topk: int,
     block_n: int,
     page_size: int,
-    page_table_width: int,
     dtype: str,
     threads: int,
     dup: int,
@@ -126,22 +126,29 @@ def _qsa_prefill_kernel(
     num_rows = T.dynamic("num_rows")
     num_blocks = T.dynamic("num_blocks")
     num_requests = T.dynamic("num_requests")
+    # The worker sizes the block table from the cache spec, which is not the
+    # same formula under every layout; read the width off the tensor.
+    page_table_width = T.dynamic("page_table_width")
     # The paged cache may be a window into a packed KV slab, so the block
     # stride is read off the tensor instead of assumed to be one page.
     k_block_stride = T.dynamic("k_block_stride")
     v_block_stride = T.dynamic("v_block_stride")
+    # v0.32 keeps K and V for one token in the same page, so the stride
+    # between two tokens of a page is not head_dim.
+    k_page_stride = T.dynamic("k_page_stride")
+    v_page_stride = T.dynamic("v_page_stride")
 
     @T.prim_func
     def qsa_prefill(
         q: T.Tensor((num_rows, group_size, head_dim), dtype),
         k_cache: T.StridedTensor(
             (num_blocks, page_size, head_dim),
-            (k_block_stride, head_dim, 1),
+            (k_block_stride, k_page_stride, 1),
             dtype,
         ),
         v_cache: T.StridedTensor(
             (num_blocks, page_size, head_dim),
-            (v_block_stride, head_dim, 1),
+            (v_block_stride, v_page_stride, 1),
             dtype,
         ),
         indices: T.Tensor((num_rows, topk + 1), "int32"),
@@ -284,7 +291,6 @@ def _qsa_decode_kernel(
     topk: int,
     block_n: int,
     page_size: int,
-    page_table_width: int,
     dtype: str,
     threads: int,
     dup: int,
@@ -296,22 +302,29 @@ def _qsa_decode_kernel(
     num_rows = T.dynamic("num_rows")
     num_blocks = T.dynamic("num_blocks")
     num_requests = T.dynamic("num_requests")
+    # The worker sizes the block table from the cache spec, which is not the
+    # same formula under every layout; read the width off the tensor.
+    page_table_width = T.dynamic("page_table_width")
     # The paged cache may be a window into a packed KV slab, so the block
     # stride is read off the tensor instead of assumed to be one page.
     k_block_stride = T.dynamic("k_block_stride")
     v_block_stride = T.dynamic("v_block_stride")
+    # v0.32 keeps K and V for one token in the same page, so the stride
+    # between two tokens of a page is not head_dim.
+    k_page_stride = T.dynamic("k_page_stride")
+    v_page_stride = T.dynamic("v_page_stride")
 
     @T.prim_func
     def qsa_decode(
         q: T.Tensor((num_rows, group_size, head_dim), dtype),
         k_cache: T.StridedTensor(
             (num_blocks, page_size, head_dim),
-            (k_block_stride, head_dim, 1),
+            (k_block_stride, k_page_stride, 1),
             dtype,
         ),
         v_cache: T.StridedTensor(
             (num_blocks, page_size, head_dim),
-            (v_block_stride, head_dim, 1),
+            (v_block_stride, v_page_stride, 1),
             dtype,
         ),
         indices: T.Tensor((num_rows, topk + 1), "int32"),
@@ -488,14 +501,13 @@ _qsa_merge_kernel.mode = "lazy"
 _SCRATCH: dict = {}
 
 
-def _shape_args(q, k_cache, logical_indices, block_table, prefill=False):
+def _shape_args(q, k_cache, logical_indices, prefill=False):
     return (
         q.shape[1] // k_cache.shape[2],
         q.shape[2],
         logical_indices.shape[1] - 1,
         _PREFILL_BLOCK_N if prefill else _BLOCK_N,
         k_cache.shape[1],
-        block_table.shape[1],
         tilelang_dtype(q.dtype),
         _PREFILL_THREADS if prefill else _THREADS,
         _PREFILL_DUP if prefill else _DUP,
@@ -510,7 +522,7 @@ def _compile_all(prefill_args, decode_args, num_splits=_DECODE_SPLITS):
     (which always runs outside capture) also compiles the decode pair.
     The jit wrappers are memoized, so repeat calls are free.
     """
-    group_size, head_dim, dtype = decode_args[0], decode_args[1], decode_args[6]
+    group_size, head_dim, dtype = decode_args[0], decode_args[1], decode_args[5]
     _qsa_prefill_kernel(*prefill_args)
     _qsa_decode_kernel(*decode_args, num_splits)
     _qsa_merge_kernel(group_size, head_dim, num_splits, dtype, _THREADS)
@@ -569,10 +581,8 @@ def qsa_prefill_attention_v2(
     num_rows = q.shape[0]
     if num_rows == 0:
         return out
-    shape_args = _shape_args(q, k_cache, logical_indices, block_table,
-                             prefill=True)
-    _compile_all(shape_args,
-                 _shape_args(q, k_cache, logical_indices, block_table))
+    shape_args = _shape_args(q, k_cache, logical_indices, prefill=True)
+    _compile_all(shape_args, _shape_args(q, k_cache, logical_indices))
     width = logical_indices.shape[1] - 1
     dense_below = 0
     if (
@@ -637,9 +647,12 @@ def qsa_decode_attention(
         return out
     group_size = q.shape[1] // k_cache.shape[2]
     head_dim = q.shape[2]
-    shape_args = _shape_args(q, k_cache, logical_indices, block_table)
-    _compile_all(_shape_args(q, k_cache, logical_indices, block_table,
-                             prefill=True), shape_args, num_splits)
+    shape_args = _shape_args(q, k_cache, logical_indices)
+    _compile_all(
+        _shape_args(q, k_cache, logical_indices, prefill=True),
+        shape_args,
+        num_splits,
+    )
     partial_o, partial_l = _split_scratch(num_rows, head_dim, q.device, num_splits)
     split = _qsa_decode_kernel(*shape_args, num_splits)
     split(q, k_cache.squeeze(2), v_cache.squeeze(2), logical_indices,
@@ -656,7 +669,6 @@ def prewarm_qsa_kernels(
     head_dim: int,
     topk: int,
     page_size: int,
-    page_table_width: int,
     dtype: torch.dtype,
     decode_rows: tuple = (),
     num_splits: int = _DECODE_SPLITS,
@@ -672,11 +684,10 @@ def prewarm_qsa_kernels(
     _compile_all(
         (
             group_size, head_dim, topk, _PREFILL_BLOCK_N, page_size,
-            page_table_width, tilelang_dtype(dtype), _PREFILL_THREADS,
-            _PREFILL_DUP,
+            tilelang_dtype(dtype), _PREFILL_THREADS, _PREFILL_DUP,
         ),
         (
-            group_size, head_dim, topk, _BLOCK_N, page_size, page_table_width,
+            group_size, head_dim, topk, _BLOCK_N, page_size,
             tilelang_dtype(dtype), _THREADS, _DUP,
         ),
         num_splits,

@@ -7,7 +7,7 @@ from pathlib import Path
 SERIES = Path(__file__).resolve().parents[1] / "vllm_musa" / "patches" / "series"
 
 #: Series length this branch is built on; bump it with the series.
-SERIES_LENGTH = 209
+SERIES_LENGTH = 210
 
 
 def test_series_numbers_are_contiguous_and_lineage_is_complete() -> None:

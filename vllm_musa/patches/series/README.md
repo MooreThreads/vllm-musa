@@ -334,8 +334,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0207-MUSA-pin-QSA-sparse-attention-to-four-warps.patch` | v0.32 new/updated | pin QSA sparse attention to four warps |
 | `0208-MUSA-bound-the-QSA-cached-rotary-positions.patch` | v0.32 new/updated | bound the QSA cached rotary positions |
 | `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
+| `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
 
-Currently **209 patches** and **0 upstream entries** in `upstream/`.
+Currently **210 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
