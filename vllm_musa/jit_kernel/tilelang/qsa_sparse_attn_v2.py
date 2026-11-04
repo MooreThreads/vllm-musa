@@ -27,13 +27,12 @@ metadata, so each shared element has a single writer; the guard holds no
 barrier.
 
 Ported to vLLM-MUSA v0.32 with the kernel bodies unchanged; only the dispatch
-in ``qwen4_exp/nvidia/qsa.py`` differs. The 32-bit index switch below stays off
-until the v0.32 KV layout work lands, so the default is 64-bit addressing.
+in ``qwen4_exp/nvidia/qsa.py`` differs. Addressing stays 64-bit: v0.32 packs the
+QSA pages beside the main KV pages, so a block is megabytes wide and the narrow
+indices of the v0.28 unpacked layout have no layout to pair with here.
 """
 
 import functools
-
-import os
 
 import tilelang
 import tilelang.language as T
@@ -56,19 +55,17 @@ _PASS_CONFIGS = dict(MUSA_COMMON_PASS_CONFIGS)
 # pure elementwise kernels must stay on.
 if hasattr(tilelang.PassConfigKey, "TL_DISABLE_THREAD_STORAGE_SYNC"):
     _PASS_CONFIGS[tilelang.PassConfigKey.TL_DISABLE_THREAD_STORAGE_SYNC] = False
-# A page of the packed KV slab is megabytes apart from the next, so a physical
-# block index times that stride leaves the 2 GiB a 32-bit byte offset can reach
-# and wraps to an address below the cache. Global buffer indices must then be
-# 64-bit, which costs about 13% of time-to-first-token.
-#
-# One page per block keeps every offset well inside 32 bits, so the narrow
-# indices are safe there. The width is tied to that layout rather than chosen
-# independently: 32-bit indices on the packed slab would fault again.
-_INDEX_BITWIDTH = 32 if os.environ.get("VLLM_MUSA_UNPACKED_KV") == "1" else 64
+# Every Qwen4Exp page sits inside a block that is megabytes wide, because the
+# QSA side cache is packed beside the main KV pages, so a physical block index
+# times that stride leaves the 2 GiB a 32-bit offset reaches. The v0.28 branch
+# could switch to an unpacked layout and narrow the indices; v0.32 has no such
+# layout (the QSA cache backend only accepts block-outermost ones), so the wide
+# indices are unconditional. See the gather loops for the 64-bit block slot:
+# this pass-level width alone does not widen the stride product.
 for _key, _value in (
     ("TL_DISABLE_SAFE_COPY_PREDICATION", True),
     ("TL_DISABLE_SAFE_ROBUST_COPY_PREDICATION", True),
-    ("TL_CONFIG_INDEX_BITWIDTH", _INDEX_BITWIDTH),
+    ("TL_CONFIG_INDEX_BITWIDTH", 64),
 ):
     if hasattr(tilelang.PassConfigKey, _key):
         _PASS_CONFIGS[getattr(tilelang.PassConfigKey, _key)] = _value
@@ -171,7 +168,12 @@ def _qsa_prefill_kernel(
             s_pb = T.alloc_shared((block_m, block_n), dtype)
             s_idx = T.alloc_shared((block_n,), "int32")
             s_off = T.alloc_shared((block_n,), "int32")
-            s_phys = T.alloc_shared((block_n,), "int32")
+            # A physical block index times the packed block stride is the
+            # one term that leaves 2 GiB. TileLang multiplies the shared
+            # slot by the dynamic stride as plain C integers, so an int32
+            # slot wraps the address regardless of the pass-level index
+            # bitwidth; keep the slot itself 64-bit.
+            s_phys = T.alloc_shared((block_n,), "int64")
             s_valid = T.alloc_shared((block_n,), "float32")
 
             acc_frag = T.alloc_fragment((block_m, head_dim), "float32")
@@ -344,7 +346,12 @@ def _qsa_decode_kernel(
             s_pb = T.alloc_shared((block_m, block_n), dtype)
             s_idx = T.alloc_shared((block_n,), "int32")
             s_off = T.alloc_shared((block_n,), "int32")
-            s_phys = T.alloc_shared((block_n,), "int32")
+            # A physical block index times the packed block stride is the
+            # one term that leaves 2 GiB. TileLang multiplies the shared
+            # slot by the dynamic stride as plain C integers, so an int32
+            # slot wraps the address regardless of the pass-level index
+            # bitwidth; keep the slot itself 64-bit.
+            s_phys = T.alloc_shared((block_n,), "int64")
             s_valid = T.alloc_shared((block_n,), "float32")
 
             acc_frag = T.alloc_fragment((block_m, head_dim), "float32")
