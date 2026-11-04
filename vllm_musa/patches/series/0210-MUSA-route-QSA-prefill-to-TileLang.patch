@@ -11,9 +11,14 @@ The kernels tile the grouped-query axis, so they are only selected when the
 step fits one tile: 16 rows for prefill, 8 for split-k decode. The guard also
 requires BF16 and a single KV head per rank. Prefill is unconditional, as on
 the v0.28 branch; decode stays behind VLLM_MUSA_QSA_TILELANG_DECODE because
-its split-k scratch and merge kernel have not been measured on v0.32 yet. The
-dense-prefix FlashAttention split is not wired either, so every row goes
-through the sparse kernel.
+its split-k scratch and merge kernel have not been measured on v0.32 yet.
+
+Prefill sends the requests whose sequence fits one selection to
+FlashAttention and keeps the sparse kernel for the rest, which is what the
+earlier branch settled on: a dense request costs one varlen call instead of a
+selection walk over its whole prefix. The split needs the padded v0.32
+metadata, so the dense layout also zeroes the key count of the padded
+requests whose sequence length is stale.
 
 Build the kernels and allocate the split-k scratch in the layer constructor,
 before graph capture. The decode path is first reached while the decode
@@ -24,11 +29,11 @@ The block-table width and the page stride are read off the tensors, so the
 packed v0.32 layout that stores K and V for one token side by side works
 without a cache-layout change.
 ---
- vllm/models/qwen4_exp/nvidia/qsa.py | 140 +++++++++++++++++++++++++++++++++++-
- 1 file changed, 137 insertions(+), 3 deletions(-)
+ vllm/models/qwen4_exp/nvidia/qsa.py | 152 ++++++++++++++++++++++-
+ 1 file changed, 149 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/models/qwen4_exp/nvidia/qsa.py b/vllm/models/qwen4_exp/nvidia/qsa.py
-index bde1366..2e71c11 100644
+index bde1366..510b848 100644
 --- a/vllm/models/qwen4_exp/nvidia/qsa.py
 +++ b/vllm/models/qwen4_exp/nvidia/qsa.py
 @@ -4,6 +4,7 @@
@@ -115,7 +120,7 @@ index bde1366..2e71c11 100644
      def forward_qsa(
          self,
          layer: torch.nn.Module,
-@@ -326,20 +382,69 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
+@@ -326,20 +382,81 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
                  "Qwen4Exp QSA requires BF16 Q and BF16 or FP8-e4m3 K/V"
              )
 
@@ -128,6 +133,7 @@ index bde1366..2e71c11 100644
 +        if use_prefill_config:
 +            if tilelang_ready:
 +                from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
++                    qsa_dense_layout,
 +                    qsa_prefill_attention_v2,
 +                )
 +
@@ -135,6 +141,13 @@ index bde1366..2e71c11 100644
 +                    "QSA prefill routed to the TileLang kernel: q=%s cache=%s",
 +                    tuple(query.shape),
 +                    tuple(key_cache.shape),
++                )
++                dense_layout = qsa_dense_layout(
++                    attn_metadata.query_start_loc,
++                    attn_metadata.seq_lens,
++                    token_to_req,
++                    num_tokens,
++                    logical_indices.shape[1] - 1,
 +                )
 +                qsa_prefill_attention_v2(
 +                    query,
@@ -144,6 +157,10 @@ index bde1366..2e71c11 100644
 +                    attn_metadata.block_table,
 +                    token_to_req,
 +                    out,
++                    query_start_loc=attn_metadata.query_start_loc,
++                    dense_layout=dense_layout,
++                    max_query_len=attn_metadata.max_query_len,
++                    max_seq_len=attn_metadata.max_seq_len,
 +                )
 +                _apply_qsa_output_gate(out, gate)
 +                return output
@@ -188,7 +205,7 @@ index bde1366..2e71c11 100644
          )
          return output
 
-@@ -545,6 +650,35 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
+@@ -545,6 +662,35 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
              raise ValueError(f"Duplicate layer name: {self.layer_name}")
          static_context[self.layer_name] = self
 

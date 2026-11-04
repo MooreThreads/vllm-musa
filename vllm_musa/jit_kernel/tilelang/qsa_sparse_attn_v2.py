@@ -547,10 +547,14 @@ def qsa_dense_layout(
     num_reqs = min(query_start_loc.shape[0] - 1, seq_lens.shape[0])
     query_start_loc = query_start_loc[: num_reqs + 1]
     seq_lens = seq_lens[:num_reqs]
+    # v0.32 pads query_start_loc to num_reqs_padded, so requests past the real
+    # batch have a zero query length. Zero their key count too: seq_lens past
+    # the real batch is stale, and FlashAttention would otherwise walk it.
+    query_lens = (query_start_loc[1:] - query_start_loc[:-1]).to(torch.int32)
     used_k = torch.clamp(seq_lens, max=width).to(torch.int32)
-    used_q = torch.clamp(
-        used_k - seq_lens + (query_start_loc[1:] - query_start_loc[:-1]), min=0
-    ).to(torch.int32)
+    used_k = torch.where(query_lens > 0, used_k, torch.zeros_like(used_k))
+    used_q = torch.clamp(used_k - seq_lens + query_lens, min=0).to(torch.int32)
+    used_q = torch.where(query_lens > 0, used_q, torch.zeros_like(used_q))
     # Token index within the request; rope positions may differ from it.
     req = token_to_req[:num_rows].long().clamp(0, num_reqs - 1)
     positions = (seq_lens.long()[req] - query_start_loc.long()[req + 1]
