@@ -5,8 +5,8 @@ Subject: [PATCH] MUSA: route Mamba2 SSD to FlashInfer
 
 ---
  .../layers/mamba/mamba_mixer2.py              |  2 ++
- .../layers/mamba/ops/ssd_combined.py          | 34 +++++++++++++++++++
- 2 files changed, 36 insertions(+)
+ .../layers/mamba/ops/ssd_combined.py          | 36 +++++++++++++++++++
+ 2 files changed, 38 insertions(+)
 
 diff --git a/vllm/model_executor/layers/mamba/mamba_mixer2.py b/vllm/model_executor/layers/mamba/mamba_mixer2.py
 index 88170321fe..bee3aef37d 100644
@@ -29,7 +29,7 @@ index 88170321fe..bee3aef37d 100644
  
              # update ssm states
 diff --git a/vllm/model_executor/layers/mamba/ops/ssd_combined.py b/vllm/model_executor/layers/mamba/ops/ssd_combined.py
-index 581cd8bb6d..6b7c1c98ea 100644
+index 581cd8bb6d..34eb89bfb9 100644
 --- a/vllm/model_executor/layers/mamba/ops/ssd_combined.py
 +++ b/vllm/model_executor/layers/mamba/ops/ssd_combined.py
 @@ -174,6 +174,7 @@ def mamba_chunk_scan_combined_varlen(
@@ -40,7 +40,7 @@ index 581cd8bb6d..6b7c1c98ea 100644
  ):
      """Argument:
          x: (seqlen, nheads, headdim)
-@@ -200,6 +201,39 @@ def mamba_chunk_scan_combined_varlen(
+@@ -200,6 +201,41 @@ def mamba_chunk_scan_combined_varlen(
      assert cu_seqlens is not None, "cu_seqlens must be provided assuming varlen input"
      assert seq_idx is not None
  
@@ -51,7 +51,9 @@ index 581cd8bb6d..6b7c1c98ea 100644
 +    ):
 +        # MATE's packed SSD pipeline behind flashinfer.mamba. Arguments are
 +        # forwarded by name: MATE and upstream FlashInfer order
-+        # `initial_states` / `dt_softplus` / `dt_limit` differently.
++        # `initial_states` / `dt_softplus` / `dt_limit` differently. A
++        # checkpointed prefill keeps the reference path; its per-chunk states
++        # feed `store_prefill_checkpoint` in vLLM's own layout.
 +        from flashinfer.mamba.ssd_combined import (
 +            ssd_combined_fwd_varlen as flashinfer_ssd_combined_fwd_varlen,
 +        )
