@@ -2,8 +2,8 @@
 """Verify the installed MUSA runtime cohort against the repository pins.
 
 Runs in the image build after the dependency stage installs. Every expected
-version comes from the requirement files, except tilelang-musa, which MATE's
-``[tilelang]`` extra declares and is therefore read back from that metadata.
+version comes from the requirement files, except tilelang-musa, which MATE
+declares as a core requirement and is therefore read back from its metadata.
 """
 
 from __future__ import annotations
@@ -48,13 +48,15 @@ EXACT_VERSION_DISTS = frozenset(
 IMPORT_ONLY = ("vllm", "vllm_musa", "transformers", "huggingface_hub")
 
 
-def mate_extra_pin(extra: str, dist_name: str) -> str:
-    """Return the version MATE pins ``dist_name`` to through ``extra``."""
+def mate_pin(dist_name: str) -> str:
+    """Return the version MATE pins ``dist_name`` to as a core requirement."""
     for requirement in requires("mate") or ():
+        if ";" in requirement:
+            continue
         name, separator, rest = requirement.partition("==")
-        if separator and name.strip().lower() == dist_name and extra in rest:
-            return rest.split(";", 1)[0].strip()
-    raise RuntimeError(f"mate declares no {dist_name} pin for extra {extra}")
+        if separator and name.strip().lower() == dist_name:
+            return rest.strip()
+    raise RuntimeError(f"mate declares no core pin for {dist_name}")
 
 
 def requirement_prefix(dist_name: str) -> str:
@@ -89,7 +91,7 @@ def expected() -> tuple[tuple[str, str, str], ...]:
         ),
         ("sageattention", "sageattention", requirement_prefix("sageattention")),
         ("deep_ep", "deep_ep", requirement_prefix("deep_ep")),
-        ("tilelang_musa", "tilelang", mate_extra_pin("tilelang", "tilelang-musa")),
+        ("tilelang_musa", "tilelang", mate_pin("tilelang-musa")),
         ("triton", "triton", requirement_prefix("triton")),
         ("uvloop", "uvloop", ""),
         ("pycountry", "pycountry", ""),

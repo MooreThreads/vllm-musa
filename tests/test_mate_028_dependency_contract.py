@@ -13,20 +13,20 @@ DOCKERFILE = ROOT / "docker/musa.Dockerfile"
 VERIFIER = ROOT / "docker/verify_installed_dependencies.py"
 
 MATE_028_COHORT = {
-    "mate": ("0.2.8", "mate"),
-    "mate-mubin": ("0.2.8", "mate_mubin"),
-    "flash_attn_3": ("0.2.8+musa", "flash_attn_3"),
-    "flash_mla": ("0.2.8+musa", "flash_mla"),
-    "deep-gemm": ("0.2.8+musa", "deep_gemm"),
-    "flashinfer-python": ("0.2.8+musa", "flashinfer"),
-    "sageattention": ("0.2.8+musa", "sageattention"),
+    "mate": ("0.2.8.post1", "mate"),
+    "mate-mubin": ("0.2.8.post1", "mate_mubin"),
+    "flash_attn_3": ("0.2.8.post1+musa", "flash_attn_3"),
+    "flash_mla": ("0.2.8.post1+musa", "flash_mla"),
+    "deep-gemm": ("0.2.8.post1+musa", "deep_gemm"),
+    "flashinfer-python": ("0.2.8.post1+musa", "flashinfer"),
+    "sageattention": ("0.2.8.post1+musa", "sageattention"),
     "apache-tvm-ffi": ("0.1.11.post1+musa.1", "tvm_ffi"),
 }
 
-# tilelang-musa is not a direct pin: MATE's [tilelang] extra declares it, so the
-# requirement file asks for the extra and the Dockerfile reads the expected
-# version back from that metadata instead of restating it.
-MATE_TILELANG_EXTRA = "mate[tilelang]==0.2.8"
+# tilelang-musa is not a direct pin: MATE requires it as a core dependency, so
+# the requirement file only asks for mate and the Dockerfile reads the expected
+# tilelang version back from that metadata instead of restating it.
+MATE_POST1_PIN = "mate==0.2.8.post1"
 MATE_TILELANG_DIST = "tilelang_musa"
 MATE_TILELANG_MODULE = "tilelang"
 
@@ -73,15 +73,19 @@ def test_image_verifier_reads_every_version_from_the_requirements() -> None:
     assert "exact_version_dists" not in dockerfile
 
 
-def test_tilelang_comes_from_the_mate_extra() -> None:
+def test_tilelang_comes_from_mate() -> None:
     requirements_text = PRIVATE_REQUIREMENTS.read_text(encoding="utf-8")
-    assert MATE_TILELANG_EXTRA in requirements_text.splitlines()
+    assert MATE_POST1_PIN in requirements_text.splitlines()
     assert "tilelang_musa==" not in requirements_text, (
-        "tilelang-musa must not be pinned by hand: MATE's [tilelang] extra owns it"
+        "tilelang-musa must not be pinned by hand: mate requires it directly"
+    )
+    assert "[tilelang]" not in requirements_text, (
+        "mate 0.2.8.post1 carries tilelang as a core dependency, so the extra "
+        "no longer exists"
     )
 
     verifier = VERIFIER.read_text(encoding="utf-8")
-    assert 'mate_extra_pin("tilelang", "tilelang-musa")' in verifier, (
+    assert 'mate_pin("tilelang-musa")' in verifier, (
         "the image verifier must read the tilelang pin from MATE metadata"
     )
     assert f'("{MATE_TILELANG_DIST}", "{MATE_TILELANG_MODULE}"' in verifier
