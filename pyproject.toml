@@ -48,6 +48,9 @@ musa = "vllm_musa:musa_platform_plugin"
 
 [project.entry-points."vllm.general_plugins"]
 musa_custom_ops = "vllm_musa:register_custom_ops"
+# Registers the MATE-backed W4A16 linear kernel for (PlatformEnum.OOT, "mp"). The target module
+# imports MATE lazily, so an image without MATE simply keeps the shipped kernels.
+mate_w4a16 = "vllm_musa.model_executor.kernels.linear.mixed_precision:register"
 
 [project.urls]
 Homepage = "https://github.com/MooreThreads/vllm-musa"
