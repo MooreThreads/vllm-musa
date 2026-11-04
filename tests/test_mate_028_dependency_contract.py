@@ -6,7 +6,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_REQUIREMENTS = ROOT / "requirements/musa_private.txt"
 DOCKERFILE = ROOT / "docker/musa.Dockerfile"
@@ -63,9 +62,9 @@ def test_image_verifier_reads_every_version_from_the_requirements() -> None:
         assert f'"{distribution}"' in verifier, distribution
         assert f'requirement_prefix("{distribution}")' in verifier, distribution
         assert f'"{distribution}"' in exact_gate, distribution
-        assert f"{distribution}=={version}" not in verifier, (
-            f"{distribution} version must come from requirements/musa_private.txt"
-        )
+        assert (
+            f"{distribution}=={version}" not in verifier
+        ), f"{distribution} version must come from requirements/musa_private.txt"
 
     # The Dockerfile only runs the verifier, so cohort changes stay in one file.
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
@@ -76,19 +75,19 @@ def test_image_verifier_reads_every_version_from_the_requirements() -> None:
 def test_tilelang_comes_from_mate() -> None:
     requirements_text = PRIVATE_REQUIREMENTS.read_text(encoding="utf-8")
     assert MATE_POST1_PIN in requirements_text.splitlines()
-    assert "tilelang_musa==" not in requirements_text, (
-        "tilelang-musa must not be pinned by hand: mate requires it directly"
-    )
+    assert (
+        "tilelang_musa==" not in requirements_text
+    ), "tilelang-musa must not be pinned by hand: mate requires it directly"
     assert "[tilelang]" not in requirements_text, (
         "mate 0.2.8.post1 carries tilelang as a core dependency, so the extra "
         "no longer exists"
     )
 
     verifier = VERIFIER.read_text(encoding="utf-8")
-    assert 'mate_pin("tilelang-musa")' in verifier, (
-        "the image verifier must read the tilelang pin from MATE metadata"
-    )
+    assert (
+        'mate_pin("tilelang-musa")' in verifier
+    ), "the image verifier must read the tilelang pin from MATE metadata"
     assert f'("{MATE_TILELANG_DIST}", "{MATE_TILELANG_MODULE}"' in verifier
-    assert '"0.1.12+musa.5"' not in verifier, (
-        "the tilelang version must come from mate's metadata, not a literal"
-    )
+    assert (
+        '"0.1.12+musa.5"' not in verifier
+    ), "the tilelang version must come from mate's metadata, not a literal"

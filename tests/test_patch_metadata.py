@@ -11,7 +11,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
 METADATA = ROOT / "vllm_musa" / "patches" / "metadata"
-spec = importlib.util.spec_from_file_location("patch_metadata", ROOT / "tools" / "patch_metadata.py")
+
+#: Series length this branch is built on; bump it with the series.
+SERIES_LENGTH = 211
+spec = importlib.util.spec_from_file_location(
+    "patch_metadata", ROOT / "tools" / "patch_metadata.py"
+)
 patch_metadata = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(patch_metadata)
 
@@ -28,14 +33,36 @@ def _fixture(tmp_path):
         "| --- | --- | --- |\n"
         "| `0065` | Superseded by `0001`. | Model smoke. |\n"
     )
-    lineage = {"schema_version": 1, "omissions": [{
-        "legacy_id": "0065", "disposition": "superseded", "owners": ["0001"],
-        "rationale": "Direct compiler fix.", "validation_required": "Model smoke.",
-    }]}
-    groups = {"schema_version": 1, "groups": [{
-        "id": "compiler", "purpose": "Compile MUSA kernels", "patches": ["0001", "0002"],
-        "depends_on": [], "required_checks": ["series", "replay", "round_trip", "source_contract", "musa_runtime"],
-    }]}
+    lineage = {
+        "schema_version": 1,
+        "omissions": [
+            {
+                "legacy_id": "0065",
+                "disposition": "superseded",
+                "owners": ["0001"],
+                "rationale": "Direct compiler fix.",
+                "validation_required": "Model smoke.",
+            }
+        ],
+    }
+    groups = {
+        "schema_version": 1,
+        "groups": [
+            {
+                "id": "compiler",
+                "purpose": "Compile MUSA kernels",
+                "patches": ["0001", "0002"],
+                "depends_on": [],
+                "required_checks": [
+                    "series",
+                    "replay",
+                    "round_trip",
+                    "source_contract",
+                    "musa_runtime",
+                ],
+            }
+        ],
+    }
     return series, metadata, lineage, groups
 
 
@@ -48,22 +75,38 @@ def _validate(series, metadata, lineage, groups):
 def test_real_series_has_exact_coverage():
     result = patch_metadata.validate(SERIES, METADATA)
     assert result.errors == []
-    assert result.patch_count == len(list(SERIES.glob("*.patch")))
+    assert result.patch_count == SERIES_LENGTH
+    assert len(list(SERIES.glob("*.patch"))) == SERIES_LENGTH
     assert result.omission_count == 24
     assert result.group_count > 1
 
 
-@pytest.mark.parametrize("mutation,expected", [
-    (lambda l, g: l["omissions"].append(copy.deepcopy(l["omissions"][0])), "duplicate legacy"),
-    (lambda l, g: l["omissions"].clear(), "missing legacy"),
-    (lambda l, g: l["omissions"][0]["owners"].append("9999"), "unknown owner"),
-    (lambda l, g: g["groups"][0]["patches"].append("0001"), "duplicate patch"),
-    (lambda l, g: g["groups"][0]["patches"].pop(), "missing patch"),
-    (lambda l, g: g["groups"][0]["patches"].append("9999"), "unknown patch"),
-    (lambda l, g: g["groups"][0]["required_checks"].append("not-a-check"), "unknown check"),
-    (lambda l, g: g["groups"][0]["depends_on"].append("missing"), "unknown dependency"),
-    (lambda l, g: l["omissions"][0].update(disposition="passed"), "unknown disposition"),
-])
+@pytest.mark.parametrize(
+    "mutation,expected",
+    [
+        (
+            lambda l, g: l["omissions"].append(copy.deepcopy(l["omissions"][0])),
+            "duplicate legacy",
+        ),
+        (lambda l, g: l["omissions"].clear(), "missing legacy"),
+        (lambda l, g: l["omissions"][0]["owners"].append("9999"), "unknown owner"),
+        (lambda l, g: g["groups"][0]["patches"].append("0001"), "duplicate patch"),
+        (lambda l, g: g["groups"][0]["patches"].pop(), "missing patch"),
+        (lambda l, g: g["groups"][0]["patches"].append("9999"), "unknown patch"),
+        (
+            lambda l, g: g["groups"][0]["required_checks"].append("not-a-check"),
+            "unknown check",
+        ),
+        (
+            lambda l, g: g["groups"][0]["depends_on"].append("missing"),
+            "unknown dependency",
+        ),
+        (
+            lambda l, g: l["omissions"][0].update(disposition="passed"),
+            "unknown disposition",
+        ),
+    ],
+)
 def test_invalid_metadata_fails(tmp_path, mutation, expected):
     series, metadata, lineage, groups = _fixture(tmp_path)
     mutation(lineage, groups)
@@ -73,16 +116,22 @@ def test_invalid_metadata_fails(tmp_path, mutation, expected):
 def test_readme_omission_must_be_documented(tmp_path):
     series, metadata, lineage, groups = _fixture(tmp_path)
     (series / "README.md").write_text(
-        (series / "README.md").read_text() +
-        "| `0069` | Unresolved offset. | MUSA sparse decode. |\n"
+        (series / "README.md").read_text()
+        + "| `0069` | Unresolved offset. | MUSA sparse decode. |\n"
     )
-    assert "missing legacy" in "\n".join(_validate(series, metadata, lineage, groups).errors)
+    assert "missing legacy" in "\n".join(
+        _validate(series, metadata, lineage, groups).errors
+    )
 
 
 def test_group_membership_is_ordered_and_unique(tmp_path):
     series, metadata, lineage, groups = _fixture(tmp_path)
-    groups["groups"].append({**groups["groups"][0], "id": "second", "patches": ["0002"]})
-    assert "duplicate patch" in "\n".join(_validate(series, metadata, lineage, groups).errors)
+    groups["groups"].append(
+        {**groups["groups"][0], "id": "second", "patches": ["0002"]}
+    )
+    assert "duplicate patch" in "\n".join(
+        _validate(series, metadata, lineage, groups).errors
+    )
     groups["groups"].pop()
     groups["groups"][0]["patches"] = ["0002", "0001"]
     assert "order" in "\n".join(_validate(series, metadata, lineage, groups).errors)
@@ -91,14 +140,22 @@ def test_group_membership_is_ordered_and_unique(tmp_path):
 def test_duplicate_and_cyclic_dependencies_fail(tmp_path):
     series, metadata, lineage, groups = _fixture(tmp_path)
     groups["groups"][0]["patches"] = ["0001"]
-    groups["groups"].append({
-        **groups["groups"][0], "id": "second", "patches": ["0002"],
-        "depends_on": ["compiler", "compiler"],
-    })
-    assert "duplicate dependency" in "\n".join(_validate(series, metadata, lineage, groups).errors)
+    groups["groups"].append(
+        {
+            **groups["groups"][0],
+            "id": "second",
+            "patches": ["0002"],
+            "depends_on": ["compiler", "compiler"],
+        }
+    )
+    assert "duplicate dependency" in "\n".join(
+        _validate(series, metadata, lineage, groups).errors
+    )
     groups["groups"][1]["depends_on"] = ["compiler"]
     groups["groups"][0]["depends_on"] = ["second"]
-    assert "dependency cycle" in "\n".join(_validate(series, metadata, lineage, groups).errors)
+    assert "dependency cycle" in "\n".join(
+        _validate(series, metadata, lineage, groups).errors
+    )
 
 
 def test_missing_and_malformed_files_fail(tmp_path):

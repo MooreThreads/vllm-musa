@@ -113,8 +113,10 @@ def check(dist_name: str, module_name: str, pinned: str) -> None:
     installed = version(dist_name)
     if dist_name in EXACT_VERSION_DISTS and installed != pinned:
         raise RuntimeError(f"{dist_name} expected exactly {pinned}, got {installed}")
-    if dist_name not in EXACT_VERSION_DISTS and pinned and not installed.startswith(
-        pinned
+    if (
+        dist_name not in EXACT_VERSION_DISTS
+        and pinned
+        and not installed.startswith(pinned)
     ):
         raise RuntimeError(f"{dist_name} expected {pinned}, got {installed}")
     action = "skip import" if skip_import else "import"

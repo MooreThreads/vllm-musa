@@ -1,10 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Source contracts for the MUSA per-state Mamba block pool.
 
-The carve is a build-time series member, so this test reads the patch text the
-build installs. The regression it guards is concrete: the v0.28 series carved a
-contiguous pool per state, the v0.32 re-cut dropped it, and the packed page
-stride that came back made the native SSU reject the state view outright.
+The carve ships as a series member, so this test reads the patch text the build
+installs rather than an imported module.
 
 Pinned here:
 
@@ -16,7 +14,6 @@ Pinned here:
 """
 
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parent.parent
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
@@ -39,7 +36,10 @@ def test_pool_member_slices_each_state_out_of_the_page():
     assert SLICE in source
     # The block extent is the state's own byte size; a page term would put the
     # packed stride back into the view.
-    assert "+        end = offset + num_blocks * prod(shape) * get_dtype_size(dtype)" in source
+    assert (
+        "+        end = offset + num_blocks * prod(shape) * get_dtype_size(dtype)"
+        in source
+    )
     assert "+            raise RuntimeError(" in source
 
 
@@ -49,9 +49,9 @@ def test_pool_member_gates_on_a_mamba_spec_in_the_separate_pool_layout():
     assert GATE in source
     # The carve must use the Mamba block count and finish before the attention
     # branch picks a kernel block size.
-    assert source.index("         num_blocks = kv_cache_config.num_blocks_of(tensor)") < (
-        source.index(GATE)
-    )
+    assert source.index(
+        "         num_blocks = kv_cache_config.num_blocks_of(tensor)"
+    ) < (source.index(GATE))
     assert source.index(GATE) < source.index("         kernel_block_size = None")
     # One pool tensor per layer: sharing a tensor would hand two layers the
     # same pools.
@@ -66,4 +66,7 @@ def test_pool_member_flattens_the_layer_pools_in_both_runner_paths():
     assert source.count("+            if isinstance(cache, (list, tuple)):") == 1
     assert "+                runner_kv_caches.extend(cache)" in source
     assert "vllm/v1/worker/gpu/model_runner.py" in source
-    assert "+            for state in (cache if isinstance(cache, (list, tuple)) else (cache,))" in source
+    assert (
+        "+            for state in (cache if isinstance(cache, (list, tuple)) else (cache,))"
+        in source
+    )

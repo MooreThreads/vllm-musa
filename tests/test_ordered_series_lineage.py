@@ -4,19 +4,22 @@
 import re
 from pathlib import Path
 
-
 SERIES = Path(__file__).resolve().parents[1] / "vllm_musa" / "patches" / "series"
+
+#: Series length this branch is built on; bump it with the series.
+SERIES_LENGTH = 211
 
 
 def test_series_numbers_are_contiguous_and_lineage_is_complete() -> None:
     patches = sorted(SERIES.glob("[0-9][0-9][0-9][0-9]-*.patch"))
+    assert len(patches) == SERIES_LENGTH
     numbers = [int(path.name[:4]) for path in patches]
-    assert numbers == list(range(1, len(patches) + 1))
+    assert numbers == list(range(1, SERIES_LENGTH + 1))
 
     readme = (SERIES / "README.md").read_text(encoding="utf-8")
     mapped = re.findall(r"^\| `(\d{4}-[^`]+\.patch)` \|", readme, re.M)
     assert mapped == [patch.name for patch in patches]
-    assert f"Currently **{len(patches)} patches**" in readme
+    assert f"Currently **{SERIES_LENGTH} patches**" in readme
     assert "v0.28 0065: superseded" in readme
     assert "v0.28 0177: superseded" in readme
 
@@ -28,8 +31,7 @@ def test_series_numbers_are_contiguous_and_lineage_is_complete() -> None:
     }
     for new, ancestry in grouped.items():
         line = next(
-            line for line in readme.splitlines()
-            if line.startswith(f"| `{new:04d}-")
+            line for line in readme.splitlines() if line.startswith(f"| `{new:04d}-")
         )
         assert all(item in line for item in ancestry)
 
