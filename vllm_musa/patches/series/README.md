@@ -333,8 +333,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0206-MUSA-fix-Qwen4Exp-Triton-3.2-compatibility.patch` | v0.32 new/updated | fix Qwen4Exp Triton 3.2 compatibility (PLE pointers, QSA metadata kernel, indexer block sizes, top-k fallback) |
 | `0207-MUSA-pin-QSA-sparse-attention-to-four-warps.patch` | v0.32 new/updated | pin QSA sparse attention to four warps |
 | `0208-MUSA-bound-the-QSA-cached-rotary-positions.patch` | v0.32 new/updated | bound the QSA cached rotary positions |
+| `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
 
-Currently **208 patches** and **0 upstream entries** in `upstream/`.
+Currently **209 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
