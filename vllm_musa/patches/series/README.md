@@ -63,7 +63,8 @@ legacy group. Old `0137` (Mooncake P/D dedicated Mamba pools) and `0192`
 their v0.32 behavior still requires separate review. The historical observations
 below describe the earlier baseline, not a measured failure of these follow-ups.
 The DeepSeek-V4.1 W4AFP8 adaptation and overlap follow-ups are carried as
-`0203`–`0204` after this baseline. Hardware validation remains required.
+`0203`–`0204` after this baseline, and the Qwen4Exp QSA migration as
+`0205`–`0211`. Hardware validation remains required.
 
 A patch may update several files when they form one atomic feature. The grouped
 entries are intentionally multi-file: `0037` contains

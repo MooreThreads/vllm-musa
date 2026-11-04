@@ -19,7 +19,7 @@ stream. The existing 1 MiB workspace supplies the per-row starts in place.
  3 files changed, 34 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
-index 8aebdff..976470b 100644
+index 8aebdffdeb..976470b38f 100644
 --- a/vllm/model_executor/warmup/kernel_warmup.py
 +++ b/vllm/model_executor/warmup/kernel_warmup.py
 @@ -194,6 +194,8 @@ def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
@@ -32,7 +32,7 @@ index 8aebdff..976470b 100644
          if sparse_mla_warmup is not None:
              sparse_mla_warmup(worker)
 diff --git a/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py b/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
-index 2065b38..87b146d 100644
+index 2065b38338..87b146d9ed 100644
 --- a/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
 +++ b/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
 @@ -19,6 +19,19 @@ logger = init_logger(__name__)
@@ -56,7 +56,7 @@ index 2065b38..87b146d 100644
      attn_module = sys.modules.get("vllm.models.qwen4_exp.nvidia.qsa")
      if qsa_module is None or attn_module is None:
 diff --git a/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py b/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
-index c3967b5..6aa1f0d 100644
+index c3967b58b8..6aa1f0de7c 100644
 --- a/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
 +++ b/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
 @@ -488,7 +488,25 @@ def _topk(

@@ -33,7 +33,7 @@ without a cache-layout change.
  1 file changed, 149 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/models/qwen4_exp/nvidia/qsa.py b/vllm/models/qwen4_exp/nvidia/qsa.py
-index bde1366..510b848 100644
+index bde1366b02..510b848698 100644
 --- a/vllm/models/qwen4_exp/nvidia/qsa.py
 +++ b/vllm/models/qwen4_exp/nvidia/qsa.py
 @@ -4,6 +4,7 @@

@@ -16,7 +16,7 @@ unmasked loads.
  1 file changed, 16 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index e0aef0a..11b8f58 100644
+index e0aef0ad89..11b8f582e3 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
 @@ -367,6 +367,8 @@ def fused_moe_kernel(
