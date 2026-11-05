@@ -144,7 +144,7 @@ docker run --rm --entrypoint /bin/bash vllm-musa:test \
 | `MCCL_VERSION` | `2.4.0` | MCCL (collective communication library) version. |
 | `PYPI_INDEX_URL` | `https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple` | Public index for ordinary third-party wheels **and** the vendored vLLM's dependencies. |
 | `MUSA_PIP_INDEX_URL` | `https://dl.mthreads.com/repo/api/pypi/pypi/simple` | Moore Threads index for the MUSA/MT wheels. |
-| `MOONCAKE_VERSION` | `0.3.13` | Exact `mooncake-transfer-engine-musa` version installed from `PYPI_INDEX_URL`. |
+| `MOONCAKE_VERSION` | `0.3.14` | Exact `mooncake-transfer-engine-musa` version installed from `PYPI_INDEX_URL`. The wheel provides both the Transfer Engine and the Store bindings. |
 | `BUILD_VLLM_RS` | `1` | `1`: build and install `vllm-rs` plus `_rust_tool_parser`; `0`: omit both and skip Rust/protoc setup. |
 | `IMAGE_REPOSITORY` | `vllm-musa` | Image repository name. |
 | `IMAGE_FLAVOR` | `ubuntu22.04_py<py>_musa_runtime_<ver>_pytorch_release_<torch>` | Tag flavor; `<torch>` is derived from `requirements/musa_private.txt` and sanitized for Docker tags. |
@@ -184,8 +184,10 @@ MUSA_RUNTIME_VERSION=5.2 MUSA_APT_SOURCE=<5.2-apt-repo> bash docker/build_image.
 ```
 
 The prebuilt MUSA Mooncake wheel is installed after the torch and vLLM stacks.
-Pin a different published build with `MOONCAKE_VERSION`; the image does not
-clone or compile Mooncake source.
+It provides both the Transfer Engine (`mooncake.engine`) and the Store bindings
+(`mooncake.store`); the image stage checks both imports. Pin a different
+published build with `MOONCAKE_VERSION`; the image does not clone or compile
+Mooncake source.
 
 **Skip the Rust frontend:**
 

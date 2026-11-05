@@ -76,10 +76,12 @@ rollback rather than a production default.
 
 Uses the Mooncake connector from the pinned upstream vLLM checkout for
 disaggregated prefill/decode serving. The MUSA image installs the compatible
-`mooncake-transfer-engine-musa` package; no MUSA-specific constructor rebind is
-required. Use Mooncake's official `MC_TE_FILTERS` HCA allow-list for RDMA
-selection. The old `MOONCAKE_RDMA_DEVICES` variable is only a deprecated
-compatibility alias, and never overrides an explicitly set `MC_TE_FILTERS`.
+`mooncake-transfer-engine-musa` package, which provides both the Transfer
+Engine (`mooncake.engine`) and the Store bindings (`mooncake.store`); no
+MUSA-specific constructor rebind is required. Use Mooncake's official
+`MC_TE_FILTERS` HCA allow-list for RDMA selection. The old
+`MOONCAKE_RDMA_DEVICES` variable is only a deprecated compatibility alias, and
+never overrides an explicitly set `MC_TE_FILTERS`.
 
 ### `utils/` – Utilities
 

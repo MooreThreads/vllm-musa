@@ -341,11 +341,12 @@ RUN mkdir -p /tmp/vllm-rs-artifacts && \
     fi
 
 # Install the prebuilt MUSA wheel after torch/vllm-musa so Mooncake integrations
-# can import the installed accelerator stack. Device visibility remains unset;
-# the final image enables it below.
+# can import the installed accelerator stack. The wheel provides both the
+# Transfer Engine and the Store bindings, so the stage check imports both.
+# Device visibility remains unset; the final image enables it below.
 FROM vllm_musa_installed AS mooncake
 
-ARG MOONCAKE_VERSION=0.3.13
+ARG MOONCAKE_VERSION=0.3.14
 ARG PYPI_INDEX_URL
 
 RUN python -m pip install \
@@ -353,12 +354,12 @@ RUN python -m pip install \
         --only-binary=:all: \
         --index-url "${PYPI_INDEX_URL}" \
         "mooncake-transfer-engine-musa==${MOONCAKE_VERSION}" && \
-    MOONCAKE_VERSION="${MOONCAKE_VERSION}" python -c 'import os; from importlib.metadata import version; from mooncake.engine import TransferEngine; actual = version("mooncake-transfer-engine-musa"); expected = os.environ["MOONCAKE_VERSION"]; assert actual == expected, (actual, expected); print(f"PASS mooncake-transfer-engine-musa version={actual}")'
+    MOONCAKE_VERSION="${MOONCAKE_VERSION}" python -c 'import os; from importlib.metadata import version; from mooncake.engine import TransferEngine; from mooncake.store import MooncakeDistributedStore; actual = version("mooncake-transfer-engine-musa"); expected = os.environ["MOONCAKE_VERSION"]; assert actual == expected, (actual, expected); print(f"PASS mooncake-transfer-engine-musa version={actual} transfer_engine={TransferEngine.__name__} store={MooncakeDistributedStore.__name__}")'
 
 FROM mooncake AS final
 
 ARG BUILD_VLLM_RS=1
-ARG MOONCAKE_VERSION=0.3.13
+ARG MOONCAKE_VERSION=0.3.14
 
 ENV MTHREADS_VISIBLE_DEVICES=all
 
