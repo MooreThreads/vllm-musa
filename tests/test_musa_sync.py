@@ -434,8 +434,16 @@ def _formatted_entry(
     staged = tmp_path / "generated"
     subprocess.run(
         [
-            "git", "-C", str(repo), "format-patch", "--no-signature",
-            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+            "git",
+            "-C",
+            str(repo),
+            "format-patch",
+            "--no-signature",
+            "--no-numbered",
+            "--zero-commit",
+            "-o",
+            str(staged),
+            base,
         ],
         check=True,
         capture_output=True,
@@ -456,14 +464,31 @@ def _cli_tree(tmp_path: Path, files: dict) -> Path:
     """
     (tmp_path / "tools").mkdir(parents=True)
     (tmp_path / "vllm_musa" / "patches" / "series").mkdir(parents=True)
-    shutil.copyfile(ROOT / "tools" / "musa_sync.py", tmp_path / "tools" / "musa_sync.py")
-    shutil.copyfile(ROOT / "tools" / "patch_metadata.py", tmp_path / "tools" / "patch_metadata.py")
+    shutil.copyfile(
+        ROOT / "tools" / "musa_sync.py", tmp_path / "tools" / "musa_sync.py"
+    )
+    shutil.copyfile(
+        ROOT / "tools" / "patch_metadata.py", tmp_path / "tools" / "patch_metadata.py"
+    )
     metadata = tmp_path / "vllm_musa" / "patches" / "metadata"
     metadata.mkdir()
-    (metadata / "legacy-lineage.json").write_text('{"schema_version": 1, "omissions": []}')
+    (metadata / "legacy-lineage.json").write_text(
+        '{"schema_version": 1, "omissions": []}'
+    )
     numbers = sorted({name[:4] for name in files if re.match(r"[0-9]{4}-", name)})
-    groups = [{"id": "fixture", "purpose": "Synthetic series", "patches": numbers,
-               "depends_on": [], "required_checks": ["series"]}] if numbers else []
+    groups = (
+        [
+            {
+                "id": "fixture",
+                "purpose": "Synthetic series",
+                "patches": numbers,
+                "depends_on": [],
+                "required_checks": ["series"],
+            }
+        ]
+        if numbers
+        else []
+    )
     (metadata / "patch-groups.json").write_text(
         json.dumps({"schema_version": 1, "groups": groups})
     )
@@ -510,8 +535,7 @@ def test_series_numbering_rows_reports_duplicate_and_gap(ms):
         (
             "series numbering",
             "non-contiguous",
-            "expected 0001..0004, missing 0003 "
-            "(numbers present: 0001, 0002, 0004)",
+            "expected 0001..0004, missing 0003 " "(numbers present: 0001, 0002, 0004)",
         ),
     ]
 
@@ -573,7 +597,9 @@ def test_subcommands_are_wired(ms):
     assert "{" + ",".join(ms.SUBCOMMANDS) + "}" in ms._build_parser().format_help()
 
 
-def test_check_series_fails_closed_without_a_series_dir(ms, tmp_path, monkeypatch, capsys):
+def test_check_series_fails_closed_without_a_series_dir(
+    ms, tmp_path, monkeypatch, capsys
+):
     # Globbing zero entries used to print "0 clean / 0 total / 0 need
     # attention" and exit 0: a deleted series directory stayed green.
     missing = tmp_path / "not-there"
@@ -659,9 +685,7 @@ def test_index_line_detection_searches_past_the_mailbox_header(
         i for i, line in enumerate(text.split(b"\n")) if line.startswith(b"index ")
     )
     assert first_index > 12, first_index  # the fixture is the point
-    subject = next(
-        line for line in text.split(b"\n") if line.startswith(b"Subject: ")
-    )
+    subject = next(line for line in text.split(b"\n") if line.startswith(b"Subject: "))
     text = text.replace(subject, b"Subject: [PATCH] entry")
     series = tmp_path / "series"
     _write_series(series, "0001-entry.patch", text)
@@ -780,7 +804,9 @@ index 0000000000..{blob}
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
-def test_repo_half_only_asks_for_blobs_the_series_cannot_produce(ms, tmp_path, monkeypatch):
+def test_repo_half_only_asks_for_blobs_the_series_cannot_produce(
+    ms, tmp_path, monkeypatch
+):
     """A blob half that demanded every declared id exist would turn the shipped
     172-entry series red on any pristine clone: a fresh clone at the pin resolves
     0/232 postimages and 133/232 preimages, yet `git am -3` replays all 172.
@@ -858,8 +884,7 @@ def test_repo_half_exempts_an_anchor_only_an_earlier_entry_produces(
     repo = tmp_path / "repo"
 
     rows = {
-        name: (status, detail)
-        for name, status, detail in ms._series_format_rows(repo)
+        name: (status, detail) for name, status, detail in ms._series_format_rows(repo)
     }
 
     # 0002 anchors on the blob 0001 produces earlier in the series: exempt. It
@@ -920,8 +945,7 @@ def test_repo_half_rejects_an_exempt_anchor_that_is_not_a_blob(
 
     _init_repo(tmp_path / "repo")
     rows = {
-        name: status
-        for name, status, _ in ms._series_format_rows(tmp_path / "repo")
+        name: status for name, status, _ in ms._series_format_rows(tmp_path / "repo")
     }
 
     assert rows["0002-second.patch"] == "missing-index-blob"
@@ -1131,7 +1155,6 @@ def test_check_series_replay_reports_the_entry_git_cannot_replay(
     _write_series(series, name, text.replace(b"\n alpha\n", b"\n gamma\n"))
     monkeypatch.setattr(ms, "SERIES_DIR", series)
 
-
     # The cheap half is green — it cannot see applicability, and says so.
     assert ms.main(["check-series", "--repo", str(repo)]) == 0
     capsys.readouterr()
@@ -1166,14 +1189,16 @@ def test_check_series_replay_accepts_a_relative_repo_path(
 
     assert ms.main(["check-series", "--repo", "upstream"]) == 0
     capsys.readouterr()
-    assert ms.main(["check-series", "--repo", "upstream", "--replay"]) == 0, (
-        capsys.readouterr().out
-    )
+    assert (
+        ms.main(["check-series", "--repo", "upstream", "--replay"]) == 0
+    ), capsys.readouterr().out
     assert "repo-unusable" not in capsys.readouterr().out
     # --round-trip needs a checkout that HOLDS the series (a different state),
     # so the relative path is exercised here by the replay; the mode's own
     # contract is pinned by the round-trip tests below.
-    assert ms.main(["check-series", "--repo", "upstream", "--replay", "--round-trip"]) == 2
+    assert (
+        ms.main(["check-series", "--repo", "upstream", "--replay", "--round-trip"]) == 2
+    )
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
@@ -1183,7 +1208,7 @@ def test_check_series_replay_and_round_trip_need_a_repo(ms, capsys):
     Mutation: return 0 instead of 2 for a missing ``--repo``.
     """
     assert ms.main(["check-series", "--replay"]) == 2
-    assert '--repo' in capsys.readouterr().out
+    assert "--repo" in capsys.readouterr().out
     assert ms.main(["check-series", "--round-trip"]) == 2
     assert "--repo" in capsys.readouterr().out
     # The two modes need contradictory checkout states, so combining them is a
@@ -1225,7 +1250,10 @@ def test_repo_half_rejects_an_anchor_the_entry_itself_declares_as_a_postimage(
     out = capsys.readouterr().out
     assert "missing-index-blob" in out and ghost in out and "0001-ghost.patch" in out
     # The gate now agrees with git: this entry cannot replay at that pin.
-    assert ms._replay_rows(repo, [entry], {entry.name: entry.read_bytes()})[0][1] == "replay-failed"
+    assert (
+        ms._replay_rows(repo, [entry], {entry.name: entry.read_bytes()})[0][1]
+        == "replay-failed"
+    )
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
@@ -1283,7 +1311,9 @@ def test_repo_half_rejects_an_anchor_that_is_not_a_blob(
     assert _git(repo, "cat-file", "-t", commit).stdout.strip() == "commit"
     series = tmp_path / "series"
     _write_series(
-        series, "0001-commit-anchor.patch", _mailbox("commit anchor", _ghost_anchor_diff(commit))
+        series,
+        "0001-commit-anchor.patch",
+        _mailbox("commit anchor", _ghost_anchor_diff(commit)),
     )
     monkeypatch.setattr(ms, "SERIES_DIR", series)
 
@@ -1470,13 +1500,27 @@ def _maintenance_repo(tmp_path: Path, messages: tuple[str, ...] = ("a",)):
     staged = tmp_path / "generated"
     subprocess.run(
         [
-            "git", "-C", str(repo), "-c", "core.abbrev=10", "format-patch", "--no-signature",
-            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "core.abbrev=10",
+            "format-patch",
+            "--no-signature",
+            "--no-numbered",
+            "--zero-commit",
+            "-o",
+            str(staged),
+            base,
         ],
         check=True,
         capture_output=True,
     )
-    return repo, base, [(p.name, p.read_bytes()) for p in sorted(staged.glob("*.patch"))]
+    return (
+        repo,
+        base,
+        [(p.name, p.read_bytes()) for p in sorted(staged.glob("*.patch"))],
+    )
 
 
 def test_check_series_round_trip_reports_what_regen_would_rewrite(
@@ -1599,8 +1643,8 @@ def test_check_series_round_trip_accepts_a_regen_fixed_point(
     monkeypatch.setattr(ms, "SERIES_DIR", series)
 
     assert ms.main(["check-series", "--repo", str(repo), "--round-trip"]) == 0
-    assert capsys.readouterr().out.strip().endswith(
-        "=== musa_sync check-series: PASS ==="
+    assert (
+        capsys.readouterr().out.strip().endswith("=== musa_sync check-series: PASS ===")
     )
 
 
@@ -1619,7 +1663,12 @@ def test_replay_refuses_an_exemption_no_entry_earns(ms, tmp_path, monkeypatch, c
     repo, name, text = _formatted_entry(tmp_path)
     ghost = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
     # 0001 keeps its real preimage and claims an id no replay can produce.
-    first = re.sub(rb"index ([0-9a-f]+)\.\.([0-9a-f]+)", rb"index \1.." + ghost.encode(), text, count=1)
+    first = re.sub(
+        rb"index ([0-9a-f]+)\.\.([0-9a-f]+)",
+        rb"index \1.." + ghost.encode(),
+        text,
+        count=1,
+    )
     assert first != text and ghost.encode() in first
     series = tmp_path / "series"
     _write_series(series, name, first)
@@ -1680,8 +1729,15 @@ def test_replay_reports_a_series_the_build_path_cannot_apply(
     staged.mkdir()
     subprocess.run(
         [
-            "git", "-C", str(scratch), "format-patch", "--no-signature",
-            "--no-numbered", "--zero-commit", "-o", str(staged),
+            "git",
+            "-C",
+            str(scratch),
+            "format-patch",
+            "--no-signature",
+            "--no-numbered",
+            "--zero-commit",
+            "-o",
+            str(staged),
             f"{later}..HEAD",
         ],
         check=True,
@@ -1776,17 +1832,23 @@ def test_series_gate_accepts_hunkless_entries(ms, tmp_path):
     staged = tmp_path / "generated"
     subprocess.run(
         [
-            "git", "-C", str(repo), "format-patch", "--no-signature",
-            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+            "git",
+            "-C",
+            str(repo),
+            "format-patch",
+            "--no-signature",
+            "--no-numbered",
+            "--zero-commit",
+            "-o",
+            str(staged),
+            base,
         ],
         check=True,
         capture_output=True,
     )
     entries = sorted(staged.glob("*.patch"))
     assert len(entries) == 3
-    hunkless = [
-        p for p in entries if b"@@ " not in p.read_bytes()
-    ]
+    hunkless = [p for p in entries if b"@@ " not in p.read_bytes()]
     assert len(hunkless) == 2, [p.name for p in entries]  # the rename and the chmod
     for patch in entries:
         text = patch.read_bytes()
@@ -1821,7 +1883,9 @@ def test_series_gate_accepts_a_cr_in_one_structural_line(ms, tmp_path, monkeypat
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
-def test_series_gate_accepts_a_crlf_file_added_by_the_entry(ms, tmp_path, monkeypatch, capsys):
+def test_series_gate_accepts_a_crlf_file_added_by_the_entry(
+    ms, tmp_path, monkeypatch, capsys
+):
     """Third audit round F1: the CRLF row fired on a legitimate entry.
 
     `git format-patch` writes a real CR into the *added* lines of a CRLF file,
@@ -1842,8 +1906,16 @@ def test_series_gate_accepts_a_crlf_file_added_by_the_entry(ms, tmp_path, monkey
     staged = tmp_path / "generated"
     subprocess.run(
         [
-            "git", "-C", str(repo), "format-patch", "--no-signature",
-            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+            "git",
+            "-C",
+            str(repo),
+            "format-patch",
+            "--no-signature",
+            "--no-numbered",
+            "--zero-commit",
+            "-o",
+            str(staged),
+            base,
         ],
         check=True,
         capture_output=True,
@@ -1891,8 +1963,16 @@ def test_series_gate_ignores_an_anchor_quoted_in_the_commit_message(
     staged = tmp_path / "generated"
     subprocess.run(
         [
-            "git", "-C", str(repo), "format-patch", "--no-signature",
-            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+            "git",
+            "-C",
+            str(repo),
+            "format-patch",
+            "--no-signature",
+            "--no-numbered",
+            "--zero-commit",
+            "-o",
+            str(staged),
+            base,
         ],
         check=True,
         capture_output=True,
@@ -1953,7 +2033,9 @@ def test_repo_half_fails_closed_on_an_unusable_repo_even_without_anchors(
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
-def test_replay_names_a_checkout_that_already_holds_the_series(ms, tmp_path, monkeypatch, capsys):
+def test_replay_names_a_checkout_that_already_holds_the_series(
+    ms, tmp_path, monkeypatch, capsys
+):
     """Third audit round F4: a wrong *state* must not read as a broken entry.
 
     `git am -3` exits 0 and creates no commit when the entry is already present
@@ -1974,8 +2056,16 @@ def test_replay_names_a_checkout_that_already_holds_the_series(ms, tmp_path, mon
     staged = tmp_path / "generated"
     subprocess.run(
         [
-            "git", "-C", str(scratch), "format-patch", "--no-signature",
-            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+            "git",
+            "-C",
+            str(scratch),
+            "format-patch",
+            "--no-signature",
+            "--no-numbered",
+            "--zero-commit",
+            "-o",
+            str(staged),
+            base,
         ],
         check=True,
         capture_output=True,
@@ -2138,8 +2228,16 @@ def test_series_gate_accepts_subjects_git_itself_slugifies(ms, tmp_path):
     staged = tmp_path / "generated"
     subprocess.run(
         [
-            "git", "-C", str(repo), "format-patch", "--no-signature",
-            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+            "git",
+            "-C",
+            str(repo),
+            "format-patch",
+            "--no-signature",
+            "--no-numbered",
+            "--zero-commit",
+            "-o",
+            str(staged),
+            base,
         ],
         check=True,
         capture_output=True,
@@ -2235,9 +2333,7 @@ def test_check_series_rejects_a_non_regular_entry(ms, tmp_path, monkeypatch, cap
         ("fifo", "not-regular-file"),
     ],
 )
-def test_cli_never_tracebacks_on_a_broken_entry_file(
-    tmp_path, kind, status
-):
+def test_cli_never_tracebacks_on_a_broken_entry_file(tmp_path, kind, status):
     """F8/F9: chmod-000 / dangling symlink / directory entries used to kill the
     CLI at import time (`manifest.py: _patch_target`), rc 1 with a traceback and
     no verdict line, and a fifo entry used to *hang* it there forever
@@ -2290,7 +2386,9 @@ def test_check_series_fails_closed_on_a_repo_it_cannot_read(ms, tmp_path, capsys
     out = capsys.readouterr().out
 
     assert "repo-unusable" in out and str(plain) in out
-    assert out.strip().endswith("=== musa_sync check-series: FAIL (series-format=1, numbering=0) ===")
+    assert out.strip().endswith(
+        "=== musa_sync check-series: FAIL (series-format=1, numbering=0) ==="
+    )
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
@@ -2400,8 +2498,16 @@ def test_git_slug_reproduces_git_format_patch_filenames(ms, tmp_path):
     staged = tmp_path / "generated"
     subprocess.run(
         [
-            "git", "-C", str(repo), "format-patch", "--no-signature",
-            "--no-numbered", "--zero-commit", "-o", str(staged), base,
+            "git",
+            "-C",
+            str(repo),
+            "format-patch",
+            "--no-signature",
+            "--no-numbered",
+            "--zero-commit",
+            "-o",
+            str(staged),
+            base,
         ],
         check=True,
         capture_output=True,
@@ -2443,11 +2549,7 @@ def test_bare_diff_with_a_hunk_needs_an_index_line(ms, tmp_path, monkeypatch):
     """
     series = tmp_path / "series"
     body = (
-        "--- a/value.txt\n"
-        "+++ b/value.txt\n"
-        "@@ -1 +1,2 @@\n"
-        " alpha\n"
-        "+beta\n"
+        "--- a/value.txt\n" "+++ b/value.txt\n" "@@ -1 +1,2 @@\n" " alpha\n" "+beta\n"
     )
     _write_series(series, "0001-bare-hunk.patch", _mailbox("bare-hunk", body))
     monkeypatch.setattr(ms, "SERIES_DIR", series)
@@ -2499,8 +2601,16 @@ def test_replay_accepts_a_new_file_whose_content_already_exists(
     staged = tmp_path / "generated"
     subprocess.run(
         [
-            "git", "-C", str(repo), "format-patch", "--no-signature", "--no-numbered",
-            "--zero-commit", "-o", str(staged), base,
+            "git",
+            "-C",
+            str(repo),
+            "format-patch",
+            "--no-signature",
+            "--no-numbered",
+            "--zero-commit",
+            "-o",
+            str(staged),
+            base,
         ],
         check=True,
         capture_output=True,
@@ -2549,7 +2659,9 @@ def test_postimage_is_checked_against_the_entrys_own_commit(
     # entry 1's own declaration is earned: the commit it created holds the blob at
     # its path, so the check stays quiet.
     assert (
-        ms._unearned_exemption_rows(repo, [path1], {name1: text1}, {name1: first_commit})
+        ms._unearned_exemption_rows(
+            repo, [path1], {name1: text1}, {name1: first_commit}
+        )
         == []
     )
 
@@ -2705,13 +2817,14 @@ def test_declared_postimages_reads_quoted_deleted_and_multi_file_sections(ms):
     Mutation: skip `+++ /dev/null` sections, drop `_unquote_git_path`, or split the
     bare body at the pair rather than at `_header_run_start`.
     """
+
     def mailbox(subject: str, diff: str) -> bytes:
         return _mailbox(subject, diff)
 
     quoted = mailbox(
         "quoted",
         'diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"\n'
-        'index 1111111111..2222222222 100644\n'
+        "index 1111111111..2222222222 100644\n"
         '--- "a/caf\\303\\251.txt"\n+++ "b/caf\\303\\251.txt"\n'
         "@@ -1 +1,2 @@\n alpha\n+beta\n",
     )
@@ -2805,7 +2918,9 @@ def test_a_quoted_index_line_just_above_a_bare_diff_is_prose_not_an_anchor(ms):
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
-def test_round_trip_refuses_a_checkout_with_unrelated_history(ms, tmp_path, monkeypatch, capsys):
+def test_round_trip_refuses_a_checkout_with_unrelated_history(
+    ms, tmp_path, monkeypatch, capsys
+):
     """Round 5: `--round-trip` paired the series with a checkout that is not it.
 
     `_series_base` falls back to `HEAD~count`, so a checkout with exactly `count`
@@ -2820,7 +2935,9 @@ def test_round_trip_refuses_a_checkout_with_unrelated_history(ms, tmp_path, monk
     Mutation: pair the entries whenever the counts match.
     """
     repo, base, entries = _maintenance_repo(tmp_path, ("a", "b", "c"))
-    monkeypatch.setattr(ms, "_default_target", lambda: None)  # force the HEAD~count path
+    monkeypatch.setattr(
+        ms, "_default_target", lambda: None
+    )  # force the HEAD~count path
     # The entries stay canonical (so nothing else rows) and only their subjects are
     # rewritten: that is what makes this series "not the one this checkout holds".
     series = tmp_path / "series"
@@ -2828,7 +2945,10 @@ def test_round_trip_refuses_a_checkout_with_unrelated_history(ms, tmp_path, monk
     for i, (_name, body) in enumerate(entries, start=1):
         slug = f"unrelated{'xyzw'[i - 1]}"
         text = re.sub(
-            r"Subject: \[PATCH\] .*\n", f"Subject: [PATCH] {slug}\n", body.decode(), count=1
+            r"Subject: \[PATCH\] .*\n",
+            f"Subject: [PATCH] {slug}\n",
+            body.decode(),
+            count=1,
         )
         (series / f"{i:04d}-{slug}.patch").write_text(text)
     monkeypatch.setattr(ms, "SERIES_DIR", series)
@@ -2842,7 +2962,9 @@ def test_round_trip_refuses_a_checkout_with_unrelated_history(ms, tmp_path, monk
     assert "--- 3 clean / 3 total / 1 need attention ---" in out
 
 
-def test_entry_rows_match_a_hostile_filename_by_its_real_name(ms, tmp_path, monkeypatch):
+def test_entry_rows_match_a_hostile_filename_by_its_real_name(
+    ms, tmp_path, monkeypatch
+):
     """Round 5: counts keyed on the *display* name dropped a real entry.
 
     `_entry_file_rows` filtered with `SERIES_DIR / row[0].is_file()`, and `row[0]`
@@ -2907,7 +3029,9 @@ def test_regen_and_rebase_end_with_a_verdict_line(ms, tmp_path, monkeypatch, cap
     assert "=== musa_sync rebase: PASS ===" in capsys.readouterr().out
 
 
-def test_verify_refuses_a_target_the_checkout_does_not_contain(ms, tmp_path, monkeypatch, capsys):
+def test_verify_refuses_a_target_the_checkout_does_not_contain(
+    ms, tmp_path, monkeypatch, capsys
+):
     """Round 5: `verify --repo X --target Y` reported a green run for an absent Y.
 
     Without the guard the divergence rows were computed against whatever the given
@@ -2929,7 +3053,9 @@ def test_verify_refuses_a_target_the_checkout_does_not_contain(ms, tmp_path, mon
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
-def test_round_trip_guard_is_positional_not_a_set_intersection(ms, tmp_path, monkeypatch, capsys):
+def test_round_trip_guard_is_positional_not_a_set_intersection(
+    ms, tmp_path, monkeypatch, capsys
+):
     """A *set* of subject slugs accepts a checkout that is not this series.
 
     `regen` numbers the entries and derives each name from its commit's subject, so
@@ -2960,7 +3086,9 @@ def test_round_trip_guard_is_positional_not_a_set_intersection(ms, tmp_path, mon
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
-def test_round_trip_pairs_a_held_series_whose_subjects_repeat(ms, tmp_path, monkeypatch, capsys):
+def test_round_trip_pairs_a_held_series_whose_subjects_repeat(
+    ms, tmp_path, monkeypatch, capsys
+):
     """The same guard must not refuse the checkout that *holds* the series.
 
     With a set intersection, a series whose four entries share one subject collapses
@@ -3022,7 +3150,9 @@ def test_gitlink_sections_are_skipped_in_all_three_shapes(ms):
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
-def test_regen_and_rebase_report_a_verdict_on_the_paths_that_fail(ms, tmp_path, monkeypatch, capsys):
+def test_regen_and_rebase_report_a_verdict_on_the_paths_that_fail(
+    ms, tmp_path, monkeypatch, capsys
+):
     """The verdict line has to exist on the failure paths too.
 
     `regen` in a checkout with nothing above the pin printed only an ERROR and

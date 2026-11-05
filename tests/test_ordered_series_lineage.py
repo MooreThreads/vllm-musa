@@ -4,7 +4,6 @@
 import re
 from pathlib import Path
 
-
 SERIES = Path(__file__).resolve().parents[1] / "vllm_musa" / "patches" / "series"
 
 
@@ -28,8 +27,7 @@ def test_series_numbers_are_contiguous_and_lineage_is_complete() -> None:
     }
     for new, ancestry in grouped.items():
         line = next(
-            line for line in readme.splitlines()
-            if line.startswith(f"| `{new:04d}-")
+            line for line in readme.splitlines() if line.startswith(f"| `{new:04d}-")
         )
         assert all(item in line for item in ancestry)
 
