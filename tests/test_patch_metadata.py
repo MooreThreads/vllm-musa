@@ -11,6 +11,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
 METADATA = ROOT / "vllm_musa" / "patches" / "metadata"
+
+#: Series length this branch is built on; bump it with the series.
+SERIES_LENGTH = 212
 spec = importlib.util.spec_from_file_location(
     "patch_metadata", ROOT / "tools" / "patch_metadata.py"
 )
@@ -72,7 +75,8 @@ def _validate(series, metadata, lineage, groups):
 def test_real_series_has_exact_coverage():
     result = patch_metadata.validate(SERIES, METADATA)
     assert result.errors == []
-    assert result.patch_count == len(list(SERIES.glob("*.patch")))
+    assert result.patch_count == SERIES_LENGTH
+    assert len(list(SERIES.glob("*.patch"))) == SERIES_LENGTH
     assert result.omission_count == 24
     assert result.group_count > 1
 

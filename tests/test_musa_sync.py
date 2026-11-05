@@ -70,11 +70,15 @@ def test_report(ms, capsys):
         assert f"'{category}': {n}" in out
 
 
+#: Series length this branch is built on; bump it with the series.
+SERIES_LENGTH = 212
+
+
 def test_report_metadata_and_gate_rejects_stale_metadata(ms, capsys, monkeypatch):
+    assert len(list(ms.SERIES_DIR.glob("*.patch"))) == SERIES_LENGTH
     assert ms.main(["report", "--metadata"]) == 0
     output = capsys.readouterr().out
-    patch_count = len(list((ROOT / "vllm_musa" / "patches" / "series").glob("*.patch")))
-    assert f"{patch_count} patches" in output
+    assert f"{SERIES_LENGTH} patches" in output
     assert "24 legacy omissions" in output
     assert "not pass claims" in output
 

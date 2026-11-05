@@ -19,6 +19,16 @@ Vision-language recipe for four S5000 GPUs.
 | Maximum context | 8,192 tokens |
 | Maximum sequences | 64 |
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`Qwen/Qwen3-VL-32B-Instruct`](https://modelscope.cn/models/Qwen/Qwen3-VL-32B-Instruct) (ModelScope) @ 8d6f46b05db6abe0cb3a5ca8c817929cc0fa2d5a |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 4x S5000 |
+| Served request | 2K/1K, 3K/1K, 3.5K/1K, 4K/1K, 4K/1.5K, 500 prompts each |
+
 ## Launching the server
 
 ```bash

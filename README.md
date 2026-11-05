@@ -20,11 +20,20 @@
 
 *New model support images* 🔥
 
+**vLLM**
+
 - [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next`
 - [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash`
 - [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
-- [FLUX.3-Image-Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:flux3`
 - [DiffusionGemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev`
+
+**vLLM-Omni**
+
+- [FLUX.3-Image-Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:flux3`
+- [MAGI-2 Preview](https://huggingface.co/sand-ai/MAGI-2-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:magi-2-preview`
+
+Read the [MAGI-2 Preview on vLLM-Omni blog post](https://vllm.ai/blog/2026-10-12-magi2-preview-musa)
+for the S5000 measurements, the individual PR gains, and the reproduction steps.
 
 These model-specific tags are maintained independently of the release line; we
 do not recommend production use without verifying the exact image and model
@@ -39,7 +48,7 @@ providing an OpenAI-compatible inference and serving engine for MUSA GPUs.
 
 - v0.32.0-dev development line with the vLLM V1 engine.
 - Uses the pinned MUSA stack: PyTorch/torch_musa 2.11.0.post2 (MUSA 5.2.0),
-  MATE 0.2.7, and torchada 0.1.95; this branch remains an upgrade candidate.
+  MATE 0.2.8.post1, and torchada 0.1.105; this branch remains an upgrade candidate.
 - MUSA-native attention, communication, custom ops, and compilation support.
 - Per-checkpoint recipes for Qwen, DeepSeek-V4-Flash, Nemotron-3.5, and
   DiffusionGemma on S5000.

@@ -23,7 +23,7 @@ SUPPORTED_MUSA_STACKS = {
             "torchaudio==2.11.0.post2+musa5.2.0",
             "deep_ep==1.1.0+musa5.2.0torch2.11.0.post2",
         ),
-        "torchada": "torchada==0.1.95",
+        "torchada": "torchada==0.1.105",
     },
 }
 
@@ -63,7 +63,7 @@ def test_supported_musa_stack_contract_cases_are_explicit():
     )
     assert (
         SUPPORTED_MUSA_STACKS["torch==2.11.0.post2+musa5.2.0"]["torchada"]
-        == "torchada==0.1.95"
+        == "torchada==0.1.105"
     )
     assert (
         "torchvision==0.24.1.post1+musa5.2.0"
@@ -84,7 +84,7 @@ def test_torchada_floor_is_consistent():
     assert expected["torchada"] in common_requirements
     for readme_name in ("README.md", "README_CN.md"):
         readme = (ROOT / readme_name).read_text()
-        assert "torchada 0.1.95" in readme
+        assert "torchada 0.1.105" in readme
 
 
 def _dockerfile_run_commands(dockerfile: str) -> list[str]:
@@ -121,11 +121,15 @@ def test_musa_image_caps_huggingface_hub(dockerfile=None):
     """
     if dockerfile is None:
         dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
+    verifier = (ROOT / "docker" / "verify_installed_dependencies.py").read_text()
     pinned = (ROOT / "requirements" / "common.txt").read_text()
     assert "huggingface_hub>=1.31.0,<2.0" in pinned, "the pin belongs in requirements/"
-    assert "huggingface_hub>=1.31.0" not in dockerfile, "no version belongs in the Dockerfile"
+    assert (
+        "huggingface_hub>=1.31.0" not in dockerfile
+    ), "no version belongs in the Dockerfile"
+    assert "RUN python docker/verify_installed_dependencies.py" in dockerfile
     for module in ("transformers", "huggingface_hub"):
-        assert f'"{module}"' in dockerfile, module
+        assert f'"{module}"' in verifier, module
 
     # Per pip *invocation*: the vendored install and the transitive install share one
     # RUN line, so a check on the RUN would pass even with the constraint moved off the
@@ -134,7 +138,11 @@ def test_musa_image_caps_huggingface_hub(dockerfile=None):
     for command in _dockerfile_run_commands(dockerfile):
         for chunk in command.split("python -m pip install")[1:]:
             invocations.append(chunk.split("&&")[0])
-    vendored = [argv for argv in invocations if "third_party/vllm/requirements/common.txt" in argv]
+    vendored = [
+        argv
+        for argv in invocations
+        if "third_party/vllm/requirements/common.txt" in argv
+    ]
     assert vendored, "no pip invocation installs the vendored requirements"
     for argv in vendored:
         assert "--constraint requirements/common.txt" in argv, argv
@@ -148,13 +156,15 @@ def test_musa_image_runtime_dependency_contract():
         (ROOT / "requirements" / "vllm_runtime_transitive.txt").read_text().splitlines()
     )
     dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
+    verifier = (ROOT / "docker" / "verify_installed_dependencies.py").read_text()
 
     assert "triton==3.2.0" in private_requirements
     _, _, expected = _declared_musa_stack()
     assert set(expected["private"]).issubset(private_requirements)
     assert "fastapi[standard]" in runtime_requirements
     assert "pycountry" in runtime_requirements
-    assert '"requirements/common.txt"' in dockerfile
+    assert '"requirements/common.txt"' in verifier
+    assert "RUN python docker/verify_installed_dependencies.py" in dockerfile
     exact_import_gates = (
         ("torchada", "torchada"),
         ("torch", "torch"),
@@ -165,29 +175,32 @@ def test_musa_image_runtime_dependency_contract():
     )
     for dist_name, module_name in exact_import_gates:
         gate = f'("{dist_name}", "{module_name}", requirement_prefix("{dist_name}"))'
-        assert gate in dockerfile
+        assert gate in verifier
 
-    exact_version_gate = (
-        'exact_version_dists = frozenset({"torchada", "torch", "torch_musa", '
-        '"torchvision", "torchaudio", "deep_ep"})'
-    )
-    assert exact_version_gate in dockerfile
+    exact_version_gate = verifier.split("EXACT_VERSION_DISTS = frozenset(", 1)[1].split(
+        ")", 1
+    )[0]
+    for dist_name in ("torchada", "torch", "torch_musa", "torchvision", "deep_ep"):
+        assert f'"{dist_name}"' in exact_version_gate, dist_name
     torchada_gate = '("torchada", "torchada", requirement_prefix("torchada"))'
     torch_gate = '("torch", "torch", requirement_prefix("torch"))'
-    assert torchada_gate in dockerfile
-    assert dockerfile.index(torchada_gate) < dockerfile.index(torch_gate)
+    assert torchada_gate in verifier
+    assert verifier.index(torchada_gate) < verifier.index(torch_gate)
     import_statement = "importlib.import_module(module_name)"
     version_statement = "installed = version(dist_name)"
-    assert import_statement in dockerfile
-    assert dockerfile.index(import_statement) < dockerfile.index(version_statement)
-    assert "if dist_name in exact_version_dists and installed != prefix:" in dockerfile
+    assert import_statement in verifier
+    assert verifier.index(import_statement) < verifier.index(version_statement)
+    assert "if dist_name in EXACT_VERSION_DISTS and installed != pinned:" in verifier
     assert (
-        "if dist_name not in exact_version_dists and prefix "
-        "and not installed.startswith(prefix):"
-    ) in dockerfile
-    assert '("triton", "triton", requirement_prefix("triton"))' in dockerfile
-    assert '("uvloop", "uvloop", "")' in dockerfile
-    assert '("pycountry", "pycountry", "")' in dockerfile
+        "if (\n"
+        "        dist_name not in EXACT_VERSION_DISTS\n"
+        "        and pinned\n"
+        "        and not installed.startswith(pinned)\n"
+        "    ):"
+    ) in verifier
+    assert '("triton", "triton", requirement_prefix("triton"))' in verifier
+    assert '("uvloop", "uvloop", "")' in verifier
+    assert '("pycountry", "pycountry", "")' in verifier
 
 
 def test_musa_image_matches_upstream_workspace_and_includes_pytest():
@@ -200,7 +213,8 @@ def test_musa_image_matches_upstream_workspace_and_includes_pytest():
     assert "/workspace/vllm-musa" not in dockerfile
     assert "pytest" in test_requirements
     assert "-r requirements/test.txt" in dockerfile
-    assert '("pytest", "pytest", "")' in dockerfile
+    verifier = (ROOT / "docker" / "verify_installed_dependencies.py").read_text()
+    assert '("pytest", "pytest", "")' in verifier
 
 
 def test_musa_image_stage_and_optional_component_contract():
@@ -272,8 +286,7 @@ def test_musa_image_stage_and_optional_component_contract():
     assert "ENTRYPOINT" not in final_stage
     assert "ARG MOONCAKE_VERSION=0.3.13" in final_stage
     assert (
-        'com.mthreads.vllm-musa.mooncake-version="${MOONCAKE_VERSION}"'
-        in final_stage
+        'com.mthreads.vllm-musa.mooncake-version="${MOONCAKE_VERSION}"' in final_stage
     )
     assert 'ENTRYPOINT ["vllm", "serve"]' in openai_stage
 

@@ -31,6 +31,16 @@ server.
 - vLLM-MUSA v0.28.0-dev with its patched vLLM installed.
 - The OvisOCR2 BF16 checkpoint available at `MODEL_PATH`.
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`ATH-MaaS/OvisOCR2`](https://huggingface.co/ATH-MaaS/OvisOCR2) (HF) @ cbdede82e048659b83310476ff807da825f8fe78 |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 1x S5000 |
+| Served request | OmniBench |
+
 ## HTTP server
 
 Replace `<MODEL_PATH>` with the checkpoint directory. Run this command where

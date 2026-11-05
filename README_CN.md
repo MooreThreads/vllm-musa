@@ -20,11 +20,20 @@
 
 *新模型支持镜像* 🔥
 
+**vLLM**
+
 - [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:qwen38-flash-next`
 - [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:glm53-flash`
 - [Hy4-preview](https://huggingface.co/tencent/Hy4-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:hy4-preview`
-- [FLUX.3-Image-Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:flux3`
 - [DiffusionGemma-26B-A4B-it](https://huggingface.co/google/diffusiongemma-26B-A4B-it) — `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev`
+
+**vLLM-Omni**
+
+- [FLUX.3-Image-Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:flux3`
+- [MAGI-2 Preview](https://huggingface.co/sand-ai/MAGI-2-preview) — `registry.mthreads.com/mcconline/inference/vllm/vllm-omni:magi-2-preview`
+
+关于 MAGI-2 Preview 在 S5000 上的测量数据、各项 PR 的收益与复现步骤，请阅读
+[博客：MAGI-2 Preview on vLLM-Omni](https://vllm.ai/blog/2026-10-12-magi2-preview-musa)。
 
 这些模型专用标签独立于当前分支维护；不建议在未核对确切镜像和模型版本的情况下用于生产。
 
@@ -37,7 +46,7 @@ vLLM-MUSA 是摩尔线程为 [vLLM](https://github.com/vllm-project/vllm) 提供
 
 - v0.32.0-dev 系列开发版本，采用 vLLM V1 引擎。
 - 使用固定的 MUSA 软件栈：PyTorch/torch_musa 2.11.0.post2（MUSA 5.2.0）、
-  MATE 0.2.7 和 torchada 0.1.95；当前分支仍属于升级候选版本。
+  MATE 0.2.8.post1 和 torchada 0.1.105；当前分支仍属于升级候选版本。
 - 提供 MUSA 原生注意力机制、通信、自定义算子和编译支持。
 - 针对 S5000 上 Qwen、DeepSeek-V4-Flash、Nemotron-3.5 和 DiffusionGemma 的各个模型检查点提供配置示例。
 

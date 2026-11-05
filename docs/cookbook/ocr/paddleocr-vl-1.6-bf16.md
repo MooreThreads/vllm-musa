@@ -35,6 +35,16 @@ client application.
   its directory, which contains the model configuration, weights, tokenizer,
   and image processor.
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`PaddlePaddle/PaddleOCR-VL-1.6`](https://modelscope.cn/models/PaddlePaddle/PaddleOCR-VL-1.6) (ModelScope) @ 9164b4090ec1aab1855a40ab24adc0e731d247e4 |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 1x S5000 |
+| Served request | OmniBench |
+
 ## HTTP server
 
 ```bash

@@ -18,6 +18,16 @@ FP8 dense-model recipe for a single S5000 GPU.
 | Maximum context | 5,192 tokens |
 | Maximum sequences | 64 |
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`Qwen/Qwen3-8B-FP8`](https://modelscope.cn/models/Qwen/Qwen3-8B-FP8) (ModelScope) @ 82f329a83a9f75ab4d922e2528e403bc649062c3 |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 1x S5000 |
+| Served request | 2K/1K, 3K/1K, 3.5K/1K, 4K/1K, 4K/1.5K, 500 prompts each |
+
 ## Launching the server
 
 ```bash

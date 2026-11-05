@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 29 Oct 2026 10:59:31 +0800
+Subject: [PATCH] MUSA: one contiguous block pool per Mamba state
+
+The MUSA dedicated Mamba pool packs a layer's states into one page, so the
+SSM view hands every kernel a page-sized block stride. GDN decode then
+carries that stride into its per-layer state access, and the native Mamba2
+SSU rejects the view outright because it only accepts a dense
+[slots, heads, dim, dstate] pool.
+
+Slice the same bytes state-major instead: each state of a layer becomes its
+own contiguous block pool, which the existing list-valued bind path already
+accepts. The runner keeps a flat list of pools, and the attention groups,
+block zeroer and KV block copy all address a pool by its own stride, so no
+other component changes.
+---
+ vllm/v1/worker/gpu/model_runner.py |  5 +++-
+ vllm/v1/worker/utils.py            | 45 +++++++++++++++++++++++++++---
+ 2 files changed, 45 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index dca14718a9..268f0a9596 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -789,7 +789,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 ),
+             )
+         self.kv_caches = [
+-            cache for cache in kv_caches_dict.values() if cache.device == self.device
++            state
++            for cache in kv_caches_dict.values()
++            for state in (cache if isinstance(cache, (list, tuple)) else (cache,))
++            if state.device == self.device
+         ]
+         self.model_state.initialize_kv_cache(self.kv_cache_config, self.block_tables)
+         if is_profiling:
+diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
+index ee1c8a1734..11c40499ba 100644
+--- a/vllm/v1/worker/utils.py
++++ b/vllm/v1/worker/utils.py
+@@ -5,6 +5,7 @@ from collections import defaultdict
+ from collections.abc import Iterable, Mapping, Sequence
+ from dataclasses import dataclass, field, replace
+ from itertools import product as iprod
++from math import prod
+ from typing import Any
+ 
+ import numpy as np
+@@ -20,7 +21,7 @@ from vllm.model_executor.models.utils import extract_layer_index
+ from vllm.platforms import current_platform
+ from vllm.triton_utils import tl, triton
+ from vllm.utils.mem_utils import MemorySnapshot, format_gib
+-from vllm.utils.torch_utils import async_tensor_h2d
++from vllm.utils.torch_utils import async_tensor_h2d, get_dtype_size
+ from vllm.v1.attention.backend import (
+     AttentionBackend,
+     AttentionMetadataBuilder,
+@@ -564,6 +565,30 @@ def select_common_block_size(
+     )
+ 
+ 
++def _musa_mamba_state_pools(
++    buf: torch.Tensor, spec: MambaSpec, num_blocks: int
++) -> list[torch.Tensor]:
++    """View one Mamba pool as a contiguous block pool per state.
++
++    The page layout interleaves a layer's states, so the SSM view carries a
++    page-sized block stride. Slicing the same bytes state-major gives each
++    state a dense pool instead.
++    """
++    flat = buf.view(-1)
++    pools: list[torch.Tensor] = []
++    offset = 0
++    for shape, dtype in zip(spec.shapes, spec.dtypes):
++        end = offset + num_blocks * prod(shape) * get_dtype_size(dtype)
++        if end > flat.numel():
++            raise RuntimeError(
++                f"Mamba pool of {flat.numel()} elements cannot hold "
++                f"{num_blocks} blocks of {shape} {dtype}: needs {end}"
++            )
++        pools.append(flat[offset:end].view(dtype).view(num_blocks, *shape))
++        offset = end
++    return pools
++
++
+ def allocate_kv_cache(
+     kv_cache_config: KVCacheConfig,
+     device: torch.device,
+@@ -629,6 +654,14 @@ def allocate_kv_cache(
+             continue
+ 
+         num_blocks = kv_cache_config.num_blocks_of(tensor)
++        if isinstance(spec, MambaSpec) and separate_musa_pools:
++            assert tensor.offset == 0
++            assert len(tensor.layers) == 1, "the MUSA Mamba pool is carved per layer"
++            kv_caches.update(
++                (name, _musa_mamba_state_pools(buf, spec, num_blocks))
++                for name in tensor.layers
++            )
++            continue
+         kernel_block_size = None
+         if kernel_block_sizes is not None and group_id < len(kernel_block_sizes):
+             kernel_block_size = kernel_block_sizes[group_id]
+@@ -826,7 +859,7 @@ def add_kv_sharing_layers_to_kv_cache_groups(
+ 
+ 
+ def bind_kv_cache(
+-    kv_caches: dict[str, torch.Tensor],
++    kv_caches: dict[str, torch.Tensor | list[torch.Tensor]],
+     forward_context: dict[str, Attention],
+     runner_kv_caches: list[torch.Tensor],
+     num_attn_module: int = 1,
+@@ -875,7 +908,11 @@ def bind_kv_cache(
+             # in the same decoder block.
+             current_platform.check_runner_kv_caches_multi_layer()
+         for layer_name in layer_names:
+-            runner_kv_caches.append(kv_caches[layer_name])
++            cache = kv_caches[layer_name]
++            if isinstance(cache, (list, tuple)):
++                runner_kv_caches.extend(cache)
++            else:
++                runner_kv_caches.append(cache)
+ 
+     bind_kv_cache_to_layers(
+         layer_kv_caches or kv_caches, forward_context, num_attn_module, kv_cache_groups
+@@ -883,7 +920,7 @@ def bind_kv_cache(
+ 
+ 
+ def bind_kv_cache_to_layers(
+-    kv_caches: dict[str, torch.Tensor],
++    kv_caches: dict[str, torch.Tensor | list[torch.Tensor]],
+     forward_context: dict[str, Attention],
+     num_attn_module: int = 1,
+     kv_cache_groups: Sequence[KVCacheGroupSpec] | None = None,

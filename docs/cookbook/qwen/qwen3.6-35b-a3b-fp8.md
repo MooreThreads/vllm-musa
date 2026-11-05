@@ -19,6 +19,16 @@ FP8 MoE recipe with two-token MTP speculative decoding.
 | Maximum context | 8,192 tokens |
 | Maximum sequences | 64 |
 
+## Validation
+
+| Item | Value |
+|---|---|
+| Checkpoint | [`Qwen/Qwen3.6-35B-A3B-FP8`](https://modelscope.cn/models/Qwen/Qwen3.6-35B-A3B-FP8) (ModelScope) @ 62836cf634afbb2a90f3e0558ded9112afbf4660 |
+| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| MUSA driver | 5.2.0 |
+| Hardware | 4x S5000 |
+| Served request | 2K/1K, 3K/1K, 3.5K/1K, 4K/1K, 4K/1.5K, 500 prompts each |
+
 ## Launching the server
 
 ```bash
