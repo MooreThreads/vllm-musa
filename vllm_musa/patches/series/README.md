@@ -41,8 +41,8 @@ that ancestry order but combines only changes that implement one independently
 maintainable feature: custom all-reduce (`0037`), dedicated Mamba pools
 (`0078`), rejection-sampler scalarization (`0111`), and DeepSeek-V4 FP8 expert
 dtype/scale resolution (`0134`). Eight v0.32 native/compatibility adaptations
-follow (`0163`–`0170`), then 41 new or updated v0.32 features
-(`0171`–`0211`). The original cross-version
+follow (`0163`–`0170`), then 42 new or updated v0.32 features
+(`0171`–`0212`). The original cross-version
 DeepSeek-V4/V4.1 aux-stream patch stays in the new group because its v0.28
 segment depends on later v0.32 attention changes; old `0110` remains in the
 legacy group. Old `0137` (Mooncake P/D dedicated Mamba pools) and `0192`
@@ -324,8 +324,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0209-MUSA-route-Mamba2-SSD-to-FlashInfer.patch` | v0.32 new | route the Mamba2 SSD/`--mamba-backend flashinfer` prefill to MATE's `flashinfer.mamba` |
 | `0210-MUSA-initialize-the-Mamba2-profiling-output.patch` | v0.32 new | initialize the supplied Mamba2 output during the profiling run |
 | `0211-MUSA-one-contiguous-block-pool-per-Mamba-state.patch` | v0.32 new | give each Mamba state its own contiguous block pool |
+| `0212-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch` | v0.28 0194 follow-up | DeepSeek-OCR defaults to Triton on MUSA only when no encoder backend is configured. All explicit backend choices and non-MUSA behavior are preserved. |
 
-Currently **211 patches** and **0 upstream entries** in `upstream/`.
+Currently **212 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
@@ -333,6 +334,16 @@ the 210-patch rebase described above gives tree
 `a0f85ed14689123a7ee7963d1a4c867cf0bb3dcd`.
 This is source equivalence, not a MUSA runtime-readiness claim. Offline replay,
 round-trip, metadata and source-contract validation must be repeated after edits.
+
+The source-equivalence result above predates `0212`.
+
+`0212` applies after `0117` and sets the encoder backend in
+`DeepseekOCRForCausalLM.__init__` before constructing the vision tower, only
+when `mm_encoder_attn_backend` is unset on MUSA. Explicit choices, including
+`FLASH_ATTN`, are not overridden or rejected by this model patch. It retains
+`0117`'s FP32 vision conversion and delegates backend selection and
+logging to the existing `MMEncoderAttention` path. It does not add another
+ViT selector call or change platform-wide policy.
 
 The round-trip holder is produced by applying this exact series to a clean
 checkout at `VLLM_COMMIT`; an already-patched v0.32 checkout with a different
