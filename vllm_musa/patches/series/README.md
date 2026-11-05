@@ -19,7 +19,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **194 patches**, plus **3 upstream entries** in `upstream/`.
+Currently **194 patches**, plus **4 upstream entries** in `upstream/`.
 Graph capture and graph-memory profiling switch the caching allocator to
 ordinary segments, because expandable segments cannot grow during stream
 capture, and replay the full allocator config so other allocator knobs are
@@ -103,6 +103,13 @@ unmodified upstream vLLM commits `c351fd3c6495` and `2c7ee87223f0` in
 `upstream/`, which the pinned `VLLM_COMMIT` predates; the Mooncake entry
 needs the scheduler one. The MUSA fix after them only renames the
 backported DeepSeek-V4 test spec field to the pin's `compress_ratio`.
+Upstream entry `0004` backports [vLLM PR #59347](https://github.com/vllm-project/vllm/pull/59347)
+(`5f30fc7031cae49bf51073fc953d419b08f8887c`). Mooncake reports receive
+completion only after all pull replies arrive and at least one local block
+group is nonempty. Empty pulls still release producer KV blocks, but their
+cleanup replies no longer report KV receive completion for requests already
+removed by the decode scheduler. The upstream regression test covers empty,
+all-empty, and nonempty local block lists.
 
 The attention page-size fastpath patch keeps Mamba pool admission and GDN
 metadata; see `0192-MUSA-optimize-hybrid-attention-page-size-fastpath.patch`
