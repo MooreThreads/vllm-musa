@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 23 Sep 2026 17:52:48 +0800
+Subject: [PATCH] MUSA: select Mamba2 SSD backend
+
+---
+ vllm/model_executor/layers/mamba/mamba_mixer2.py | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/vllm/model_executor/layers/mamba/mamba_mixer2.py b/vllm/model_executor/layers/mamba/mamba_mixer2.py
+index 14b1121389..aa13d4f41e 100644
+--- a/vllm/model_executor/layers/mamba/mamba_mixer2.py
++++ b/vllm/model_executor/layers/mamba/mamba_mixer2.py
+@@ -671,6 +671,7 @@ class MambaMixer2(MambaBase, PluggableLayer):
+                     dt_softplus=True,
+                     dt_limit=(0.0, float("inf")),
+                     state_dtype=ssm_state_dtype,
++                    backend=self.mamba_config.backend.value,
+                 )
+             except Exception:
+                 logger.warning(
+@@ -890,6 +891,7 @@ class MambaMixer2(MambaBase, PluggableLayer):
+                 dt_limit=(0.0, float("inf")),
+                 out=preallocated_ssm_out_p.view(num_prefill_tokens, -1, self.head_dim),
+                 state_dtype=ssm_state.dtype,
++                backend=self.mamba_config.backend.value,
+             )
+ 
+             if is_mamba_cache_all:
