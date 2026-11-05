@@ -48,7 +48,7 @@ def _validate(series, metadata, lineage, groups):
 def test_real_series_has_exact_coverage():
     result = patch_metadata.validate(SERIES, METADATA)
     assert result.errors == []
-    assert result.patch_count == 201
+    assert result.patch_count == 200
     assert result.omission_count == 24
     assert result.group_count > 1
 

@@ -67,7 +67,7 @@ intermediate patch has its own entry. This records the final v0.32 source
 result, not equivalence across all v0.28 runtime paths.
 
 The 24 old numbers without their own entry are accounted for below. The
-comparison is against the pinned vLLM tree after all 208 patches, not a
+comparison is against the pinned vLLM tree after all 200 patches, not a
 model-level regression. “Folded” identifies the owner of the final source
 change, not proof of equivalent runtime behavior. A blocked/unverified row is
 not a canceled feature and must not be restored verbatim without an adapted
@@ -275,7 +275,7 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0167-MUSA-accept-MUSA-online-quantization-capability.patch` | v0.32 native adaptation | accept MUSA online quantization capability |
 | `0168-MUSA-skip-unavailable-MUSA-Triton-warmup-hook.patch` | v0.32 native adaptation | skip unavailable MUSA Triton warmup hook |
 | `0169-MUSA-export-attention-compatibility-helpers.patch` | v0.32 native adaptation | export attention compatibility helpers |
-| `0170-MUSA-forward-attention-capture-metadata` | v0.32 native adaptation | forward attention capture metadata |
+| `0170-MUSA-forward-attention-capture-metadata.patch` | v0.32 native adaptation | forward attention capture metadata |
 | `0171-MUSA-skip-unsafe-v2-warmup-for-Qwen3.5-family.patch` | v0.32 new/updated | skip unsafe v2 warmup for Qwen3.5 family |
 | `0172-MUSA-split-chained-boolean-operators-in-Triton-kerne.patch` | v0.32 new/updated | split chained boolean operators in Triton kernels |
 | `0173-MUSA-zero-padded-heads-in-the-BF16-sparse-MLA-prefil.patch` | v0.32 new/updated | zero padded heads in the BF16 sparse MLA prefill |
@@ -311,10 +311,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0203-MUSA-keep-the-allocator-settings-while-loading-weigh.patch` | v0.32 new/updated | keep the allocator settings while loading weights |
 
 | `0205-MUSA-run-the-DiffusionGemma-read-tests-on-MUSA.patch` | v0.32 upstream update | run the DiffusionGemma read tests on MUSA |
-| `0207-MUSA-optimize-hybrid-attention-page-size-fastpath.patch` | v0.32 upstream update | optimize hybrid attention page-size fastpath |
 | `0208-MUSA-handle-expandable-segments-around-graph-capture.patch` | v0.32 upstream update | handle expandable segments around graph capture |
 
-Currently **201 patches** and **0 upstream entries** in `upstream/`.
+Currently **200 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and

@@ -360,13 +360,6 @@ def resolve_optimization_contract(
 
         contract = resolve_rotary_contract(contract, model_config)
 
-    if model.is_hybrid is True:
-        feature = OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
-        contract = replace(
-            contract,
-            supported_features=contract.supported_features | {feature},
-            preferred_features=contract.preferred_features | {feature},
-        )
     return contract
 
 
