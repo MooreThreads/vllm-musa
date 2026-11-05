@@ -381,7 +381,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         value = _v.unflatten(-1, (-1, self.head_v_dim)).unsqueeze(1)
 
         # MUSA: mate addresses the state pool through state_indices, so a
-        # page-aligned pool (packed conv/SSM pages, or a dedicated Mamba pool)
+        # page-aligned pool (packed conv/SSM pages)
         # decodes in place. Only a layout mate cannot stride over gathers the
         # active per-sequence states into a contiguous buffer first.
         if ssm_state.dtype == torch.float32:

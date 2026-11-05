@@ -274,7 +274,7 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0167-MUSA-accept-MUSA-online-quantization-capability.patch` | v0.32 native adaptation | accept MUSA online quantization capability |
 | `0168-MUSA-skip-unavailable-MUSA-Triton-warmup-hook.patch` | v0.32 native adaptation | skip unavailable MUSA Triton warmup hook |
 | `0169-MUSA-export-attention-compatibility-helpers.patch` | v0.32 native adaptation | export attention compatibility helpers |
-| `0170-MUSA-forward-attention-capture-metadata` | v0.32 native adaptation | forward attention capture metadata |
+| `0170-MUSA-forward-attention-capture-metadata.patch` | v0.32 native adaptation | forward attention capture metadata |
 | `0171-MUSA-skip-unsafe-v2-warmup-for-Qwen3.5-family.patch` | v0.32 new/updated | skip unsafe v2 warmup for Qwen3.5 family |
 | `0172-MUSA-split-chained-boolean-operators-in-Triton-kerne.patch` | v0.32 new/updated | split chained boolean operators in Triton kernels |
 | `0173-MUSA-zero-padded-heads-in-the-BF16-sparse-MLA-prefil.patch` | v0.32 new/updated | zero padded heads in the BF16 sparse MLA prefill |

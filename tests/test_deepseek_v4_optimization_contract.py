@@ -229,14 +229,9 @@ def test_hybrid_deepseek_v4_does_not_enable_flash_base_features() -> None:
     contract = resolve_optimization_contract(config)
 
     assert contract.supported_features == frozenset(
-        {
-            OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD,
-            OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL,
-        }
+        {OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}
     )
-    assert contract.preferred_features == frozenset(
-        {OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL}
-    )
+    assert not contract.preferred_features
 
 
 def test_non_block128_quantization_fails_closed() -> None:
