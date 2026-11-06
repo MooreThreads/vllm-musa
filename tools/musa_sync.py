@@ -121,6 +121,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import importlib.util
+import json
 import re
 from email.header import decode_header, make_header
 import shutil
@@ -135,6 +136,7 @@ from typing import NamedTuple
 ROOT = Path(__file__).resolve().parent.parent  # tools/ -> repo root
 PATCHES = ROOT / "vllm_musa" / "patches"
 SERIES_DIR = PATCHES / "series"
+REMOVED_PATCHES_PATH = PATCHES / "metadata" / "removed-patches.json"
 MODULE_DRIFT_DIR = (
     PATCHES / "module-drift"
 )  # cat-4a drift tripwires (never build-applied)
@@ -201,6 +203,23 @@ _SERIES_FATAL = (
     "git-unavailable",
     "repo-unusable",
 )
+
+
+def _declared_removed_patch_numbers() -> set[str]:
+    try:
+        data = json.loads(REMOVED_PATCHES_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return set()
+    removed = data.get("removed", [])
+    if not isinstance(removed, list) or not all(
+        isinstance(number, str) and re.fullmatch(r"[0-9]{4}", number)
+        for number in removed
+    ):
+        return set()
+    return set(removed)
+
+
+_REMOVED_PATCHES = _declared_removed_patch_numbers()
 
 
 def _load(name: str, path: Path):
@@ -1802,27 +1821,8 @@ def _number_prefix(name: str) -> str | None:
 
 
 def _series_numbering_rows(rows) -> list[tuple[str, str, str]]:
-    """Series-level numbering: every entry numbered, unique, and gapless.
-
-    ``regen`` numbers the entries itself (``git format-patch --no-numbered``
-    plus a contiguous renumber), so a duplicate or a gap can only come from
-    hand numbering. Both are silent everywhere else: two PRs each pick "the
-    next free number" in isolation, each one applies cleanly, and the collision
-    surfaces only when somebody regenerates — or not at all, if a duplicate
-    entry happens to be applied by prefix order.
-
-    The expected range comes from the numbers *present* (``max``), not from the
-    entry count, so ``0001``+``0003`` reports the real gap instead of a phantom
-    trailing one; the numbers present are listed alongside it whenever the set
-    is not exactly ``0001..max``.
-
-    ``NNNN`` is 1-based, so a ``0000`` prefix is a ``bad-range`` row of its own
-    rather than a green series whose verdict line then claims
-    ``contiguous 0001..0001``.
-
-    Out of scope by design: this reads names only, so a rename, or a content
-    swap that preserves the set of prefixes, is invisible here — the content
-    gates in ``_series_format_rows`` are what a swapped entry has to satisfy.
+    """Series-level numbering: numbered entries are unique and gapless except
+    for patch IDs explicitly listed in ``metadata/removed-patches.json``.
     """
     if any(status in _SERIES_FATAL for _, status, _ in rows):
         return []  # nothing was gated: never claim `0001..0000`
@@ -1847,8 +1847,21 @@ def _series_numbering_rows(rows) -> list[tuple[str, str, str]]:
         if len(same) > 1:
             out.append((f"series/{num}", "duplicate-number", ", ".join(same)))
     if numbered:
-        expected = {f"{i:04d}" for i in range(1, int(numbered[-1]) + 1)}
+        expected = {
+            f"{i:04d}"
+            for i in range(1, int(numbered[-1]) + 1)
+            if f"{i:04d}" not in _REMOVED_PATCHES
+        }
         missing = sorted(expected - set(numbered))
+        present_removed = sorted(set(numbered) & _REMOVED_PATCHES)
+        if present_removed:
+            out.append(
+                (
+                    "series numbering",
+                    "removed-patch-present",
+                    f"declared removed patches still present: {', '.join(present_removed)}",
+                )
+            )
         if missing:
             out.append(
                 (

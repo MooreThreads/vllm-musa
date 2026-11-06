@@ -318,6 +318,10 @@ source-level and MUSA long-context graph/model regression before inclusion.
 
 Currently **204 patches** and **0 upstream entries** in `upstream/`.
 
+The intentionally removed patch IDs are recorded in
+`vllm_musa/patches/metadata/removed-patches.json`; surviving patch filenames
+are not renumbered after a removal.
+
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
 the 210-patch rebase described above gives tree
