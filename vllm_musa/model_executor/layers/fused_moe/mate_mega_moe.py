@@ -43,6 +43,8 @@ logger = init_logger(__name__)
 
 # Limits of mate.mega_moe.MegaMoESymmBuffer and transform_weights_for_mega_moe.
 BLOCK_SIZE = 128
+# The kernels tile hidden and intermediate sizes in 256-wide N blocks.
+SHAPE_ALIGNMENT = 256
 TOKEN_ALIGNMENT = 256
 # fp8_fp8_mega_moe runs its decode kernels up to this many tokens per rank and
 # its split prefill stages above it; every rank of a step must take one path.
@@ -92,11 +94,11 @@ def mate_mega_moe_shape_reasons(
 ) -> tuple[str, ...]:
     """Shape and topology limits of the MATE Mega MoE kernels."""
     reasons: list[str] = []
-    if hidden_size % BLOCK_SIZE:
-        reasons.append(f"hidden size {hidden_size} not divisible by {BLOCK_SIZE}")
-    if intermediate_size % BLOCK_SIZE:
+    if hidden_size % SHAPE_ALIGNMENT:
+        reasons.append(f"hidden size {hidden_size} not divisible by {SHAPE_ALIGNMENT}")
+    if intermediate_size % SHAPE_ALIGNMENT:
         reasons.append(
-            f"intermediate size {intermediate_size} not divisible by {BLOCK_SIZE}"
+            f"intermediate size {intermediate_size} not divisible by {SHAPE_ALIGNMENT}"
         )
     if intermediate_size > MAX_INTERMEDIATE:
         reasons.append(f"intermediate size {intermediate_size} > {MAX_INTERMEDIATE}")
@@ -370,7 +372,7 @@ class MateMegaMoEExperts(mk.FusedMoEExpertsModular):
         if run is None:
             # The fused entry point picks its path from the local token count,
             # so it is only safe when every rank lands on the same side.
-            if num_tokens == 0 or decode != (num_tokens <= DECODE_MAX_TOKENS):
+            if decode != (num_tokens <= DECODE_MAX_TOKENS):
                 raise RuntimeError(
                     "MATE Mega MoE ranks would take different kernel paths and "
                     "this MATE build lacks the split decode/prefill entry points"

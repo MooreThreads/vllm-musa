@@ -37,8 +37,10 @@ def test_qwen3_moe_shapes_are_supported():
     ("overrides", "fragment"),
     [
         ({"hidden_size": 2112}, "hidden size 2112"),
+        ({"hidden_size": 2176}, "hidden size 2176 not divisible by 256"),
         ({"intermediate_size": 704}, "intermediate size 704 not divisible"),
-        ({"intermediate_size": 8320}, "> 8192"),
+        ({"intermediate_size": 1408}, "intermediate size 1408 not divisible by 256"),
+        ({"intermediate_size": 8448}, "> 8192"),
         ({"ep_size": 16}, "intranode"),
         ({"num_experts": 100}, "not divisible by 8 ranks"),
         ({"top_k": 33}, "top-k 33"),
@@ -143,6 +145,15 @@ def test_without_split_entry_points_ranks_must_agree(monkeypatch):
     _fake_dp(monkeypatch, [3, 200])
     with pytest.raises(RuntimeError, match="different kernel paths"):
         experts._run(torch.empty(3, 8), 3)
+
+
+def test_idle_rank_joins_the_fused_entry_point(monkeypatch):
+    fake = _FakeMegaMoE(split=False)
+    experts = _experts(monkeypatch, fake)
+
+    _fake_dp(monkeypatch, [0, 3])
+    experts._run(torch.empty(0, 8), 0)
+    assert [call[0] for call in fake.calls] == ["fused"]
 
 
 def _apply(experts, num_tokens, apply_router_weight_on_input=False):
