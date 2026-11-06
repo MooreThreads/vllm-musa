@@ -25,7 +25,7 @@ def _read_entry(prefix: str) -> str:
 
 
 def test_series_never_introduces_a_dedicated_mamba_pool():
-    """mate 0.3.0 strides the packed page, so no entry may split the pools."""
+    """mate==0.2.8.post1 strides the packed page, so no entry may split the pools."""
     forbidden = (
         "musa_mamba",
         "separate_musa_pools",

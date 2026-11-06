@@ -47,9 +47,9 @@ DeepSeek-V4/V4.1 aux-stream patch stays in the new group because its v0.28
 segment depends on later v0.32 attention changes; old `0110` remains in the
 legacy group. Old `0137` (Mooncake P/D dedicated Mamba pools) and `0192`
 (hybrid attention page-size fast path) have no independent continuation here;
-their v0.32 behavior still requires separate review. The upstream follow-up `0200` now changes hybrid attention page sizing;
-the historical observations below describe the earlier baseline, not a measured
-failure of these follow-ups. Hardware validation remains required.
+their v0.32 behavior still requires separate review. The historical observations
+below describe the earlier baseline, not a measured failure of these follow-ups.
+Hardware validation remains required.
 
 A patch may update several files when they form one atomic feature. The grouped
 entries are intentionally multi-file: `0037` contains
