@@ -275,9 +275,7 @@ def _execution_signature(
         ),
         batch_invariant_enabled=batch_invariant_enabled,
         speculative_method=_normalize_name(getattr(speculative_config, "method", None)),
-        async_scheduling=bool(
-            getattr(scheduler_config, "async_scheduling", False)
-        ),
+        async_scheduling=bool(getattr(scheduler_config, "async_scheduling", False)),
     )
 
 
