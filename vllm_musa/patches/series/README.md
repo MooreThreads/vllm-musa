@@ -325,8 +325,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0210-MUSA-initialize-the-Mamba2-profiling-output.patch` | v0.32 new | initialize the supplied Mamba2 output during the profiling run |
 | `0211-MUSA-one-contiguous-block-pool-per-Mamba-state.patch` | v0.32 new | give each Mamba state its own contiguous block pool |
 | `0212-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch` | v0.28 0194 follow-up | DeepSeek-OCR defaults to Triton on MUSA only when no encoder backend is configured. All explicit backend choices and non-MUSA behavior are preserved. |
+| `0213-MUSA-add-the-MATE-Mega-MoE-FP8-experts-backend.patch` | v0.32 new | add `--moe-backend mate_mega_moe`: block-FP8 MoE experts on MATE Mega MoE with the passthrough all2all |
 
-Currently **212 patches** and **0 upstream entries** in `upstream/`.
+Currently **213 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
