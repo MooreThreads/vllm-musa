@@ -326,8 +326,10 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0211-MUSA-one-contiguous-block-pool-per-Mamba-state.patch` | v0.32 new | give each Mamba state its own contiguous block pool |
 | `0212-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch` | v0.28 0194 follow-up | DeepSeek-OCR defaults to Triton on MUSA only when no encoder backend is configured. All explicit backend choices and non-MUSA behavior are preserved. |
 | `0213-MUSA-load-MCCL-as-the-pynccl-library.patch` | v0.32 new | load `libmccl.so.2` as the pynccl library, so `all_gatherv`/`reduce_scatterv` (DP + EP all2all) have a communicator |
+| `0214-MUSA-track-torch_musa-streams-in-current_stream.patch` | v0.32 new | make `current_stream()` follow `torch_musa.set_stream`, so pynccl collectives stay inside graphs captured on torch_musa's capture stream |
+| `0215-MUSA-avoid-MCCL-groups-in-DP-EP-all2all-collectives.patch` | v0.32 new | keep the DP + EP all2all collectives out of MCCL groups on MUSA (MCCL can hang on a group of small collectives): gather a batch tensor by tensor, pad uneven `all_gatherv`/`reduce_scatterv` to one collective |
 
-Currently **213 patches** and **0 upstream entries** in `upstream/`.
+Currently **215 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
