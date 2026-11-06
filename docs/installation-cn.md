@@ -69,6 +69,8 @@ export PIP_INDEX_URL="${PYPI_INDEX_URL}"
 pip install . --no-build-isolation -v
 ```
 
+在已有环境中，请先将 torchada 升级到 `requirements/common.txt` 固定的版本：`setup.py` 在构建时导入 `torchada.arch`。
+
 开发时使用可编辑安装：
 
 ```bash

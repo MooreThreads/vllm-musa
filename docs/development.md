@@ -37,6 +37,9 @@ The runtime stack is split across these companion projects:
 
 ## Editable development
 
+In an existing environment, upgrade torchada to the `requirements/common.txt` pin
+first: `setup.py` imports `torchada.arch` at build time.
+
 ```bash
 pip install -e . --no-build-isolation -v
 ```

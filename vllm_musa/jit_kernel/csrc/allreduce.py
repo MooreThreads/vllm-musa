@@ -49,7 +49,6 @@ def _custom_ar_module(world_size: int):
             "-Wno-error=address-of-temporary",
             "-fmusa-flush-denormals-to-zero",
             "-fno-signed-zeros",
-            "-D__MUSA_ARCH_LIST__=310",
             f"-DSGL_CUSTOM_AR_THREADS={threads}",
             f"-DSGL_CUSTOM_AR_BLOCKS={blocks}",
             f"-DSGL_CUSTOM_AR_VECTOR_LOAD={vector_load}",

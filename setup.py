@@ -12,7 +12,7 @@ from pathlib import Path
 
 # Activate MUSA patches before importing the torch ecosystem.
 import torchada  # noqa: F401
-import torch
+import torch  # noqa: F401
 
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
@@ -246,31 +246,28 @@ EXTRA_LINK_ARGS = [
     "-lmublasLt",
 ]
 
-# Detect MTGPU target architecture
-DEFAULT_MTGPU_TARGET = "mp_31"
-MTGPU_TARGET = os.environ.get("MTGPU_TARGET")
+# `arch` is the host CPU architecture in this file.
+from torchada import arch as musa_arch
 
-if MTGPU_TARGET:
-    print(f"Using MTGPU_TARGET from environment: {MTGPU_TARGET}")
-else:
-    MTGPU_TARGET = DEFAULT_MTGPU_TARGET
-
-if "MTGPU_TARGET" not in os.environ and torch.musa.is_available():
-    try:
-        device_props = torch.musa.get_device_properties(0)
-        MTGPU_TARGET = f"mp_{device_props.major}{device_props.minor}"
-    except Exception as e:
-        print(f"Warning: Failed to detect GPU properties: {e}")
-elif "MTGPU_TARGET" not in os.environ:
-    print(f"Warning: torch.musa not available. Using default target: {MTGPU_TARGET}")
-
-SUPPORTED_MTGPU_TARGETS = ["mp_22", "mp_31"]
-if MTGPU_TARGET not in SUPPORTED_MTGPU_TARGETS:
+# MTGPU_TARGET, then TORCH_MUSA_ARCH_LIST, then the visible devices, then mp_31.
+# No device check: a build may target an arch other than the build host's.
+MUSA_ARCHS = musa_arch.target_archs(env=("MTGPU_TARGET", "TORCH_MUSA_ARCH_LIST"))
+if len(MUSA_ARCHS) != 1:
     print(
-        f"Warning: Unsupported GPU architecture '{MTGPU_TARGET}'. "
-        f"Expected one of: {SUPPORTED_MTGPU_TARGETS}"
+        "vllm-musa builds for one MUSA arch per build; "
+        f"got {[a.name for a in MUSA_ARCHS]}"
     )
     sys.exit(1)
+MUSA_ARCH = MUSA_ARCHS[0]
+if MUSA_ARCH not in musa_arch.ARCHS:
+    print(
+        f"Unsupported GPU architecture '{MUSA_ARCH.name}'. "
+        f"Expected one of: {[a.name for a in musa_arch.ARCHS]}"
+    )
+    sys.exit(1)
+print(f"Building for MUSA arch {MUSA_ARCH.name}")
+# torch_musa's MUSAExtension takes --offload-arch from TORCH_MUSA_ARCH_LIST.
+os.environ["TORCH_MUSA_ARCH_LIST"] = musa_arch.torch_arch_list(MUSA_ARCHS)
 
 MCC_FLAGS = [
     "-DNDEBUG",
@@ -288,7 +285,7 @@ MCC_FLAGS = [
     "-DUSE_MUSA",
 ]
 
-if MTGPU_TARGET == "mp_31":
+if MUSA_ARCH.fp8:
     MCC_FLAGS.append("-DENABLE_FP8")
 
 COMPILE_ARGS = {

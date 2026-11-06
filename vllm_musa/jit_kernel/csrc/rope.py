@@ -42,19 +42,11 @@ def _store_hint(num_tokens: int, rot_dim: int) -> str:
     return "stwb"
 
 
-def _musa_arch_tag() -> str:
-    try:
-        major, minor = torch.musa.get_device_capability()
-        return f"mp{int(major)}{int(minor)}"
-    except Exception:
-        return "mp31"
-
-
 @cache_once
-def _rope_module(arch_tag: str, store_hint: str):
+def _rope_module(store_hint: str):
     hint_value = {"default": 0, "stwb": 1, "stcg": 2, "stcs": 3}[store_hint]
     return load_musa_jit(
-        f"vllm_musa_rope_{arch_tag}_{store_hint}",
+        f"vllm_musa_rope_{store_hint}",
         ("rope/rotary_embedding.mu",),
         extra_musa_cflags=(f"-DVLLM_MUSA_ROPE_STORE_HINT={hint_value}",),
     )
@@ -82,9 +74,7 @@ def _rotary_embedding_kernel(
     is_neox: bool,
     has_key: bool,
 ) -> None:
-    _rope_module(
-        _musa_arch_tag(), _store_hint(int(num_tokens), int(rot_dim))
-    ).sgl_rotary_embedding(
+    _rope_module(_store_hint(int(num_tokens), int(rot_dim))).sgl_rotary_embedding(
         positions,
         query,
         key,
