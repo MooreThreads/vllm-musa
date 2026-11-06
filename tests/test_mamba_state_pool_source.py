@@ -8,8 +8,8 @@ Pinned here:
 
 * the pool is sliced state-major, so the block stride is the state's own dense
   size and not the page size;
-* the carve is gated on a Mamba spec inside the MUSA separate-pool layout and
-  uses the Mamba block count, not the attention one;
+* the carve is gated on a Mamba spec in the shared backing allocation and uses
+  the Mamba block count, not the attention one;
 * both runner paths flatten the per-layer pool list.
 """
 
@@ -21,7 +21,7 @@ SERIES = ROOT / "vllm_musa" / "patches" / "series"
 POOL = "0211-MUSA-one-contiguous-block-pool-per-Mamba-state.patch"
 
 SLICE = "+        pools.append(flat[offset:end].view(dtype).view(num_blocks, *shape))"
-GATE = "+        if isinstance(spec, MambaSpec) and separate_musa_pools:"
+GATE = "+        if isinstance(spec, MambaSpec):"
 
 
 def _read() -> str:
@@ -55,7 +55,7 @@ def test_pool_member_gates_on_a_mamba_spec_in_the_separate_pool_layout():
     assert source.index(GATE) < source.index("         kernel_block_size = None")
     # One pool tensor per layer: sharing a tensor would hand two layers the
     # same pools.
-    assert '+            assert len(tensor.layers) == 1, "the MUSA Mamba pool' in source
+    assert '+            assert len(tensor.layers) == 1, "the Mamba pool' in source
 
 
 def test_pool_member_flattens_the_layer_pools_in_both_runner_paths():

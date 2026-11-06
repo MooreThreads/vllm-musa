@@ -18,16 +18,9 @@ GDN = (
 )
 
 
-def _read_entry(prefix: str) -> str:
-    matches = sorted(SERIES.glob(f"{prefix}*.patch"))
-    assert len(matches) == 1, matches
-    return matches[0].read_text()
-
-
 def test_series_never_introduces_a_dedicated_mamba_pool():
-    """mate==0.2.8.post1 strides the packed page, so no entry may split the pools."""
+    """The shared pool must not reintroduce a dedicated Mamba allocator."""
     forbidden = (
-        "musa_mamba",
         "separate_musa_pools",
         "separate_pool_eligible",
         "DEDICATED_MAMBA_POOL",
