@@ -380,14 +380,8 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         key = _k.unflatten(-1, (-1, self.head_k_dim)).unsqueeze(1)
         value = _v.unflatten(-1, (-1, self.head_v_dim)).unsqueeze(1)
 
-        # MUSA: mate addresses the state pool through state_indices, so a
-        # page-aligned pool (packed conv/SSM pages)
-        # decodes in place. Only a layout mate cannot stride over gathers the
-        # active per-sequence states into a contiguous buffer first.
         if ssm_state.dtype == torch.float32:
             try:
-                # MUSA: write the mate decode output straight into the
-                # preallocated core_attn_out buffer (bf16) to skip a per-layer copy.
                 _out_view = core_attn_out[:num_decode_tokens].view(
                     num_decode_tokens,
                     1,
@@ -395,9 +389,6 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                     self.head_v_dim,
                 )
                 if _mate_state_pool_zero_copy(ssm_state):
-                    # MUSA: mate addresses the state pool through state_indices,
-                    # so padded page strides (packed or dedicated pools) decode
-                    # in place; no gather/scatter copy.
                     mate_kwargs = {
                         "q": query,
                         "k": key,
@@ -418,7 +409,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                     output, _ = gated_delta_rule_decode(**mate_kwargs)
                     _log_once(
                         "info",
-                        "MUSA GDN mate in-place decode active (paged state pool)",
+                        "Using MATE GDN decode kernel (zero-copy state pool).",
                     )
                 else:
                     active_state = ssm_state[state_indices]
@@ -536,7 +527,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                 mate_kwargs["state_indices"] = state_indices
                 _log_once(
                     "info",
-                    "MUSA GDN mate in-place prefill active (paged state pool)",
+                    "Using MATE GDN prefill kernel (zero-copy state pool).",
                 )
                 if has_initial_state is not None:
                     mate_kwargs["has_initial_state"] = has_initial_state
