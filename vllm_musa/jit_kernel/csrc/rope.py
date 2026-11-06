@@ -31,25 +31,63 @@ def _layout_strides(
     return batch_stride, token_stride, head_stride, dim_stride
 
 
-def _store_hint(num_tokens: int, rot_dim: int) -> str:
+_STORE_HINT_VALUES = {"default": 0, "stwb": 1, "stcg": 2, "stcs": 3}
+# The auto policy uses stcg for 512..2048 tokens at this rotary width only.
+_STCG_ROT_DIM = 64
+
+
+def _store_hint_override() -> str | None:
     hint = os.getenv("VLLM_MUSA_ROPE_STORE_HINT", "auto").lower()
-    if hint in {"default", "stwb", "stcg", "stcs"}:
-        return hint
-    if hint != "auto":
-        return "stwb"
-    if rot_dim == 64 and 512 <= num_tokens <= 2048:
+    if hint == "auto":
+        return None
+    return hint if hint in _STORE_HINT_VALUES else "stwb"
+
+
+def _store_hint(num_tokens: int, rot_dim: int) -> str:
+    override = _store_hint_override()
+    if override is not None:
+        return override
+    if rot_dim == _STCG_ROT_DIM and 512 <= num_tokens <= 2048:
         return "stcg"
     return "stwb"
 
 
+def _store_hints(rot_dim: int | None) -> tuple[str, ...]:
+    """Every hint ``_store_hint`` can return for ``rot_dim`` (``None``: any width)."""
+    override = _store_hint_override()
+    if override is not None:
+        return (override,)
+    if rot_dim is None or rot_dim == _STCG_ROT_DIM:
+        return ("stwb", "stcg")
+    return ("stwb",)
+
+
+def _rope_module_name(store_hint: str) -> str:
+    return f"vllm_musa_rope_{store_hint}"
+
+
 @cache_once
 def _rope_module(store_hint: str):
-    hint_value = {"default": 0, "stwb": 1, "stcg": 2, "stcs": 3}[store_hint]
+    hint_value = _STORE_HINT_VALUES[store_hint]
     return load_musa_jit(
-        f"vllm_musa_rope_{store_hint}",
+        _rope_module_name(store_hint),
         ("rope/rotary_embedding.mu",),
         extra_musa_cflags=(f"-DVLLM_MUSA_ROPE_STORE_HINT={hint_value}",),
     )
+
+
+def prewarm_rope_modules(rot_dim: int | None = None) -> list[str]:
+    """Load the store-hint modules the kernel can pick for ``rot_dim``.
+
+    The hint follows the runtime token count and each hint is its own JIT
+    module, so loading them up front keeps the build out of serving and graph
+    capture. ``None`` loads every hint the auto policy can return. Returns the
+    module names.
+    """
+    hints = _store_hints(rot_dim)
+    for hint in hints:
+        _rope_module(hint)
+    return [_rope_module_name(hint) for hint in hints]
 
 
 def _rotary_embedding_kernel(
