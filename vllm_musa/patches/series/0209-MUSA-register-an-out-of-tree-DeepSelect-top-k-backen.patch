@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 28 Oct 2026 17:20:00 +0800
+Subject: [PATCH] MUSA: register an out-of-tree DeepSelect top-k backend
+
+Accept the MUSA vllm._deepselect_C extension while retaining upstream
+extension-import detection, CUDA capability checks and input validation.
+---
+ vllm/model_executor/layers/indexer_topk.py | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/layers/indexer_topk.py b/vllm/model_executor/layers/indexer_topk.py
+index 02c4280ea0..d27afd3744 100644
+--- a/vllm/model_executor/layers/indexer_topk.py
++++ b/vllm/model_executor/layers/indexer_topk.py
+@@ -148,19 +148,17 @@ class SparseIndexerTopk(torch.nn.Module):
+     def __init__(self, backend: str | None = None) -> None:
+         super().__init__()
+         if backend is None:
+             backend = (
+                 get_current_vllm_config().kernel_config.sparse_indexer_topk_backend
+             )
+         self._backend = backend
+         self._is_cuda = current_platform.is_cuda()
+-        self._has_deep_select = self._is_cuda and (
+-            current_platform.is_device_capability_family(100)
+-        )
++        self._is_musa = current_platform.is_musa()
+         self._has_flashinfer_topk = has_flashinfer()
+         self._cooperative_capable = self._is_cuda and (
+             current_platform.has_device_capability(90)
+             and not current_platform.is_device_capability_family(120)
+         )
+         self._is_rocm = current_platform.is_rocm()
+         self._aiter_enabled = False
+         self._aiter_capable = False
+@@ -185,19 +183,19 @@ class SparseIndexerTopk(torch.nn.Module):
+         elif self._backend == "persistent":
+             if not self._is_cuda:
+                 failures.append("requires a CUDA platform")
+             if topk_tokens not in (512, 1024, 2048):
+                 failures.append(
+                     f"topk_tokens must be in (512, 1024, 2048), got {topk_tokens}"
+                 )
+         elif self._backend == "deep_select":
+-            if not self._is_cuda:
+-                failures.append("requires a CUDA platform")
+-            elif not self._has_deep_select:
++            if not self._is_cuda and not self._is_musa:
++                failures.append("requires a CUDA or MUSA platform")
++            elif self._is_cuda and not current_platform.is_device_capability_family(100):
+                 failures.append("requires SM100a/SM103a (10.x device family)")
+             elif not _HAS_DEEP_SELECT_C:
+                 failures.append("vllm._deepselect_C could not be imported")
+             elif not is_deep_select_supported(logits, topk_tokens):
+                 failures.append(
+                     f"inputs violate DeepSelect's constraints: dtype={logits.dtype},"
+                     f" stride={logits.stride()}, topk={topk_tokens}"
+                 )

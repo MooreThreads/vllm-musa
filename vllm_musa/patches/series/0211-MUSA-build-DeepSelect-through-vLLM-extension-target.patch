@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 3 Nov 2026 20:30:00 +0800
+Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
+
+Keep the upstream DeepSelect repository URL and existing FetchContent source
+overrides. Build and install vllm._deepselect_C with MCC in vLLM instead of the
+out-of-tree plugin; MUSA sources can be supplied through DEEPSELECT_SRC_DIR.
+---
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3a71d7e1e5..ffd26a832e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -47,6 +47,9 @@ install(CODE "set(CMAKE_INSTALL_LOCAL_ONLY TRUE)" ALL_COMPONENTS)
+ # first match will be selected.  These should be kept in sync with setup.py.
+ #
+ set(PYTHON_SUPPORTED_VERSIONS "3.11" "3.12" "3.13" "3.14")
++if(VLLM_TARGET_DEVICE STREQUAL "musa")
++  list(APPEND PYTHON_SUPPORTED_VERSIONS "3.10")
++endif()
+ 
+ # Supported AMD GPU architectures.
+ set(HIP_SUPPORTED_ARCHS "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1250;gfx1030;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201")
+@@ -95,6 +98,11 @@ endif()
+ #
+ # Update cmake's `CMAKE_PREFIX_PATH` with torch location.
+ #
++if(VLLM_TARGET_DEVICE STREQUAL "musa")
++  include(cmake/external_projects/deepselect.cmake)
++  return()
++endif()
++
+ append_cmake_prefix_path("torch" "torch.utils.cmake_prefix_path")
+ 
+ # Ensure the 'nvcc' command is in the PATH
+diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
+index e2a5592e61..3f84c37637 100644
+--- a/cmake/external_projects/deepselect.cmake
++++ b/cmake/external_projects/deepselect.cmake
+@@ -29,6 +29,14 @@ endif()
+ FetchContent_MakeAvailable(deepselect)
+ message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
+ 
++if(VLLM_TARGET_DEVICE STREQUAL "musa")
++    if(NOT EXISTS "${deepselect_SOURCE_DIR}/cmake/vllm_musa.cmake")
++        message(FATAL_ERROR "DeepSelect MUSA integration missing; set DEEPSELECT_SRC_DIR to the updated MUSA checkout")
++    endif()
++    include("${deepselect_SOURCE_DIR}/cmake/vllm_musa.cmake")
++    return()
++endif()
++
+ # DeepSelect kernels require CUDA 12.9+; 10.0f (family) covers SM100 and SM103.
+ set(DEEPSELECT_SUPPORT_ARCHS)
+ if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.9)
+diff --git a/setup.py b/setup.py
+index 37bfc3e41b..4f098ec8da 100644
+--- a/setup.py
++++ b/setup.py
+@@ -329,6 +329,9 @@ class cmake_build_ext(build_ext):
+             cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME}/bin/nvcc"]
+         elif _is_hip() and ROCM_HOME is not None:
+             cmake_args += [f"-DROCM_PATH={ROCM_HOME}"]
++        elif _is_musa():
++            musa_home = os.environ.get("MUSA_HOME", "/usr/local/musa")
++            cmake_args += [f"-DCMAKE_CXX_COMPILER={musa_home}/bin/mcc"]
+ 
+         other_cmake_args = os.environ.get("CMAKE_ARGS")
+         if other_cmake_args:
+@@ -1273,6 +1276,10 @@ def _is_cuda() -> bool:
+     return VLLM_TARGET_DEVICE == "cuda" and has_cuda and not _is_tpu()
+ 
+ 
++def _is_musa() -> bool:
++    return VLLM_TARGET_DEVICE == "musa"
++
++
+ def _is_hip() -> bool:
+     return (
+         VLLM_TARGET_DEVICE == "cuda" or VLLM_TARGET_DEVICE == "rocm"
+@@ -1392,6 +1399,8 @@ def get_vllm_version() -> str:
+                 version += f"{sep}cpu"
+         elif _is_xpu():
+             version += f"{sep}xpu"
++        elif _is_musa():
++            version += f"{sep}musa"
+         else:
+             raise RuntimeError("Unknown runtime environment")
+ 
+@@ -1485,7 +1494,7 @@ def get_requirements() -> list[str]:
+                 resolved_requirements.append(line)
+         return resolved_requirements
+ 
+-    if _no_device():
++    if _no_device() or _is_musa():
+         requirements = _read_requirements("common.txt")
+     elif _is_cuda():
+         requirements = _read_requirements("cuda.txt")
+@@ -1531,7 +1540,12 @@ if _is_cuda() or _is_hip():
+     # copying the relevant .py files from the source repository.
+     ext_modules.append(CMakeExtension(name="vllm.triton_kernels", optional=True))
+ 
+-if not _is_xpu():
++if _is_musa() and os.environ.get("MTGPU_TARGET", "mp_31") == "mp_31":
++    deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
++    deepselect_extension.py_limited_api = False
++    ext_modules.append(deepselect_extension)
++
++if not _is_xpu() and not _is_musa():
+     ext_modules.append(CMakeExtension(name="vllm.spinloop"))
+     ext_modules.append(CMakeExtension(name="vllm.fs_io_C"))
+ 

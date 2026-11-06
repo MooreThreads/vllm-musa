@@ -125,7 +125,7 @@ def test_entries_for_phase(manifest):
     # runtime = cat-5 tracked modules + cat-6 object patches
     assert runtime and all(e.category in ("5", "6") for e in runtime)
     assert len(runtime) == len(
-        [e for e in manifest.ENTRIES if e.category in ("5", "6")]
+        [e for e in manifest.ENTRIES if e.apply_phase == "runtime"]
     )
     assert all(e.category == "1" for e in manifest.entries_for_phase("pre-install"))
     # cat-4a drift tripwires are never build-applied (apply_phase = "none")

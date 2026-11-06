@@ -103,7 +103,11 @@ def develop_dynamic_library(package_name, source_dir="./", target_override=None)
             reverse=True,
         )
         for src in candidates:
-            sos = list(src.glob("*.so"))
+            sos = [
+                so
+                for so in src.glob("*.so")
+                if not so.name.startswith("_deepselect_C.")
+            ]
             if sos:
                 for so in sos:
                     shutil.copy2(so, target_dir)
@@ -411,7 +415,8 @@ class _CustomBuildExt(BuildExtension):
         source_dir = Path(repo_path)
 
         env = os.environ.copy()
-        env["VLLM_TARGET_DEVICE"] = "empty"
+        env["VLLM_TARGET_DEVICE"] = "musa"
+        env["MTGPU_TARGET"] = MTGPU_TARGET
 
         # The exact upstream release commit is pinned in third_party/PINS, but
         # its local Git object set may not contain the corresponding tag.
