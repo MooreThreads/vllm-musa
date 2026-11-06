@@ -102,6 +102,147 @@ def test_a_strided_rope_cache_keeps_the_native_op() -> None:
     )
 
 
+@requires_mp31
+@pytest.mark.parametrize("tokens", [0, 1, 5, 161, 4096])
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("empty_slots", [False, True])
+def test_kv_only_writer_matches_fused_cache_bytes(tokens, native, empty_slots):
+    from vllm_musa import _custom_ops as ops
+    from vllm_musa.kernels import deepseek_v4_rope_kv_insert as rk
+
+    torch.manual_seed(tokens)
+    block_size, num_blocks = 64, 80
+    kv = (torch.randn(tokens, 512) * 4).to(torch.bfloat16).to("musa")
+    original_kv = kv.clone()
+    positions = torch.randint(0, 8192, (tokens,), dtype=torch.int64).to("musa")
+    slot_count = 0 if empty_slots else tokens - tokens // 4
+    slots = torch.randperm(num_blocks * block_size)[:slot_count].to("musa")
+    slots[::7] = -1
+    cache = torch.randint(
+        0, 256, (num_blocks, block_size, 584), dtype=torch.uint8
+    ).to("musa")
+    expected = cache.clone()
+    rope = _rope_cache(8192)
+    query = torch.zeros(tokens, 8, 512, dtype=torch.bfloat16, device="musa")
+    ops.deepseek_v4_qnorm_rope_kv_insert(
+        query, kv, expected, slots, positions, rope, 1e-6, block_size
+    )
+    if native:
+        torch.ops._C_musa_ops.deepseek_v4_kv_rope_insert(
+            kv, cache, slots, positions, rope, block_size
+        )
+    else:
+        rk.kv_rope_insert(kv, cache, slots, positions, rope, block_size)
+    assert torch.equal(cache, expected)
+    assert torch.equal(kv, original_kv)
+
+
+@requires_mp31
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize(
+    "num_blocks,storage_offset,shortfall,cache_width",
+    [(1, 0, 37312, 1), (2, 0, 1, 1), (2, 32, 1, 1), (1, 32, 0, 0)],
+)
+def test_kv_only_writer_rejects_truncated_cache_storage(
+    native, num_blocks, storage_offset, shortfall, cache_width
+) -> None:
+    from vllm_musa import _custom_ops as ops
+    from vllm_musa.kernels import deepseek_v4_rope_kv_insert as rk
+
+    block_size, page_bytes = 64, 64 * 584
+    block_stride = page_bytes + 512
+    storage_bytes = (
+        storage_offset + (num_blocks - 1) * block_stride + page_bytes - shortfall
+    )
+    storage = torch.zeros(storage_bytes, dtype=torch.uint8, device="musa")
+    cache = storage.as_strided(
+        (num_blocks, block_size, cache_width), (block_stride, 1, 1), storage_offset
+    )
+    kv = torch.zeros(1, 512, dtype=torch.bfloat16, device="musa")
+    slots = torch.tensor([num_blocks * block_size - 1], device="musa")
+    positions = torch.zeros(1, dtype=torch.int64, device="musa")
+    rope = _rope_cache(1)
+    assert not rk.rope_kv_insert_supported(
+        kv.unsqueeze(1), kv, cache, slots, positions, rope, block_size, 0
+    )
+    writer = (
+        torch.ops._C_musa_ops.deepseek_v4_kv_rope_insert
+        if native
+        else ops.deepseek_v4_kv_rope_insert
+    )
+    with pytest.raises(RuntimeError, match="kv_cache storage is too small"):
+        writer(kv, cache, slots, positions, rope, block_size)
+    assert torch.count_nonzero(storage) == 0
+
+
+@requires_mp31
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("num_blocks", [0, 2])
+@pytest.mark.parametrize("storage_offset", [0, 32])
+def test_kv_only_writer_preserves_page_padding_and_storage_offset(
+    native, num_blocks, storage_offset
+) -> None:
+    from vllm_musa import _custom_ops as ops
+    from vllm_musa.kernels import deepseek_v4_rope_kv_insert as rk
+
+    torch.manual_seed(4)
+    block_size, page_bytes = 64, 64 * 584
+    block_stride = page_bytes + 512
+    storage_bytes = storage_offset
+    if num_blocks:
+        storage_bytes += (num_blocks - 1) * block_stride + page_bytes
+    storage = torch.full((storage_bytes,), 165, dtype=torch.uint8, device="musa")
+    expected_storage = storage.clone()
+    cache = storage.as_strided(
+        (num_blocks, block_size, 584), (block_stride, 584, 1), storage_offset
+    )
+    expected_cache = expected_storage.as_strided(
+        cache.shape, cache.stride(), storage_offset
+    )
+    kv = torch.randn(4, 512, device="musa").to(torch.bfloat16)
+    slots = torch.tensor([0, 63, 64, 127], device="musa")
+    positions = torch.arange(4, device="musa")
+    rope = _rope_cache(4)
+    assert rk.rope_kv_insert_supported(
+        kv.unsqueeze(1), kv, cache, slots, positions, rope, block_size, 0
+    )
+    query = torch.zeros(4, 8, 512, dtype=torch.bfloat16, device="musa")
+    ops.deepseek_v4_qnorm_rope_kv_insert(
+        query, kv, expected_cache, slots, positions, rope, 1e-6, block_size
+    )
+    writer = (
+        torch.ops._C_musa_ops.deepseek_v4_kv_rope_insert
+        if native
+        else ops.deepseek_v4_kv_rope_insert
+    )
+    writer(kv, cache, slots, positions, rope, block_size)
+    assert torch.equal(storage, expected_storage)
+
+
+@requires_mp31
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("block_size", [-1, 0])
+def test_kv_only_writer_rejects_nonpositive_block_size(native, block_size) -> None:
+    from vllm_musa import _custom_ops as ops
+    from vllm_musa.kernels import deepseek_v4_rope_kv_insert as rk
+
+    kv = torch.zeros(1, 512, dtype=torch.bfloat16, device="musa")
+    cache = torch.empty(0, 0, 584, dtype=torch.uint8, device="musa")
+    slots = torch.empty(0, dtype=torch.int64, device="musa")
+    positions = torch.zeros(1, dtype=torch.int64, device="musa")
+    rope = _rope_cache(1)
+    assert not rk.rope_kv_insert_supported(
+        kv.unsqueeze(1), kv, cache, slots, positions, rope, block_size, 0
+    )
+    writer = (
+        torch.ops._C_musa_ops.deepseek_v4_kv_rope_insert
+        if native
+        else ops.deepseek_v4_kv_rope_insert
+    )
+    with pytest.raises(RuntimeError, match="cache_block_size must be positive"):
+        writer(kv, cache, slots, positions, rope, block_size)
+
+
 def _dispatch_inputs() -> tuple[torch.Tensor, ...]:
     """Five rows of a supported call, with three padded slots past them."""
     torch.manual_seed(5)

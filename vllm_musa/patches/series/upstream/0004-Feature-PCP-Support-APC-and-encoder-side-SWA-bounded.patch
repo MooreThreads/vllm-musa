@@ -1,0 +1,290 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 19 Oct 2026 14:52:20 +0800
+Subject: [PATCH] [Feature][PCP] Support APC and encoder-side SWA bounded
+ replay for DeepSeek-V4.1-Flash (#62183)
+
+Signed-off-by: wangyicong <wangyicong@bytedance.com>
+Co-authored-by: OpenAI Codex <noreply@openai.com>
+Co-authored-by: Lucas Wilkinson <LucasWilkinson@users.noreply.github.com>
+(cherry picked from commit fc47cc8fff8282b7fa2b257468b8595f91a1a741)
+---
+ .../models/test_deepseek_v41_replay_batch.py  | 77 +++++++++++++++++++
+ .../models/test_deepseek_v41_replay_start.py  |  1 +
+ vllm/models/deepseek_v41/attention.py         |  7 +-
+ vllm/models/deepseek_v41/nvidia/model.py      |  9 ++-
+ .../models/deepseek_v41/nvidia/model_state.py | 61 ++++++++-------
+ 5 files changed, 122 insertions(+), 33 deletions(-)
+
+diff --git a/tests/models/test_deepseek_v41_replay_batch.py b/tests/models/test_deepseek_v41_replay_batch.py
+index 5133917493..8d27b8c3ef 100644
+--- a/tests/models/test_deepseek_v41_replay_batch.py
++++ b/tests/models/test_deepseek_v41_replay_batch.py
+@@ -63,6 +63,7 @@ def state(monkeypatch):
+     cfg.scheduler_config.max_num_seqs = 16
+     cfg.scheduler_config.max_num_batched_tokens = 1024
+     cfg.parallel_config.data_parallel_size = 1
++    cfg.parallel_config.prefill_context_parallel_size = 1
+     cfg.aux_output_config.enable_return_routed_experts = False
+     cfg.compilation_config.fast_moe_cold_start = False
+     cfg.compilation_config.cudagraph_mode = CUDAGraphMode.NONE
+@@ -312,6 +313,82 @@ def test_idle_dp_rank_dummy_trims_with_its_peers(dp_state):
+     assert dp_metadata.num_tokens_across_dp_cpu.tolist() == [1, 129]
+ 
+ 
++def test_zero_prefix_window_warms_gather_and_skips_pad(monkeypatch):
++    """ROCm leaves the prefix-cache window at 0. Replay still needs replay_start
++    and a warmed gather kernel. The pad kernel stays on the prefix-cache path."""
++    import vllm.models.deepseek_v41.nvidia.model_state as model_state
++
++    calls = {"pad_warmup": 0, "gather_warmup": 0, "pad_launch": 0}
++
++    def pad_warmup(*args, **kwargs):
++        calls["pad_warmup"] += 1
++
++    def gather_warmup(*args, **kwargs):
++        calls["gather_warmup"] += 1
++
++    class _Pad:
++        warmup = staticmethod(pad_warmup)
++
++        def __getitem__(self, grid):
++            def launch(*args, **kwargs):
++                calls["pad_launch"] += 1
++
++            return launch
++
++    monkeypatch.setattr(model_state, "_pad_replayed_slots_kernel", _Pad())
++    monkeypatch.setattr(
++        model_state._gather_replay_batch_kernel, "warmup", gather_warmup
++    )
++
++    cfg = MagicMock()
++    cfg.model_config.enable_prompt_embeds = False
++    cfg.model_config.uses_mrope = False
++    cfg.model_config.is_multimodal_model = False
++    cfg.scheduler_config.max_num_seqs = 16
++    cfg.scheduler_config.max_num_batched_tokens = 1024
++    cfg.parallel_config.data_parallel_size = 1
++    cfg.parallel_config.prefill_context_parallel_size = 1
++    cfg.compilation_config.fast_moe_cold_start = False
++    cfg.compilation_config.cudagraph_mode = CUDAGraphMode.NONE
++    layers = SimpleNamespace(window=WINDOW, replay_batch=None, metadata_prefixes=set())
++    model = SimpleNamespace(token_lookback_depth=0, decoder_replay_layers=layers)
++    groups = SimpleNamespace(
++        kv_cache_groups=[
++            SimpleNamespace(
++                layer_names=["swa"],
++                kv_cache_spec=SimpleNamespace(
++                    prefix_cacheable=False, prefix_replay_tokens=0
++                ),
++            ),
++            SimpleNamespace(
++                layer_names=["mla"],
++                kv_cache_spec=SimpleNamespace(
++                    prefix_cacheable=True, prefix_replay_tokens=0
++                ),
++            ),
++        ]
++    )
++
++    def prepare_attn(self, input_batch, cg_mode, block_tables, slot_mappings, *a, **kw):
++        return {"swa": kw["model_specific_attn_metadata"]}
++
++    monkeypatch.setattr(DefaultModelState, "prepare_attn", prepare_attn)
++    state = DeepseekV41ModelState(cfg, model, None, DEVICE)
++    state._replay_start_np[0] = 16
++    batch = _input_batch([8], [24], [True])
++    state.prepare_attn(
++        batch,
++        CUDAGraphMode.NONE,
++        BLOCK_TABLES,
++        _slot_mappings(batch.num_tokens_after_padding),
++        [],
++        groups,
++    )
++    assert state._replay[0] == 0
++    assert calls == {"pad_warmup": 0, "gather_warmup": 1, "pad_launch": 0}
++    assert state._replay_start[:1].tolist() == [16]
++
++
+ def test_dp_ranks_pad_to_one_replay_graph(dp_state):
+     """Every rank pads its replay batch to the graph fitting the largest rank's."""
+     dp_state.replay_cudagraphs = MagicMock()
+diff --git a/tests/models/test_deepseek_v41_replay_start.py b/tests/models/test_deepseek_v41_replay_start.py
+index 7d4e45fe81..e5c06a2f9f 100644
+--- a/tests/models/test_deepseek_v41_replay_start.py
++++ b/tests/models/test_deepseek_v41_replay_start.py
+@@ -44,6 +44,7 @@ def state(monkeypatch):
+     cfg.model_config.enable_prompt_embeds = False
+     cfg.model_config.uses_mrope = False
+     cfg.model_config.is_multimodal_model = False
++    cfg.parallel_config.prefill_context_parallel_size = 1
+     cfg.scheduler_config.max_num_seqs = 8
+     cfg.scheduler_config.max_num_batched_tokens = 64
+     seen: dict = {}
+diff --git a/vllm/models/deepseek_v41/attention.py b/vllm/models/deepseek_v41/attention.py
+index ce5f000cc2..d001e40ab2 100644
+--- a/vllm/models/deepseek_v41/attention.py
++++ b/vllm/models/deepseek_v41/attention.py
+@@ -570,12 +570,11 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         if (
+             swa_bounded_replay
+             and vllm_config.parallel_config.prefill_context_parallel_size > 1
++            and not cache_config.enable_prefix_caching
+         ):
+             logger.warning_once(
+-                "SWA bounded replay is off under prefill context parallelism "
+-                "(the replayed tokens' slot padding knows the rank-local batch "
+-                "only); the sliding-window cache takes part in prefix caching "
+-                "instead."
++                "SWA bounded replay with PCP requires prefix caching; "
++                "decoder-side replay is not supported with PCP."
+             )
+             swa_bounded_replay = False
+         if swa_bounded_replay and current_platform.is_rocm():
+diff --git a/vllm/models/deepseek_v41/nvidia/model.py b/vllm/models/deepseek_v41/nvidia/model.py
+index 15b523a56c..48d764812a 100644
+--- a/vllm/models/deepseek_v41/nvidia/model.py
++++ b/vllm/models/deepseek_v41/nvidia/model.py
+@@ -687,13 +687,16 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
+             or self.parallel_config.use_ubatching
+             or vllm_config.speculative_config is not None
+             or vllm_config.kv_transfer_config is not None
+-            or vllm_config.cache_config.enable_prefix_caching
++            or (
++                vllm_config.cache_config.enable_prefix_caching
++                and not vllm_config.cache_config.swa_bounded_replay
++            )
+             or vllm_config.kernel_config.moe_backend in MEGA_MOE_BACKENDS
+         ):
+             raise NotImplementedError(
+                 "DeepSeek-V4.1 PCP currently requires PP=DP=DCP=1, with no "
+-                "microbatching, speculative decoding, KV transfer, prefix "
+-                "caching, or MegaMoE."
++                "microbatching, speculative decoding, KV transfer, or MegaMoE. "
++                "Prefix caching requires SWA bounded replay."
+             )
+         self.use_native_mega_moe = (
+             vllm_config.kernel_config.moe_backend in NATIVE_MEGA_MOE_BACKENDS
+diff --git a/vllm/models/deepseek_v41/nvidia/model_state.py b/vllm/models/deepseek_v41/nvidia/model_state.py
+index 951779913e..6f4f236601 100644
+--- a/vllm/models/deepseek_v41/nvidia/model_state.py
++++ b/vllm/models/deepseek_v41/nvidia/model_state.py
+@@ -10,7 +10,7 @@ import torch.nn as nn
+ 
+ from vllm.compilation.breakable_cudagraph import is_breakable_cudagraph_enabled
+ from vllm.config import CUDAGraphMode, VllmConfig
+-from vllm.distributed.parallel_state import get_dp_group, get_pp_group
++from vllm.distributed.parallel_state import get_dp_group, get_pcp_group, get_pp_group
+ from vllm.forward_context import BatchDescriptor, DPMetadata, create_forward_context
+ from vllm.models.deepseek_v41.decoder_replay_layers import (
+     DecoderReplayLayers,
+@@ -200,23 +200,22 @@ class DeepseekV41ModelState(DefaultModelState):
+         device: torch.device,
+     ):
+         super().__init__(vllm_config, model, encoder_cache, device)
++        self.pcp_size = vllm_config.parallel_config.prefill_context_parallel_size
++        max_local_reqs = self.max_num_reqs * (2 if self.pcp_size > 1 else 1)
+         depth = model.token_lookback_depth
+         self.lookback_token_ids: torch.Tensor | None = None
+         if depth > 0:
+             # Persistent so a captured graph can read it on replay.
+-            max_num_reqs = self.max_num_reqs
+-            if vllm_config.parallel_config.prefill_context_parallel_size > 1:
+-                max_num_reqs *= 2
+             self.lookback_token_ids = torch.full(
+-                (max_num_reqs, depth), -1, dtype=torch.int32, device=device
++                (max_local_reqs, depth), -1, dtype=torch.int32, device=device
+             )
+ 
+         # Per request state index; batches gather from it (see prepare_attn).
+         self._replay_start_np = np.zeros(self.max_num_reqs, dtype=np.int32)
+         self._replay_start = torch.zeros(
+-            self.max_num_reqs, dtype=torch.int32, device=device
++            max_local_reqs, dtype=torch.int32, device=device
+         )
+-        self._replay_start_staging = UvaBufferPool(self.max_num_reqs, torch.int32)
++        self._replay_start_staging = UvaBufferPool(max_local_reqs, torch.int32)
+         # The replay window and the indices of the prefix-cacheable groups, from
+         # the KV cache config on first use; None until then.
+         self._replay: tuple[int, torch.Tensor] | None = None
+@@ -345,7 +344,7 @@ class DeepseekV41ModelState(DefaultModelState):
+             self._warm_up_replay_kernels(input_batch, slot_mappings)
+         window, cacheable_groups = self._replay
+         replay_start: torch.Tensor | None = None
+-        if window:
++        if window or self.decoder_replay_layers is not None:
+             num_reqs = input_batch.num_reqs
+             # Decode rows sit above the hit, so only prefills carry a replay
+             # start; dummy batches (captures, profiling) carry none.
+@@ -357,12 +356,17 @@ class DeepseekV41ModelState(DefaultModelState):
+             replay_start = self._replay_start_staging.copy_to_gpu(
+                 replay_start_np, out=self._replay_start[:num_reqs]
+             )
+-            if replay_start_np.any():
++            local_slot_mappings = slot_mappings
++            if window and self.pcp_size > 1:
++                local_slot_mappings = slot_mappings.chunk(self.pcp_size, dim=1)[
++                    get_pcp_group().rank_in_group
++                ]
++            if window and replay_start_np.any():
+                 # The replayed tokens rebuild window KV only: their slots in the
+                 # prefix-cacheable groups are padded so the cached KV stays as is.
+                 _pad_replayed_slots_kernel[(num_reqs,)](
+-                    slot_mappings,
+-                    slot_mappings.stride(0),
++                    local_slot_mappings,
++                    local_slot_mappings.stride(0),
+                     cacheable_groups,
+                     input_batch.query_start_loc,
+                     input_batch.positions,
+@@ -372,6 +376,12 @@ class DeepseekV41ModelState(DefaultModelState):
+                     NUM_GROUPS=cacheable_groups.numel(),
+                     BLOCK=1024,
+                 )
++            if window and self.pcp_size > 1:
++                # Peers may have no replay rows. All ranks publish their masked
++                # cacheable slots in the same order as the gathered KV payload.
++                slot_mappings[cacheable_groups] = get_pcp_group().all_gather(
++                    local_slot_mappings[cacheable_groups], dim=1
++                )
+             assert model_specific_attn_metadata is None
+             model_specific_attn_metadata = ReplayAttnMetadata(replay_start)
+         attn_metadata = super().prepare_attn(
+@@ -405,21 +415,20 @@ class DeepseekV41ModelState(DefaultModelState):
+         dummy batches never replay or trim, so they would not launch them."""
+         assert self._replay is not None
+         window, cacheable_groups = self._replay
+-        if not window:
+-            return
+-        _pad_replayed_slots_kernel.warmup(
+-            slot_mappings,
+-            slot_mappings.stride(0),
+-            cacheable_groups,
+-            input_batch.query_start_loc,
+-            input_batch.positions,
+-            self._replay_start,
+-            window,
+-            PAD_SLOT_ID,
+-            NUM_GROUPS=cacheable_groups.numel(),
+-            BLOCK=1024,
+-            grid=(1,),
+-        )
++        if window:
++            _pad_replayed_slots_kernel.warmup(
++                slot_mappings,
++                slot_mappings.stride(0),
++                cacheable_groups,
++                input_batch.query_start_loc,
++                input_batch.positions,
++                self._replay_start,
++                window,
++                PAD_SLOT_ID,
++                NUM_GROUPS=cacheable_groups.numel(),
++                BLOCK=1024,
++                grid=(1,),
++            )
+         if self.decoder_replay_layers is None:
+             return
+         assert self._kept_slot_mappings is not None

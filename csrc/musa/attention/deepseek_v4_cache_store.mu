@@ -387,6 +387,71 @@ __global__ void deepseek_v4_qnorm_rope_kv_pack_fused_kernel(
 
 }  // namespace
 
+void deepseek_v4_kv_rope_insert(
+    const torch::Tensor& kv,
+    torch::Tensor& kv_cache,
+    const torch::Tensor& slot_mapping,
+    const torch::Tensor& positions,
+    const torch::Tensor& cos_sin_cache,
+    int64_t cache_block_size) {
+  TORCH_CHECK(kv.scalar_type() == torch::kBFloat16 && kv.dim() == 2 &&
+                  kv.size(1) == kHeadDim && kv.is_contiguous(),
+              "kv must be contiguous bfloat16 [N, 512]");
+  TORCH_CHECK(cache_block_size > 0, "cache_block_size must be positive");
+  TORCH_CHECK(kv_cache.scalar_type() == torch::kUInt8 && kv_cache.dim() >= 3 &&
+                  kv_cache.size(1) == cache_block_size &&
+                  kv_cache.stride(-1) == 1 &&
+                  cache_block_size <=
+                      kv_cache.stride(0) / (kTokenDataBytes + kTokenScaleBytes),
+              "kv_cache must use the packed DeepSeek FP8 layout");
+  if (kv_cache.size(0) > 0) {
+    const auto storage_bytes = kv_cache.storage().nbytes();
+    const auto cache_offset =
+        kv_cache.storage_offset() * kv_cache.element_size();
+    const auto page_bytes =
+        cache_block_size * (kTokenDataBytes + kTokenScaleBytes);
+    TORCH_CHECK(
+        kv_cache.numel() > 0 && cache_offset <= storage_bytes &&
+            page_bytes <= storage_bytes - cache_offset &&
+            static_cast<uint64_t>(kv_cache.size(0) - 1) <=
+                (storage_bytes - cache_offset - page_bytes) / kv_cache.stride(0),
+        "kv_cache storage is too small for the packed DeepSeek FP8 pages");
+  }
+  TORCH_CHECK(slot_mapping.dim() == 1 && slot_mapping.is_contiguous() &&
+                  slot_mapping.numel() <= kv.size(0),
+              "slot_mapping must be contiguous and not exceed kv rows");
+  TORCH_CHECK(positions.dim() == 1 && positions.is_contiguous() &&
+                  positions.numel() == kv.size(0),
+              "positions must be contiguous [N]");
+  TORCH_CHECK(cos_sin_cache.scalar_type() == torch::kFloat32 &&
+                  cos_sin_cache.dim() == 2 &&
+                  cos_sin_cache.size(1) == kRopeDim &&
+                  cos_sin_cache.is_contiguous(),
+              "cos_sin_cache must be contiguous float32 [max_pos, 64]");
+  TORCH_CHECK(kv.device() == kv_cache.device() &&
+                  kv.device() == slot_mapping.device() &&
+                  kv.device() == positions.device() &&
+                  kv.device() == cos_sin_cache.device(),
+              "all tensors must be on the same device");
+  const int slot_kind = index_kind(slot_mapping);
+  const int position_kind = index_kind(positions);
+  if (slot_mapping.numel() == 0) {
+    return;
+  }
+  const at::musa::OptionalMUSAGuard device_guard(device_of(kv));
+  musaStream_t stream = at::musa::getCurrentMUSAStream();
+  deepseek_v4_kv_rope_pack_kernel<<<slot_mapping.numel(), kQNormThreads, 0,
+                                  stream>>>(
+      static_cast<const __mt_bfloat16*>(kv.data_ptr()),
+      static_cast<uint8_t*>(kv_cache.data_ptr()), slot_mapping.data_ptr(),
+      slot_kind, positions.data_ptr(), position_kind,
+      static_cast<const float*>(cos_sin_cache.data_ptr()), slot_mapping.numel(),
+      kv_cache.size(0), cache_block_size, kv_cache.stride(0));
+  auto err = musaGetLastError();
+  TORCH_CHECK(err == musaSuccess, "deepseek_v4_kv_rope_pack launch failed: ",
+              musaGetErrorString(err));
+}
+
 torch::Tensor deepseek_v4_qnorm_rope_kv_insert(
     torch::Tensor& q,
     const torch::Tensor& kv,

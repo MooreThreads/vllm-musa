@@ -105,6 +105,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
                 &deepseek_v4_store_sparse_kv);
 
   musa_ops.def(
+      "deepseek_v4_kv_rope_insert(Tensor kv, Tensor! kv_cache, "
+      "Tensor slot_mapping, Tensor positions, Tensor cos_sin_cache, "
+      "int cache_block_size) -> ()");
+  musa_ops.impl("deepseek_v4_kv_rope_insert", torch::kMUSA,
+                &deepseek_v4_kv_rope_insert);
+
+  musa_ops.def(
       "deepseek_v4_qnorm_rope_kv_insert(Tensor! q, Tensor kv, "
       "Tensor! kv_cache, Tensor slot_mapping, Tensor positions, "
       "Tensor cos_sin_cache, float eps, int cache_block_size, "

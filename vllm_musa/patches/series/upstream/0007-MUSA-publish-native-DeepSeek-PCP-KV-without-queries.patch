@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 5 Nov 2026 16:10:46 +0800
+Subject: [PATCH] MUSA: publish native DeepSeek PCP KV without queries
+
+---
+ .../device_communicators/cuda_communicator.py |  6 ++
+ vllm/models/deepseek_v41/attention.py         | 77 ++++++++++---------
+ 2 files changed, 47 insertions(+), 36 deletions(-)
+
+diff --git a/vllm/distributed/device_communicators/cuda_communicator.py b/vllm/distributed/device_communicators/cuda_communicator.py
+index 4c6cb64bdf..362d5002b4 100644
+--- a/vllm/distributed/device_communicators/cuda_communicator.py
++++ b/vllm/distributed/device_communicators/cuda_communicator.py
+@@ -520,6 +520,12 @@ class CudaCommunicator(DeviceCommunicatorBase):
+     def reduce_scatter(self, input_: torch.Tensor, dim: int = -1):
+         world_size = self.world_size
+         pynccl_comm = self.pynccl_comm
++        if current_platform.is_musa() and (
++            pynccl_comm is None or pynccl_comm.disabled
++        ):
++            front_input = input_.movedim(dim, 0).contiguous()
++            output = super().reduce_scatter(front_input, dim=0)
++            return output.movedim(0, dim).contiguous()
+         assert pynccl_comm is not None
+         if dim < 0:
+             # Convert negative dim to positive.
+diff --git a/vllm/models/deepseek_v41/attention.py b/vllm/models/deepseek_v41/attention.py
+index 8f74a42450..f8dcac8b36 100644
+--- a/vllm/models/deepseek_v41/attention.py
++++ b/vllm/models/deepseek_v41/attention.py
+@@ -184,24 +184,16 @@ def _musa_deepseek_v4_kv_rope_insert(
+     slot_mapping: torch.Tensor,
+     positions: torch.Tensor,
+ ) -> None:
+-    """MUSA: the fused CUDA KV insert op is not built. The MUSA q-norm, RoPE
+-    and KV insert takes a query; pass a zero one and discard its result."""
++    """Publish packed SWA KV without preparing queries."""
+     assert not attn.kv_mxfp8
+     from vllm_musa import _custom_ops as _musa_custom_ops
+ 
+-    dummy_q = torch.zeros(
+-        (kv.shape[0], attn.n_local_heads, attn.head_dim),
+-        dtype=kv.dtype,
+-        device=kv.device,
+-    )
+-    _musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(
+-        dummy_q,
+-        kv,
++    _musa_custom_ops.deepseek_v4_kv_rope_insert(
++        kv.contiguous(),
+         attn.swa_cache_layer.kv_cache,
+         slot_mapping.contiguous(),
+         positions.contiguous(),
+         attn.rotary_emb.cos_sin_cache,
+-        attn.eps,
+         attn.swa_cache_layer.block_size,
+     )
+ 
+@@ -736,18 +728,23 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 assert swa_metadata.cache_positions is not None
+                 slot_mapping = swa_metadata.cache_slot_mapping
+                 cache_positions = swa_metadata.cache_positions
+-            torch.ops._C.fused_deepseek_v4_kv_rope_insert(
+-                cache_kv,
+-                cache,
+-                slot_mapping,
+-                cache_positions,
+-                self.rotary_emb.cos_sin_cache,
+-                self.swa_cache_layer.block_size,
+-                self._flashinfer_fp8_kv_scale
+-                if cache.dtype == torch.float8_e4m3fn
+-                else None,
+-                self.kv_mxfp8,
+-            )
++            if current_platform.is_musa():
++                _musa_deepseek_v4_kv_rope_insert(
++                    self, cache_kv, slot_mapping, cache_positions
++                )
++            else:
++                torch.ops._C.fused_deepseek_v4_kv_rope_insert(
++                    cache_kv,
++                    cache,
++                    slot_mapping,
++                    cache_positions,
++                    self.rotary_emb.cos_sin_cache,
++                    self.swa_cache_layer.block_size,
++                    self._flashinfer_fp8_kv_scale
++                    if cache.dtype == torch.float8_e4m3fn
++                    else None,
++                    self.kv_mxfp8,
++                )
+         if self.compressor is not None:
+             latent = self.compressor(kv_score, positions)
+             if self.use_pcp and latent is not None:
+@@ -1126,18 +1123,26 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             cache_kv = get_pcp_group().all_gather(kv.contiguous(), dim=0)
+             assert swa_metadata.cache_slot_mapping is not None
+             assert swa_metadata.cache_positions is not None
+-            torch.ops._C.fused_deepseek_v4_kv_rope_insert(
+-                cache_kv,
+-                swa_kv_cache,
+-                swa_metadata.cache_slot_mapping,
+-                swa_metadata.cache_positions,
+-                cos_sin_cache,
+-                swa_metadata.block_size,
+-                self._flashinfer_fp8_kv_scale
+-                if cache_dtype == torch.float8_e4m3fn
+-                else None,
+-                self.kv_mxfp8,
+-            )
++            if current_platform.is_musa():
++                _musa_deepseek_v4_kv_rope_insert(
++                    self,
++                    cache_kv,
++                    swa_metadata.cache_slot_mapping,
++                    swa_metadata.cache_positions,
++                )
++            else:
++                torch.ops._C.fused_deepseek_v4_kv_rope_insert(
++                    cache_kv,
++                    swa_kv_cache,
++                    swa_metadata.cache_slot_mapping,
++                    swa_metadata.cache_positions,
++                    cos_sin_cache,
++                    swa_metadata.block_size,
++                    self._flashinfer_fp8_kv_scale
++                    if cache_dtype == torch.float8_e4m3fn
++                    else None,
++                    self.kv_mxfp8,
++                )
+             # The fused op now only prepares the rank-local queries.
+             slot_mapping = slot_mapping[:0]
+ 
+@@ -1150,7 +1155,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 q,
+                 kv,
+                 swa_kv_cache,
+-                swa_metadata.slot_mapping,
++                slot_mapping,
+                 positions,
+                 cos_sin_cache,
+                 self.eps,

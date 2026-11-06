@@ -625,8 +625,10 @@ def _mhc_pre_delayed_big_fuse(
         hc_post_mult_value,
         sinkhorn_repeat,
     )
-    rms = torch.rsqrt(sqrsum.sum(dim=0) / float(hc_mult * hidden_size) + rms_eps)
-    pre_logits = mixes[:, :, :hc_mult].sum(dim=0) * rms.unsqueeze(-1) * hc_scale[0]
+    reduced_sqrsum = sqrsum.movedim(0, -1).contiguous().sum(dim=-1)
+    reduced_mixes = mixes[:, :, :hc_mult].movedim(0, -1).contiguous().sum(dim=-1)
+    rms = torch.rsqrt(reduced_sqrsum / float(hc_mult * hidden_size) + rms_eps)
+    pre_logits = reduced_mixes * rms.unsqueeze(-1) * hc_scale[0]
     next_pre_mix = torch.sigmoid(pre_logits + hc_base[:hc_mult]) + hc_pre_eps
     return (
         post_mix.view(num_tokens, hc_mult, 1),

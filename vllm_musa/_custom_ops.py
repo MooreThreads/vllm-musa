@@ -510,6 +510,38 @@ def deepseek_v4_store_sparse_kv(
     )
 
 
+def deepseek_v4_kv_rope_insert(
+    kv: torch.Tensor,
+    kv_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    cache_block_size: int,
+) -> None:
+    from vllm_musa.kernels.deepseek_v4_rope_kv_insert import (
+        kv_rope_insert,
+        rope_kv_insert_supported,
+    )
+
+    if kv.dim() == 2 and rope_kv_insert_supported(
+        kv.unsqueeze(1),
+        kv,
+        kv_cache,
+        slot_mapping,
+        positions,
+        cos_sin_cache,
+        cache_block_size,
+        0,
+    ):
+        kv_rope_insert(
+            kv, kv_cache, slot_mapping, positions, cos_sin_cache, cache_block_size
+        )
+        return
+    torch.ops._C_musa_ops.deepseek_v4_kv_rope_insert(
+        kv, kv_cache, slot_mapping, positions, cos_sin_cache, cache_block_size
+    )
+
+
 def deepseek_v4_qnorm_rope_kv_insert(
     q: torch.Tensor,
     kv: torch.Tensor,

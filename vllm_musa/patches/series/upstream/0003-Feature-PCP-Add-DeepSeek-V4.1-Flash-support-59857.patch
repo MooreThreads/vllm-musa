@@ -1,0 +1,1514 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 16 Oct 2026 14:17:51 +0800
+Subject: [PATCH] [Feature][PCP] Add DeepSeek-V4.1-Flash support (#59857)
+
+Signed-off-by: wangyicong <wangyicong@bytedance.com>
+Co-authored-by: OpenAI Codex <noreply@openai.com>
+Co-authored-by: Lucas Wilkinson <lwilkins@redhat.com>
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Co-authored-by: Kevin H. Luu <khluu000@gmail.com>
+(cherry picked from commit fa75d3456d60a5ffe923818c4b495295675b38e1)
+---
+ .buildkite/test_areas/models_basic.yaml       |   3 +-
+ tests/distributed/test_engram_dp_shard.py     |   1 +
+ tests/kernels/test_compressor_kv_cache.py     | 450 +++++++++++++++++-
+ tests/kernels/test_engram.py                  |  19 +-
+ tests/models/test_deepseek_v41_pcp.py         |  66 +++
+ vllm/models/deepseek_v41/amd/model.py         |   4 +
+ vllm/models/deepseek_v41/attention.py         |  61 ++-
+ .../common/ops/fused_compress_quant_cache.py  |  97 +++-
+ vllm/models/deepseek_v41/compressor.py        |  95 +++-
+ vllm/models/deepseek_v41/nvidia/flashmla.py   |  12 +
+ vllm/models/deepseek_v41/nvidia/model.py      |  34 ++
+ .../models/deepseek_v41/nvidia/model_state.py |  18 +-
+ vllm/models/deepseek_v41/sparse_mla.py        |  45 +-
+ vllm/v1/attention/backends/mla/sparse_swa.py  |   3 +
+ 14 files changed, 871 insertions(+), 37 deletions(-)
+ create mode 100644 tests/models/test_deepseek_v41_pcp.py
+
+diff --git a/.buildkite/test_areas/models_basic.yaml b/.buildkite/test_areas/models_basic.yaml
+index 552910e85a..752d37bf2a 100644
+--- a/.buildkite/test_areas/models_basic.yaml
++++ b/.buildkite/test_areas/models_basic.yaml
+@@ -68,10 +68,11 @@ steps:
+   - tests/models/test_deepseek_v4_vl_rocm.py
+   - tests/models/test_deepseek_v41_decoder_replay_layers.py
+   - tests/models/test_deepseek_v41_replay_batch.py
++  - tests/models/test_deepseek_v41_pcp.py
+   - tests/models/transformers/test_layer_registry_e2e.py
+   - tests/models/test_deepseek_v41_replay_start.py
+   commands:
+-    - pytest -v -s models/test_terratorch.py models/transformers/test_backend.py models/test_registry.py models/test_deepseek_v4_vl_rocm.py models/transformers/test_layer_registry_e2e.py models/test_deepseek_v41_replay_start.py models/test_deepseek_v41_decoder_replay_layers.py models/test_deepseek_v41_replay_batch.py
++    - pytest -v -s models/test_terratorch.py models/transformers/test_backend.py models/test_registry.py models/test_deepseek_v4_vl_rocm.py models/transformers/test_layer_registry_e2e.py models/test_deepseek_v41_replay_start.py models/test_deepseek_v41_decoder_replay_layers.py models/test_deepseek_v41_replay_batch.py models/test_deepseek_v41_pcp.py
+   mirror:
+     amd:
+       label: ":amd: (MI355) Basic Models (Other)"
+diff --git a/tests/distributed/test_engram_dp_shard.py b/tests/distributed/test_engram_dp_shard.py
+index 8b7d3e8cec..6f14859dec 100644
+--- a/tests/distributed/test_engram_dp_shard.py
++++ b/tests/distributed/test_engram_dp_shard.py
+@@ -585,6 +585,7 @@ def _check_dummy_hash_model_forward(
+ 
+     model = model_ops.DeepseekV4Model.__new__(model_ops.DeepseekV4Model)
+     torch.nn.Module.__init__(model)
++    model.parallel_config = vllm_config.parallel_config
+     model.use_native_mega_moe = False
+     model.use_sequence_parallel = False
+     model.fuse_mhc_all_reduce = False
+diff --git a/tests/kernels/test_compressor_kv_cache.py b/tests/kernels/test_compressor_kv_cache.py
+index cc4f4c72a9..f6bc296d7e 100644
+--- a/tests/kernels/test_compressor_kv_cache.py
++++ b/tests/kernels/test_compressor_kv_cache.py
+@@ -14,6 +14,7 @@ These tests cover:
+ import math
+ from types import SimpleNamespace
+ 
++import numpy as np
+ import pytest
+ import torch
+ 
+@@ -157,6 +158,104 @@ def test_dspark_context_kv_matches_query_insert(
+         torch.testing.assert_close(kv, before, rtol=0, atol=0)
+ 
+ 
++@pytest.mark.skipif(not current_platform.is_cuda(), reason="CUDA only")
++@pytest.mark.parametrize("kv_mxfp8", [False, True])
++def test_v41_pcp_swa_cache_matches_non_pcp_writer(kv_mxfp8, monkeypatch):
++    """PCP SWA writes must preserve the established CUDA cache bytes."""
++    from vllm.models.deepseek_v41 import attention as attention_module
++    from vllm.models.deepseek_v41.attention import DeepseekV4Attention
++
++    torch.manual_seed(43)
++    block_size = 64
++    num_local_tokens = 5
++    num_tokens = 2 * num_local_tokens
++    row_size = 528 if kv_mxfp8 else 584
++    num_blocks = 2
++    page_stride = math.ceil(block_size * row_size / 576) * 576 + 576
++    backing = torch.full(
++        (num_blocks, page_stride), 165, dtype=torch.uint8, device="cuda"
++    )
++    cache = backing.as_strided(
++        (num_blocks, block_size, row_size), (page_stride, row_size, 1)
++    )
++    reference_backing = backing.clone()
++    reference = reference_backing.as_strided(cache.shape, cache.stride())
++
++    local_kv = torch.randn(num_local_tokens, 512, dtype=torch.bfloat16, device="cuda")
++    remote_kv = torch.randn_like(local_kv)
++    gathered_kv = torch.cat((local_kv, remote_kv))
++    local_positions = torch.arange(num_local_tokens, device="cuda") + 3
++    cache_positions = torch.cat((local_positions, local_positions + 11))
++    cache_slots = torch.randperm(
++        num_blocks * block_size, dtype=torch.int64, device="cuda"
++    )[:num_tokens]
++    cache_slots[2] = -1
++    angles = torch.randn(32, 32, device="cuda")
++    cos_sin = torch.cat((angles.cos(), angles.sin()), dim=-1)
++    num_heads = 8
++    q = torch.randn(
++        num_local_tokens,
++        num_heads,
++        512,
++        dtype=torch.bfloat16,
++        device="cuda",
++    )
++
++    torch.ops._C.fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert(
++        torch.zeros(num_tokens, num_heads, 512, dtype=torch.bfloat16, device="cuda"),
++        gathered_kv,
++        reference.view(num_blocks, -1),
++        cache_slots,
++        cache_positions,
++        cos_sin,
++        num_heads,
++        1e-20,
++        block_size,
++        False,
++        kv_mxfp8,
++    )
++
++    monkeypatch.setattr(
++        attention_module,
++        "get_pcp_group",
++        lambda: SimpleNamespace(
++            all_gather=lambda tensor, dim: torch.cat((tensor, remote_kv), dim=dim)
++        ),
++    )
++    metadata = SimpleNamespace(
++        slot_mapping=torch.full(
++            (num_local_tokens,), -1, dtype=torch.int64, device="cuda"
++        ),
++        cache_slot_mapping=cache_slots,
++        cache_positions=cache_positions,
++        block_size=block_size,
++    )
++    attention = SimpleNamespace(
++        use_pcp=True,
++        swa_cache_layer=SimpleNamespace(
++            prefix="swa", kv_cache=cache, block_size=block_size
++        ),
++        rotary_emb=SimpleNamespace(cos_sin_cache=cos_sin),
++        _flashinfer_fp8_kv_scale=None,
++        kv_mxfp8=kv_mxfp8,
++        accepts_unnormed_unroped_query=False,
++        n_local_heads=num_heads,
++        padded_heads=num_heads,
++        eps=1e-20,
++        head_dim=512,
++    )
++    DeepseekV4Attention._fused_qnorm_rope_kv_insert(
++        attention, q, local_kv, local_positions, {"swa": metadata}
++    )
++
++    torch.testing.assert_close(
++        backing.view(torch.uint8),
++        reference_backing.view(torch.uint8),
++        rtol=0,
++        atol=0,
++    )
++
++
+ @pytest.mark.skipif(
+     not current_platform.is_cuda_alike(), reason="graph capture coverage"
+ )
+@@ -796,6 +895,7 @@ def test_v41_compressor_metadata_maps_tokens_to_their_ring():
+     capacity = 8
+     vllm_config = MagicMock()
+     vllm_config.scheduler_config.max_num_batched_tokens = 16
++    vllm_config.parallel_config.prefill_context_parallel_size = 1
+     spec = CircularBufferSpec(
+         block_size=capacity,
+         num_kv_heads=1,
+@@ -832,6 +932,67 @@ def test_v41_compressor_metadata_maps_tokens_to_their_ring():
+     assert metadata.token_to_req_indices.tolist() == [0, 0, 0, 1, 1, 2, 2]
+ 
+ 
++def test_v41_pcp_compressor_latent_is_gathered_for_cache_writes(monkeypatch):
++    """PCP compresses locally and publishes the gathered latent to both caches."""
++    from vllm.forward_context import ForwardContext, override_forward_context
++    from vllm.models.deepseek_v41 import attention as attention_module
++    from vllm.models.deepseek_v41.attention import DeepseekV4Attention
++
++    local_latent = torch.arange(8, dtype=torch.float32).view(2, 4)
++    cache_positions = torch.tensor([0, 1, 10, 11])
++    observed = {}
++
++    class Compressor:
++        def __call__(self, kv_score, positions):
++            return local_latent
++
++        def insert_cache(self, latent, positions, rotary_emb):
++            observed["insert"] = (latent, positions)
++
++    def prepare_indexer(qr, latent, weights, positions, rotary, qr_scale, **kwargs):
++        observed["indexer"] = (latent, kwargs)
++        return None, None, None
++
++    monkeypatch.setattr(
++        attention_module,
++        "get_pcp_group",
++        lambda: SimpleNamespace(
++            all_gather=lambda tensor, dim: torch.cat((tensor, tensor + 10), dim=dim)
++        ),
++    )
++    metadata = {"swa": SimpleNamespace(cache_positions=cache_positions)}
++    attention = SimpleNamespace(
++        use_pcp=True,
++        compressor=Compressor(),
++        indexer=prepare_indexer,
++        aux_stream_list=None,
++        ln_events=[None, None],
++        swa_cache_layer=SimpleNamespace(prefix="swa"),
++        rotary_emb=SimpleNamespace(),
++        indexer_rotary_emb=SimpleNamespace(),
++        n_local_heads=1,
++        head_dim=4,
++        _wq_b_proj=lambda qr, scale: qr,
++        _fused_qnorm_rope_kv_insert=lambda q, kv, pos, meta: q,
++        _sparse_indexer_and_attn=lambda *args: None,
++    )
++    rows = torch.zeros(2, 4)
++    positions = torch.arange(2)
++    with override_forward_context(ForwardContext({}, metadata, {})):
++        DeepseekV4Attention._prepare_and_attn(
++            attention, rows, rows, rows, None, rows, rows, positions, rows
++        )
++
++    expected_global = torch.cat((local_latent, local_latent + 10))
++    insert_latent, insert_positions = observed["insert"]
++    torch.testing.assert_close(insert_latent, expected_global)
++    torch.testing.assert_close(insert_positions, cache_positions)
++    indexer_latent, indexer_kwargs = observed["indexer"]
++    torch.testing.assert_close(indexer_latent, local_latent)
++    torch.testing.assert_close(indexer_kwargs["cache_latent"], expected_global)
++    torch.testing.assert_close(indexer_kwargs["cache_positions"], cache_positions)
++
++
+ @pytest.mark.skipif(not current_platform.is_cuda(), reason="CUDA stream coverage")
+ @pytest.mark.parametrize(
+     "use_aux,use_graph", [(False, False), (True, False), (True, True)]
+@@ -871,6 +1032,7 @@ def test_v41_attention_joins_cache_writes_before_consumption(use_aux, use_graph)
+     context = ForwardContext({}, metadata, {})
+     compressor = DeepseekCompressor.__new__(DeepseekCompressor)
+     torch.nn.Module.__init__(compressor)
++    compressor.pcp_size = 1
+     compressor.head_dim, compressor.rope_head_dim, compressor.compress_ratio = (
+         512,
+         64,
+@@ -896,7 +1058,7 @@ def test_v41_attention_joins_cache_writes_before_consumption(use_aux, use_graph)
+         use_fp4_kv=False,
+     )
+ 
+-    def prepare_indexer(qr, latent, weights, positions, rotary, qr_scale):
++    def prepare_indexer(qr, latent, weights, positions, rotary, qr_scale, **kwargs):
+         DeepseekV4Indexer._produce_k(indexer, latent, positions, rotary)
+         return None, None, None
+ 
+@@ -906,6 +1068,7 @@ def test_v41_attention_joins_cache_writes_before_consumption(use_aux, use_graph)
+ 
+     auxiliary = [torch.cuda.Stream()] if use_aux else None
+     attention = SimpleNamespace(
++        use_pcp=False,
+         compressor=compressor,
+         indexer=prepare_indexer,
+         aux_stream_list=auxiliary,
+@@ -963,6 +1126,291 @@ def test_v41_attention_joins_cache_writes_before_consumption(use_aux, use_graph)
+         previous = expected
+ 
+ 
++@pytest.mark.parametrize("pcp_size", [2, 4])
++@pytest.mark.parametrize(
++    "lengths,prefilling,starts",
++    [
++        ([9, 1], [True, False], [1, 4]),
++        ([1, 1], [False, False], [16, 3]),
++        ([3, 1], [True, False], [1, 0]),
++    ],
++)
++def test_v41_pcp_ring_links_match_request_positions(
++    pcp_size, lengths, prefilling, starts, monkeypatch
++):
++    """Cross-chunk predecessors and open ring writes must belong to the request."""
++    from vllm.models.deepseek_v41 import compressor as compressor_module
++    from vllm.models.deepseek_v41.compressor import (
++        CompressorMetadata,
++        CompressorMetadataBuilder,
++    )
++    from vllm.v1.worker.gpu import pcp_manager as pcp_manager_module
++    from vllm.v1.worker.gpu.pcp_manager import PCPManager
++
++    monkeypatch.setattr(
++        pcp_manager_module,
++        "async_tensor_h2d",
++        lambda array, **kwargs: torch.from_numpy(array),
++    )
++    manager = PCPManager(pcp_size, 0, torch.device("cpu"), shard_decode_requests=True)
++    query_start = np.array([0, *np.cumsum(lengths)], dtype=np.int32)
++    segments, counts = manager._build_batch_layout(
++        np.array(lengths), np.array(starts), np.array(prefilling), query_start
++    )
++    width = max(counts)
++    capacity = 8
++    blocks = [1, (1 << 20) + 2]
++    num_rows = min(width, 2 * len(lengths))
++    metadata_by_rank = []
++    positions_by_rank = []
++    gathered_keys = []
++    for local_segments in segments:
++        positions = torch.zeros(width, dtype=torch.int64)
++        slots = torch.full((width,), -1, dtype=torch.int64)
++        local_query_start = [0]
++        keys = [-1] * num_rows
++        for row, segment in enumerate(local_segments):
++            req = segment.global_batch_req_idx
++            begin = starts[req] + segment.global_batch_slice.start - query_start[req]
++            local = segment.rank_local_batch_slice
++            positions[local] = torch.arange(begin, begin + segment.num_tokens)
++            slots[local] = blocks[req] * capacity + positions[local] % capacity
++            local_query_start.append(local.stop)
++            keys[row] = (blocks[req] << 32) | int(positions[local.stop - 1])
++        if not local_segments:
++            local_query_start.append(0)
++        metadata_by_rank.append(
++            CompressorMetadata(
++                slot_mapping=slots,
++                query_start_loc=torch.tensor(local_query_start, dtype=torch.int32),
++                token_to_req_indices=torch.empty(0, dtype=torch.int32),
++            )
++        )
++        positions_by_rank.append(positions)
++        gathered_keys.extend(keys)
++
++    keys = torch.tensor(gathered_keys, dtype=torch.int64)
++    contributed_keys = []
++
++    def all_gather(tensor, dim):
++        contributed_keys.append(tensor.clone())
++        return keys
++
++    monkeypatch.setattr(
++        compressor_module,
++        "get_pcp_group",
++        lambda: SimpleNamespace(all_gather=all_gather),
++    )
++    builder = SimpleNamespace(
++        capacity=capacity,
++        device=torch.device("cpu"),
++        vllm_config=SimpleNamespace(
++            scheduler_config=SimpleNamespace(max_num_seqs=len(lengths))
++        ),
++    )
++    expected_rows = {
++        block: max(key for key in gathered_keys if key >> 32 == block)
++        for block in blocks
++    }
++    expected_slots = [
++        block * capacity + (key & 0xFFFFFFFF) % capacity
++        for block, key in expected_rows.items()
++        if key % 2 == 0
++    ]
++    for metadata, positions in zip(metadata_by_rank, positions_by_rank):
++        num_reqs = metadata.query_start_loc.numel() - 1
++        CompressorMetadataBuilder._link_pcp_chunks(
++            builder, metadata, num_reqs, positions
++        )
++        assert metadata.prev_row_indices is not None
++        assert metadata.gather_tokens is not None
++        assert metadata.ring_write_slots is not None
++        for row, token in enumerate(metadata.gather_tokens.tolist()):
++            key = int(contributed_keys[-1][row])
++            if key >= 0:
++                assert int(metadata.slot_mapping[token]) // capacity == key >> 32
++                assert int(positions[token]) == key & 0xFFFFFFFF
++        for start, prev in zip(
++            metadata.query_start_loc[:-1].tolist(), metadata.prev_row_indices.tolist()
++        ):
++            position = int(positions[start])
++            block = int(metadata.slot_mapping[start]) // capacity
++            wanted = (block << 32) | (position - 1)
++            if position % 2 == 1 and wanted in gathered_keys:
++                assert prev >= 0 and gathered_keys[prev] == wanted
++            else:
++                assert prev == -1
++        writes = metadata.ring_write_slots.tolist()
++        assert sorted(slot for slot in writes if slot >= 0) == sorted(expected_slots)
++        for row, slot in enumerate(writes):
++            if slot >= 0:
++                assert gathered_keys[row] == expected_rows[slot // capacity]
++                assert (gathered_keys[row] & 0xFFFFFFFF) % capacity == slot % capacity
++    torch.testing.assert_close(torch.cat(contributed_keys), keys)
++
++
++def _build_pcp_ring_metadata(ranks, all_gather, spec, config, device, monkeypatch):
++    from vllm.models.deepseek_v41 import compressor as compressor_module
++    from vllm.models.deepseek_v41.compressor import CompressorMetadataBuilder
++
++    monkeypatch.setattr(
++        compressor_module,
++        "get_pcp_group",
++        lambda: SimpleNamespace(all_gather=all_gather),
++    )
++    for local in ranks:
++        builder = CompressorMetadataBuilder(spec, ["ring"], config, device)
++        local.metadata = builder.build(0, local.common)
++
++
++@pytest.mark.skipif(not current_platform.is_cuda(), reason="Triton kernel")
++@pytest.mark.parametrize("pcp_size", [2, 4])
++def test_v41_pcp_compressor_preserves_pairs_and_decode_state(pcp_size, monkeypatch):
++    """Pairs split across PCP chunks and decode owner changes keep exact latents."""
++    from vllm.forward_context import ForwardContext, override_forward_context
++    from vllm.models.deepseek_v41 import compressor as compressor_module
++    from vllm.models.deepseek_v41.common.ops.fused_compress_quant_cache import (
++        fused_save_compress_norm,
++    )
++    from vllm.models.deepseek_v41.compressor import DeepseekCompressor
++    from vllm.v1.attention.backend import CommonAttentionMetadata
++    from vllm.v1.kv_cache_interface import CircularBufferSpec
++    from vllm.v1.worker.gpu.pcp_manager import PCPManager
++
++    torch.manual_seed(42)
++    device = torch.device("cuda")
++    norm = torch.randn(512, dtype=torch.bfloat16, device=device)
++    # Block 0 is reserved as the null block; requests use physical blocks 1/2.
++    reference_state = torch.zeros(3, 8, 1024, device=device)
++    rank_states = [reference_state.clone() for _ in range(pcp_size)]
++    config = SimpleNamespace(
++        scheduler_config=SimpleNamespace(max_num_batched_tokens=32, max_num_seqs=4),
++        parallel_config=SimpleNamespace(prefill_context_parallel_size=pcp_size),
++        speculative_config=None,
++    )
++    spec = CircularBufferSpec(
++        block_size=8, num_kv_heads=1, head_size=1024, head_size_v=0, dtype=torch.float32
++    )
++    starts = np.zeros(2, dtype=np.int32)
++    for lengths, prefilling in [
++        ([7, 3], [True, True]),
++        ([9, 1], [True, False]),
++        ([1, 1], [False, False]),
++        ([1, 1], [False, False]),
++    ]:
++        lengths = np.array(lengths, dtype=np.int32)
++        query_start = np.concatenate(([0], np.cumsum(lengths))).astype(np.int32)
++        qsl = torch.from_numpy(query_start).to(device)
++        positions = torch.cat(
++            [torch.arange(s, s + n, device=device) for s, n in zip(starts, lengths)]
++        )
++        req_ids = torch.repeat_interleave(
++            torch.arange(2, device=device, dtype=torch.int32),
++            torch.from_numpy(lengths).to(device),
++        )
++        slots = (req_ids.long() + 1) * 8 + positions % 8
++        raw = torch.randn(sum(lengths), 1024, device=device)
++        expected = torch.empty(sum(lengths), 512, dtype=torch.bfloat16, device=device)
++        fused_save_compress_norm(
++            raw,
++            positions,
++            reference_state,
++            slots,
++            qsl,
++            req_ids,
++            norm,
++            1e-20,
++            2,
++            expected,
++        )
++
++        ranks = []
++        for rank in range(pcp_size):
++            manager = PCPManager(pcp_size, rank, device, shard_decode_requests=True)
++            segments, counts = manager._build_batch_layout(
++                lengths, starts, np.array(prefilling), query_start
++            )
++            width = max(counts)
++            local_indices = manager._padded_gather_idx[
++                rank * width : (rank + 1) * width
++            ]
++            local_lengths = [s.num_tokens for s in segments[rank]] or [0]
++            local_qsl = torch.tensor([0, *np.cumsum(local_lengths)], dtype=torch.int32)
++            local_reqs = [s.global_batch_req_idx for s in segments[rank]] or [0]
++            common = CommonAttentionMetadata(
++                query_start_loc=local_qsl.to(device),
++                query_start_loc_cpu=local_qsl,
++                seq_lens=torch.zeros(len(local_reqs), dtype=torch.int32, device=device),
++                num_reqs=len(local_reqs),
++                num_actual_tokens=counts[rank],
++                max_query_len=max(local_lengths),
++                max_seq_len=int(max(starts + lengths)),
++                block_table_tensor=torch.tensor(
++                    np.array(local_reqs) + 1, dtype=torch.int32, device=device
++                ).unsqueeze(1),
++                slot_mapping=torch.full((width * pcp_size,), -1, device=device),
++                positions=positions[local_indices],
++            )
++            ranks.append(
++                SimpleNamespace(
++                    indices=local_indices[: counts[rank]],
++                    raw=raw[local_indices],
++                    positions=common.positions,
++                    common=common,
++                )
++            )
++
++        # Each rank's builder contributes its last-row candidates to a gather.
++        candidates: list[torch.Tensor] = []
++        _build_pcp_ring_metadata(
++            ranks,
++            lambda t, dim, out=candidates: out.append(t.clone()) or t.repeat(pcp_size),
++            spec,
++            config,
++            device,
++            monkeypatch,
++        )
++        _build_pcp_ring_metadata(
++            ranks,
++            lambda t, dim, out=candidates: torch.cat(out),
++            spec,
++            config,
++            device,
++            monkeypatch,
++        )
++        gathered_rows = torch.cat([r.raw[r.metadata.gather_tokens] for r in ranks])
++        monkeypatch.setattr(
++            compressor_module,
++            "get_pcp_group",
++            lambda rows=gathered_rows: SimpleNamespace(all_gather=lambda t, dim: rows),
++        )
++        for rank, local in enumerate(ranks):
++            compressor = SimpleNamespace(
++                pcp_size=pcp_size,
++                head_dim=512,
++                compress_ratio=2,
++                rms_norm_eps=1e-20,
++                norm=SimpleNamespace(weight=norm),
++                state_cache=SimpleNamespace(prefix="ring", kv_cache=rank_states[rank]),
++            )
++            context = ForwardContext({}, {"ring": local.metadata}, {})
++            with override_forward_context(context):
++                actual = DeepseekCompressor.forward(
++                    compressor, local.raw, local.positions
++                )
++            assert isinstance(actual, torch.Tensor)
++            valid = (positions[local.indices] + 1) % 2 == 0
++            torch.testing.assert_close(
++                actual[: local.indices.numel()][valid],
++                expected[local.indices][valid],
++                rtol=0,
++                atol=0,
++            )
++        for state in rank_states[1:]:
++            torch.testing.assert_close(state, rank_states[0], rtol=0, atol=0)
++        starts += lengths
++
++
+ def _on_gfx950() -> bool:
+     if not current_platform.is_rocm():
+         return False
+diff --git a/tests/kernels/test_engram.py b/tests/kernels/test_engram.py
+index 3663108d9d..dd80f3d2cf 100644
+--- a/tests/kernels/test_engram.py
++++ b/tests/kernels/test_engram.py
+@@ -502,11 +502,12 @@ def test_lookback_window_reproduces_single_instance(runner, capture):
+ 
+ 
+ @pytest.mark.skipif(not current_platform.is_cuda(), reason="CUDA required")
+-def test_v2_model_state_gathers_lookback_window():
++@pytest.mark.parametrize("pcp", [False, True])
++def test_v2_model_state_gathers_lookback_window(pcp):
+     """The window is gathered on device from the runner's token history."""
+     from vllm.models.deepseek_v41.nvidia.model_state import DeepseekV41ModelState
+ 
+-    depth, max_num_reqs, max_model_len = 3, 4, 16
++    depth, max_num_reqs, max_model_len = 3, 6, 16
+     state = DeepseekV41ModelState.__new__(DeepseekV41ModelState)
+     state.rope_state = None
+     state.supports_mm_inputs = False
+@@ -527,15 +528,23 @@ def test_v2_model_state_gathers_lookback_window():
+     # Batch rows -> request state rows: a request two decode steps in, a fresh
+     # request, and one at the end of a 5-token prompt.
+     input_batch = SimpleNamespace(
+-        idx_mapping=torch.tensor([2, 0, 3], dtype=torch.int64, device="cuda")
++        idx_mapping=torch.tensor(
++            [2, 0, 3, 2] if pcp else [2, 0, 3], dtype=torch.int64, device="cuda"
++        ),
++        query_start_loc=torch.arange(5 if pcp else 4, dtype=torch.int32, device="cuda"),
++        positions=torch.tensor([8, 0, 6, 5] if pcp else [8, 0, 6], device="cuda"),
+     )
+     window = state.prepare_inputs(input_batch, req_states)["lookback_token_ids"]
+-    assert window.cpu().tolist() == [
++    expected = [
+         [22, 21, 16],
+         [-1, -1, -1],
+         [0, 0, 0],
+-        [-1, -1, -1],
+     ]
++    if pcp:
++        # The second PCP chunk of request 2 starts at 5, not at its global 8.
++        expected.append([15, 14, 13])
++    expected.extend([[-1] * depth] * (max_num_reqs - len(expected)))
++    assert window.cpu().tolist() == expected
+     # Graph capture runs on the dummy inputs and replays read the same buffer.
+     dummy = state.prepare_dummy_inputs(num_reqs=3, num_tokens=3)["lookback_token_ids"]
+     assert dummy is window and torch.all(dummy == -1)
+diff --git a/tests/models/test_deepseek_v41_pcp.py b/tests/models/test_deepseek_v41_pcp.py
+new file mode 100644
+index 0000000000..59b185ca26
+--- /dev/null
++++ b/tests/models/test_deepseek_v41_pcp.py
+@@ -0,0 +1,66 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++from types import SimpleNamespace
++from unittest.mock import Mock
++
++import pytest
++import torch
++
++from vllm.models.deepseek_v41.nvidia import model as model_module
++
++
++@pytest.mark.parametrize(
++    "pcp_size,use_ep", [(1, False), (2, True), (2, False), (4, False)]
++)
++@pytest.mark.parametrize("use_sp", [False, True])
++def test_pcp_gathers_routing_ids_once_after_local_input_preparation(
++    pcp_size, use_ep, use_sp, monkeypatch
++):
++    """Embedding keeps local IDs; all decoder layers receive aligned routing IDs."""
++    gather = Mock(side_effect=lambda ids, dim: torch.cat([ids] * pcp_size, dim=dim))
++    monkeypatch.setattr(
++        model_module, "get_pcp_group", lambda: SimpleNamespace(all_gather=gather)
++    )
++    monkeypatch.setattr(
++        model_module,
++        "get_pp_group",
++        lambda: SimpleNamespace(is_first_rank=True, is_last_rank=True),
++    )
++    monkeypatch.setattr(model_module, "is_forward_context_available", lambda: False)
++    monkeypatch.setattr(model_module, "sp_shard", lambda tensor: tensor[::2])
++    monkeypatch.setattr(
++        model_module, "sp_all_gather", lambda tensor: tensor.repeat_interleave(2, dim=0)
++    )
++    monkeypatch.setattr(model_module, "hc_collapse_triton", lambda hidden, mix: hidden)
++    embed = Mock(side_effect=lambda ids: ids[:, None].float())
++    run_layers = Mock(
++        side_effect=lambda layer_ids, hidden, *args: (hidden, None, None, None, hidden)
++    )
++    model = SimpleNamespace(
++        parallel_config=SimpleNamespace(
++            prefill_context_parallel_size=pcp_size, enable_expert_parallel=use_ep
++        ),
++        use_native_mega_moe=False,
++        use_sequence_parallel=use_sp,
++        engram_hash=None,
++        embed_input_ids=embed,
++        start_layer=0,
++        decoder_replay_start=2,
++        decoder_replay_layers=None,
++        aux_hidden_state_layers=(),
++        _mtp_hidden_buffer=None,
++        _run_layers=run_layers,
++        _collapse=lambda hidden, *args: hidden,
++        norm=lambda hidden: hidden,
++    )
++    for offset in (0, 10):
++        local_ids = torch.tensor([3, 7, 11, 15]) + offset
++        model_module.DeepseekV4Model.forward(model, local_ids, torch.arange(4), None)
++        assert embed.call_args.args[0] is local_ids
++        routing_ids = local_ids[::2] if use_sp else local_ids
++        needs_gather = pcp_size > 1 and not use_ep
++        if needs_gather:
++            torch.testing.assert_close(gather.call_args.args[0], routing_ids)
++            routing_ids = routing_ids.repeat(pcp_size)
++        torch.testing.assert_close(run_layers.call_args.args[3], routing_ids)
++    assert gather.call_count == 2 * int(needs_gather)
+diff --git a/vllm/models/deepseek_v41/amd/model.py b/vllm/models/deepseek_v41/amd/model.py
+index 5de173a870..6ffd3bd18d 100644
+--- a/vllm/models/deepseek_v41/amd/model.py
++++ b/vllm/models/deepseek_v41/amd/model.py
+@@ -140,6 +140,10 @@ class DeepseekV4MoE(DeepseekV4MoEBase):
+ 
+ def _select_dsv4_attn_cls(vllm_config: VllmConfig) -> type[DeepseekV4Attention]:
+     """Pick the ROCm sparse-MLA implementation for DeepSeek V4.1."""
++    if vllm_config.parallel_config.prefill_context_parallel_size > 1:
++        raise NotImplementedError(
++            "DeepSeek-V4.1 PCP currently supports NVIDIA CUDA only."
++        )
+     backend = vllm_config.attention_config.backend
+     if backend is not None and (
+         backend is not AttentionBackendEnum.ROCM_FLASHMLA_SPARSE_DSV4
+diff --git a/vllm/models/deepseek_v41/attention.py b/vllm/models/deepseek_v41/attention.py
+index 259ed93eb9..ce5f000cc2 100644
+--- a/vllm/models/deepseek_v41/attention.py
++++ b/vllm/models/deepseek_v41/attention.py
+@@ -52,7 +52,7 @@ from vllm.config import (
+     get_current_vllm_config,
+ )
+ from vllm.config.cache import CacheDType
+-from vllm.distributed import get_tensor_model_parallel_world_size
++from vllm.distributed import get_pcp_group, get_tensor_model_parallel_world_size
+ from vllm.forward_context import get_forward_context
+ from vllm.logger import init_logger
+ from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
+@@ -320,6 +320,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         self.layer_id = layer_id
+ 
+         self.prefix = prefix  # Alias for compatibility with compressor
++        self.use_pcp = vllm_config.parallel_config.prefill_context_parallel_size > 1
+         self.hidden_size = config.hidden_size
+         self.n_heads = config.num_attention_heads
+         assert self.n_heads % tp_size == 0
+@@ -902,7 +903,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         index_q_scale: torch.Tensor | None = None
+         index_weights_out: torch.Tensor | None = None
+         latent: torch.Tensor | None = None
+-        aux_stream = aux_streams[0] if aux_streams is not None else None
++        # Keep PCP collectives on one stream in the same order on every rank.
++        aux_stream = (
++            aux_streams[0] if aux_streams is not None and not self.use_pcp else None
++        )
+         if not _musa_deepseek_v4_aux_overlap():
+             aux_stream = None
+ 
+@@ -920,6 +924,17 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         else:
+             q = project_query_and_cache_kv()
+ 
++        cache_latent = latent
++        cache_positions = positions
++        if self.use_pcp and latent is not None:
++            assert isinstance(attn_metadata, dict)
++            swa_metadata = cast(
++                "DeepseekSparseSWAMetadata", attn_metadata[self.swa_cache_layer.prefix]
++            )
++            assert swa_metadata.cache_positions is not None
++            cache_latent = get_pcp_group().all_gather(latent, dim=0)
++            cache_positions = swa_metadata.cache_positions
++
+         def prepare_indexer():
+             if indexer is None:
+                 return None, None, None
+@@ -930,12 +945,16 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 positions,
+                 self.indexer_rotary_emb,
+                 qr_scale,
++                cache_latent=cache_latent,
++                cache_positions=cache_positions,
+             )
+ 
+         if compressor is not None:
+             indexer_result, _ = maybe_execute_in_parallel(
+                 prepare_indexer,
+-                lambda: compressor.insert_cache(latent, positions, self.rotary_emb),
++                lambda: compressor.insert_cache(
++                    cache_latent, cache_positions, self.rotary_emb
++                ),
+                 self.ln_events[0],
+                 self.ln_events[1],
+                 aux_stream,
+@@ -1098,6 +1117,25 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         assert positions.dtype == torch.int64
+         cos_sin_cache = self.rotary_emb.cos_sin_cache
+         cache_dtype = swa_kv_cache.dtype
++        slot_mapping = swa_metadata.slot_mapping
++        if self.use_pcp:
++            cache_kv = get_pcp_group().all_gather(kv.contiguous(), dim=0)
++            assert swa_metadata.cache_slot_mapping is not None
++            assert swa_metadata.cache_positions is not None
++            torch.ops._C.fused_deepseek_v4_kv_rope_insert(
++                cache_kv,
++                swa_kv_cache,
++                swa_metadata.cache_slot_mapping,
++                swa_metadata.cache_positions,
++                cos_sin_cache,
++                swa_metadata.block_size,
++                self._flashinfer_fp8_kv_scale
++                if cache_dtype == torch.float8_e4m3fn
++                else None,
++                self.kv_mxfp8,
++            )
++            # The fused op now only prepares the rank-local queries.
++            slot_mapping = slot_mapping[:0]
+ 
+         # kv is unchanged; attention reads kv solely via swa_kv_cache.
+         if cache_dtype == torch.uint8 and current_platform.is_musa():
+@@ -1136,7 +1174,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 q,
+                 kv,
+                 swa_kv_cache_2d,
+-                swa_metadata.slot_mapping,
++                slot_mapping,
+                 positions,
+                 cos_sin_cache,
+                 pad_to,
+@@ -1164,7 +1202,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 q,
+                 kv,
+                 swa_kv_cache_3d,
+-                swa_metadata.slot_mapping,
++                slot_mapping,
+                 positions,
+                 cos_sin_cache,
+                 self.eps,
+@@ -1180,7 +1218,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             kv,
+             q_fp8,
+             swa_kv_cache_3d,
+-            swa_metadata.slot_mapping,
++            slot_mapping,
+             positions,
+             cos_sin_cache,
+             self._flashinfer_fp8_kv_scale,
+@@ -1538,7 +1576,14 @@ class DeepseekV4Indexer(nn.Module):
+         positions: torch.Tensor,
+         rotary_emb: nn.Module,
+         qr_scale: torch.Tensor | None = None,
++        *,
++        cache_latent: torch.Tensor | None = None,
++        cache_positions: torch.Tensor | None = None,
+     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
++        if cache_latent is None:
++            cache_latent = latent
++        if cache_positions is None:
++            cache_positions = positions
+         attn_metadata = get_forward_context().attn_metadata
+         if isinstance(attn_metadata, dict):
+             indexer_metadata = cast(Any, attn_metadata[self.k_cache.prefix])
+@@ -1549,7 +1594,7 @@ class DeepseekV4Indexer(nn.Module):
+                 # candidates num smaller than topk, every candidate is selected
+                 # but we still need to build k cache
+                 if self.owns_k:
+-                    self._produce_k(latent, positions, rotary_emb)
++                    self._produce_k(cache_latent, cache_positions, rotary_emb)
+                 assert self.topk_indices_buffer is not None
+                 num_tokens = (
+                     indexer_metadata.num_decode_tokens
+@@ -1569,7 +1614,7 @@ class DeepseekV4Indexer(nn.Module):
+         if self.owns_k:
+             # K write must land before indexer_op reads the cache
+             # (skip_k_cache_insert=True).
+-            self._produce_k(latent, positions, rotary_emb)
++            self._produce_k(cache_latent, cache_positions, rotary_emb)
+ 
+         return self.forward_q(qr, qr_scale, indexer_weights, positions, rotary_emb)
+ 
+diff --git a/vllm/models/deepseek_v41/common/ops/fused_compress_quant_cache.py b/vllm/models/deepseek_v41/common/ops/fused_compress_quant_cache.py
+index 41efc75107..59f771ff7f 100644
+--- a/vllm/models/deepseek_v41/common/ops/fused_compress_quant_cache.py
++++ b/vllm/models/deepseek_v41/common/ops/fused_compress_quant_cache.py
+@@ -35,6 +35,8 @@ def fused_save_compress_norm(
+     rms_norm_eps: float,
+     compress_ratio: int,
+     latent_out: torch.Tensor,
++    prev_rows: torch.Tensor | None = None,
++    prev_row_indices: torch.Tensor | None = None,
+ ) -> None:
+     """Pool each closed group into a normalized BF16 latent; save FP32 states.
+ 
+@@ -63,6 +65,11 @@ def fused_save_compress_norm(
+         rms_norm_eps: RMSNorm epsilon.
+         compress_ratio: Group size, either 1 or 2.
+         latent_out: BF16 [tokens, 512], written only at valid group boundaries.
++        prev_rows: FP32 [rows, 1024] rows gathered from all PCP ranks (CR2). A
++            chunk reads its predecessor here where ``prev_row_indices`` is set,
++            and the ring is left to ``save_ring_rows``.
++        prev_row_indices: [num_reqs] row in ``prev_rows`` holding the token
++            before each chunk's first token, or -1 to read the ring.
+ 
+     """
+     assert compress_ratio in (1, 2)
+@@ -87,6 +94,11 @@ def fused_save_compress_norm(
+             state_cache.shape[1],
+         )
+         num_reqs = query_start_loc.numel() - 1
++        if prev_rows is not None:
++            assert prev_row_indices is not None
++            assert prev_row_indices.numel() >= num_reqs
++            assert prev_rows.dtype == torch.float32 and prev_rows.shape[1] == 1024
++            assert prev_rows.stride(1) == 1 and prev_rows.stride(0) % 16 == 0
+     else:
+         state_cache = query_start_loc = token_to_req_indices = None
+         state_stride = state_row_stride = state_block = 1
+@@ -95,6 +107,8 @@ def fused_save_compress_norm(
+     assert num_tokens <= min(kv_score.shape[0], positions.numel())
+     if num_tokens == 0:
+         return
++    has_prev_rows = prev_rows is not None
++    prev_row_stride = prev_rows.stride(0) if prev_rows is not None else 1
+     grid = num_reqs + triton.cdiv(num_tokens, compress_ratio)
+     _fused_save_compress_norm_kernel[(grid,)](
+         kv_score,
+@@ -105,15 +119,19 @@ def fused_save_compress_norm(
+         token_to_req_indices,
+         rms_norm_weight,
+         latent_out,
++        prev_rows if has_prev_rows else kv_score,
++        prev_row_indices if has_prev_rows else slot_mapping,
+         num_tokens,
+         num_reqs,
+         RAW_STRIDE=kv_score.stride(0),
++        PREV_ROW_STRIDE=prev_row_stride,
+         STATE_STRIDE=state_stride,
+         STATE_ROW_STRIDE=state_row_stride,
+         STATE_BLOCK=state_block,
+         COMPRESS_RATIO=compress_ratio,
+         EPS=rms_norm_eps,
+         JOIN_ROW_PTRS=_JOIN_ROW_PTRS,
++        HAS_PREV_ROWS=has_prev_rows,
+         num_warps=4,
+         **({"launch_pdl": False} if current_platform.is_cuda() else {}),
+     )
+@@ -129,15 +147,19 @@ def _fused_save_compress_norm_kernel(
+     req_ids,
+     norm_weight,
+     latent,
++    prev_rows,
++    prev_row_indices,
+     num_tokens,
+     num_reqs,
+     RAW_STRIDE: tl.constexpr,
++    PREV_ROW_STRIDE: tl.constexpr,
+     STATE_STRIDE: tl.constexpr,
+     STATE_ROW_STRIDE: tl.constexpr,
+     STATE_BLOCK: tl.constexpr,
+     COMPRESS_RATIO: tl.constexpr,
+     EPS: tl.constexpr,
+     JOIN_ROW_PTRS: tl.constexpr,
++    HAS_PREV_ROWS: tl.constexpr,
+ ):
+     pid = tl.program_id(0)
+     d = tl.arange(0, 512)
+@@ -157,6 +179,10 @@ def _fused_save_compress_norm_kernel(
+             if (position + 1) % 2 == 0:
+                 ring = state + (state_slot // STATE_BLOCK).to(tl.int64) * STATE_STRIDE
+                 prev = ring + ((position - 1) % STATE_BLOCK) * STATE_ROW_STRIDE
++                if HAS_PREV_ROWS:
++                    prev_idx = tl.load(prev_row_indices + pid)
++                    if prev_idx >= 0:
++                        prev = prev_rows + prev_idx.to(tl.int64) * PREV_ROW_STRIDE
+                 current = raw + start.to(tl.int64) * RAW_STRIDE
+                 if JOIN_ROW_PTRS:
+                     # Joining pointers hides row alignment from Triton; restate it.
+@@ -182,19 +208,20 @@ def _fused_save_compress_norm_kernel(
+                         weight_prev + weight_current
+                     )
+                 _store_latent(pooled, start, norm_weight, latent, EPS)
+-            num_rows = tl.minimum(end - start, STATE_BLOCK)
+-            for k in tl.range(0, num_rows):
+-                token = end - num_rows + k
+-                slot = tl.load(state_slots + token)
+-                if slot >= 0:
+-                    row = (
+-                        state
+-                        + (slot // STATE_BLOCK).to(tl.int64) * STATE_STRIDE
+-                        + (slot % STATE_BLOCK) * STATE_ROW_STRIDE
+-                    )
+-                    src = raw + token.to(tl.int64) * RAW_STRIDE
+-                    tl.store(row + d, tl.load(src + d))
+-                    tl.store(row + 512 + d, tl.load(src + 512 + d))
++            if not HAS_PREV_ROWS:
++                num_rows = tl.minimum(end - start, STATE_BLOCK)
++                for k in tl.range(0, num_rows):
++                    token = end - num_rows + k
++                    slot = tl.load(state_slots + token)
++                    if slot >= 0:
++                        row = (
++                            state
++                            + (slot // STATE_BLOCK).to(tl.int64) * STATE_STRIDE
++                            + (slot % STATE_BLOCK) * STATE_ROW_STRIDE
++                        )
++                        src = raw + token.to(tl.int64) * RAW_STRIDE
++                        tl.store(row + d, tl.load(src + d))
++                        tl.store(row + 512 + d, tl.load(src + 512 + d))
+             return
+ 
+     # Group program: one token (ratio 1) or the token of the pair that ends
+@@ -217,6 +244,50 @@ def _fused_save_compress_norm_kernel(
+     _store_latent(pooled, t, norm_weight, latent, EPS)
+ 
+ 
++def save_ring_rows(
++    rows: torch.Tensor, slot_mapping: torch.Tensor, state_cache: torch.Tensor
++) -> None:
++    """Store FP32 [kv, score] rows to their ring slots, skipping slot -1."""
++    assert rows.dtype == torch.float32 and rows.shape[1] == 1024
++    assert rows.stride(1) == 1 and state_cache.stride(2) == 1
++    assert slot_mapping.numel() == rows.shape[0]
++    if rows.shape[0] == 0:
++        return
++    _save_ring_rows_kernel[(rows.shape[0],)](
++        rows,
++        slot_mapping,
++        state_cache,
++        ROW_STRIDE=rows.stride(0),
++        STATE_STRIDE=state_cache.stride(0),
++        STATE_ROW_STRIDE=state_cache.stride(1),
++        STATE_BLOCK=state_cache.shape[1],
++        num_warps=4,
++    )
++
++
++@triton.jit
++def _save_ring_rows_kernel(
++    rows,
++    slot_mapping,
++    state,
++    ROW_STRIDE: tl.constexpr,
++    STATE_STRIDE: tl.constexpr,
++    STATE_ROW_STRIDE: tl.constexpr,
++    STATE_BLOCK: tl.constexpr,
++):
++    pid = tl.program_id(0)
++    slot = tl.load(slot_mapping + pid)
++    if slot < 0:
++        return
++    d = tl.arange(0, 1024)
++    dst = (
++        state
++        + (slot // STATE_BLOCK).to(tl.int64) * STATE_STRIDE
++        + (slot % STATE_BLOCK) * STATE_ROW_STRIDE
++    )
++    tl.store(dst + d, tl.load(rows + pid.to(tl.int64) * ROW_STRIDE + d))
++
++
+ @triton.jit
+ def _store_latent(pooled, t, norm_weight, latent, EPS: tl.constexpr):
+     d = tl.arange(0, 512)
+diff --git a/vllm/models/deepseek_v41/compressor.py b/vllm/models/deepseek_v41/compressor.py
+index 6f56ad8d5b..324123fb54 100644
+--- a/vllm/models/deepseek_v41/compressor.py
++++ b/vllm/models/deepseek_v41/compressor.py
+@@ -8,6 +8,7 @@ import torch
+ from torch import nn
+ 
+ from vllm.config import VllmConfig, get_current_vllm_config
++from vllm.distributed import get_pcp_group
+ from vllm.forward_context import get_forward_context
+ from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
+ from vllm.model_executor.layers.layernorm import RMSNorm
+@@ -15,6 +16,7 @@ from vllm.model_executor.layers.linear import MergedColumnParallelLinear
+ from vllm.models.deepseek_v41.common.ops.fused_compress_quant_cache import (
+     fused_save_compress_norm,
+     rope_quant_insert,
++    save_ring_rows,
+ )
+ from vllm.platforms import current_platform
+ from vllm.triton_utils import tl, triton
+@@ -36,6 +38,10 @@ class CompressorBackend(AttentionBackend):
+     def get_name() -> str:
+         return "CompressorBackend"
+ 
++    @classmethod
++    def supports_pcp(cls) -> bool:
++        return True
++
+     @staticmethod
+     def get_supported_kernel_block_sizes(kv_cache_spec=None) -> list[int | MultipleOf]:
+         return [MultipleOf(1)]
+@@ -55,6 +61,12 @@ class CompressorMetadata:
+     slot_mapping: torch.Tensor
+     query_start_loc: torch.Tensor  # [num_reqs + 1]
+     token_to_req_indices: torch.Tensor  # [num_tokens]
++    # PCP only: every rank gathers the last row of each rank's local requests.
++    gather_tokens: torch.Tensor | None = None  # [rows] this rank's rows
++    # [pcp * rows] ring slot of each request's newest row if it is open, else -1.
++    ring_write_slots: torch.Tensor | None = None
++    # [num_reqs] gathered row preceding each local chunk, or -1 to use the ring.
++    prev_row_indices: torch.Tensor | None = None
+ 
+ 
+ @triton.jit(do_not_specialize=["block_table_stride", "num_actual_tokens", "num_tokens"])
+@@ -91,6 +103,7 @@ class CompressorMetadataBuilder(AttentionMetadataBuilder):
+         super().__init__(*args, **kwargs)
+         assert isinstance(self.kv_cache_spec, CircularBufferSpec)
+         self.capacity = self.kv_cache_spec.block_size
++        self.pcp_size = self.vllm_config.parallel_config.prefill_context_parallel_size
+         max_num_batched_tokens = (
+             self.vllm_config.scheduler_config.max_num_batched_tokens
+         )
+@@ -100,6 +113,8 @@ class CompressorMetadataBuilder(AttentionMetadataBuilder):
+         self.slot_mapping_buffer = torch.empty(
+             max_num_batched_tokens, dtype=torch.int64, device=self.device
+         )
++        # The ring keeps only the open row under PCP, too few for spec decoding.
++        assert self.pcp_size == 1 or self.vllm_config.speculative_config is None
+ 
+     def build(
+         self,
+@@ -107,7 +122,7 @@ class CompressorMetadataBuilder(AttentionMetadataBuilder):
+         common_attn_metadata: CommonAttentionMetadata,
+         fast_build: bool = False,
+     ) -> CompressorMetadata:
+-        num_tokens = common_attn_metadata.slot_mapping.numel()
++        num_tokens = common_attn_metadata.slot_mapping.numel() // self.pcp_size
+         positions = common_attn_metadata.positions
+         assert positions is not None
+         token_to_req_indices = common_attn_metadata.token_to_req_indices(
+@@ -126,11 +141,66 @@ class CompressorMetadataBuilder(AttentionMetadataBuilder):
+             CAPACITY=self.capacity,
+             BLOCK=256,
+         )
+-        return CompressorMetadata(
++        metadata = CompressorMetadata(
+             slot_mapping=slot_mapping,
+             query_start_loc=common_attn_metadata.query_start_loc,
+             token_to_req_indices=token_to_req_indices,
+         )
++        if self.pcp_size > 1:
++            self._link_pcp_chunks(metadata, common_attn_metadata.num_reqs, positions)
++        return metadata
++
++    def _link_pcp_chunks(
++        self, metadata: CompressorMetadata, num_reqs: int, positions: torch.Tensor
++    ) -> None:
++        """Link ratio-2 groups split across PCP chunks and pick the ring writes.
++
++        Every rank gathers ``(ring block, position)`` of each local request's
++        last token; the ring block names a request on every rank. Sorted, they
++        give each local chunk's predecessor row and each request's newest row.
++        """
++        num_tokens = metadata.slot_mapping.numel()
++        # Equal on every rank, so the gathers line up.
++        num_rows = min(num_tokens, 2 * self.vllm_config.scheduler_config.max_num_seqs)
++        num_reqs = min(num_reqs, num_rows)
++        query_start_loc = metadata.query_start_loc.long()
++        starts = query_start_loc[:num_reqs].clamp(max=num_tokens - 1)
++        last = (query_start_loc[1 : num_reqs + 1] - 1).clamp(min=0)
++        nonempty = query_start_loc[1 : num_reqs + 1] > query_start_loc[:num_reqs]
++
++        def key(slots: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
++            return torch.where(slots >= 0, (slots // self.capacity) << 32 | pos, -1)
++
++        local_keys = torch.full((num_rows,), -1, dtype=torch.int64, device=self.device)
++        local_keys[:num_reqs] = key(
++            torch.where(nonempty, metadata.slot_mapping[last], -1), positions[last]
++        )
++        sorted_keys, order = get_pcp_group().all_gather(local_keys, dim=0).sort()
++
++        blocks, sorted_positions = sorted_keys >> 32, sorted_keys & 0xFFFFFFFF
++        newest = torch.ones_like(sorted_keys, dtype=torch.bool)
++        newest[:-1] = blocks[:-1] != blocks[1:]
++        is_open = (sorted_keys >= 0) & newest & (sorted_positions % 2 == 0)
++        ring_write_slots = torch.empty_like(sorted_keys)
++        ring_write_slots[order] = torch.where(
++            is_open, blocks * self.capacity + sorted_positions % self.capacity, -1
++        )
++
++        first_positions = positions[starts]
++        wanted = key(metadata.slot_mapping[starts], first_positions - 1)
++        found = torch.searchsorted(sorted_keys, wanted).clamp_(max=order.numel() - 1)
++        has_prev = (
++            nonempty
++            & (wanted >= 0)
++            & (first_positions % 2 == 1)
++            & (sorted_keys[found] == wanted)
++        )
++
++        gather_tokens = torch.zeros_like(local_keys)
++        gather_tokens[:num_reqs] = last
++        metadata.gather_tokens = gather_tokens
++        metadata.ring_write_slots = ring_write_slots
++        metadata.prev_row_indices = torch.where(has_prev, order[found], -1)
+ 
+ 
+ class CompressorStateCache(torch.nn.Module, AttentionLayerBase):
+@@ -205,6 +275,8 @@ class DeepseekCompressor(nn.Module):
+         self.rotate = rotate
+         self.prefix = prefix
+         self.k_cache_prefix = k_cache_prefix
++        self.pcp_size = vllm_config.parallel_config.prefill_context_parallel_size
++        self.pcp_rank = get_pcp_group().rank_in_group if self.pcp_size > 1 else 0
+         # Ratio 1 pools single tokens, so the checkpoint carries no gate.
+         self.has_gate = compress_ratio > 1
+ 
+@@ -256,15 +328,20 @@ class DeepseekCompressor(nn.Module):
+     ) -> torch.Tensor | None:
+         """Save states and return the BF16 latent for cache insertion and indexing.
+ 
+-        Only valid group-boundary rows are written.
++        Only valid group-boundary rows are written. Under PCP each rank pools
++        its own rows; the last row of every rank's chunks is gathered, both to
++        close groups split across chunks and to keep every rank's ring equal.
+         """
+         attn_metadata = get_forward_context().attn_metadata
+         if not isinstance(attn_metadata, dict):
+             return None
+ 
++        prev_rows = prev_row_indices = ring_write_slots = None
+         if self.state_cache is None:
+             state_cache = query_start_loc = token_to_req_indices = None
+             slot_mapping = cast(Any, attn_metadata[self.k_cache_prefix]).slot_mapping
++            if self.pcp_size > 1:
++                slot_mapping = slot_mapping.chunk(self.pcp_size)[self.pcp_rank]
+         else:
+             state_metadata = cast(
+                 CompressorMetadata, attn_metadata[self.state_cache.prefix]
+@@ -273,6 +350,13 @@ class DeepseekCompressor(nn.Module):
+             slot_mapping = state_metadata.slot_mapping
+             query_start_loc = state_metadata.query_start_loc
+             token_to_req_indices = state_metadata.token_to_req_indices
++            if self.pcp_size > 1:
++                assert state_metadata.gather_tokens is not None
++                prev_rows = get_pcp_group().all_gather(
++                    kv_score[state_metadata.gather_tokens], dim=0
++                )
++                prev_row_indices = state_metadata.prev_row_indices
++                ring_write_slots = state_metadata.ring_write_slots
+ 
+         latent = torch.empty(
+             kv_score.shape[0],
+@@ -291,7 +375,12 @@ class DeepseekCompressor(nn.Module):
+             self.rms_norm_eps,
+             self.compress_ratio,
+             latent,
++            prev_rows=prev_rows,
++            prev_row_indices=prev_row_indices,
+         )
++        if prev_rows is not None:
++            assert state_cache is not None and ring_write_slots is not None
++            save_ring_rows(prev_rows, ring_write_slots, state_cache)
+         return latent
+ 
+     def insert_cache(
+diff --git a/vllm/models/deepseek_v41/nvidia/flashmla.py b/vllm/models/deepseek_v41/nvidia/flashmla.py
+index 16a3fc5666..713e3d2af0 100644
+--- a/vllm/models/deepseek_v41/nvidia/flashmla.py
++++ b/vllm/models/deepseek_v41/nvidia/flashmla.py
+@@ -44,6 +44,10 @@ class DeepseekSparseSWAFlashMLAMetadataBuilder(DeepseekV41SparseSWAMetadataBuild
+ 
+ 
+ class DeepseekSparseSWAFlashMLABackend(DeepseekSparseSWABackend):
++    @classmethod
++    def supports_pcp(cls) -> bool:
++        return True
++
+     @staticmethod
+     def get_builder_cls() -> type[DeepseekSparseSWAFlashMLAMetadataBuilder]:
+         return DeepseekSparseSWAFlashMLAMetadataBuilder
+@@ -134,6 +138,14 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
+         )
+         assert swa_metadata is not None
+ 
++        if self.use_pcp:
++            num_tokens = (
++                swa_metadata.num_decode_tokens + swa_metadata.num_prefill_tokens
++            )
++            output[num_tokens:].zero_()
++            if num_tokens == 0:
++                return
++
+         swa_only = self.compress_ratio == 0
+         # SWA-only layers (compress_ratio == 0) don't have their own KV cache
+         # allocation; consumers read the kv source's cache, which is bound on
+diff --git a/vllm/models/deepseek_v41/nvidia/model.py b/vllm/models/deepseek_v41/nvidia/model.py
+index 20f3e2b97b..15b523a56c 100644
+--- a/vllm/models/deepseek_v41/nvidia/model.py
++++ b/vllm/models/deepseek_v41/nvidia/model.py
+@@ -14,6 +14,7 @@ from vllm.config import VllmConfig
+ from vllm.config.kernel import MEGA_MOE_BACKENDS, NATIVE_MEGA_MOE_BACKENDS
+ from vllm.distributed import (
+     get_engram_dp_size,
++    get_pcp_group,
+     get_pp_group,
+     get_tensor_model_parallel_rank,
+     get_tensor_model_parallel_world_size,
+@@ -204,6 +205,17 @@ def _select_dsv4_attn_cls(vllm_config: VllmConfig) -> type[DeepseekV4Attention]:
+     FlashMLA path.
+     """
+     backend = vllm_config.attention_config.backend
++    if vllm_config.parallel_config.prefill_context_parallel_size > 1:
++        if backend not in (
++            None,
++            AttentionBackendEnum.FLASHMLA_SPARSE,
++            AttentionBackendEnum.FLASHMLA_SPARSE_DSV4,
++            AttentionBackendEnum.FLASHMLA_SPARSE_DSV41,
++        ):
++            raise NotImplementedError(
++                "DeepSeek-V4.1 PCP requires FlashMLA sparse attention."
++            )
++        return DeepseekV4FlashMLAAttention
+     device_capability = current_platform.get_device_capability()
+     if backend in (
+         AttentionBackendEnum.FLASHINFER_MLA_SPARSE,
+@@ -668,6 +680,21 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
+         self.config = config
+         self.quant_config = quant_config
+         self.parallel_config = vllm_config.parallel_config
++        if self.parallel_config.prefill_context_parallel_size > 1 and (
++            self.parallel_config.pipeline_parallel_size != 1
++            or self.parallel_config.data_parallel_size != 1
++            or self.parallel_config.decode_context_parallel_size != 1
++            or self.parallel_config.use_ubatching
++            or vllm_config.speculative_config is not None
++            or vllm_config.kv_transfer_config is not None
++            or vllm_config.cache_config.enable_prefix_caching
++            or vllm_config.kernel_config.moe_backend in MEGA_MOE_BACKENDS
++        ):
++            raise NotImplementedError(
++                "DeepSeek-V4.1 PCP currently requires PP=DP=DCP=1, with no "
++                "microbatching, speculative decoding, KV transfer, prefix "
++                "caching, or MegaMoE."
++            )
+         self.use_native_mega_moe = (
+             vllm_config.kernel_config.moe_backend in NATIVE_MEGA_MOE_BACKENDS
+         )
+@@ -1003,6 +1030,13 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
+             hidden_states = sp_shard(hidden_states)
+             input_ids = sp_shard(input_ids)
+ 
++        if (
++            input_ids is not None
++            and self.parallel_config.prefill_context_parallel_size > 1
++            and not self.parallel_config.enable_expert_parallel
++        ):
++            input_ids = get_pcp_group().all_gather(input_ids, dim=0)
++
+         residual, post_mix, res_mix = None, None, None
+         pre_mix: torch.Tensor | None = None
+         if not get_pp_group().is_first_rank:
+diff --git a/vllm/models/deepseek_v41/nvidia/model_state.py b/vllm/models/deepseek_v41/nvidia/model_state.py
+index b05a5ab9a0..951779913e 100644
+--- a/vllm/models/deepseek_v41/nvidia/model_state.py
++++ b/vllm/models/deepseek_v41/nvidia/model_state.py
+@@ -41,7 +41,8 @@ from vllm.v1.worker.utils import AttentionGroup
+ def _gather_lookback_kernel(
+     lookback_ptr,
+     idx_mapping_ptr,
+-    num_computed_tokens_ptr,
++    query_start_loc_ptr,
++    positions_ptr,
+     all_token_ids_ptr,
+     all_token_ids_stride,
+     num_reqs,
+@@ -52,13 +53,16 @@ def _gather_lookback_kernel(
+     batch_idx = tl.program_id(0)
+     in_batch = batch_idx < num_reqs
+     req_state_idx = tl.load(idx_mapping_ptr + batch_idx, mask=in_batch, other=0)
+-    num_computed = tl.load(num_computed_tokens_ptr + req_state_idx)
++    begin = tl.load(query_start_loc_ptr + batch_idx, mask=in_batch, other=0)
++    end = tl.load(query_start_loc_ptr + batch_idx + 1, mask=in_batch, other=0)
++    in_batch = in_batch & (end > begin)
++    num_computed = tl.load(positions_ptr + begin, mask=in_batch, other=0)
+ 
+     offs = tl.arange(0, BLOCK_DEPTH)
+     pos = num_computed - 1 - offs
+     valid = in_batch & (offs < DEPTH) & (pos >= 0)
+     ids = tl.load(
+-        all_token_ids_ptr + req_state_idx * all_token_ids_stride + pos,
++        all_token_ids_ptr + req_state_idx.to(tl.int64) * all_token_ids_stride + pos,
+         mask=valid,
+         other=-1,
+     )
+@@ -200,8 +204,11 @@ class DeepseekV41ModelState(DefaultModelState):
+         self.lookback_token_ids: torch.Tensor | None = None
+         if depth > 0:
+             # Persistent so a captured graph can read it on replay.
++            max_num_reqs = self.max_num_reqs
++            if vllm_config.parallel_config.prefill_context_parallel_size > 1:
++                max_num_reqs *= 2
+             self.lookback_token_ids = torch.full(
+-                (self.max_num_reqs, depth), -1, dtype=torch.int32, device=device
++                (max_num_reqs, depth), -1, dtype=torch.int32, device=device
+             )
+ 
+         # Per request state index; batches gather from it (see prepare_attn).
+@@ -287,7 +294,8 @@ class DeepseekV41ModelState(DefaultModelState):
+         _gather_lookback_kernel[(window.shape[0],)](
+             window,
+             input_batch.idx_mapping,
+-            req_states.num_computed_tokens.gpu,
++            input_batch.query_start_loc,
++            input_batch.positions,
+             all_token_ids,
+             all_token_ids.stride(0),
+             input_batch.idx_mapping.shape[0],
+diff --git a/vllm/models/deepseek_v41/sparse_mla.py b/vllm/models/deepseek_v41/sparse_mla.py
+index 1130eec090..3a3c26f438 100644
+--- a/vllm/models/deepseek_v41/sparse_mla.py
++++ b/vllm/models/deepseek_v41/sparse_mla.py
+@@ -9,6 +9,7 @@ import torch
+ 
+ from vllm.config import VllmConfig
+ from vllm.config.cache import CacheDType
++from vllm.distributed import get_pcp_group
+ from vllm.platforms import current_platform
+ from vllm.platforms.interface import DeviceCapability
+ from vllm.v1.attention.backend import (
+@@ -24,6 +25,7 @@ from vllm.v1.attention.backends.mla.sparse_swa import (
+     _LAYER_TYPE_C1A,
+     _LAYER_TYPE_C2A,
+     _LAYER_TYPE_SWAONLY,
++    DeepseekSparseSWAMetadata,
+     DeepseekSparseSWAMetadataBuilder,
+ )
+ from vllm.v1.kv_cache_interface import AttentionSpec
+@@ -60,6 +62,12 @@ class DeepseekV41SparseSWAMetadataBuilder(DeepseekSparseSWAMetadataBuilder):
+ 
+     def __init__(self, *args, **kwargs):
+         super().__init__(*args, **kwargs)
++        self.pcp_size = self.vllm_config.parallel_config.prefill_context_parallel_size
++        self.pcp_rank = get_pcp_group().rank_in_group if self.pcp_size > 1 else 0
++        if self.pcp_size > 1:
++            self.no_replay_start = self.no_replay_start.new_zeros(
++                2 * self.vllm_config.scheduler_config.max_num_seqs + 1
++            )
+         compress_ratios = getattr(
+             self.vllm_config.model_config.hf_config, "compress_ratios", None
+         ) or [0]
+@@ -67,6 +75,24 @@ class DeepseekV41SparseSWAMetadataBuilder(DeepseekSparseSWAMetadataBuilder):
+             deepseek_v41_layer_type(int(ratio)) for ratio in compress_ratios
+         }
+ 
++    def build(
++        self,
++        common_prefix_len: int,
++        common_attn_metadata: CommonAttentionMetadata,
++        fast_build: bool = False,
++        replay_start: torch.Tensor | None = None,
++    ) -> DeepseekSparseSWAMetadata:
++        cm = common_attn_metadata
++        if self.pcp_size > 1:
++            local_slots = cm.slot_mapping.chunk(self.pcp_size)[self.pcp_rank]
++            cm = cm.replace(slot_mapping=local_slots)
++        metadata = super().build(common_prefix_len, cm, fast_build, replay_start)
++        if self.pcp_size > 1:
++            metadata.cache_slot_mapping = common_attn_metadata.slot_mapping
++            assert cm.positions is not None
++            metadata.cache_positions = get_pcp_group().all_gather(cm.positions, dim=0)
++        return metadata
++
+ 
+ class DeepseekV4SparseMLABackend(AttentionBackend):
+     """DeepSeek-V4.1 sparse-MLA backend base.
+@@ -155,6 +181,8 @@ class DeepseekV4SparseMLAMetadataBuilder(
+     ) -> None:
+         super().__init__(kv_cache_spec, layer_names, vllm_config, device)
+         self.model_config = vllm_config.model_config
++        self.pcp_size = vllm_config.parallel_config.prefill_context_parallel_size
++        self.pcp_rank = get_pcp_group().rank_in_group if self.pcp_size > 1 else 0
+         # Classify single-token queries (plus num_speculative_tokens via
+         # supports_spec_as_decode=True) as decodes; longer queries go to prefill.
+         self._init_reorder_batch_threshold(1, supports_spec_as_decode=True)
+@@ -193,9 +221,12 @@ class DeepseekV4SparseMLAMetadataBuilder(
+ 
+         slot_mapping = cm.slot_mapping
+         if self.compress_ratio > 1:
++            local_slots = slot_mapping
++            if self.pcp_size > 1:
++                local_slots = slot_mapping.chunk(self.pcp_size)[self.pcp_rank]
+             slot_mapping = get_compressed_slot_mapping(
+                 cm.num_actual_tokens,
+-                cm.slot_mapping,
++                local_slots,
+                 cm.query_start_loc,
+                 cm.seq_lens,
+                 cm.block_table_tensor.clamp_(min=0),
+@@ -203,6 +234,10 @@ class DeepseekV4SparseMLAMetadataBuilder(
+                 self.compress_ratio,
+                 out=self.compressed_slot_mapping_buffer,
+             )
++            if self.pcp_size > 1:
++                slot_mapping = get_pcp_group().all_gather(
++                    self.compressed_slot_mapping_buffer[: local_slots.numel()], dim=0
++                )
+ 
+         return DeepseekV4FlashMLAMetadata(
+             num_reqs=cm.num_reqs,
+@@ -223,6 +258,10 @@ class DeepseekV4FlashMLAMetadataBuilder(DeepseekV4SparseMLAMetadataBuilder):
+ 
+ 
+ class DeepseekV4FlashMLABackend(DeepseekV4SparseMLABackend):
++    @classmethod
++    def supports_pcp(cls) -> bool:
++        return True
++
+     @staticmethod
+     def get_name() -> str:
+         return "FLASHMLA_SPARSE_DSV41"
+@@ -250,6 +289,10 @@ class FlashMLAMegaAttnBackend(DeepseekV4FlashMLABackend):
+         "nvfp4_ds_mla",  # V4.1 fp8 SWA cache + NVFP4 compressed cache
+     ]
+ 
++    @classmethod
++    def supports_pcp(cls) -> bool:
++        return False
++
+     @staticmethod
+     def get_name() -> str:
+         return "FLASHMLA_MEGA_ATTN_DSV41"
+diff --git a/vllm/v1/attention/backends/mla/sparse_swa.py b/vllm/v1/attention/backends/mla/sparse_swa.py
+index 427a8bc86e..25011fe9d9 100644
+--- a/vllm/v1/attention/backends/mla/sparse_swa.py
++++ b/vllm/v1/attention/backends/mla/sparse_swa.py
+@@ -209,6 +209,9 @@ class DeepseekSparseSWAMetadata:
+     # window attention may read (SWA bounded replay);
+     # zeros when nothing replays.
+     replay_start: torch.Tensor | None = None
++    # PCP cache writes use the gathered slots; queries use rank-local slots.
++    cache_slot_mapping: torch.Tensor | None = None
++    cache_positions: torch.Tensor | None = None
+ 
+     # Number of decode/prefill requests/tokens (batch is reordered: decodes first)
+     num_decodes: int = 0

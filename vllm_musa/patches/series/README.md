@@ -41,7 +41,7 @@ that ancestry order but combines only changes that implement one independently
 maintainable feature: custom all-reduce (`0037`), dedicated Mamba pools
 (`0078`), rejection-sampler scalarization (`0111`), and DeepSeek-V4 FP8 expert
 dtype/scale resolution (`0134`). Eight v0.32 native/compatibility adaptations
-follow (`0163`–`0170`), then 41 new or updated v0.32 features
+follow (`0163`–`0170`), then 39 new or updated v0.32 features
 (`0171`–`0211`). The original cross-version
 DeepSeek-V4/V4.1 aux-stream patch stays in the new group because its v0.28
 segment depends on later v0.32 attention changes; old `0110` remains in the
@@ -325,7 +325,30 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0210-MUSA-initialize-the-Mamba2-profiling-output.patch` | v0.32 new | initialize the supplied Mamba2 output during the profiling run |
 | `0211-MUSA-one-contiguous-block-pool-per-Mamba-state.patch` | v0.32 new | give each Mamba state its own contiguous block pool |
 
-Currently **211 patches** and **0 upstream entries** in `upstream/`.
+Currently **211 patches** and **8 upstream entries** in `upstream/`.
+
+## DeepSeek-V4.1 native PCP backports
+
+The upstream entries apply after the MUSA series, on the same immutable v0.32.0
+pin. They use the native MRV2 PCP manager and DeepSeek-V4.1 model state; no MUSA
+runner intercepts attention or gathers full compressor scores.
+
+| Entry | Source | Purpose |
+| --- | --- | --- |
+| `upstream/0001` | `bfdbfa1632`, #60946 | Align routing padding with gathered rows, including startup profiling. |
+| `upstream/0002` | `d12d5460a5`, #61643 | Preserve input IDs while gathering decoder replay rows. |
+| `upstream/0003` | `fa75d3456d`, #59857 | Native PCP compression, boundary exchange, cache publication and Engram lookback. |
+| `upstream/0004` | `fc47cc8fff`, #62183 | APC and encoder-side bounded replay; includes the shared zero-window model-state prerequisite from `c077dc663d`. |
+| `upstream/0005` | `85752a43c3`, #62652 | Preserve target-token scoring rows while trimming replay. |
+| `upstream/0006` | `c7476c7a6f`, #62384 | Decoder-side PCP bounded replay and rank-aligned replay metadata. |
+| `upstream/0007` | MUSA integration | Dispatch KV-only publication to MUSA, suppress duplicate local KV writes, and support MCCL reduce-scatter on arbitrary axes. |
+| `upstream/0008` | MUSA test routing | Run native replay, routing-padding and ratio-2 compressor regression tests on MUSA instead of skipping them as CUDA-only. |
+
+The PCP and replay commits retain their cherry-pick provenance. Backport conflict
+resolutions preserve MUSA stream guards, omit ROCm-only tests whose prerequisites
+are absent, and carry only the shared model-state prerequisite, not the unrelated
+ROCm model implementation. DSpark and PP/DP PCP extensions are not included.
+See `docs/deepseek-pcp.md` for validation and runtime boundaries.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and

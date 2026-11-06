@@ -63,6 +63,7 @@ def _dsv4_rope_kv_insert_kernel(
     GROUP: tl.constexpr,
     TOKEN_BYTES: tl.constexpr,
     SCALE_BYTES: tl.constexpr,
+    KV_ONLY: tl.constexpr = False,
 ):
     HEAD_DIM: tl.constexpr = NOPE_DIM + 2 * HALF_ROPE
     PAIRS: tl.constexpr = HEAD_DIM // 2
@@ -73,7 +74,7 @@ def _dsv4_rope_kv_insert_kernel(
     pair = tl.arange(0, PAIRS)
     rope_pair = pair >= NOPE_DIM // 2
 
-    if head_block == KV_BLOCK:
+    if KV_ONLY or head_block == KV_BLOCK:
         slot = tl.load(slot_ptr + t, mask=t < num_slots, other=-1).to(tl.int64)
         if (slot >= 0) & (slot < cache_slots):
             block = slot // block_size
@@ -173,7 +174,7 @@ def rope_kv_insert_supported(
         positions.device,
         cos_sin_cache.device,
     }
-    return (
+    if not (
         _ENABLED
         and len(devices) == 1
         and q.dim() == 3
@@ -186,6 +187,7 @@ def rope_kv_insert_supported(
         and kv.is_contiguous()
         and kv_cache.dtype == torch.uint8
         and kv_cache.dim() >= 3
+        and cache_block_size > 0
         and kv_cache.shape[1] == cache_block_size
         and kv_cache.stride(-1) == 1
         and kv_cache.stride(0) >= cache_block_size * (_TOKEN_BYTES + _SCALE_BYTES)
@@ -201,6 +203,59 @@ def rope_kv_insert_supported(
         and cos_sin_cache.dim() == 2
         and cos_sin_cache.shape[1] == _ROPE_DIM
         and cos_sin_cache.is_contiguous()
+    ):
+        return False
+    if kv_cache.shape[0] == 0:
+        return True
+    storage = kv_cache.untyped_storage()
+    cache_offset = kv_cache.storage_offset()
+    required_bytes = (kv_cache.shape[0] - 1) * kv_cache.stride(0) + cache_block_size * (
+        _TOKEN_BYTES + _SCALE_BYTES
+    )
+    return (
+        kv_cache.numel() > 0
+        and cache_offset >= 0
+        and required_bytes <= storage.nbytes() - cache_offset
+    )
+
+
+def kv_rope_insert(
+    kv: torch.Tensor,
+    kv_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    cache_block_size: int,
+) -> None:
+    num_slots = slot_mapping.numel()
+    if num_slots == 0:
+        return
+    _dsv4_rope_kv_insert_kernel[(num_slots, 1)](
+        kv,
+        kv,
+        kv,
+        kv_cache,
+        slot_mapping,
+        positions,
+        cos_sin_cache,
+        num_slots,
+        kv_cache.shape[0] * cache_block_size,
+        cache_block_size,
+        kv_cache.stride(0),
+        cos_sin_cache.stride(0),
+        0.0,
+        APPLY_NORM=False,
+        IN_HEADS=0,
+        OUT_HEADS=0,
+        HEADS=1,
+        KV_BLOCK=0,
+        NOPE_DIM=_NOPE_DIM,
+        HALF_ROPE=_ROPE_DIM // 2,
+        GROUP=_QUANT_GROUP,
+        TOKEN_BYTES=_TOKEN_BYTES,
+        SCALE_BYTES=_SCALE_BYTES,
+        KV_ONLY=True,
+        num_warps=2,
     )
 
 

@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from typing import Any
+
 from vllm.config import VllmConfig
 from vllm.v1.worker.gpu_worker import Worker
 
@@ -26,3 +28,14 @@ class MTGPUWorker(Worker):
             distributed_init_method=distributed_init_method,
             is_driver_worker=is_driver_worker,
         )
+
+    def _make_model_runner(self) -> Any:
+        model_runner = super()._make_model_runner()
+        if not self.use_v2_model_runner:
+            return model_runner
+        from vllm_musa.v1.worker.request_token_staging import (
+            preallocate_deepseek_request_token_staging,
+        )
+
+        preallocate_deepseek_request_token_staging(self.vllm_config, model_runner)
+        return model_runner

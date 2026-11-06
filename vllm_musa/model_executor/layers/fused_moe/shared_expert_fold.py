@@ -72,6 +72,7 @@ def deepseek_v4_shared_expert_foldable(
         or parallel_config.enable_expert_parallel
         or parallel_config.enable_eplb
         or parallel_config.data_parallel_size != 1
+        or getattr(parallel_config, "prefill_context_parallel_size", 1) != 1
         or getattr(moe, "use_sequence_parallel", False)
         or getattr(moe, "scoring_func", None) != "sqrtsoftplus"
         or moe.gate.tid2eid is not None

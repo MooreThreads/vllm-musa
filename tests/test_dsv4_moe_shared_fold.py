@@ -185,6 +185,9 @@ def test_shared_fold_eligibility() -> None:
     assert not fold.deepseek_v4_shared_expert_foldable(
         _config(tensor_parallel_size=4), _moe(), hf, quant
     )
+    assert not fold.deepseek_v4_shared_expert_foldable(
+        _config(prefill_context_parallel_size=2), _moe(), hf, quant
+    )
     # The contract keeps DeepSeek-V4-Flash off the fold even when its layers fit.
     dsv4 = _flash_base_config(
         speculative=True, speculative_method="dspark", max_num_seqs=64
