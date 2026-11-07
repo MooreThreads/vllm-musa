@@ -250,6 +250,16 @@ def test_musa_image_stage_and_optional_component_contract():
     assert "TORCH_MUSA_ARCH_LIST=31" in deps_stage
     assert "MATE_MUSA_ARCH_LIST=3.1" in deps_stage
 
+    installed_stage = dockerfile.split("FROM vllm_musa_deps AS vllm_musa_installed", 1)[
+        1
+    ].split("FROM vllm_musa_installed AS vllm_rs_build", 1)[0]
+    installed_runs = _dockerfile_run_commands(installed_stage)
+    arch_check = installed_runs.index("RUN python docker/check_musa_arch_env.py")
+    native_build = next(
+        i for i, run in enumerate(installed_runs) if "-e . --no-build-isolation" in run
+    )
+    assert arch_check < native_build
+
     mooncake_stage = dockerfile.split("FROM vllm_musa_installed AS mooncake", 1)[
         1
     ].split("FROM mooncake AS final", 1)[0]
