@@ -174,12 +174,16 @@ def _dequant(weight, scale):
 @requires_mp31
 @pytest.mark.parametrize("shape", [(1792, 5120), (1024, 4096), (576, 5120)])
 @pytest.mark.parametrize("rows", [1, 3, 5, 8])
-def test_native_dense_gemv_matches_triton(shape, rows) -> None:
+def test_native_dense_gemv_matches_triton(shape, rows, monkeypatch) -> None:
     from vllm.model_executor.layers.quantization.utils.fp8_utils import (
         per_token_group_quant_fp8,
     )
 
     import vllm_musa.kernels.fp8_block_gemv as gemv
+    from vllm_musa.kernels import fp8_block_splitk as sk
+
+    # The default split-K rows, so the GEMV runs the rows it runs on any card.
+    monkeypatch.setattr(sk, "_multiprocessor_count", lambda index: 0)
 
     torch.manual_seed(rows)
     n, k = shape
