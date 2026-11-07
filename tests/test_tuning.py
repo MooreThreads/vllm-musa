@@ -30,6 +30,10 @@ def test_a_valid_table_parses() -> None:
     assert entries == [{"n": 64, "k": 128, "limits": {"capture": 8, "eager": 16}}]
 
 
+def test_the_shipped_tables_are_found() -> None:
+    assert TABLES, "no tables under vllm_musa/tuning"
+
+
 @pytest.mark.parametrize("path", TABLES, ids=lambda p: p.name)
 def test_every_shipped_table_loads(path) -> None:
     assert tuning.load(path.stem)
