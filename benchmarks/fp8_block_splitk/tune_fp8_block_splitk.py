@@ -12,11 +12,9 @@ and its events time the kernels. The two sides alternate within each round. A ro
 inside the band unless split-K is slower than the dispatch without it by more than the
 tie margin.
 
-Per shape the output also holds the table row this card gets (``table_row``): the best
-config where it is CONFIG_GAIN faster than the default config, else the default config,
-with its measured band; MIN_ROWS is the strict crossover. A row is emitted only where it
-differs from the default row by a config or by a moved band edge. ``--rows-from``
-re-derives the rows from an earlier output.
+Per shape the output also holds the table row this card gets, by the rule in
+table_rows.py. ``--write`` merges the rows into the table when the run ends;
+table_rows.py does the same from saved output and needs no torch.
 """
 
 from __future__ import annotations
@@ -41,6 +39,7 @@ import torch
 # isort: on
 
 from mate.testing.utils import bench_gpu_time_with_musa_event
+from table_rows import TABLE, report_lines, table_row, write
 
 # Coarse rows for the band sweeps; edges are bisected between a win and a loss.
 COARSE_ROWS = (
@@ -73,14 +72,6 @@ COARSE_ROWS = (
 # Decode row counts that rank the candidate configs, in graph capture.
 RANK_ROWS = (2, 4, 8, 16, 32, 48, 64)
 SCREEN_ROWS = (4, 16, 48)
-# A card gets its own table row when its best config is CONFIG_GAIN faster than the
-# default config on RANK_ROWS, or a band edge moves by max(EDGE_ROWS, EDGE_FRACTION).
-CONFIG_GAIN = 0.03
-EDGE_ROWS = 4
-EDGE_FRACTION = 0.10
-# MIN_ROWS keeps the default row's value unless the strict crossover moved this far.
-MIN_ROWS_DELTA = 2
-MAX_RELATIVE_ERROR = 0.01
 
 
 def parse_args() -> argparse.Namespace:
@@ -114,14 +105,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=20261107)
     parser.add_argument(
-        "--output",
-        type=Path,
-        help="where the measurements go (required unless --rows-from)",
+        "--output", type=Path, required=True, help="where the measurements go"
     )
     parser.add_argument(
-        "--rows-from",
+        "--write",
+        nargs="?",
+        const=TABLE,
         type=Path,
-        help="print the table rows of an earlier --output and exit",
+        help="merge this card's rows into the table when the run ends",
     )
     return parser.parse_args()
 
@@ -433,91 +424,8 @@ def check_outputs(kernel, layer, n: int, k: int, config: tuple) -> float:
     return worst
 
 
-def _launch(config) -> tuple:
-    return (*config[:4], config[6])
-
-
-def _moved(a: int, b: int) -> bool:
-    return abs(a - b) >= max(EDGE_ROWS, EDGE_FRACTION * max(a, b))
-
-
-def _strict_min_rows(log: list, config) -> int | None:
-    """Smallest measured row from 2 from which split-K is faster at every measured
-    capture row up to 16."""
-    ratio = {
-        m["rows"]: m["splitk_ms"] / m["ref_ms"]
-        for m in log
-        if m.get("stage") == "band"
-        and m.get("mode") == "capture"
-        and m["config"] == list(config)
-    }
-    rows = sorted(r for r in ratio if 2 <= r <= 16)
-    for i, r in enumerate(rows):
-        if all(ratio[x] < 1 for x in rows[i:]):
-            return r
-    return None
-
-
-def table_row(shape: dict, mp: int) -> tuple[dict | None, list[str]]:
-    """The table row this card gets for ``shape``, or None, and the reasons."""
-    default, best = shape.get("default"), shape.get("best")
-    if default is None:
-        return None, ["no default row"]
-    scores = {_launch(r["config"]): r["score"] for r in shape.get("ranked", [])}
-    default_score = scores.get(_launch(default["config"]))
-    use_best = (
-        best is not None
-        and default_score is not None
-        and _launch(best["config"]) != _launch(default["config"])
-        and best.get("relative_error", math.inf) <= MAX_RELATIVE_ERROR
-        and scores[_launch(best["config"])] <= default_score * (1 - CONFIG_GAIN)
-    )
-    chosen = best if use_best else default
-    bands, table = chosen["measured"], default["table"]
-    reasons = []
-    if use_best:
-        gain = 1 - scores[_launch(best["config"])] / default_score
-        reasons.append(f"config {_launch(best['config'])} {gain:.1%} faster")
-    min_rows = _strict_min_rows(shape["log"], chosen["config"])
-    if bands["min_rows"] is None or min_rows is None:
-        return None, reasons + ["split-K never clearly wins"]
-    if abs(min_rows - table["min_rows"]) < MIN_ROWS_DELTA:
-        min_rows = table["min_rows"]
-    for mode in ("capture", "eager"):
-        if _moved(bands[mode], table[mode]):
-            reasons.append(f"{mode} {table[mode]}->{bands[mode]}")
-    if not reasons:
-        return None, reasons
-    split, block_n, warps, unroll, _, _, tile_m = chosen["config"]
-    row = {
-        "multiprocessor_count": mp,
-        "n": shape["n"],
-        "k": shape["k"],
-        "split": split,
-        "block_n": block_n,
-        "num_warps": warps,
-        "unroll": unroll,
-        "tile_m": tile_m,
-        "min_rows": min_rows,
-        "max_rows": {"capture": bands["capture"], "eager": bands["eager"]},
-    }
-    return row, reasons
-
-
-def print_rows(report: dict) -> None:
-    mp = report["provenance"]["multiprocessor_count"]
-    for shape in report["shapes"]:
-        row, reasons = table_row(shape, mp)
-        print(json.dumps({"row": row, "reasons": reasons}))
-
-
 def main() -> None:
     args = parse_args()
-    if args.rows_from:
-        print_rows(json.loads(args.rows_from.read_text()))
-        return
-    if args.output is None:
-        raise SystemExit("--output is required")
     from vllm.plugins import load_general_plugins
 
     load_general_plugins()
@@ -613,6 +521,10 @@ def main() -> None:
             ),
             flush=True,
         )
+    if args.write:
+        result = write(args.write, [report])
+        print("\n".join(report_lines(result["decisions"], result["proposals"])))
+        print(json.dumps({"write": str(args.write), "changes": result["changes"]}))
 
 
 if __name__ == "__main__":
