@@ -45,6 +45,33 @@ def _literal(path: Path, name: str):
     raise AssertionError(f"{name} not found")
 
 
+def _splitk_rows() -> list[tuple[tuple[int, int], int | None, tuple, int]]:
+    """Every split-K table row as (shape, multiprocessor count, config, eager max)."""
+    from vllm_musa import tuning
+
+    return [
+        (
+            (e["n"], e["k"]),
+            e.get("multiprocessor_count"),
+            (
+                e["split"],
+                e["block_n"],
+                e["num_warps"],
+                e["unroll"],
+                e["min_rows"],
+                e["max_rows"]["capture"],
+                e["tile_m"],
+            ),
+            e["max_rows"]["eager"],
+        )
+        for e in tuning.load("fp8_block_splitk")
+    ]
+
+
+def _splitk_default_shapes() -> list[tuple[int, int]]:
+    return sorted(shape for shape, mp, _, _ in _splitk_rows() if mp is None)
+
+
 def test_native_tables_cover_eight_rows_with_known_configs() -> None:
     kernel = KERNEL.read_text(encoding="utf-8")
     known = {int(c) for c in re.findall(r"case (\d+): launch_dense", kernel)}
@@ -243,14 +270,11 @@ MOE_MMA = ROOT / "vllm_musa" / "kernels" / "fp8_moe_mma.py"
 
 
 def test_splitk_configs_tile_k_and_keep_one_row_on_the_gemv() -> None:
-    configs = _literal(SPLITK, "_CONFIGS")
-    eager_max_rows = _literal(SPLITK, "_EAGER_MAX_ROWS")
-    assert set(eager_max_rows) == set(configs)
-    for (n, k), config in configs.items():
+    for (n, k), _, config, eager_max_rows in _splitk_rows():
         split, block_n, warps, unroll, min_rows, max_rows, tile_m = config
         assert k % (split * 32 * unroll) == 0
         assert 2 <= min_rows <= 16 <= max_rows
-        assert 16 <= eager_max_rows[(n, k)]
+        assert 16 <= eager_max_rows
         assert tile_m in (16, 32)
     source = _function(SPLITK, "fp8_block_splitk_config")
     assert "config[4] <= rows <= max_rows" in source
@@ -269,14 +293,12 @@ def test_splitk_row_tiles_add_no_padding() -> None:
 
 
 def test_bf16_gemm_rows_start_past_the_splitk_rows() -> None:
-    configs = _literal(SPLITK, "_CONFIGS")
-    eager_max_rows = _literal(SPLITK, "_EAGER_MAX_ROWS")
     min_rows = _literal(BF16, "MIN_ROWS")
     by_shape = _literal(BF16, "_MIN_ROWS_BY_SHAPE")
-    assert set(by_shape) <= set(configs)
-    for shape, config in configs.items():
+    assert set(by_shape) <= set(_splitk_default_shapes())
+    for shape, _, config, eager_max_rows in _splitk_rows():
         assert by_shape.get(shape, min_rows) > config[5]
-        assert min_rows > eager_max_rows[shape]
+        assert min_rows > eager_max_rows
     assert all(rows <= min_rows for rows in by_shape.values())
     source = _function(BF16, "fp8_block_bf16_supported")
     assert "_MIN_ROWS_BY_SHAPE.get((n, k), MIN_ROWS)" in source
@@ -294,7 +316,7 @@ def test_bf16_gemm_rows_start_past_the_splitk_rows() -> None:
 
 
 @pytest.mark.parametrize(
-    "shape", sorted(_literal(SPLITK, "_CONFIGS")), ids=lambda s: f"{s[0]}x{s[1]}"
+    "shape", _splitk_default_shapes(), ids=lambda s: f"{s[0]}x{s[1]}"
 )
 @pytest.mark.parametrize("capturing", [False, True])
 def test_measured_rows_apply_only_in_graph_capture(
@@ -306,6 +328,8 @@ def test_measured_rows_apply_only_in_graph_capture(
     from vllm_musa.kernels import fp8_block_splitk as sk
 
     monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: capturing)
+    # A multiprocessor count without rows of its own takes the default rows.
+    monkeypatch.setattr(sk, "_multiprocessor_count", lambda index: 0)
     weight = torch.empty(shape, dtype=torch.float8_e4m3fn)
     scale = torch.empty((shape[0] // 32, shape[1] // 32), dtype=torch.float32)
     if capturing:
@@ -380,9 +404,26 @@ def test_moe_dot_path_matches_triton(tokens) -> None:
     torch.testing.assert_close(got.float(), ref.float(), rtol=3e-2, atol=3e-2)
 
 
+def _splitk_launches() -> list[tuple[tuple[int, int], tuple, int]]:
+    """Each distinct split-K launch per shape, with the largest eager limit using it."""
+    widest = {}
+    for shape, _, config, eager_max_rows in _splitk_rows():
+        key = (shape, config[:4] + config[6:])
+        if eager_max_rows > widest.get(key, (None, 0))[1]:
+            widest[key] = (config, eager_max_rows)
+    return sorted(
+        (shape, config, rows) for (shape, _), (config, rows) in widest.items()
+    )
+
+
+# Every row of the table, whatever multiprocessor count the test card has.
 @requires_mp31
-@pytest.mark.parametrize("shape", [(1792, 5120), (4096, 1280), (1024, 4096)])
-def test_splitk_row_tiles_keep_each_row_result(shape) -> None:
+@pytest.mark.parametrize(
+    "shape, config, max_rows",
+    _splitk_launches(),
+    ids=lambda v: "x".join(map(str, v)) if isinstance(v, tuple) else str(v),
+)
+def test_splitk_row_tiles_keep_each_row_result(shape, config, max_rows) -> None:
     from vllm.model_executor.layers.quantization.utils.fp8_utils import (
         per_token_group_quant_fp8,
     )
@@ -392,13 +433,10 @@ def test_splitk_row_tiles_keep_each_row_result(shape) -> None:
     torch.manual_seed(shape[0])
     n, k = shape
     weight, scale = _block_fp8_weight(n, k)
-    max_rows = sk._EAGER_MAX_ROWS[shape]
     x = torch.randn(max_rows, k).to(torch.bfloat16).to("musa")
     xq, xs = per_token_group_quant_fp8(x, 32, use_ue8m0=False)
     ref = (xq.float() * xs.repeat_interleave(32, -1)) @ _dequant(weight, scale).T
-    for rows in [r for r in (17, 40, 64) if r < max_rows] + [max_rows]:
-        config = sk.fp8_block_splitk_config(weight, scale, rows)
-        assert config is not None
+    for rows in [r for r in (config[4], 17, 40, 64) if r < max_rows] + [max_rows]:
         out = torch.empty((rows, n), dtype=torch.bfloat16, device="musa")
         sk.fp8_block_splitk_mm(x[:rows], None, weight, scale, out, config)
         torch.testing.assert_close(out.float(), ref[:rows], rtol=3e-2, atol=3e-2)
@@ -408,7 +446,6 @@ def test_splitk_row_tiles_keep_each_row_result(shape) -> None:
                 x[row : row + 1], None, weight, scale, single, config
             )
             assert torch.equal(single[0], out[row])
-    assert sk.fp8_block_splitk_config(weight, scale, max_rows + 1) is None
 
 
 @requires_mp31
