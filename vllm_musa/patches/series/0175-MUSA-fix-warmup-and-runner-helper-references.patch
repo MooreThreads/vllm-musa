@@ -48,7 +48,7 @@ index 808613efac..d199286c0f 100644
                      )
                      schedule_metadata = self.scheduler_metadata_buffer[
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index e7ef9e5d9e..34c72ffcdd 100644
+index 750a9ef5bb..5e3545c856 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -7320,6 +7320,7 @@ class GPUModelRunner(

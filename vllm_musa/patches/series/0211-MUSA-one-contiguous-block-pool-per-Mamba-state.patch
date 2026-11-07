@@ -15,10 +15,35 @@ accepts. The runner keeps a flat list of pools, and the attention groups,
 block zeroer and KV block copy all address a pool by its own stride, so no
 other component changes.
 ---
- vllm/v1/worker/gpu/model_runner.py |  5 +++-
- vllm/v1/worker/utils.py            | 45 +++++++++++++++++++++++++++---
- 2 files changed, 45 insertions(+), 5 deletions(-)
+ vllm/model_executor/layers/mamba/abstract.py | 12 +++--
+ vllm/v1/worker/gpu/model_runner.py           |  5 +-
+ vllm/v1/worker/utils.py                      | 57 ++++++++++++++++++--
+ 3 files changed, 64 insertions(+), 10 deletions(-)
 
+diff --git a/vllm/model_executor/layers/mamba/abstract.py b/vllm/model_executor/layers/mamba/abstract.py
+index 5322f899dd..d958b1d0e5 100644
+--- a/vllm/model_executor/layers/mamba/abstract.py
++++ b/vllm/model_executor/layers/mamba/abstract.py
+@@ -25,12 +25,14 @@ class MambaBase(AttentionLayerBase):
+     kv_cache: tuple[torch.Tensor, ...]
+     supports_dcp: bool = False
+ 
+-    def bind_kv_cache(self, kv_cache: torch.Tensor) -> None:
+-        """Unpack a raw ``[B, 1, 1, C]`` int8 page view into per-state views.
++    def bind_kv_cache(self, kv_cache: torch.Tensor | list[torch.Tensor]) -> None:
++        """Bind either packed pages or pre-carved dense Mamba state views."""
++        if isinstance(kv_cache, (list, tuple)):
++            self.kv_cache = tuple(kv_cache)
++            return
+ 
+-        Each block's ``C`` bytes hold the layer's states (e.g. conv, ssm)
+-        packed contiguously; slice them out and reinterpret per dtype/shape.
+-        """
++        # Each block's ``C`` bytes hold the layer's states (e.g. conv, ssm)
++        # packed contiguously; slice them out and reinterpret per dtype/shape.
+         pages = kv_cache.squeeze(dim=(1, 2))
+         states: list[torch.Tensor] = []
+         offset = 0
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
 index dca14718a9..268f0a9596 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
@@ -36,7 +61,7 @@ index dca14718a9..268f0a9596 100644
          self.model_state.initialize_kv_cache(self.kv_cache_config, self.block_tables)
          if is_profiling:
 diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
-index ee1c8a1734..11c40499ba 100644
+index 166b5da71f..29e4fb3bc3 100644
 --- a/vllm/v1/worker/utils.py
 +++ b/vllm/v1/worker/utils.py
 @@ -5,6 +5,7 @@ from collections import defaultdict
@@ -56,30 +81,33 @@ index ee1c8a1734..11c40499ba 100644
  from vllm.v1.attention.backend import (
      AttentionBackend,
      AttentionMetadataBuilder,
-@@ -564,6 +565,30 @@ def select_common_block_size(
+@@ -564,6 +565,33 @@ def select_common_block_size(
      )
  
  
 +def _musa_mamba_state_pools(
 +    buf: torch.Tensor, spec: MambaSpec, num_blocks: int
 +) -> list[torch.Tensor]:
-+    """View one Mamba pool as a contiguous block pool per state.
++    """Build one semantically correct state view per packed block page.
 +
-+    The page layout interleaves a layer's states, so the SSM view carries a
-+    page-sized block stride. Slicing the same bytes state-major gives each
-+    state a dense pool instead.
++    The shared fused backing allocation is page-major: each block contains all
++    of a layer's states.  A flat state-major slice mixes adjacent blocks, so
++    retain the page stride while selecting each state's byte range.
 +    """
-+    flat = buf.view(-1)
++    page_bytes = buf.numel() // num_blocks
++    pages = buf.view(num_blocks, page_bytes)
 +    pools: list[torch.Tensor] = []
 +    offset = 0
 +    for shape, dtype in zip(spec.shapes, spec.dtypes):
-+        end = offset + num_blocks * prod(shape) * get_dtype_size(dtype)
-+        if end > flat.numel():
++        state_bytes = prod(shape) * get_dtype_size(dtype)
++        end = offset + state_bytes
++        if end > page_bytes:
 +            raise RuntimeError(
-+                f"Mamba pool of {flat.numel()} elements cannot hold "
-+                f"{num_blocks} blocks of {shape} {dtype}: needs {end}"
++                f"Mamba page of {page_bytes} bytes cannot hold "
++                f"state {shape} {dtype}: needs {end}"
 +            )
-+        pools.append(flat[offset:end].view(dtype).view(num_blocks, *shape))
++        state = pages[:, offset:end].view(dtype)
++        pools.append(state.view(num_blocks, *shape))
 +        offset = end
 +    return pools
 +
@@ -87,22 +115,31 @@ index ee1c8a1734..11c40499ba 100644
  def allocate_kv_cache(
      kv_cache_config: KVCacheConfig,
      device: torch.device,
-@@ -629,6 +654,14 @@ def allocate_kv_cache(
+@@ -615,6 +643,23 @@ def allocate_kv_cache(
              continue
  
          num_blocks = kv_cache_config.num_blocks_of(tensor)
-+        if isinstance(spec, MambaSpec) and separate_musa_pools:
-+            assert tensor.offset == 0
-+            assert len(tensor.layers) == 1, "the MUSA Mamba pool is carved per layer"
++        if isinstance(spec, MambaSpec):
 +            kv_caches.update(
-+                (name, _musa_mamba_state_pools(buf, spec, num_blocks))
-+                for name in tensor.layers
++                (
++                    name,
++                    _musa_mamba_state_pools(
++                        buf.narrow(
++                            0,
++                            tensor.offset + layer_idx * tensor.layer_stride,
++                            tensor.layer_stride,
++                        ),
++                        spec,
++                        num_blocks,
++                    ),
++                )
++                for layer_idx, name in enumerate(tensor.layers)
 +            )
 +            continue
          kernel_block_size = None
          if kernel_block_sizes is not None and group_id < len(kernel_block_sizes):
              kernel_block_size = kernel_block_sizes[group_id]
-@@ -826,7 +859,7 @@ def add_kv_sharing_layers_to_kv_cache_groups(
+@@ -812,7 +857,7 @@ def add_kv_sharing_layers_to_kv_cache_groups(
  
  
  def bind_kv_cache(
@@ -111,7 +148,7 @@ index ee1c8a1734..11c40499ba 100644
      forward_context: dict[str, Attention],
      runner_kv_caches: list[torch.Tensor],
      num_attn_module: int = 1,
-@@ -875,7 +908,11 @@ def bind_kv_cache(
+@@ -861,7 +906,11 @@ def bind_kv_cache(
              # in the same decoder block.
              current_platform.check_runner_kv_caches_multi_layer()
          for layer_name in layer_names:
@@ -124,7 +161,7 @@ index ee1c8a1734..11c40499ba 100644
  
      bind_kv_cache_to_layers(
          layer_kv_caches or kv_caches, forward_context, num_attn_module, kv_cache_groups
-@@ -883,7 +920,7 @@ def bind_kv_cache(
+@@ -869,7 +918,7 @@ def bind_kv_cache(
  
  
  def bind_kv_cache_to_layers(
@@ -133,3 +170,6 @@ index ee1c8a1734..11c40499ba 100644
      forward_context: dict[str, Attention],
      num_attn_module: int = 1,
      kv_cache_groups: Sequence[KVCacheGroupSpec] | None = None,
+-- 
+2.34.1
+

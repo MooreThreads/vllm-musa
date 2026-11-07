@@ -9,7 +9,7 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0170-MUSA-bound-DSV4-long-prefill-indexer-logits.patch"
+    / "0144-MUSA-bound-DSV4-long-prefill-indexer-logits.patch"
 )
 POLICY = ROOT / "vllm_musa" / "optimization_contract" / "policy.py"
 INIT = ROOT / "vllm_musa" / "optimization_contract" / "__init__.py"

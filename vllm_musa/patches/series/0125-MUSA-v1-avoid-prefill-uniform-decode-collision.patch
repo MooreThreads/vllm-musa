@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: v1-avoid-prefill-uniform-decode-collision
  1 file changed, 9 insertions(+)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 839bc9d97e..2cdd01ebad 100644
+index 1b9e0e72dd..18de4ba13b 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -3777,6 +3777,7 @@ class GPUModelRunner(
