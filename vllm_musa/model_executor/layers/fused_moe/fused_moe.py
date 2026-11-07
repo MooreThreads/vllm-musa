@@ -1905,9 +1905,7 @@ def _supports_quant_scheme(
     else:
         is_rocm_on_gfx9 = False
     # ==================== MUSA ADAPTATION ====================
-    device_supports_fp8 = is_rocm_on_gfx9 or (
-        p.is_musa() and p.has_device_capability((3, 1))
-    )
+    device_supports_fp8 = is_rocm_on_gfx9 or (p.is_musa() and p.supports_fp8())
     # ========================== END ==========================
     if not device_supports_fp8:
         return (weight_key, activation_key) == (None, None)
