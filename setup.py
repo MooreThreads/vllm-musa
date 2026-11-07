@@ -20,6 +20,7 @@ sys.path.insert(0, str(root))
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
+from build_utils.build_info import write_build_info  # noqa: E402
 from build_utils.ccache import configure_compiler_cache  # noqa: E402
 
 third_party = Path("third_party")
@@ -359,6 +360,17 @@ EXT_MODULES = [
 
 class _CustomBuildExt(BuildExtension):
     """Custom build extension that clones third-party repositories before building."""
+
+    def build_extensions(self):
+        super().build_extensions()
+        # The source tree serves editable installs; build_lib is what a wheel packs,
+        # and build_py has already copied the package there.
+        package_dirs = {root / "vllm_musa"}
+        if self.build_lib and (Path(self.build_lib) / "vllm_musa").is_dir():
+            package_dirs.add(Path(self.build_lib) / "vllm_musa")
+        for package_dir in package_dirs:
+            path = write_build_info(package_dir, [a.capability for a in MUSA_ARCHS])
+            print(f"Recorded MUSA arch {MUSA_ARCH.name} in {path}")
 
     @staticmethod
     def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):
