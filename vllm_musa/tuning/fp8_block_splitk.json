@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "kernel": "fp8_block_splitk",
-  "source": "MTT S5000 (mp_31), cold L2, DeepSeek-V4.1 TP8 per-rank projections; the rows without multiprocessor_count were measured on one card whose MP count was not recorded",
+  "source": "MTT S5000 (mp_31), cold L2, DeepSeek-V4.1 TP8 per-rank projections. Rows without multiprocessor_count are the original measurement, on one card whose MP count was not recorded. Rows with it are the table rows benchmarks/fp8_block_splitk/tune_fp8_block_splitk.py derives on a card of that count",
   "entries": [
     {"n": 1792, "k": 5120, "split": 16, "block_n": 64, "num_warps": 4, "unroll": 2, "tile_m": 32, "min_rows": 2, "max_rows": {"capture": 59, "eager": 192}},
     {"n": 576, "k": 5120, "split": 16, "block_n": 64, "num_warps": 4, "unroll": 2, "tile_m": 16, "min_rows": 4, "max_rows": {"capture": 64, "eager": 320}},
@@ -9,6 +9,21 @@
     {"n": 4096, "k": 1280, "split": 8, "block_n": 64, "num_warps": 4, "unroll": 1, "tile_m": 32, "min_rows": 4, "max_rows": {"capture": 59, "eager": 96}},
     {"n": 5120, "k": 1024, "split": 8, "block_n": 64, "num_warps": 4, "unroll": 2, "tile_m": 16, "min_rows": 4, "max_rows": {"capture": 48, "eager": 48}},
     {"n": 5120, "k": 15360, "split": 8, "block_n": 64, "num_warps": 4, "unroll": 2, "tile_m": 16, "min_rows": 2, "max_rows": {"capture": 64, "eager": 96}},
-    {"n": 25600, "k": 768, "split": 2, "block_n": 64, "num_warps": 4, "unroll": 1, "tile_m": 16, "min_rows": 2, "max_rows": {"capture": 32, "eager": 32}}
+    {"n": 25600, "k": 768, "split": 2, "block_n": 64, "num_warps": 4, "unroll": 1, "tile_m": 16, "min_rows": 2, "max_rows": {"capture": 32, "eager": 32}},
+    {"multiprocessor_count": 48, "n": 576, "k": 5120, "split": 16, "block_n": 64, "num_warps": 4, "unroll": 2, "tile_m": 16, "min_rows": 4, "max_rows": {"capture": 64, "eager": 511}},
+    {"multiprocessor_count": 48, "n": 1024, "k": 4096, "split": 16, "block_n": 128, "num_warps": 8, "unroll": 1, "tile_m": 32, "min_rows": 3, "max_rows": {"capture": 191, "eager": 511}},
+    {"multiprocessor_count": 48, "n": 1792, "k": 5120, "split": 16, "block_n": 64, "num_warps": 4, "unroll": 1, "tile_m": 32, "min_rows": 2, "max_rows": {"capture": 59, "eager": 511}},
+    {"multiprocessor_count": 48, "n": 5120, "k": 1024, "split": 4, "block_n": 128, "num_warps": 8, "unroll": 2, "tile_m": 32, "min_rows": 4, "max_rows": {"capture": 59, "eager": 144}},
+    {"multiprocessor_count": 48, "n": 5120, "k": 15360, "split": 16, "block_n": 128, "num_warps": 8, "unroll": 1, "tile_m": 32, "min_rows": 2, "max_rows": {"capture": 64, "eager": 128}},
+    {"multiprocessor_count": 48, "n": 25600, "k": 768, "split": 2, "block_n": 128, "num_warps": 4, "unroll": 1, "tile_m": 32, "min_rows": 2, "max_rows": {"capture": 32, "eager": 32}},
+    {"multiprocessor_count": 56, "n": 576, "k": 5120, "split": 32, "block_n": 64, "num_warps": 4, "unroll": 1, "tile_m": 32, "min_rows": 4, "max_rows": {"capture": 64, "eager": 511}},
+    {"multiprocessor_count": 56, "n": 1024, "k": 4096, "split": 16, "block_n": 128, "num_warps": 8, "unroll": 1, "tile_m": 32, "min_rows": 3, "max_rows": {"capture": 191, "eager": 511}},
+    {"multiprocessor_count": 56, "n": 1792, "k": 5120, "split": 16, "block_n": 64, "num_warps": 4, "unroll": 2, "tile_m": 32, "min_rows": 2, "max_rows": {"capture": 59, "eager": 256}},
+    {"multiprocessor_count": 60, "n": 576, "k": 5120, "split": 32, "block_n": 64, "num_warps": 4, "unroll": 1, "tile_m": 32, "min_rows": 2, "max_rows": {"capture": 64, "eager": 511}},
+    {"multiprocessor_count": 60, "n": 1024, "k": 4096, "split": 16, "block_n": 128, "num_warps": 8, "unroll": 1, "tile_m": 32, "min_rows": 3, "max_rows": {"capture": 191, "eager": 511}},
+    {"multiprocessor_count": 60, "n": 1792, "k": 5120, "split": 16, "block_n": 64, "num_warps": 4, "unroll": 2, "tile_m": 32, "min_rows": 2, "max_rows": {"capture": 59, "eager": 272}},
+    {"multiprocessor_count": 60, "n": 4096, "k": 1280, "split": 8, "block_n": 64, "num_warps": 4, "unroll": 1, "tile_m": 32, "min_rows": 2, "max_rows": {"capture": 59, "eager": 256}},
+    {"multiprocessor_count": 60, "n": 5120, "k": 1024, "split": 4, "block_n": 128, "num_warps": 8, "unroll": 1, "tile_m": 32, "min_rows": 4, "max_rows": {"capture": 59, "eager": 96}},
+    {"multiprocessor_count": 60, "n": 5120, "k": 15360, "split": 16, "block_n": 128, "num_warps": 8, "unroll": 2, "tile_m": 32, "min_rows": 2, "max_rows": {"capture": 64, "eager": 128}}
   ]
 }

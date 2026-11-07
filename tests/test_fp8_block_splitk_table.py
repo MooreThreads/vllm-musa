@@ -42,6 +42,27 @@ def test_selection_matches_golden(monkeypatch, capturing) -> None:
             assert sk.fp8_block_splitk_config(weight, scale, rows) is None, (n, k)
 
 
+@pytest.mark.parametrize(
+    "key",
+    sorted(key for key in sk._ROWS if key[2] is not None),
+    ids=lambda key: f"{key[0]}x{key[1]}-mp{key[2]}",
+)
+@pytest.mark.parametrize("capturing", [True, False], ids=["capture", "eager"])
+def test_each_bin_row_applies_on_its_bin_only(monkeypatch, key, capturing) -> None:
+    n, k, mp = key
+    config, eager_max_rows = sk._ROWS[key]
+    last = config[5] if capturing else eager_max_rows
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: capturing)
+    weight, scale = _tensors(n, k)
+    monkeypatch.setattr(sk, "_multiprocessor_count", lambda index: mp)
+    for rows in range(GOLDEN["rows"] + 1):
+        expected = config if config[4] <= rows <= last else None
+        assert sk.fp8_block_splitk_config(weight, scale, rows) == expected, rows
+    monkeypatch.setattr(sk, "_multiprocessor_count", lambda index: 0)
+    default = sk._CONFIGS.get((n, k))
+    assert sk.fp8_block_splitk_config(weight, scale, config[4]) in (default, None)
+
+
 def _entry(**overrides) -> dict:
     entry = {
         "n": 1792,
