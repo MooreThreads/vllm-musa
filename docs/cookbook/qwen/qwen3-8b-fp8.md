@@ -31,7 +31,6 @@ FP8 dense-model recipe for a single S5000 GPU.
 ## Launching the server
 
 ```bash
-export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export SAFETENSORS_FAST_GPU=1
 

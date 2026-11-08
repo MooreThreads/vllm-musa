@@ -12,7 +12,6 @@ import torch
 from vllm.config.cache import CacheDType
 from vllm.platforms.interface import DeviceCapability
 from vllm.v1.attention.backends import turboquant_attn as _turboquant_attn
-from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 from vllm.v1.attention.ops import triton_turboquant_decode as _turboquant_decode
 from vllm.v1.attention.ops import triton_turboquant_store as _turboquant_store
 
@@ -64,7 +63,6 @@ class MUSATurboQuantAttentionImpl(_turboquant_attn.TurboQuantAttentionImpl):
         )
 
 
-@register_backend(AttentionBackendEnum.TURBOQUANT)
 class MUSATurboQuantAttentionBackend(_turboquant_attn.TurboQuantAttentionBackend):
     supported_dtypes: ClassVar[list[torch.dtype]] = [torch.float16, torch.bfloat16]
     supported_kv_cache_dtypes: ClassVar[list[CacheDType]] = [

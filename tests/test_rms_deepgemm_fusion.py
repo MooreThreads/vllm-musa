@@ -40,7 +40,7 @@ def _musa_device() -> Iterator[None]:
 
     if tuple(torch.musa.get_device_capability(0)) != (3, 1):
         pytest.skip("the fused RMSNorm group-quant kernel requires S5000/mp31")
-    vllm_musa.register_custom_ops()
+    vllm_musa.register_all()
     assert deep_gemm is not None
     yield
 

@@ -32,7 +32,6 @@ FP8 MoE recipe for eight S5000 GPUs.
 ## Launching the server
 
 ```bash
-export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export PYTHONUNBUFFERED=1
 export SAFETENSORS_FAST_GPU=1

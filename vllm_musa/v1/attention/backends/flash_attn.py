@@ -37,7 +37,6 @@ from vllm.v1.attention.backend import (
     CommonAttentionMetadata,
     MultipleOf,
 )
-from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 from vllm.v1.attention.backends.utils import (
     get_dcp_local_seq_lens,
     get_kv_cache_layout,
@@ -234,7 +233,6 @@ def _musa_cp_lse_ag_out_rs(
     )
 
 
-@register_backend(AttentionBackendEnum.FLASH_ATTN)
 class MUSAFlashAttentionBackend(AttentionBackend):
     accept_output_buffer: bool = True
     supported_dtypes: ClassVar[list[torch.dtype]] = [torch.float16, torch.bfloat16]

@@ -101,7 +101,6 @@ device list used by the plugin:
 ```bash
 export MUSA_VISIBLE_DEVICES=0
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export VLLM_PLUGINS=musa,musa_custom_ops
 ```
 
 For ccache, native compiler selection, and build troubleshooting, see

@@ -20,7 +20,7 @@ def test_requested_16x8_gemv_matches_reference(rows: int) -> None:
     from vllm_musa import _custom_ops as musa_ops
 
     vllm_musa = pytest.importorskip("vllm_musa")
-    vllm_musa.register_custom_ops()
+    vllm_musa.register_all()
     torch.manual_seed(60083 + rows)
 
     hidden_size = 128
@@ -61,7 +61,7 @@ def test_requested_gemv_block_is_graph_static() -> None:
     from vllm_musa import _custom_ops as musa_ops
 
     vllm_musa = pytest.importorskip("vllm_musa")
-    vllm_musa.register_custom_ops()
+    vllm_musa.register_all()
 
     rows, hidden_size, output_size = 1, 128, 32
     a = torch.empty((rows, hidden_size), device="musa", dtype=torch.bfloat16)

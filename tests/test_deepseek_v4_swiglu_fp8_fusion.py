@@ -25,7 +25,7 @@ def _musa_device() -> Iterator[None]:
 
     if not current_platform.is_device_capability((3, 1)):
         pytest.skip("the fused clamp-SwiGLU group-quant kernel requires mp31")
-    vllm_musa.register_custom_ops()
+    vllm_musa.register_all()
     yield
 
 

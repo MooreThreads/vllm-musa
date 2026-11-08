@@ -16,7 +16,6 @@ from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability
 from vllm.v1.attention.backend import MultipleOf
 from vllm.v1.attention.backends.mla.flashmla_sparse import FlashMLASparseBackend
-from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 
 from vllm_musa.v1.attention.ops.flashmla import (
     flash_mla_sparse_fwd as _musa_flash_mla_sparse_fwd,
@@ -159,7 +158,6 @@ _core_sparse.flash_mla_with_kvcache = _musa_mla_kvcache
 _core_sparse.FlashMLASchedMeta = _musa_sched_meta
 
 
-@register_backend(AttentionBackendEnum.FLASHMLA_SPARSE)
 class MUSAFlashMLASparseBackend(FlashMLASparseBackend):
     @classmethod
     def supports_compute_capability(cls, capability: DeviceCapability) -> bool:

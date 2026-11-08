@@ -13,8 +13,7 @@ checkpoint.
 import argparse
 import os
 
-# MUSA plugins and runtime settings; must be set before vllm is imported.
-os.environ.setdefault("VLLM_PLUGINS", "musa,musa_custom_ops")
+# MUSA runtime settings; must be set before vllm is imported.
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 os.environ.setdefault("SAFETENSORS_FAST_GPU", "1")
 
