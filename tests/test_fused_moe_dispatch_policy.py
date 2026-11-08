@@ -141,6 +141,56 @@ def test_mp56_dsv4_native_gemv_boundary():
             assert backend == expected
 
 
+def test_mp56_qwen3_30b_a3b_tp1_native_gemv_boundary_and_shape_isolation():
+    for graph_mode in ("eager", "capture"):
+        shape = _shape(
+            multiprocessor_count=56,
+            local_experts=128,
+            w1_output_size=1536,
+            w2_input_size=768,
+            hidden_size=2048,
+            top_k=8,
+            w1_scale_shape=(128, 12, 16),
+            w2_scale_shape=(128, 16, 6),
+            graph_mode=graph_mode,
+        )
+        thresholds = thresholds_for_shape(shape)
+        assert thresholds.gemv_max_tokens == 3
+        assert thresholds.grouped_gemm_min_tokens is None
+        assert thresholds.source.startswith("s5000-mp56-")
+        for num_tokens in (1, 2, 3, 4, 8, 16, 64, 4096):
+            backend = select_fused_moe_backend(
+                shape=shape,
+                num_tokens=num_tokens,
+                can_use_gemv=True,
+                can_use_grouped_gemm=True,
+                stream_is_capturing=graph_mode == "capture",
+            )
+            expected = (
+                MusaFusedMoeBackend.GEMV
+                if num_tokens <= 3
+                else MusaFusedMoeBackend.UPSTREAM
+            )
+            assert backend == expected
+        for override in (
+            {"multiprocessor_count": 60},
+            {"expert_parallel": True},
+            {
+                "local_experts": 16,
+                "w1_scale_shape": (16, 12, 16),
+                "w2_scale_shape": (16, 16, 6),
+            },
+            {
+                "w1_output_size": 768,
+                "w2_input_size": 384,
+                "w1_scale_shape": (128, 6, 16),
+                "w2_scale_shape": (128, 16, 3),
+            },
+        ):
+            unrelated = _shape(**{**shape.__dict__, **override})
+            assert thresholds_for_shape(unrelated).source == "uncalibrated-shape"
+
+
 def _dsv4_tp8_shape(multiprocessor_count, graph_mode):
     return _shape(
         multiprocessor_count=multiprocessor_count,
