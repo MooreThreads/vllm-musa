@@ -25,6 +25,15 @@ SUPPORTED_MUSA_STACKS = {
         ),
         "torchada": "torchada==0.1.105",
     },
+    "torch==2.13.0.post1+musa5.2.0": {
+        "private": (
+            "torch_musa==2.13.0.post1+musa5.2.0",
+            "torchvision==0.28.0.post1+musa5.2.0",
+            "torchaudio==2.11.0.post2+musa5.2.0",
+            "deep_ep==1.1.0+musa5.2.0torch2.13.0.post1",
+        ),
+        "torchada": "torchada==0.1.106",
+    },
 }
 
 
@@ -56,6 +65,7 @@ def test_supported_musa_stack_contract_cases_are_explicit():
     assert set(SUPPORTED_MUSA_STACKS) == {
         "torch==2.9.1.post1+musa5.2.0",
         "torch==2.11.0.post2+musa5.2.0",
+        "torch==2.13.0.post1+musa5.2.0",
     }
     assert (
         SUPPORTED_MUSA_STACKS["torch==2.9.1.post1+musa5.2.0"]["torchada"]
@@ -73,6 +83,14 @@ def test_supported_musa_stack_contract_cases_are_explicit():
         "torchvision==0.26.0.post2+musa5.2.0"
         in SUPPORTED_MUSA_STACKS["torch==2.11.0.post2+musa5.2.0"]["private"]
     )
+    assert (
+        SUPPORTED_MUSA_STACKS["torch==2.13.0.post1+musa5.2.0"]["torchada"]
+        == "torchada==0.1.106"
+    )
+    assert (
+        "torchvision==0.28.0.post1+musa5.2.0"
+        in SUPPORTED_MUSA_STACKS["torch==2.13.0.post1+musa5.2.0"]["private"]
+    )
     for torch_pin, expected in SUPPORTED_MUSA_STACKS.items():
         assert _select_musa_stack({torch_pin}) is expected
 
@@ -84,7 +102,7 @@ def test_torchada_floor_is_consistent():
     assert expected["torchada"] in common_requirements
     for readme_name in ("README.md", "README_CN.md"):
         readme = (ROOT / readme_name).read_text()
-        assert "torchada 0.1.105" in readme
+        assert "torchada 0.1.106" in readme
 
 
 def _dockerfile_run_commands(dockerfile: str) -> list[str]:
