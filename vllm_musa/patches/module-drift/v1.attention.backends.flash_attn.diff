@@ -62,7 +62,7 @@
  import vllm.envs as envs
  from vllm.config import (
      VllmConfig,
-@@ -65,335 +23,270 @@
+@@ -65,335 +23,268 @@
      get_dcp_world_size_and_rank,
  )
  from vllm.logger import init_logger
@@ -86,7 +86,6 @@
 -    KVCacheSpec,
 -    KVQuantMode,
 -    SlidingWindowSpec,
-+from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 +from vllm.v1.attention.backends.utils import (
 +    get_dcp_local_seq_lens,
 +    get_kv_cache_layout,
@@ -309,7 +308,6 @@
 +    )
 +
 +
-+@register_backend(AttentionBackendEnum.FLASH_ATTN)
 +class MUSAFlashAttentionBackend(AttentionBackend):
 +    accept_output_buffer: bool = True
 +    supported_dtypes: ClassVar[list[torch.dtype]] = [torch.float16, torch.bfloat16]
@@ -634,7 +632,7 @@
          return True
 
      @classmethod
-@@ -408,8 +301,9 @@
+@@ -408,8 +299,9 @@
 
      @classmethod
      def supports_per_head_quant_scales(cls) -> bool:
@@ -646,7 +644,7 @@
 
      @staticmethod
      def get_impl_cls() -> type["FlashAttentionImpl"]:
-@@ -419,29 +313,60 @@
+@@ -419,29 +311,60 @@
      def get_builder_cls() -> type["FlashAttentionMetadataBuilder"]:
          return FlashAttentionMetadataBuilder
 
@@ -723,7 +721,7 @@
 
      @classmethod
      def supports_sink(cls) -> bool:
-@@ -451,7 +376,7 @@
+@@ -451,7 +374,7 @@
 
      @classmethod
      def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
@@ -732,7 +730,7 @@
 
      @classmethod
      def supports_combination(
-@@ -466,46 +391,11 @@
+@@ -466,46 +389,11 @@
          use_mm_prefix: bool,
          device_capability: DeviceCapability,
      ) -> str | None:
@@ -782,7 +780,7 @@
          return None
 
 
-@@ -527,69 +417,56 @@
+@@ -527,69 +415,56 @@
      block_table: torch.Tensor
      slot_mapping: torch.Tensor
 
@@ -885,7 +883,7 @@
 
 
  class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetadata]):
-@@ -618,64 +495,17 @@
+@@ -618,64 +493,17 @@
      )
      supports_update_block_table: bool = True
 
@@ -955,7 +953,7 @@
 
      def __init__(
          self,
-@@ -691,50 +521,22 @@
+@@ -691,50 +519,22 @@
          self.compilation_config = vllm_config.compilation_config
          self.attention_config = vllm_config.attention_config
 
@@ -1012,7 +1010,7 @@
          self.cp_kv_cache_interleave_size = (
              self.parallel_config.cp_kv_cache_interleave_size
          )
-@@ -743,6 +545,16 @@
+@@ -743,6 +543,16 @@
              self.compilation_config.cudagraph_mode.has_full_cudagraphs()
          )
          self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
@@ -1029,7 +1027,7 @@
 
          if self.use_full_cuda_graph and self.aot_schedule:
              # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
-@@ -765,46 +577,38 @@
+@@ -765,46 +575,38 @@
              self.max_num_splits = (
                  self.attention_config.flash_attn_max_num_splits_for_cuda_graph
              )
@@ -1101,7 +1099,7 @@
 
      def build(
          self,
-@@ -812,7 +616,8 @@
+@@ -812,7 +614,8 @@
          common_attn_metadata: CommonAttentionMetadata,
          fast_build: bool = False,
      ) -> FlashAttentionMetadata:
@@ -1111,7 +1109,7 @@
          iterations i.e. spec-decode
          """
          num_reqs = common_attn_metadata.num_reqs
-@@ -825,11 +630,25 @@
+@@ -825,11 +628,25 @@
          slot_mapping = common_attn_metadata.slot_mapping
          causal = common_attn_metadata.causal
 
@@ -1142,7 +1140,7 @@
 
          if self.aot_sliding_window is None:
              self.aot_sliding_window = (-1, -1)
-@@ -857,100 +676,263 @@
+@@ -857,100 +674,263 @@
              # usage, because the intermediate buffers of size [num_splits,
              # num_heads, num_tokens, head_size] are allocated. Therefore,
              # we only set num_splits when using cuda graphs.
@@ -1480,7 +1478,7 @@
 
          attn_metadata = FlashAttentionMetadata(
              num_actual_tokens=num_actual_tokens,
-@@ -958,62 +940,31 @@
+@@ -958,62 +938,31 @@
              query_start_loc=query_start_loc,
              max_seq_len=max_seq_len,
              seq_lens=seq_lens,
@@ -1560,7 +1558,7 @@
          return attn_metadata
 
      def update_block_table(
-@@ -1024,34 +975,18 @@
+@@ -1024,34 +973,18 @@
      ) -> FlashAttentionMetadata:
          new_metadata = copy.copy(metadata)
          new_metadata.block_table = blk_table
@@ -1600,7 +1598,7 @@
 
      def __init__(
          self,
-@@ -1090,89 +1025,57 @@
+@@ -1090,89 +1023,57 @@
          self.num_queries_per_kv = self.num_heads // self.num_kv_heads
 
          self.attn_type = attn_type
@@ -1716,7 +1714,7 @@
 
      def forward(
          self,
-@@ -1182,36 +1085,31 @@
+@@ -1182,36 +1083,31 @@
          value: torch.Tensor,
          kv_cache: torch.Tensor,
          attn_metadata: FlashAttentionMetadata,
@@ -1761,7 +1759,7 @@
 
          if output_scale is not None or output_block_scale is not None:
              raise NotImplementedError(
-@@ -1248,181 +1146,688 @@
+@@ -1248,181 +1144,693 @@
                  layer,
              )
 
@@ -2299,9 +2297,11 @@
 +
 +    def qwen3_qk_rope_kvcache_supported(self) -> bool:
 +        """Whether this layer is inside a validated Qwen3 cache-out envelope."""
-+        supported_shape = (
-+            (self.num_heads, self.num_kv_heads, self.head_size)
-+            in ((16, 8, 128), (32, 8, 128), (4, 1, 256), (32, 2, 256))
++        supported_shape = (self.num_heads, self.num_kv_heads, self.head_size) in (
++            (16, 8, 128),
++            (32, 8, 128),
++            (4, 1, 256),
++            (32, 2, 256),
 +        )
 +        return (
 +            get_flash_attn_version() == 3
@@ -2352,7 +2352,9 @@
 +            and get_kv_cache_layout() == "NHD"
 +        )
 +        if can_fuse_cache:
-+            key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
++            key_cache, value_cache = kv_cache.transpose(1, 2).split(
++                self.head_size, dim=-1
++            )
 +            expected_tail = (self.num_kv_heads, self.head_size)
 +            flat_cache_supported = (
 +                key_cache.is_contiguous()
@@ -2365,8 +2367,7 @@
 +                and is_interleaved
 +                and self.head_size == 256
 +                and cos_sin_cache.shape[-1] == 64
-+                and (mrope_section_t, mrope_section_h, mrope_section_w)
-+                == (11, 11, 10)
++                and (mrope_section_t, mrope_section_h, mrope_section_w) == (11, 11, 10)
 +            )
 +            paged_cache_supported = (
 +                h256_paged_specialization
@@ -2455,7 +2456,9 @@
 +    ) -> None:
 +        """Apply Qwen2 RoPE and populate its NHD cache in one MUSA launch."""
 +        if query.shape[0] <= 1:
-+            key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
++            key_cache, value_cache = kv_cache.transpose(1, 2).split(
++                self.head_size, dim=-1
++            )
 +            from vllm_musa.kernels.qwen2_rope_kv import try_qwen2_rope_kv_cache
 +
 +            if try_qwen2_rope_kv_cache(
@@ -2618,7 +2621,7 @@
 
      def do_kv_cache_update(
          self,
-@@ -1437,9 +1842,7 @@
+@@ -1437,9 +1845,7 @@
              # we use direct Q, K, V tensors without caching
              return
 
@@ -2629,7 +2632,7 @@
          key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
          # Reshape the input keys and values and store them in the cache.
-@@ -1460,182 +1863,6 @@
+@@ -1460,182 +1866,6 @@
              layer._v_scale,
          )
 
@@ -2812,7 +2815,7 @@
      def _forward_encoder_attention(
          self,
          query: torch.Tensor,
-@@ -1654,14 +1881,13 @@
+@@ -1654,14 +1884,13 @@
              output: shape = [num_encoder_tokens, num_heads, head_size]
              attn_metadata: Encoder attention metadata
              layer: The attention layer
@@ -2831,7 +2834,7 @@
              raise NotImplementedError(
                  "quantization is not supported for encoder attention"
              )
-@@ -1672,203 +1898,198 @@
+@@ -1672,203 +1901,198 @@
          max_seqlen_q = attn_metadata.max_query_len
          max_seqlen_k = attn_metadata.max_query_len
 

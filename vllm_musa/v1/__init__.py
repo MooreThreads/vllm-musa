@@ -1,7 +1,3 @@
-import vllm_musa.v1.attention.backends.mla.common
-import vllm_musa.v1.attention.backends.mla.flashmla
-import vllm_musa.v1.attention.backends.mla.flashmla_sparse
-import vllm_musa.v1.executor
-import vllm_musa.v1.sample
-import vllm_musa.v1.spec_decode.utils
-import vllm_musa.v1.worker  # noqa: F401
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""MUSA v1 engine integrations; :mod:`vllm_musa.plugins` registers them."""

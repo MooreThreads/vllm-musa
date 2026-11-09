@@ -48,7 +48,6 @@ deployment profiles:
 ### Launching the server
 
 ```bash
-export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export PYTHONUNBUFFERED=1
 export SAFETENSORS_FAST_GPU=1
@@ -137,7 +136,6 @@ Use this profile when the workload needs more than one concurrent request.
 ### Launching the server
 
 ```bash
-export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export PYTHONUNBUFFERED=1
 export LD_LIBRARY_PATH=/usr/local/mtshmem/lib:${LD_LIBRARY_PATH:-}

@@ -36,7 +36,6 @@ MUSA_VISIBLE_DEVICES=0,1,2,3 python example/generate/qwen3_5_offline.py \
 Start the server:
 
 ```bash
-export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export SAFETENSORS_FAST_GPU=1
 MUSA_VISIBLE_DEVICES=0,1,2,3 vllm serve Qwen/Qwen3.5-35B-A3B-FP8 \

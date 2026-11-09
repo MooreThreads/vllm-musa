@@ -295,7 +295,7 @@ def test_musa_image_stage_and_optional_component_contract():
 
 def test_mooncake_uses_the_pinned_upstream_connector():
     distributed_init = (ROOT / "vllm_musa" / "distributed" / "__init__.py").read_text()
-    package_init = (ROOT / "vllm_musa" / "__init__.py").read_text()
+    plugins = (ROOT / "vllm_musa" / "plugins.py").read_text()
     mooncake_compat = (
         ROOT / "vllm_musa" / "distributed" / "mooncake_compat.py"
     ).read_text()
@@ -313,10 +313,12 @@ def test_mooncake_uses_the_pinned_upstream_connector():
     assert not legacy_rebind.exists()
     assert "import vllm_musa.distributed.kv_transfer" not in distributed_init
     assert "kv_connector/v1/mooncake_connector.py" not in manifest
-    configure_index = package_init.index("    configure_legacy_device_filter()")
-    patch_index = package_init.index("    _register_patches()", configure_index)
-    modules_index = package_init.index("    _register_modules()", patch_index)
-    assert configure_index < patch_index < modules_index
+    assert "    configure_legacy_device_filter()" in plugins
+    register_all = plugins[plugins.index("def register_all(") :]
+    connector_index = register_all.index("    register_kv_connector()")
+    patch_index = register_all.index("    register_patches()", connector_index)
+    runtime_index = register_all.index("    register_runtime()", patch_index)
+    assert connector_index < patch_index < runtime_index
     assert '"MC_TE_FILTERS"' in mooncake_compat
     assert '"MOONCAKE_RDMA_DEVICES"' in mooncake_compat
     assert "import mooncake" not in mooncake_compat

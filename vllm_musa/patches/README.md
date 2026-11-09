@@ -87,7 +87,8 @@ def apply() -> None:          # idempotent; called by apply_object_patches()
 
 `vllm_musa.patches.apply_object_patches()` loads each `*.patch.py` in
 deterministic name order and calls `apply()` where present. It is wired from
-`vllm_musa.__init__._register_patches()` at import time and is idempotent.
+`vllm_musa.plugins.register_patches()`, which runs once per process before any
+plugin part that touches vLLM, and is idempotent.
 
 > A `*.patch.py` with a **non-empty** `PATCHES` list is now a mistake — source
 > edits belong in `series/`. `patch_report()` flags such a file as

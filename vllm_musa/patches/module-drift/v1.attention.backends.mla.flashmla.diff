@@ -8,7 +8,7 @@
  import vllm.envs as envs
  from vllm.config import VllmConfig
  from vllm.config.cache import CacheDType
-@@ -20,35 +19,35 @@
+@@ -20,7 +19,6 @@
  )
  from vllm.platforms.interface import DeviceCapability
  from vllm.utils.platform_utils import num_compute_units
@@ -16,11 +16,7 @@
  from vllm.v1.attention.backend import (
      AttentionCGSupport,
      AttentionLayer,
-     AttentionType,
-     MultipleOf,
- )
-+from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
- from vllm.v1.attention.backends.utils import (
+@@ -31,24 +29,23 @@
      reshape_attn_output_for_spec_decode,
      reshape_query_for_spec_decode,
  )
@@ -42,7 +38,6 @@
 
 
 -class FlashMLABackend(MLACommonBackend):
-+@register_backend(AttentionBackendEnum.FLASHMLA)
 +class MUSAFlashMLABackend(MLACommonBackend):
      supported_dtypes: ClassVar[list[torch.dtype]] = [torch.float16, torch.bfloat16]
      supported_kv_cache_dtypes: ClassVar[list[CacheDType]] = [
@@ -51,7 +46,7 @@
          "bfloat16",
          "fp8",
          "fp8_e4m3",
-@@ -72,7 +71,8 @@
+@@ -72,7 +69,8 @@
 
      @classmethod
      def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
@@ -61,7 +56,7 @@
 
      @classmethod
      def supports_combination(
-@@ -80,7 +80,7 @@
+@@ -80,7 +78,7 @@
          head_size: int,
          dtype: torch.dtype,
          kv_cache_dtype: CacheDType | None,
@@ -70,7 +65,7 @@
          use_mla: bool,
          has_sink: bool,
          use_sparse: bool,
-@@ -88,12 +88,10 @@
+@@ -88,12 +86,10 @@
          device_capability: DeviceCapability,
      ) -> str | None:
          if use_sparse:
@@ -84,7 +79,7 @@
              return is_flashmla_dense_supported()[1]
 
 
-@@ -110,7 +108,7 @@
+@@ -110,7 +106,7 @@
  class FlashMLAMetadataBuilder(MLACommonMetadataBuilder[FlashMLAMetadata]):
      _cudagraph_support: ClassVar[AttentionCGSupport] = AttentionCGSupport.UNIFORM_BATCH
      query_len_support: ClassVar[QueryLenSupport] = QueryLenSupport.UNIFORM
@@ -93,7 +88,7 @@
      # ^ TODO(matt): tune this
 
      def __init__(
-@@ -130,9 +128,7 @@
+@@ -130,9 +126,7 @@
 
          self.cg_buf_tile_scheduler_metadata = None
          self.cg_buf_num_splits = None
@@ -104,7 +99,7 @@
 
          num_sms = num_compute_units(self.device.index)
 
-@@ -164,40 +160,52 @@
+@@ -164,40 +158,52 @@
          query_lens_cpu = query_start_loc_cpu[1:] - query_start_loc_cpu[:-1]
          # we use the max but all should be the same due to uniform length requirement
          max_query_len = query_lens_cpu.max().item()
@@ -183,7 +178,7 @@
          return FlashMLADecodeMetadata(
              block_table=block_table_tensor,
              seq_lens=seq_lens_device,
-@@ -208,7 +216,6 @@
+@@ -208,7 +214,6 @@
 
  class FlashMLAImpl(MLACommonImpl[FlashMLAMetadata]):
      can_return_lse_for_decode: bool = True
@@ -191,7 +186,7 @@
 
      def __init__(
          self,
-@@ -276,9 +283,9 @@
+@@ -276,9 +281,9 @@
 
          num_decodes = attn_metadata.num_decodes
          q = reshape_query_for_spec_decode(q, num_decodes)
@@ -203,7 +198,7 @@
              device = q.device
              dtype = torch.int32
 
-@@ -305,48 +312,20 @@
+@@ -305,48 +310,20 @@
              # Non-split path ignores num_splits, but the API requires it:
              # zeros of length B+1
              num_splits = torch.zeros((B + 1,), dtype=dtype, device=device)

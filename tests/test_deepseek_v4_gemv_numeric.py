@@ -20,15 +20,13 @@ def test_requested_16x8_gemv_matches_reference(rows: int) -> None:
     from vllm_musa import _custom_ops as musa_ops
 
     vllm_musa = pytest.importorskip("vllm_musa")
-    vllm_musa.register_custom_ops()
+    vllm_musa.register_all()
     torch.manual_seed(60083 + rows)
 
     hidden_size = 128
     output_size = 32
     a = torch.randn((rows, hidden_size), device="musa", dtype=torch.bfloat16)
-    b = torch.randn(
-        (1, output_size, hidden_size), device="musa", dtype=torch.bfloat16
-    )
+    b = torch.randn((1, output_size, hidden_size), device="musa", dtype=torch.bfloat16)
     c = torch.empty((rows, output_size), device="musa", dtype=torch.bfloat16)
     topk_weights = torch.ones((rows, 1), device="musa", dtype=torch.float32)
     topk_ids = torch.zeros((rows, 1), device="musa", dtype=torch.int32)
@@ -50,9 +48,7 @@ def test_requested_16x8_gemv_matches_reference(rows: int) -> None:
     )
     torch.musa.synchronize()
 
-    expected = torch.matmul(a.float(), b[0].float().transpose(0, 1)).to(
-        torch.bfloat16
-    )
+    expected = torch.matmul(a.float(), b[0].float().transpose(0, 1)).to(torch.bfloat16)
     torch.testing.assert_close(c.float(), expected.float(), rtol=2e-2, atol=2e-2)
 
 
@@ -61,13 +57,11 @@ def test_requested_gemv_block_is_graph_static() -> None:
     from vllm_musa import _custom_ops as musa_ops
 
     vllm_musa = pytest.importorskip("vllm_musa")
-    vllm_musa.register_custom_ops()
+    vllm_musa.register_all()
 
     rows, hidden_size, output_size = 1, 128, 32
     a = torch.empty((rows, hidden_size), device="musa", dtype=torch.bfloat16)
-    b = torch.randn(
-        (1, output_size, hidden_size), device="musa", dtype=torch.bfloat16
-    )
+    b = torch.randn((1, output_size, hidden_size), device="musa", dtype=torch.bfloat16)
     c = torch.empty((rows, output_size), device="musa", dtype=torch.bfloat16)
     topk_weights = torch.ones((rows, 1), device="musa", dtype=torch.float32)
     topk_ids = torch.zeros((rows, 1), device="musa", dtype=torch.int32)

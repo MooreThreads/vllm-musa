@@ -39,7 +39,7 @@ def _musa_device() -> Iterator[None]:
 
     if not current_platform.is_device_capability((3, 1)):
         pytest.skip("the fused SiLU group-quant kernel requires S5000/mp31")
-    vllm_musa.register_custom_ops()
+    vllm_musa.register_all()
     assert deep_gemm is not None  # Import registers the two DeepGEMM custom ops.
     yield
 

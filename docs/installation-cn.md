@@ -92,7 +92,6 @@ CUDA wheel 替换。
 ```bash
 export MUSA_VISIBLE_DEVICES=0
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export VLLM_PLUGINS=musa,musa_custom_ops
 ```
 
 ccache、原生编译器和构建排障说明见

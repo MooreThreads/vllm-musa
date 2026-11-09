@@ -5,7 +5,6 @@
 ```bash
 export MUSA_VISIBLE_DEVICES=0
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export VLLM_PLUGINS=musa,musa_custom_ops
 ```
 
 `MUSA_VISIBLE_DEVICES` is authoritative. Keep it aligned with the devices
@@ -37,6 +36,31 @@ architectures such as Qwen3, DeepSeek-V2, and Llama can select Model Runner V2
 automatically. Set
 `VLLM_USE_V2_MODEL_RUNNER=0` to force V1 or `1` to force V2 when diagnosing a
 model-specific issue.
+
+## Plugins
+
+vLLM loads vLLM-MUSA through the entry points below. Leave `VLLM_PLUGINS`
+unset to load all of them.
+
+| Entry point | Group | Registers |
+|---|---|---|
+| `musa` | `vllm.platform_plugins` | The MUSA platform (`MUSAPlatform`) |
+| `musa` | `vllm.general_plugins` | Every part below, in order |
+| `musa_kv_connector` | `vllm.general_plugins` | KV-transfer connector setup (maps `MOONCAKE_RDMA_DEVICES` to Mooncake's `MC_TE_FILTERS`) |
+| `musa_custom_ops` | `vllm.general_plugins` | OOT custom ops, custom-op module preloading, and the MoE JIT prewarm |
+| `musa_attn_backends` | `vllm.general_plugins` | The MUSA attention backends |
+| `musa_runtime` | `vllm.general_plugins` | The executor, sampler, spec-decode, and worker overrides |
+
+The runtime object patches are applied before the custom ops, attention
+backends, and runtime overrides. Each part registers at most once per process,
+whichever entry point runs first.
+
+`VLLM_PLUGINS` is an allowlist of plugin names for every package in the
+environment. If you set it, include `musa`: that name enables both the MUSA
+platform and the full registration. The part names keep existing `VLLM_PLUGINS`
+values working; they do not select a narrower set. Without `musa` no MUSA
+platform loads, and with it a value such as `musa,musa_custom_ops` loads
+everything. An empty value disables all plugins, including the MUSA platform.
 
 ## Native builds and ccache
 

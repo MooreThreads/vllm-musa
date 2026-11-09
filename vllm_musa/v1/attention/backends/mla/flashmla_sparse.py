@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """MUSA FlashMLA sparse backend shim.
 
-Registers the sparse-MLA backend so the MLA selector can pick it for DSA
-(index_topk) models such as GLM-5.2, and routes the sparse FlashMLA ops
-(metadata + kernels) from the CUDA `vllm._flashmla_C` path to the MUSA
-`flash_mla` library.
+The sparse-MLA backend that `vllm_musa.v1.attention.registry` registers so the
+MLA selector can pick it for DSA (index_topk) models such as GLM-5.2. It routes
+the sparse FlashMLA ops (metadata + kernels) from the CUDA `vllm._flashmla_C`
+path to the MUSA `flash_mla` library.
 """
 
 from os import getenv
@@ -14,12 +14,12 @@ import torch
 from vllm.config.cache import CacheDType
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability
-from vllm.v1.attention.backend import MultipleOf
 from vllm.v1.attention.backends.mla.flashmla_sparse import FlashMLASparseBackend
-from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 
 from vllm_musa.v1.attention.ops.flashmla import (
     flash_mla_sparse_fwd as _musa_flash_mla_sparse_fwd,
+)
+from vllm_musa.v1.attention.ops.flashmla import (
     is_flashmla_sparse_supported,
 )
 
@@ -29,9 +29,12 @@ logger = init_logger(__name__)
 # those names in the core sparse module to the MUSA `flash_mla` equivalents so
 # the sparse metadata builder and impl execute on MUSA.
 import vllm.v1.attention.backends.mla.flashmla_sparse as _core_sparse
+
+from vllm_musa.v1.attention.ops.flashmla import FlashMLASchedMeta as _musa_sched_meta
 from vllm_musa.v1.attention.ops.flashmla import (
-    FlashMLASchedMeta as _musa_sched_meta,
     flash_mla_with_kvcache as _musa_mla_kvcache,
+)
+from vllm_musa.v1.attention.ops.flashmla import (
     get_mla_metadata as _musa_get_mla_metadata,
 )
 
@@ -159,7 +162,6 @@ _core_sparse.flash_mla_with_kvcache = _musa_mla_kvcache
 _core_sparse.FlashMLASchedMeta = _musa_sched_meta
 
 
-@register_backend(AttentionBackendEnum.FLASHMLA_SPARSE)
 class MUSAFlashMLASparseBackend(FlashMLASparseBackend):
     @classmethod
     def supports_compute_capability(cls, capability: DeviceCapability) -> bool:

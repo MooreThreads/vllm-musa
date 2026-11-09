@@ -32,7 +32,6 @@ BF16 small-model recipe for two S5000 GPUs with MTP1 speculative decoding.
 ## Launching the server
 
 ```bash
-export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export PYTHONUNBUFFERED=1
 export VLLM_DISABLE_COMPILE_CACHE=1

@@ -25,7 +25,6 @@ from vllm.v1.attention.backend import (
     AttentionType,
     MultipleOf,
 )
-from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 from vllm.v1.attention.backends.utils import (
     reshape_attn_output_for_spec_decode,
     reshape_query_for_spec_decode,
@@ -43,7 +42,6 @@ from vllm_musa.v1.attention.ops.flashmla import (
 logger = init_logger(__name__)
 
 
-@register_backend(AttentionBackendEnum.FLASHMLA)
 class MUSAFlashMLABackend(MLACommonBackend):
     supported_dtypes: ClassVar[list[torch.dtype]] = [torch.float16, torch.bfloat16]
     supported_kv_cache_dtypes: ClassVar[list[CacheDType]] = [

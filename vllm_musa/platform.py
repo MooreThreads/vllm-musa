@@ -20,7 +20,7 @@ import torch
 from typing_extensions import ParamSpec
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability, Platform, PlatformEnum
-from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
+from vllm.v1.attention.backends.registry import AttentionBackendEnum
 
 if TYPE_CHECKING:
     from vllm.config import VllmConfig
@@ -35,10 +35,13 @@ import pymtml as pynvml
 from vllm_musa.optimization_contract import (
     ModelFamily,
     OptimizationFeature,
-    resolve_optimization_contract,
 )
 from vllm_musa.optimization_contract import policy as contract_policy
+from vllm_musa.optimization_contract import (
+    resolve_optimization_contract,
+)
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
+from vllm_musa.v1.attention.registry import register_attention_backends
 
 logger = init_logger(__name__)
 
@@ -84,44 +87,6 @@ def with_mtml_context(fn: Callable[_P, _R]) -> Callable[_P, _R]:
             pynvml.nvmlShutdown()
 
     return wrapper
-
-
-def register_attention_backends() -> None:
-    # Pre-register all attention backends
-    register_backend(
-        AttentionBackendEnum.FLASHMLA,
-        class_path="vllm_musa.v1.attention.backends.mla.flashmla.MUSAFlashMLABackend",
-    )
-    register_backend(
-        AttentionBackendEnum.FLASHMLA_SPARSE,
-        class_path=(
-            "vllm_musa.v1.attention.backends.mla.flashmla_sparse."
-            "MUSAFlashMLASparseBackend"
-        ),
-    )
-    register_backend(
-        AttentionBackendEnum.FLASH_ATTN,
-        class_path="vllm_musa.v1.attention.backends.flash_attn.MUSAFlashAttentionBackend",
-    )
-    register_backend(
-        AttentionBackendEnum.TURBOQUANT,
-        class_path=(
-            "vllm_musa.v1.attention.backends.turboquant."
-            "MUSATurboQuantAttentionBackend"
-        ),
-    )
-    tree_attn_backend = getattr(AttentionBackendEnum, "TREE_ATTN", None)
-    if tree_attn_backend is not None:
-        # tree drafting via a MUSA-routed TreeAttention backend
-        # (Triton unified_attention is already MUSA-patched; reshape_and_cache_flash
-        # is wired through fa_utils.reshape_and_cache_flash). v0.22 removed this
-        # enum member, so only register it on older upstream snapshots.
-        register_backend(
-            tree_attn_backend,
-            class_path=(
-                "vllm_musa.v1.attention.backends.tree_attn.MUSATreeAttentionBackend"
-            ),
-        )
 
 
 def _will_capture_piecewise_cudagraph(vllm_config: Any) -> bool:
@@ -760,10 +725,10 @@ class MUSAPlatformBase(Platform):
             or model_config.is_hybrid
         ):
             return
-        if (
-            resolve_optimization_contract(vllm_config).model.family
-            is ModelFamily.DEEPSEEK_V4
-            or "DeepseekV41ForCausalLM" in (model_config.architectures or ())
+        if resolve_optimization_contract(
+            vllm_config
+        ).model.family is ModelFamily.DEEPSEEK_V4 or "DeepseekV41ForCausalLM" in (
+            model_config.architectures or ()
         ):
             return
         backend_classes = cls._find_non_ssm_backends(vllm_config)

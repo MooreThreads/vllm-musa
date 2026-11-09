@@ -6,9 +6,17 @@ Python package that plugs into vLLM's platform and general plugin system to enab
 
 | Entry Point | Function | Purpose |
 |---|---|---|
-| `vllm.platform_plugins` | `musa_platform_plugin` | Registers `MUSAPlatform` when MUSA hardware is detected |
-| `vllm.general_plugins` | `register_custom_ops` | Applies source patches, registers OOT ops, distributed connectors, and attention backends |
+| `vllm.platform_plugins`: `musa` | `musa_platform_plugin` | Registers `MUSAPlatform` when MUSA hardware is detected |
+| `vllm.general_plugins`: `musa` | `register_all` | Registers every part below, once per process |
+| `vllm.general_plugins`: `musa_kv_connector` | `register_kv_connector` | Maps `MOONCAKE_RDMA_DEVICES` to Mooncake's `MC_TE_FILTERS` |
+| `vllm.general_plugins`: `musa_custom_ops` | `register_custom_ops` | Registers OOT custom ops, preloads custom-op modules, and prewarms the MoE JIT |
+| `vllm.general_plugins`: `musa_attn_backends` | `register_attn_backends` | Registers the MUSA attention backends |
+| `vllm.general_plugins`: `musa_runtime` | `register_runtime` | Installs the executor, sampler, spec-decode, and worker overrides |
 | Console script | `collect_env` | Prints MUSA environment info (`vllm_collect_env`) |
+
+The general plugins are implemented in `plugins.py`. The custom-op, attention and
+runtime parts apply the runtime object patches first. See
+[Configuration](../configuration.md#plugins) for `VLLM_PLUGINS`.
 
 ## Module Overview
 

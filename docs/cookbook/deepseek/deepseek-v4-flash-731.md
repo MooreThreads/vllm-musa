@@ -52,7 +52,6 @@ tokens. This recipe covers two deployment shapes:
 Common environment for every vLLM process in this recipe:
 
 ```bash
-export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export MODEL_PATH=/models/DeepSeek-V4-Flash-0731-FP8-mt
 ```

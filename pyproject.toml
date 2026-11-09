@@ -46,8 +46,14 @@ vllm_collect_env = "vllm_musa:collect_env"
 [project.entry-points."vllm.platform_plugins"]
 musa = "vllm_musa:musa_platform_plugin"
 
+# `musa` shares the platform plugin's name: any VLLM_PLUGINS value that enables
+# the MUSA platform also runs register_all, which registers every part below.
 [project.entry-points."vllm.general_plugins"]
+musa = "vllm_musa:register_all"
+musa_attn_backends = "vllm_musa:register_attn_backends"
 musa_custom_ops = "vllm_musa:register_custom_ops"
+musa_kv_connector = "vllm_musa:register_kv_connector"
+musa_runtime = "vllm_musa:register_runtime"
 
 [project.urls]
 Homepage = "https://github.com/MooreThreads/vllm-musa"
