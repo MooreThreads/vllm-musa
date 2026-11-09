@@ -41,8 +41,8 @@ that ancestry order but combines only changes that implement one independently
 maintainable feature: custom all-reduce (`0037`), dedicated Mamba pools
 (`0078`), rejection-sampler scalarization (`0111`), and DeepSeek-V4 FP8 expert
 dtype/scale resolution (`0134`). Eight v0.32 native/compatibility adaptations
-follow (`0163`–`0170`), then 42 new or updated v0.32 features
-(`0171`–`0212`). The original cross-version
+follow (`0163`–`0170`), then 43 new or updated v0.32 features
+(`0171`–`0213`). The original cross-version
 DeepSeek-V4/V4.1 aux-stream patch stays in the new group because its v0.28
 segment depends on later v0.32 attention changes; old `0110` remains in the
 legacy group. Old `0137` (Mooncake P/D dedicated Mamba pools) and `0192`
@@ -325,8 +325,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0210-MUSA-initialize-the-Mamba2-profiling-output.patch` | v0.32 new | initialize the supplied Mamba2 output during the profiling run |
 | `0211-MUSA-one-contiguous-block-pool-per-Mamba-state.patch` | v0.32 new | give each Mamba state its own contiguous block pool |
 | `0212-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch` | v0.28 0194 follow-up | DeepSeek-OCR defaults to Triton on MUSA only when no encoder backend is configured. All explicit backend choices and non-MUSA behavior are preserved. |
+| `0213-MUSA-mask-fused-MoE-K-loads-on-Triton-3.2.patch` | v0.32 new | take the K-masked fused-MoE load path on Triton 3.2 so the pipelined prefetch stays inside the expert weights |
 
-Currently **212 patches** and **0 upstream entries** in `upstream/`.
+Currently **213 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
@@ -335,7 +336,7 @@ the 210-patch rebase described above gives tree
 This is source equivalence, not a MUSA runtime-readiness claim. Offline replay,
 round-trip, metadata and source-contract validation must be repeated after edits.
 
-The source-equivalence result above predates `0212`.
+The source-equivalence result above predates `0212` and `0213`.
 
 `0212` applies after `0117` and sets the encoder backend in
 `DeepseekOCRForCausalLM.__init__` before constructing the vision tower, only
@@ -344,6 +345,13 @@ when `mm_encoder_attn_backend` is unset on MUSA. Explicit choices, including
 `0117`'s FP32 vision conversion and delegates backend selection and
 logging to the existing `MMEncoderAttention` path. It does not add another
 ViT selector call or change platform-wide policy.
+
+`0213` sets `even_Ks` to False in `invoke_fused_moe_triton_kernel` when
+`is_musa_triton_32()`. With `num_stages > 1`, Triton 3.2 on MUSA issues the
+loads of the tiles after the last K tile without a bound. On the even-K path
+those loads are unmasked, so they read past the end of the last expert's
+weights and fault when the next page is unmapped; the K-masked path keeps them
+in bounds.
 
 The round-trip holder is produced by applying this exact series to a clean
 checkout at `VLLM_COMMIT`; an already-patched v0.32 checkout with a different
