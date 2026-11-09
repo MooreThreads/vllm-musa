@@ -2,10 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """MUSA FlashMLA sparse backend shim.
 
-Registers the sparse-MLA backend so the MLA selector can pick it for DSA
-(index_topk) models such as GLM-5.2, and routes the sparse FlashMLA ops
-(metadata + kernels) from the CUDA `vllm._flashmla_C` path to the MUSA
-`flash_mla` library.
+The sparse-MLA backend that `vllm_musa.v1.attention.registry` registers so the
+MLA selector can pick it for DSA (index_topk) models such as GLM-5.2. It routes
+the sparse FlashMLA ops (metadata + kernels) from the CUDA `vllm._flashmla_C`
+path to the MUSA `flash_mla` library.
 """
 
 from os import getenv

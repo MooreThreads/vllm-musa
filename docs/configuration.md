@@ -57,9 +57,10 @@ whichever entry point runs first.
 
 `VLLM_PLUGINS` is an allowlist of plugin names for every package in the
 environment. If you set it, include `musa`: that name enables both the MUSA
-platform and the full registration, so a value such as `musa,musa_custom_ops`
-also loads everything. An empty value disables all plugins, including the MUSA
-platform.
+platform and the full registration. The part names keep existing `VLLM_PLUGINS`
+values working; they do not select a narrower set. Without `musa` no MUSA
+platform loads, and with it a value such as `musa,musa_custom_ops` loads
+everything. An empty value disables all plugins, including the MUSA platform.
 
 ## Native builds and ccache
 
