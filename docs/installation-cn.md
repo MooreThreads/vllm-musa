@@ -5,11 +5,11 @@
 
 ## 环境要求
 
-- x86_64 Linux、CPython 3.10（固定版本的 MUSA wheel 针对这一组合发布）。
+- x86_64 Linux、CPython 3.12（固定版本的 MUSA wheel 针对这一组合发布）。
 - 配备兼容 MUSA 驱动和工具包的摩尔线程（Moore Threads）GPU。
 - vLLM-MUSA v0.32.0-dev 及对应的 PyTorch/MUSA wheel。
 
-v0.32.0-dev 依赖栈使用 PyTorch 2.11.x。驱动、工具包和 wheel 应来自同一版本系列。
+v0.32.0-dev 依赖栈使用 PyTorch 2.13.x。驱动、工具包和 wheel 应来自同一版本系列。
 
 ## 软件包索引
 
