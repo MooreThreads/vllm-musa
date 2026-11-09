@@ -317,9 +317,13 @@ _STABLE_BOX_HEADER = _ta_stable_box()
 # Explicitly add torchada's stable_compat include dir (the include_paths()
 # auto-append does not reach the torch_musa MUSAExtension compile path).
 STABLE_INCLUDE_DIRS = INCLUDE_DIRS + [_ta_stable_inc()]
+# Shared quantization headers use TORCH_CHECK, which torch 2.13's stable headers
+# do not provide; STD_TORCH_CHECK is the stable-ABI spelling.
+_STABLE_TORCH_CHECK = "-DTORCH_CHECK=STD_TORCH_CHECK"
 STABLE_COMPILE_ARGS = {
-    "mcc": MCC_FLAGS + ["-DCUDA_VERSION=0", "-include", _STABLE_BOX_HEADER],
-    "cxx": CXX_FLAGS + ["-include", _STABLE_BOX_HEADER],
+    "mcc": MCC_FLAGS
+    + ["-DCUDA_VERSION=0", _STABLE_TORCH_CHECK, "-include", _STABLE_BOX_HEADER],
+    "cxx": CXX_FLAGS + [_STABLE_TORCH_CHECK, "-include", _STABLE_BOX_HEADER],
 }
 STABLE_LINK_LIBRARIES = LINK_LIBRARIES + ["torch_cpu"]
 
