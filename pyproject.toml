@@ -11,7 +11,7 @@ version = "0.1.32"
 description = "vLLM platform plugin for Moore Threads (MUSA) GPUs"
 readme = "README.md"
 license = {text = "Apache-2.0"}
-requires-python = "==3.10.*"
+requires-python = "==3.12.*"
 authors = [
     {name = "vLLM Community"},
 ]
@@ -22,7 +22,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dynamic = ["dependencies"]

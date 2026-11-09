@@ -2,17 +2,31 @@
 # do not add validation-only wheel/tar download-and-extract logic here.
 
 ARG BASE_IMAGE=ubuntu:22.04
-ARG PYTHON_VERSION=3.10
+ARG PYTHON_VERSION=3.12
+# Ubuntu 22.04 (jammy) does not ship Python 3.12 in its default archive.
+# Leave the PPA configurable for mirrors used by isolated build networks.
+ARG DEADSNAKES_MIRROR_URL=
+ARG DEADSNAKES_GPGKEY_URL=
+ARG GET_PIP_URL=https://bootstrap.pypa.io/get-pip.py
+ARG PIP_BOOTSTRAP_INDEX_URL=https://pypi.org/simple
 
 FROM ${BASE_IMAGE} AS base
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG PYTHON_VERSION
+ARG DEADSNAKES_MIRROR_URL
+ARG DEADSNAKES_GPGKEY_URL
+ARG GET_PIP_URL
+ARG PIP_BOOTSTRAP_INDEX_URL
 
 FROM base AS apt_base
 
 ARG PYTHON_VERSION
+ARG DEADSNAKES_MIRROR_URL
+ARG DEADSNAKES_GPGKEY_URL
+ARG GET_PIP_URL
+ARG PIP_BOOTSTRAP_INDEX_URL
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
@@ -57,15 +71,54 @@ RUN apt-get update && \
         openssh-client \
         patchelf \
         pkg-config \
-        python${PYTHON_VERSION} \
-        python${PYTHON_VERSION}-dev \
-        python3-pip \
         python-is-python3 \
         rdma-core \
+        software-properties-common \
         unzip \
         xz-utils \
         zip && \
-    python -m pip install --upgrade pip && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install the system interpreter directly, without uv or a virtual environment,
+# and keep the image on jammy for the MUSA apt stack.
+RUN if [[ "${PYTHON_VERSION}" != "3.12" ]]; then \
+        echo "This image supports only PYTHON_VERSION=3.12 (got ${PYTHON_VERSION})" >&2; \
+        exit 1; \
+    fi && \
+    if [[ -n "${DEADSNAKES_MIRROR_URL}" ]]; then \
+        if [[ -z "${DEADSNAKES_GPGKEY_URL}" ]]; then \
+            echo "DEADSNAKES_GPGKEY_URL is required with DEADSNAKES_MIRROR_URL" >&2; \
+            exit 1; \
+        fi && \
+        install -d -m 0755 /etc/apt/keyrings && \
+        curl -fsSL "${DEADSNAKES_GPGKEY_URL}" | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg && \
+        chmod 0644 /etc/apt/keyrings/deadsnakes.gpg && \
+        printf 'deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] %s jammy main\n' \
+            "${DEADSNAKES_MIRROR_URL}" > /etc/apt/sources.list.d/deadsnakes.list; \
+    else \
+        env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+            add-apt-repository -y ppa:deadsnakes/ppa; \
+    fi && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python${PYTHON_VERSION} \
+        python${PYTHON_VERSION}-dev && \
+    update-alternatives --install /usr/bin/python3 python3 \
+        /usr/bin/python${PYTHON_VERSION} 100 && \
+    update-alternatives --set python3 /usr/bin/python${PYTHON_VERSION} && \
+    ln -sfn /usr/bin/python${PYTHON_VERSION}-config /usr/bin/python3-config && \
+    rm -f /usr/lib/python${PYTHON_VERSION}/EXTERNALLY-MANAGED && \
+    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 10 \
+        "${GET_PIP_URL}" -o /tmp/get-pip.py && \
+    /usr/bin/python${PYTHON_VERSION} /tmp/get-pip.py \
+        --index-url "${PIP_BOOTSTRAP_INDEX_URL}" && \
+    rm -f /tmp/get-pip.py && \
+    ln -sfn /usr/local/bin/pip${PYTHON_VERSION} /usr/local/bin/pip && \
+    ln -sfn /usr/local/bin/pip${PYTHON_VERSION} /usr/local/bin/pip3 && \
+    python --version && \
+    python3 --version && \
+    pip --version && \
+    python -c 'import sys; assert sys.version_info[:2] == (3, 12); assert sys.prefix == sys.base_prefix; print("PASS system-python", sys.executable)' && \
     rm -rf /var/lib/apt/lists/*
 
 # The MUSA PyTorch wheel links MKL with .so.2 sonames. Ubuntu 22.04 apt
@@ -252,6 +305,7 @@ WORKDIR /vllm-workspace
 #    resolve would pull public CUDA torch and the multi-GB nvidia-cuda-* stack.
 RUN python -m pip install \
         --no-deps \
+        --only-binary=:all: \
         --index-url "${MUSA_PIP_INDEX_URL}" \
         -r requirements/musa_private.txt
 

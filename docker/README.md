@@ -59,7 +59,7 @@ bash docker/build_image.sh
 With the defaults this produces:
 
 ```
-vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.11.0.post2_musa5.2.0
+vllm-musa:ubuntu22.04_py3.12_musa_runtime_5.2_pytorch_release_2.13.0.post1_musa5.2.0
 ```
 
 The release image accepts the model and engine arguments directly. This block
@@ -137,7 +137,11 @@ docker run --rm --entrypoint /bin/bash vllm-musa:test \
 | Variable | Default | Purpose |
 |---|---|---|
 | `BASE_IMAGE` | `ubuntu:22.04` | Base image. Point at a local/mirror image if Docker Hub is unreachable, or an `mthreads/musa:*-devel` image to reuse its runtime. |
-| `PYTHON_VERSION` | `3.10` | Python version (apt `python3.X`). The wheels pinned in `requirements/musa_private.txt` are published for 3.10 on x86_64 only, so other values fail the dependency install. |
+| `PYTHON_VERSION` | `3.12` | System Python version. Only `3.12` is accepted: the torch wheels pinned in `requirements/musa_private.txt` are published for cp312 on x86_64 only. |
+| `DEADSNAKES_MIRROR_URL` | empty | Optional apt mirror for the Python 3.12 packages; empty uses `ppa:deadsnakes/ppa`. |
+| `DEADSNAKES_GPGKEY_URL` | empty | Signing key URL; required with `DEADSNAKES_MIRROR_URL`. |
+| `GET_PIP_URL` | `https://bootstrap.pypa.io/get-pip.py` | Location of `get-pip.py` used to bootstrap pip. |
+| `PIP_BOOTSTRAP_INDEX_URL` | value of `PYPI_INDEX_URL` | Index used by the pip bootstrap. |
 | `MUSA_APT_SOURCE` | `https://dl.mthreads.com/repo/repository/ubuntu2204/` | apt repo for the MUSA runtime SDK. |
 | `INSTALL_MUSA_STACK` | `auto` | `auto`: install the MUSA apt stack unless the base already provides `mcc`; `0`: skip (base image supplies the runtime). |
 | `MUSA_RUNTIME_VERSION` | `5.2` | MUSA runtime line as `major.minor`; derives apt package names (e.g. `musa-toolkit-5-2`). |
@@ -230,7 +234,7 @@ Two build-time details make this work on such a host:
 ```bash
 docker run --rm <MUSA GPU flags> \
   --entrypoint python \
-  vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.11.0.post2_musa5.2.0 \
+  vllm-musa:ubuntu22.04_py3.12_musa_runtime_5.2_pytorch_release_2.13.0.post1_musa5.2.0 \
   -c "import torch, torch_musa; print('musa available:', torch.musa.is_available())"
 ```
 

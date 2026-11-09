@@ -27,7 +27,7 @@ arch = platform.machine().lower()
 
 
 def _read_pins():
-    """Read third_party/PINS (KEY=VALUE; py3.10 has no tomllib). Shared with
+    """Read third_party/PINS (KEY=VALUE, no parser dependency). Shared with
     Makefile.sync so the build and patch-gen pins can't desync."""
     pins = {}
     pins_path = root / "third_party" / "PINS"
