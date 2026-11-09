@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import importlib.util
 import os
 import platform
 import shutil
@@ -309,7 +310,15 @@ from torchada.utils.cpp_extension import (
 _STABLE_BOX_HEADER = _ta_stable_box()
 # Explicitly add torchada's stable_compat include dir (the include_paths()
 # auto-append does not reach the torch_musa MUSAExtension compile path).
-STABLE_INCLUDE_DIRS = INCLUDE_DIRS + [_ta_stable_inc()]
+# torch_musa's headers go first: on torch >= 2.11 its stable macros.h and
+# device.h are the real ones, and torchada's torch 2.9 forwards must not win.
+_TORCH_MUSA_INCLUDE_DIR = (
+    Path(importlib.util.find_spec("torch_musa").origin).parent
+    / "share"
+    / "generated_cuda_compatible"
+    / "include"
+)
+STABLE_INCLUDE_DIRS = INCLUDE_DIRS + [_TORCH_MUSA_INCLUDE_DIR, _ta_stable_inc()]
 STABLE_COMPILE_ARGS = {
     "mcc": MCC_FLAGS + ["-DCUDA_VERSION=0", "-include", _STABLE_BOX_HEADER],
     "cxx": CXX_FLAGS + ["-include", _STABLE_BOX_HEADER],
