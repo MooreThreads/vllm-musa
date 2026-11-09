@@ -71,7 +71,7 @@ def test_report(ms, capsys):
 
 
 #: Series length this branch is built on; bump it with the series.
-SERIES_LENGTH = 212
+SERIES_LENGTH = 213
 
 
 def test_report_metadata_and_gate_rejects_stale_metadata(ms, capsys, monkeypatch):

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 9 Nov 2026 11:28:48 +0800
+Subject: [PATCH] MUSA: mask fused-MoE K loads on Triton 3.2
+
+Triton 3.2 on MUSA software-pipelines the fused-MoE K loop and issues the
+loads of the following K tiles without a bound. When BLOCK_SIZE_K divides
+K the kernel loads B, and the K range of A, unmasked, so the prefetch after
+the last tile reads past the end of the last expert's weights and faults
+when that address is unmapped. Take the K-masked load path on Triton 3.2;
+the masked prefetch stays inside both operands.
+---
+ vllm/model_executor/layers/fused_moe/fused_moe.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index e0aef0ad89..027e17f106 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -890,7 +890,8 @@ def invoke_fused_moe_triton_kernel(
+     BLOCK_SIZE_K = config.pop("BLOCK_SIZE_K")
+     if block_shape is not None:
+         BLOCK_SIZE_K = min(BLOCK_SIZE_K, min(block_shape[0], block_shape[1]))
+-    even_Ks = B.size(2) % BLOCK_SIZE_K == 0
++    # MUSA: Triton 3.2 pipelines unmasked loads past the last K tile.
++    even_Ks = B.size(2) % BLOCK_SIZE_K == 0 and not is_musa_triton_32()
+     if use_td and A.size(1) % BLOCK_SIZE_K != 0:
+         # TD gather/load feeding tl.dot with a non-block-aligned K
+         # miscompiles (~74% of output elements wrong) on real HW;
