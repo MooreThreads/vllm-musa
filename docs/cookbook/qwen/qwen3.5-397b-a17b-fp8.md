@@ -44,8 +44,6 @@ vllm serve /models/Qwen3.5-397B-A17B-FP8 \
   --max-model-len 8192 \
   --max-num-seqs 64 \
   --max-num-batched-tokens 32768 \
-  --max-num-partial-prefills 1 \
-  --max-long-partial-prefills 1 \
   --long-prefill-token-threshold 2048 \
   --gpu-memory-utilization 0.90 \
   --no-enable-prefix-caching \
