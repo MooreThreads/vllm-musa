@@ -45,7 +45,15 @@ EXACT_VERSION_DISTS = frozenset(
 )
 
 #: Distributions imported in the image, outside the versioned cohort.
-IMPORT_ONLY = ("vllm", "vllm_musa", "transformers", "huggingface_hub")
+IMPORT_ONLY = (
+    "vllm",
+    "vllm_musa",
+    "transformers",
+    "huggingface_hub",
+    "mcp",
+    "soundfile",
+    "av",
+)
 
 
 def mate_pin(dist_name: str) -> str:
