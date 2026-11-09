@@ -294,7 +294,7 @@ _CALIBRATED_THRESHOLDS.update(
 _CALIBRATED_THRESHOLDS.update(
     {
         _s5000_fp8_shape(
-            multiprocessor_count=56,
+            multiprocessor_count=multiprocessor_count,
             local_experts=128,
             w1_output_size=1536,
             w2_input_size=768,
@@ -307,11 +307,15 @@ _CALIBRATED_THRESHOLDS.update(
         ): _thresholds(
             # Unsharded Qwen3-30B-A3B experts. The GEMV reads each routed
             # expert once per token, so hot routes favour upstream from M=4.
-            # Grouped GEMM trails another backend at every swept M, so it stays off.
+            # Grouped GEMM trailed another backend at every M swept on MP56.
             gemv_max_tokens=3,
             grouped_gemm_min_tokens=None,
-            source=f"s5000-mp56-20261108-e128-n1536-k2048-{graph_mode}-dense-v6",
+            source=(
+                f"s5000-mp{multiprocessor_count}-{date}-e128-n1536-k2048-"
+                f"{graph_mode}-dense-v6"
+            ),
         )
+        for multiprocessor_count, date in ((56, "20261108"), (60, "20261109"))
         for graph_mode in ("eager", "capture")
     }
 )

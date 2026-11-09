@@ -1,5 +1,6 @@
 import ast
 import importlib.util
+import itertools
 import sys
 from pathlib import Path
 
@@ -141,10 +142,12 @@ def test_mp56_dsv4_native_gemv_boundary():
             assert backend == expected
 
 
-def test_mp56_qwen3_30b_a3b_tp1_native_gemv_boundary_and_shape_isolation():
-    for graph_mode in ("eager", "capture"):
+def test_qwen3_30b_a3b_tp1_native_gemv_boundary_and_shape_isolation():
+    for multiprocessor_count, graph_mode in itertools.product(
+        (56, 60), ("eager", "capture")
+    ):
         shape = _shape(
-            multiprocessor_count=56,
+            multiprocessor_count=multiprocessor_count,
             local_experts=128,
             w1_output_size=1536,
             w2_input_size=768,
@@ -157,7 +160,7 @@ def test_mp56_qwen3_30b_a3b_tp1_native_gemv_boundary_and_shape_isolation():
         thresholds = thresholds_for_shape(shape)
         assert thresholds.gemv_max_tokens == 3
         assert thresholds.grouped_gemm_min_tokens is None
-        assert thresholds.source.startswith("s5000-mp56-")
+        assert thresholds.source.startswith(f"s5000-mp{multiprocessor_count}-")
         for num_tokens in (1, 2, 3, 4, 8, 16, 64, 4096):
             backend = select_fused_moe_backend(
                 shape=shape,
@@ -173,7 +176,7 @@ def test_mp56_qwen3_30b_a3b_tp1_native_gemv_boundary_and_shape_isolation():
             )
             assert backend == expected
         for override in (
-            {"multiprocessor_count": 60},
+            {"multiprocessor_count": 48},
             {"expert_parallel": True},
             {
                 "local_experts": 16,
