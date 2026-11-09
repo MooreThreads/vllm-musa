@@ -44,8 +44,6 @@ vllm serve /models/Qwen3-VL-32B-Instruct-FP8 \
   --max-model-len 8192 \
   --max-num-seqs 64 \
   --max-num-batched-tokens 8192 \
-  --max-num-partial-prefills 1 \
-  --max-long-partial-prefills 1 \
   --long-prefill-token-threshold 4096 \
   --gpu-memory-utilization 0.90 \
   --limit-mm-per-prompt '{"image":1}' \
