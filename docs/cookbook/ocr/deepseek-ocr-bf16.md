@@ -51,16 +51,17 @@ vllm serve /models/DeepSeek-OCR \
   --max-num-batched-tokens 8192 \
   --gpu-memory-utilization 0.90 \
   --mm-processor-cache-gb 0 \
-  --no-enable-prefix-caching \
-  --logits-processors vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor
+  --no-enable-prefix-caching
 ```
 
 ## Configuration notes
 
 - `--mm-processor-cache-gb 0` disables the multimodal processor cache, which
   keeps memory predictable for image-heavy OCR traffic.
-- The NGram per-request logits processor is part of the validated DeepSeek-OCR
-  decoding path; keep it in the command.
+- The command sets no `--logits-processors`. The default Model Runner V2 only
+  loads V2 logits processors, and `NGramPerReqLogitsProcessor` from upstream
+  DeepSeek-OCR examples is a V1 processor, so the server refuses to start with
+  it.
 - The 8,192-token batched budget admits a full document page in one prefill.
 - Vision attention routes through the Triton backend by default on this
   branch; no backend flag is required.

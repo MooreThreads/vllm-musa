@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 9 Nov 2026 09:09:55 +0800
+Subject: [PATCH] MUSA: make DeepEncoder LOG2E a Triton constexpr
+
+The SAM relative-position attention kernel reads LOG2E, a plain float
+imported from vllm.triton_utils. Triton rejects non-constexpr globals in
+@triton.jit code, so the kernel fails to compile and the DeepSeek-OCR
+vision encoder cannot run.
+---
+ vllm/model_executor/models/deepencoder.py | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/vllm/model_executor/models/deepencoder.py b/vllm/model_executor/models/deepencoder.py
+index fa972ca615..3ed88a02af 100644
+--- a/vllm/model_executor/models/deepencoder.py
++++ b/vllm/model_executor/models/deepencoder.py
+@@ -28,6 +28,8 @@ from vllm.triton_utils import LOG2E, tl, triton
+ from .clip import CLIPEncoder, CLIPVisionEmbeddings
+ from .utils import AutoWeightsLoader
+ 
++LOG2E = tl.constexpr(LOG2E)
++
+ 
+ @triton.jit
+ def _deepencoder_rel_pos_attention_kernel(
