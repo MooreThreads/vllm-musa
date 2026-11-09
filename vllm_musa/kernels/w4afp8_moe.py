@@ -230,8 +230,11 @@ def w4afp8_moe(
     masked = routes <= 128
     small_masked = masked and routes <= 32
     capacity = triton.next_power_of_2(routes) if small_masked else 128
+    active_expert_upper = min(experts, routes)
     rows = (
-        experts * capacity if masked else triton.cdiv(routes + experts * 127, 128) * 128
+        experts * capacity
+        if masked
+        else triton.cdiv(routes + active_expert_upper * 127, 128) * 128
     )
     counts = torch.zeros(experts, dtype=torch.int32, device=device)
     local_ids = torch.empty(routes, dtype=torch.int32, device=device)
@@ -293,11 +296,11 @@ def w4afp8_moe(
                 (weight, weight_scales),
                 counts,
                 output.view(experts, capacity, -1),
-                expect_tokens=capacity,
+                expect_tokens=routes,
                 enable_overlap=False,
                 signal=None,
                 mixed_dtype=mate.gemm.GemmMixedDType.S4FP8,
-                backend="mutlass" if small_masked else "mubin",
+                backend="auto",
                 a_quant_recipe=(1, -1),
                 b_quant_recipe=(1, 128),
             )

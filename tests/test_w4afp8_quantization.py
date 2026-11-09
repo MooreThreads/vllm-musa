@@ -405,11 +405,11 @@ def test_output_allocation_is_contiguous_for_transposed_input(
 @pytest.mark.parametrize(
     "tokens,topk,backend,capacity",
     [
-        (1, 6, "mutlass", 8),
-        (16, 2, "mutlass", 32),
-        (33, 1, "mubin", 128),
-        (17, 2, "mubin", 128),
-        (64, 2, "mubin", 128),
+        (1, 6, "auto", 8),
+        (16, 2, "auto", 32),
+        (33, 1, "auto", 128),
+        (17, 2, "auto", 128),
+        (64, 2, "auto", 128),
         (65, 2, "mubin", None),
     ],
 )
@@ -435,7 +435,39 @@ def test_small_masked_capacity_and_backend_preserve_large_paths(
             assert options["alignment_m"] == 128
         else:
             assert arguments[0][0].shape[:2] == (1, capacity)
-            assert options["expect_tokens"] == capacity
+            assert options["expect_tokens"] == tokens * topk
+
+
+@pytest.mark.parametrize("experts,routes", [(256, 129), (512, 130), (2, 129), (48, 384)])
+def test_ragged_capacity_bounds_only_potentially_active_experts(
+    stubbed_kernel_entrypoint, experts, routes
+):
+    kernel_entrypoint, calls = stubbed_kernel_entrypoint
+    kernel_entrypoint(
+        torch.empty(routes, 128, dtype=torch.bfloat16),
+        torch.empty(experts, 256, 64, dtype=torch.int8),
+        torch.empty(experts, 128, 64, dtype=torch.int8),
+        torch.ones(experts, 256, 1, dtype=torch.bfloat16),
+        torch.ones(experts, 128, 1, dtype=torch.bfloat16),
+        torch.ones(routes, 1),
+        torch.zeros(routes, 1, dtype=torch.int32),
+    )
+
+    active_experts = min(experts, routes)
+    expected_rows = ((routes + active_experts * 127 + 127) // 128) * 128
+    counts = [routes - active_experts + 1] + [1] * (active_experts - 1)
+    for distribution in (counts, [routes], [0] * experts):
+        needed_rows = sum(((count + 127) // 128) * 128 for count in distribution)
+        assert needed_rows <= expected_rows
+
+    assert len(calls) == 2
+    for arguments, options in calls:
+        assert options["backend"] == "mubin"
+        assert options["alignment_m"] == 128
+        assert arguments[0][0].shape[0] == expected_rows
+        assert arguments[0][1].shape == (expected_rows, 1)
+        assert arguments[2].shape == (expected_rows,)
+        assert arguments[3].shape[0] == expected_rows
 
 
 @pytest.mark.parametrize(

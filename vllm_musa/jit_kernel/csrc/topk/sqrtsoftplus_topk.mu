@@ -3,12 +3,14 @@
 //
 // The arithmetic is that of the vLLM topkGatingSoftplusSqrt kernel, so weights and
 // ids match it bit for bit: ties go to the lower expert id and a picked score is
-// cleared to -10000. One warp handles one token; lane l holds experts l, l + 32, ...
+// cleared to -10000. The fallback uses one warp per token, with strided experts.
 // Image tokens (five consecutive sentinel ids from image_lo) select with bias_vl
 // instead of the correction bias. An optional constant slot (a shared expert folded
 // into the routed expert stack) follows the routed top-k. The logits are FP32 or the
 // BF16 gate output, which is widened exactly.
 #include <cstdint>
+#include <cstdlib>
+#include <cmath>
 
 #include <musa_bf16.h>
 #include <musa_fp8.h>
@@ -344,12 +346,135 @@ __global__ void __launch_bounds__(kMapTokens * kWarpSize)
   }
 }
 
+template <typename LT>
+__global__ void __launch_bounds__(512) sqrtsoftplus_single_row_kernel(
+    const LT* __restrict__ logits, RowBias rb,
+    const bool* __restrict__ padding, float* __restrict__ weights,
+    int32_t* __restrict__ ids, bool renormalize, float scaling,
+    int shared_id, float shared_weight) {
+  constexpr int experts = 384;
+  constexpr int top_k = 6;
+  constexpr int threads = 512;
+  constexpr int warps = threads / kWarpSize;
+  constexpr int active_warps = experts / kWarpSize;
+  const int thread = threadIdx.x;
+  const int lane = thread % kWarpSize;
+  const int warp = thread / kWarpSize;
+  const bool image_bias = rb.bias_vl != nullptr && rb.image_lo > 0;
+  int64_t token = 0;
+  if (image_bias) {
+    token = rb.ids_64 ? static_cast<const int64_t*>(rb.input_ids)[0]
+                      : static_cast<const int32_t*>(rb.input_ids)[0];
+  }
+  const float* bias = image_bias && token >= rb.image_lo && token < rb.image_lo + 5
+                          ? rb.bias_vl : rb.bias;
+  if (padding != nullptr && *padding) {
+    if (thread < top_k + (shared_id >= 0 ? 1 : 0)) {
+      weights[thread] = 0.0f;
+      ids[thread] = -1;
+    }
+    return;
+  }
+  const int safe_expert = min(thread, experts - 1);
+  const float value = load_logit(logits + safe_expert);
+  const float correction = bias[safe_expert];
+  float score = value > 20.0f ? value : __logf(1.0f + __expf(value));
+  score = sqrtf(score);
+  if (isnan(score)) {
+    score = 0.0f;
+  }
+  score = thread < experts ? score + correction : kAbsent;
+  __shared__ float candidate_scores[warps * top_k];
+  __shared__ float candidate_weights[warps * top_k];
+  __shared__ int candidate_ids[warps * top_k];
+#pragma unroll
+  for (int selection = 0; selection < top_k; ++selection) {
+    float best = score;
+    int best_id = thread;
+#pragma unroll
+    for (int offset = kWarpSize / 2; offset > 0; offset >>= 1) {
+      const float other = __shfl_xor_sync(0xffffffffu, best, offset);
+      const int other_id = __shfl_xor_sync(0xffffffffu, best_id, offset);
+      if (other > best || (other == best && other_id < best_id)) {
+        best = other;
+        best_id = other_id;
+      }
+    }
+    const float picked = thread == best_id ? best - correction : 0.0f;
+    if (thread == best_id) {
+      score = kCleared;
+    }
+    const float weight = __shfl_sync(0xffffffffu, picked, best_id % kWarpSize);
+    if (lane == 0) {
+      candidate_scores[warp * top_k + selection] = best;
+      candidate_weights[warp * top_k + selection] = weight;
+      candidate_ids[warp * top_k + selection] = best_id;
+    }
+  }
+  __syncthreads();
+  if (warp == 0) {
+    int cursor = 0;
+    float selected_weights[top_k];
+    int selected_ids[top_k];
+    float sum = 0.0f;
+#pragma unroll
+    for (int selection = 0; selection < top_k; ++selection) {
+      const int position = lane * top_k + min(cursor, top_k - 1);
+      float best = lane < active_warps ? candidate_scores[position] : -INFINITY;
+      int best_id = lane < active_warps ? candidate_ids[position] : experts;
+      const float local_weight = lane < active_warps ? candidate_weights[position] : 0.0f;
+#pragma unroll
+      for (int offset = kWarpSize / 2; offset > 0; offset >>= 1) {
+        const float other = __shfl_xor_sync(0xffffffffu, best, offset);
+        const int other_id = __shfl_xor_sync(0xffffffffu, best_id, offset);
+        if (other > best || (other == best && other_id < best_id)) {
+          best = other;
+          best_id = other_id;
+        }
+      }
+      const int owner = (best_id % threads) / kWarpSize;
+      const float weight = __shfl_sync(0xffffffffu, local_weight, owner);
+      selected_weights[selection] = weight;
+      selected_ids[selection] = best_id;
+      if (renormalize) {
+        sum += weight;
+      }
+      cursor += lane == owner ? 1 : 0;
+    }
+    float factor = scaling;
+    if (renormalize) {
+      const float denominator = sum > 0.0f ? sum : 1.0f;
+      factor /= denominator;
+    }
+    if (lane == 0) {
+#pragma unroll
+      for (int selection = 0; selection < top_k; ++selection) {
+        weights[selection] = selected_weights[selection] * factor;
+        ids[selection] = selected_ids[selection];
+      }
+      if (shared_id >= 0) {
+        weights[top_k] = shared_weight;
+        ids[top_k] = shared_id;
+      }
+    }
+  }
+}
+
 template <int VPT, typename LT>
 void launch_topk(int top_k, dim3 grid, musaStream_t stream, const LT* logits,
                  int64_t logits_stride, const RowBias& bias, const bool* is_padding, float* out_w,
                  int32_t* out_ids, int64_t out_stride, int32_t* route_map, const uint16_t* x,
                  int64_t x_stride, uint8_t* xq, float* xs, int hidden, int rows, int experts,
                  float scaling, bool renormalize, int shared_id, float shared_weight) {
+  if (rows == 1 && experts == 384 && top_k == 6 && route_map == nullptr) {
+    const char* enabled = std::getenv("VLLM_MUSA_SINGLE_ROW_ROUTER");
+    if (enabled == nullptr || enabled[0] != '0') {
+      sqrtsoftplus_single_row_kernel<LT><<<1, 512, 0, stream>>>(
+          logits, bias, is_padding, out_w, out_ids, renormalize, scaling,
+          shared_id, shared_weight);
+      return;
+    }
+  }
   const int quant_ctas =
       x == nullptr ? 0 : (rows * (hidden / kQuantVec) + kMapTokens * kWarpSize - 1) /
                              (kMapTokens * kWarpSize);
