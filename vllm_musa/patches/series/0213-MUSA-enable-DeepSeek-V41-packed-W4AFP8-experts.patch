@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 6 Nov 2026 15:45:00 +0800
+Subject: [PATCH] MUSA: enable DeepSeek V41 packed W4AFP8 experts
+
+diff --git a/vllm/model_executor/layers/quantization/__init__.py b/vllm/model_executor/layers/quantization/__init__.py
+index 39e613a611..090346a8f2 100644
+--- a/vllm/model_executor/layers/quantization/__init__.py
++++ b/vllm/model_executor/layers/quantization/__init__.py
+@@ -51,3 +51,5 @@
+ QUANTIZATION_METHODS: list[str] = list(get_args(QuantizationMethods))
++if current_platform.is_musa():
++    QUANTIZATION_METHODS.append("w4afp8")
+
+ DEPRECATED_QUANTIZATION_METHODS = [
+@@ -112,6 +114,12 @@
+ def get_quantization_config(quantization: str) -> type[QuantizationConfig]:
+     if quantization not in QUANTIZATION_METHODS:
+         raise ValueError(f"Invalid quantization method: {quantization}")
++    if quantization == "w4afp8":
++        from vllm_musa.model_executor.layers.quantization.w4afp8 import (
++            MusaW4AFp8Config,
++        )
++
++        return MusaW4AFp8Config
+
+     # lazy import to avoid triggering `torch.compile` too early
+     from vllm.config.quantization import _ONLINE_SHORTHANDS
+diff --git a/vllm/models/deepseek_v41/nvidia/model.py b/vllm/models/deepseek_v41/nvidia/model.py
+index 20f3e2b97b..5f863a2b3f 100644
+--- a/vllm/models/deepseek_v41/nvidia/model.py
++++ b/vllm/models/deepseek_v41/nvidia/model.py
+@@ -1430,6 +1430,8 @@
+     """Expert dtype for the weight mapper. Converted FP8 checkpoints omit
+     ``expert_dtype`` from their config; the DeepSeek quant config resolves it
+     from hf_overrides, which do not reach nested text or draft configs."""
++    if quant_config is not None and quant_config.get_name() == "w4afp8":
++        return "int4"
+     expert_dtype = getattr(config, "expert_dtype", None)
+     resolved = getattr(quant_config, "expert_dtype", None)
+     if resolved in ("fp4", "fp8") and (
