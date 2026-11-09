@@ -4,33 +4,26 @@
 
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 
-MUSA_ATTENTION_BACKENDS: dict[AttentionBackendEnum, str] = {
-    AttentionBackendEnum.FLASHMLA: (
-        "vllm_musa.v1.attention.backends.mla.flashmla.MUSAFlashMLABackend"
+# Keyed by enum member name so that importing this module never dereferences a
+# member; a backend this vLLM does not define is skipped at registration.
+_MUSA_ATTENTION_BACKENDS: dict[str, str] = {
+    "FLASHMLA": "vllm_musa.v1.attention.backends.mla.flashmla.MUSAFlashMLABackend",
+    "FLASHMLA_SPARSE": (
+        "vllm_musa.v1.attention.backends.mla.flashmla_sparse.MUSAFlashMLASparseBackend"
     ),
-    AttentionBackendEnum.FLASHMLA_SPARSE: (
-        "vllm_musa.v1.attention.backends.mla.flashmla_sparse."
-        "MUSAFlashMLASparseBackend"
-    ),
-    AttentionBackendEnum.FLASH_ATTN: (
+    "FLASH_ATTN": (
         "vllm_musa.v1.attention.backends.flash_attn.MUSAFlashAttentionBackend"
     ),
-    AttentionBackendEnum.TURBOQUANT: (
+    "TURBOQUANT": (
         "vllm_musa.v1.attention.backends.turboquant.MUSATurboQuantAttentionBackend"
     ),
+    "TREE_ATTN": ("vllm_musa.v1.attention.backends.tree_attn.MUSATreeAttentionBackend"),
 }
 
 
 def register_attention_backends() -> None:
     """Point vLLM's attention backends at the MUSA implementations."""
-    for backend, class_path in MUSA_ATTENTION_BACKENDS.items():
-        register_backend(backend, class_path=class_path)
-    # Only registered when this vLLM defines TREE_ATTN.
-    tree_attn_backend = getattr(AttentionBackendEnum, "TREE_ATTN", None)
-    if tree_attn_backend is not None:
-        register_backend(
-            tree_attn_backend,
-            class_path=(
-                "vllm_musa.v1.attention.backends.tree_attn.MUSATreeAttentionBackend"
-            ),
-        )
+    for name, class_path in _MUSA_ATTENTION_BACKENDS.items():
+        backend = getattr(AttentionBackendEnum, name, None)
+        if backend is not None:
+            register_backend(backend, class_path=class_path)

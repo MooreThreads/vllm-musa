@@ -1635,9 +1635,11 @@ class FlashAttentionImpl(AttentionImpl):
 
     def qwen3_qk_rope_kvcache_supported(self) -> bool:
         """Whether this layer is inside a validated Qwen3 cache-out envelope."""
-        supported_shape = (
-            (self.num_heads, self.num_kv_heads, self.head_size)
-            in ((16, 8, 128), (32, 8, 128), (4, 1, 256), (32, 2, 256))
+        supported_shape = (self.num_heads, self.num_kv_heads, self.head_size) in (
+            (16, 8, 128),
+            (32, 8, 128),
+            (4, 1, 256),
+            (32, 2, 256),
         )
         return (
             get_flash_attn_version() == 3
@@ -1688,7 +1690,9 @@ class FlashAttentionImpl(AttentionImpl):
             and get_kv_cache_layout() == "NHD"
         )
         if can_fuse_cache:
-            key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
+            key_cache, value_cache = kv_cache.transpose(1, 2).split(
+                self.head_size, dim=-1
+            )
             expected_tail = (self.num_kv_heads, self.head_size)
             flat_cache_supported = (
                 key_cache.is_contiguous()
@@ -1701,8 +1705,7 @@ class FlashAttentionImpl(AttentionImpl):
                 and is_interleaved
                 and self.head_size == 256
                 and cos_sin_cache.shape[-1] == 64
-                and (mrope_section_t, mrope_section_h, mrope_section_w)
-                == (11, 11, 10)
+                and (mrope_section_t, mrope_section_h, mrope_section_w) == (11, 11, 10)
             )
             paged_cache_supported = (
                 h256_paged_specialization
@@ -1791,7 +1794,9 @@ class FlashAttentionImpl(AttentionImpl):
     ) -> None:
         """Apply Qwen2 RoPE and populate its NHD cache in one MUSA launch."""
         if query.shape[0] <= 1:
-            key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
+            key_cache, value_cache = kv_cache.transpose(1, 2).split(
+                self.head_size, dim=-1
+            )
             from vllm_musa.kernels.qwen2_rope_kv import try_qwen2_rope_kv_cache
 
             if try_qwen2_rope_kv_cache(
