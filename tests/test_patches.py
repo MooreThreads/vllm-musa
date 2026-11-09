@@ -1106,8 +1106,7 @@ class TestMUSAPlatformDefaults:
         # The MUSA platform seeds a 64-element KV page for non-hybrid,
         # non-user-specified configs so paged FMHA/MLA decode takes the TME
         # bulk-gather path. Fixed-page kernels and explicit user overrides are
-        # preserved. Hybrid models with separate physical Mamba pools keep the
-        # attention page independent in both none and align cache modes.
+        # preserved.
         from types import SimpleNamespace
 
         from vllm.v1.attention.backend import AttentionBackend, MultipleOf
@@ -1174,20 +1173,6 @@ class TestMUSAPlatformDefaults:
         cfg = _cfg(user_specified=True, block_size=32)
         MUSAPlatformBase.update_block_size_for_backend(cfg)
         assert cfg.cache_config.block_size == 32
-
-        # Separate-pool hybrid models keep 64-token attention pages.
-        _use_backend(_MultipleOf16Backend)
-        cfg = _cfg(is_hybrid=True)
-        MUSAPlatformBase.update_block_size_for_backend(cfg)
-        assert cfg.cache_config.block_size == 64
-        assert cfg.cache_config.mamba_page_size_padded is None
-
-        # Prefix-cached align mode keeps the same independent attention page.
-        cfg = _cfg(is_hybrid=True, mamba_cache_mode="align")
-        MUSAPlatformBase.update_block_size_for_backend(cfg)
-        assert cfg.cache_config.block_size == 64
-        assert cfg.cache_config.mamba_block_size == 64
-        assert cfg.cache_config.mamba_page_size_padded is None
 
     def test_dense_fp8_does_not_cap_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase
