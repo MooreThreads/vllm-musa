@@ -16,6 +16,13 @@ group member against the current filenames. `third_party/PINS` alone selects
 the base and `manifest.py` remains the divergence census. Run
 `python3.10 tools/musa_sync.py report --metadata` for a concise index.
 
+Every top-level `series/*.patch` must have exactly one row in the current-patch
+table below, using its complete filename. Adding, removing, renaming, or
+regenerating a patch therefore requires updating that row, the patch count, and
+the applicable `metadata/patch-groups.json` ownership. Changing a patch's
+intent also requires refreshing its row description and the required checks.
+`tools/patch_metadata.py` validates the table and metadata coverage together.
+
 `.github/workflows/patch-series.yml` runs Python 3.10 offline unit/source
 contracts, canonical format/metadata checks, strict build-path and `git am -3`
 replay plus `verify` on a pristine pinned checkout, and regeneration round-trip
@@ -49,7 +56,8 @@ legacy group. Old `0137` (Mooncake P/D dedicated Mamba pools) and `0192`
 (hybrid attention page-size fast path) have no independent continuation here;
 their v0.32 behavior still requires separate review. The historical observations
 below describe the earlier baseline, not a measured failure of these follow-ups.
-Hardware validation remains required.
+The DeepSeek-V4.1 W4AFP8 adaptation and overlap follow-ups are carried as
+`0203`–`0204` after this baseline. Hardware validation remains required.
 
 A patch may update several files when they form one atomic feature. The grouped
 entries are intentionally multi-file: `0037` contains
@@ -66,7 +74,7 @@ intermediate patch has its own entry. This records the final v0.32 source
 result, not equivalence across all v0.28 runtime paths.
 
 The 24 old numbers without their own entry are accounted for below. The
-comparison is against the pinned vLLM tree after all 202 patches, not a
+comparison is against the pinned vLLM tree after all 204 patches, not a
 model-level regression. “Folded” identifies the owner of the final source
 change, not proof of equivalent runtime behavior. A blocked/unverified row is
 not a canceled feature and must not be restored verbatim without an adapted
@@ -288,7 +296,6 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0176-MUSA-route-the-delayed-mHC-pre-blocks-to-the-MUSA-pr.patch` | v0.32 new/updated | route the delayed mHC pre blocks to the MUSA provider |
 | `0177-MUSA-load-the-DeepSeek-V4.1-ratio-2-compressor-rows-.patch` | v0.32 new/updated | load the DeepSeek-V4.1 ratio-2 compressor rows separately |
 | `0178-MUSA-load-DeepSeek-V4-FP8-experts-with-their-own-blo.patch` | v0.32 new/updated | load DeepSeek-V4 FP8 experts with their own block size |
- v0.32 new/updated | bound the exact indexer cache rows to each block |
 | `0179-MUSA-claim-DeepSeek-V4.1-checkpoints-for-the-DeepSee.patch` | v0.32 new/updated | claim DeepSeek-V4.1 checkpoints for the DeepSeek-V4 FP8 config |
 | `0180-MUSA-load-the-MoE-top-k-gating-rows-element-by-eleme.patch` | v0.32 new/updated | load the MoE top-k gating rows element by element |
 | `0181-MUSA-score-decode-indexer-keys-of-any-cache-block-si.patch` | v0.32 new/updated | score decode indexer keys of any cache block size in graphs |
@@ -314,8 +321,10 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0200-MUSA-route-Mamba2-SSD-to-FlashInfer.patch` | v0.32 new | route the Mamba2 SSD/`--mamba-backend flashinfer` prefill to MATE's `flashinfer.mamba` |
 | `0201-MUSA-initialize-the-Mamba2-profiling-output.patch` | v0.32 new | initialize the supplied Mamba2 output during the profiling run |
 | `0202-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch` | v0.28 0194 follow-up | DeepSeek-OCR defaults to Triton on MUSA only when no encoder backend is configured. All explicit backend choices and non-MUSA behavior are preserved. |
+| `0203-MUSA-enable-DeepSeek-V41-packed-W4AFP8-experts.patch` | v0.32 W4AFP8 adaptation | register the MUSA `w4afp8` quantization method and resolve DeepSeek-V4.1 expert weights as packed INT4 |
+| `0204-MUSA-overlap-validated-W4AFP8-shared-experts.patch` | v0.32 W4AFP8 optimization | enable contract-gated MUSA shared-expert overlap and synchronize events with the MUSA current stream |
 
-Currently **202 patches** and **0 upstream entries** in `upstream/`.
+Currently **204 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
@@ -324,7 +333,8 @@ the 210-patch rebase described above gives tree
 This is source equivalence, not a MUSA runtime-readiness claim. Offline replay,
 round-trip, metadata and source-contract validation must be repeated after edits.
 
-The source-equivalence result above predates `0202`.
+The source-equivalence result above predates `0202`, `0203`, and `0204`; it is
+not current evidence for the W4AFP8 branch.
 
 `0202` applies after `0114` and sets the encoder backend in
 `DeepseekOCRForCausalLM.__init__` before constructing the vision tower, only

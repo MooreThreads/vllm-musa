@@ -1,6 +1,6 @@
-From 613962de34d8193ead2d177bf14137eed72015ff Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Tue, 10 Nov 2026 17:31:17 +0800
+Date: Tue, 10 Nov 2026 19:40:25 +0800
 Subject: [PATCH] MUSA: overlap validated W4AFP8 shared experts
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH] MUSA: overlap validated W4AFP8 shared experts
  2 files changed, 26 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/model_executor/layers/fused_moe/runner/moe_runner.py b/vllm/model_executor/layers/fused_moe/runner/moe_runner.py
-index d220f8d..5752679 100644
+index d220f8da36..57526797bf 100644
 --- a/vllm/model_executor/layers/fused_moe/runner/moe_runner.py
 +++ b/vllm/model_executor/layers/fused_moe/runner/moe_runner.py
 @@ -282,12 +282,22 @@ class MoERunner(MoERunnerInterface):
@@ -36,7 +36,7 @@ index d220f8d..5752679 100644
  
          # Needed for string -> MoERunner layer lookup in custom ops.
 diff --git a/vllm/model_executor/layers/fused_moe/runner/shared_experts.py b/vllm/model_executor/layers/fused_moe/runner/shared_experts.py
-index 3fb44be..55df777 100644
+index 3fb44befca..55df777924 100644
 --- a/vllm/model_executor/layers/fused_moe/runner/shared_experts.py
 +++ b/vllm/model_executor/layers/fused_moe/runner/shared_experts.py
 @@ -43,6 +43,7 @@ class SharedExperts(torch.nn.Module):
@@ -104,6 +104,3 @@ index 3fb44be..55df777 100644
  
      @property
      def _output_idx(self) -> int:
--- 
-2.25.1
-
