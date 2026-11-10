@@ -51,7 +51,7 @@ diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runne
 index 750a9ef5bb..5e3545c856 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -7320,6 +7320,7 @@ class GPUModelRunner(
+@@ -7318,6 +7318,7 @@ class GPUModelRunner(
              kv_caches = self.initialize_kv_cache_tensors(
                  kv_cache_config,
                  kernel_block_sizes,

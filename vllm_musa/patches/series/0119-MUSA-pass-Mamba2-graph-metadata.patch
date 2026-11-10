@@ -56,7 +56,7 @@ diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runne
 index b0c2bdd53f..1b9e0e72dd 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -2564,8 +2564,11 @@ class GPUModelRunner(
+@@ -2562,8 +2562,11 @@ class GPUModelRunner(
                  )
  
              if for_cudagraph_capture:

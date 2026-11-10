@@ -7,7 +7,7 @@ from pathlib import Path
 SERIES = Path(__file__).resolve().parents[1] / "vllm_musa" / "patches" / "series"
 
 #: Series length this branch is built on; bump it with the series.
-SERIES_LENGTH = 204
+SERIES_LENGTH = 202
 
 
 def test_series_numbers_are_contiguous_and_lineage_is_complete() -> None:
@@ -15,7 +15,7 @@ def test_series_numbers_are_contiguous_and_lineage_is_complete() -> None:
     assert len(patches) == SERIES_LENGTH
     numbers = [int(path.name[:4]) for path in patches]
     assert numbers == sorted(numbers)
-    assert not {78, 108, 112, 119, 120, 204, 206, 207}.intersection(numbers)
+    assert numbers == list(range(1, SERIES_LENGTH + 1))
 
     readme = (SERIES / "README.md").read_text(encoding="utf-8")
     mapped = re.findall(r"^\| `(\d{4}-[^`]+\.patch)` \|", readme, re.M)
@@ -26,9 +26,8 @@ def test_series_numbers_are_contiguous_and_lineage_is_complete() -> None:
 
     grouped = {
         37: ("v0.28 0037", "v0.28 0038"),
-        78: ("v0.28 0081", "v0.28 0082", "v0.28 0083"),
-        111: ("v0.28 0125", "v0.28 0127", "v0.28 0128"),
-        134: ("v0.28 0155", "v0.28 0156", "v0.28 0157"),
+        109: ("v0.28 0125", "v0.28 0127", "v0.28 0128"),
+        129: ("v0.28 0155", "v0.28 0156", "v0.28 0157"),
     }
     for new, ancestry in grouped.items():
         line = next(
@@ -36,7 +35,7 @@ def test_series_numbers_are_contiguous_and_lineage_is_complete() -> None:
         )
         assert all(item in line for item in ancestry)
 
-    for old, new in ((84, 79), (111, 102), (112, 103), (122, 108), (146, 126)):
+    for old, new in ((84, 78), (111, 101), (112, 102), (146, 121)):
         assert f"v0.28 {old:04d}" in next(
             line for line in readme.splitlines() if line.startswith(f"| `{new:04d}-")
         )

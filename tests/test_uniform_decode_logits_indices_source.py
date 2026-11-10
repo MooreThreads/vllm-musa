@@ -9,10 +9,12 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0083-MUSA-perf-musa-unify-Qwen-runtime-fast-paths.patch"
+    / "0082-MUSA-perf-musa-unify-Qwen-runtime-fast-paths.patch"
 )
 CONTRACT = ROOT / "vllm_musa" / "optimization_contract" / "qwen.py"
-RUNNER = ROOT / "third_party" / "vllm" / "vllm" / "v1" / "worker" / "gpu_model_runner.py"
+RUNNER = (
+    ROOT / "third_party" / "vllm" / "vllm" / "v1" / "worker" / "gpu_model_runner.py"
+)
 
 
 def test_uniform_decode_patch_reuses_uploaded_request_indices() -> None:
@@ -39,7 +41,10 @@ def test_uniform_decode_patch_reuses_uploaded_request_indices() -> None:
     assert "use_cached_decode_logits_indices: bool = False" in source
     assert "+                logits_indices = query_start_loc[1:] - 1" in source
     assert "+            if use_cached_decode_logits_indices:" in source
-    assert "+                logits_indices = self._musa_qwen_uniform_decode_logits_indices[" in source
+    assert (
+        "+                logits_indices = self._musa_qwen_uniform_decode_logits_indices["
+        in source
+    )
 
 
 def test_uniform_decode_gate_is_exact_for_positive_query_lengths() -> None:
@@ -77,17 +82,21 @@ def test_uniform_decode_gate_is_exact_for_positive_query_lengths() -> None:
 
 
 def test_uniform_decode_hidden_view_patch_preserves_fallbacks() -> None:
-    source = next(
-        (ROOT / "vllm_musa/patches/series").glob("0093-*.patch")
-    ).read_text()
+    source = next((ROOT / "vllm_musa/patches/series").glob("0092-*.patch")).read_text()
 
     assert source.count("+                if use_cached_decode_logits_indices:") == 2
-    assert source.count("+                    sample_hidden_states = hidden_states[:num_reqs]") == 2
-    assert source.count(
-        "+                    sample_hidden_states = hidden_states[logits_indices]"
-    ) == 2
-
-
+    assert (
+        source.count(
+            "+                    sample_hidden_states = hidden_states[:num_reqs]"
+        )
+        == 2
+    )
+    assert (
+        source.count(
+            "+                    sample_hidden_states = hidden_states[logits_indices]"
+        )
+        == 2
+    )
 
 
 def test_final_runner_selects_cached_and_fallback_hidden_rows() -> None:

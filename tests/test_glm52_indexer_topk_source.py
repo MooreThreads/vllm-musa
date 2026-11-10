@@ -3,7 +3,6 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -39,7 +38,7 @@ def test_glm52_indexer_ops_are_built_registered_and_wrapped():
         "glm52_indexer_topk_prefill",
     ):
         assert f'"{op}(' in bindings
-        assert f'&{op}' in bindings
+        assert f"&{op}" in bindings
         assert f"void {op}(" in headers
         assert f"def {op}(" in custom_ops
         assert f"torch.ops._C_musa_ops.{op}" in custom_ops
@@ -70,7 +69,7 @@ def test_glm52_indexer_dispatch_has_shortcut_and_safe_fallback_boundary():
 def test_musa_decode_schedule_metadata_is_precomputed_for_graph_capture():
     series = _read(
         "vllm_musa/patches/series/"
-        "0080-MUSA-MUSA-vllm.v1.attention.backends.mla.indexer.patch"
+        "0079-MUSA-MUSA-vllm.v1.attention.backends.mla.indexer.patch"
     )
 
     assert "current_platform.is_musa()" in series

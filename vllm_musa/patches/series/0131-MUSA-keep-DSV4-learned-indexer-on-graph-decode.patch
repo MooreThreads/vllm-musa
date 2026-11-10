@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: keep DSV4 learned indexer on graph decode
  1 file changed, 50 insertions(+)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 5ee2364586..a8894e9387 100644
+index 9ab6e83bc9..97af2cf4d5 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
-@@ -2571,6 +2571,56 @@ class SparseAttnIndexer(CustomOp):
+@@ -2573,6 +2573,56 @@ class SparseAttnIndexer(CustomOp):
                  "CUDA, ROCm, XPU and CPU platforms."
              )
  

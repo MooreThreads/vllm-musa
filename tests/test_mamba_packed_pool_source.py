@@ -3,6 +3,7 @@
 
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
@@ -15,6 +16,11 @@ GDN = (
     / "mamba"
     / "gdn"
     / "qwen_gdn_linear_attn.py"
+)
+
+pytestmark = pytest.mark.skipif(
+    not UPSTREAM.is_dir(),
+    reason="third_party/vllm checkout is not present",
 )
 
 

@@ -32,11 +32,9 @@ else:
 
 import pymtml as pynvml
 
-from vllm_musa.optimization_contract import (
-    ModelFamily,
-    resolve_optimization_contract,
-)
+from vllm_musa.optimization_contract import ModelFamily
 from vllm_musa.optimization_contract import policy as contract_policy
+from vllm_musa.optimization_contract import resolve_optimization_contract
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
@@ -677,10 +675,10 @@ class MUSAPlatformBase(Platform):
             or model_config.is_hybrid
         ):
             return
-        if (
-            resolve_optimization_contract(vllm_config).model.family
-            is ModelFamily.DEEPSEEK_V4
-            or "DeepseekV41ForCausalLM" in (model_config.architectures or ())
+        if resolve_optimization_contract(
+            vllm_config
+        ).model.family is ModelFamily.DEEPSEEK_V4 or "DeepseekV41ForCausalLM" in (
+            model_config.architectures or ()
         ):
             return
         backend_classes = cls._find_non_ssm_backends(vllm_config)

@@ -771,9 +771,11 @@ class TestMUSAPlatformDefaults:
                 max_num_seqs=1 if is_deepseek_v4 else 64,
             ),
             attention_config=SimpleNamespace(backend=attention_backend),
-            quant_config=SimpleNamespace(weight_block_size=[128, 128])
-            if is_deepseek_v4
-            else None,
+            quant_config=(
+                SimpleNamespace(weight_block_size=[128, 128])
+                if is_deepseek_v4
+                else None
+            ),
             compilation_config=SimpleNamespace(
                 custom_ops=[],
                 inductor_compile_config={},
@@ -1260,11 +1262,7 @@ class TestMUSAFp8MoEPadding:
         monkeypatch.setattr(
             musa_fp8,
             "_ORIGINAL_FP8_MOE_MAYBE_ROUNDUP_SIZES",
-            lambda self,
-            hidden_size,
-            intermediate_size_per_partition,
-            act_dtype,
-            moe_parallel_config: (
+            lambda self, hidden_size, intermediate_size_per_partition, act_dtype, moe_parallel_config: (
                 hidden_size,
                 intermediate_size_per_partition,
             ),
@@ -1716,11 +1714,9 @@ class TestBuildTimeSeries:
             (self._SERIES_DIR / "upstream").glob("*.patch")
         )
 
-
     def test_apply_patch_series_missing_dir_is_noop(self, tmp_path):
         ba = self._load_build_apply()
         assert ba.apply_patch_series(tmp_path, tmp_path / "nope") == []
-
 
     def test_deepseek_v4_rerank_prefill_requires_enough_candidates(self):
         source = (

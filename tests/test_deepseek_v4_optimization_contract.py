@@ -395,6 +395,7 @@ def test_tp8_mtp_multibatch_syncs_only_prefill_or_mixed_steps() -> None:
         max_num_seqs=64,
         cache_dtype="fp8_ds_mla",
     )
+
     def step(*, new=(), cached_context=(), scheduled=("a", "b")):
         context_req_ids = set(cached_context)
         return SimpleNamespace(
