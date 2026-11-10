@@ -22,6 +22,14 @@ def eligibility(monkeypatch):
     quantization = ModuleType(name)
     quantization.MusaW4AFp8MoEMethod = type("MusaW4AFp8MoEMethod", (), {})
     monkeypatch.setitem(sys.modules, name, quantization)
+    optimization = ModuleType("vllm_musa.optimization_contract")
+    optimization.OptimizationFeature = SimpleNamespace(
+        DEEPSEEK_V41_W4AFP8_SHARED_EXPERT_OVERLAP=object()
+    )
+    optimization.prefers_feature = lambda config, feature: (
+        config.contract_prefers_overlap
+    )
+    monkeypatch.setitem(sys.modules, "vllm_musa.optimization_contract", optimization)
     spec = importlib.util.spec_from_file_location(
         "shared_overlap_eligibility",
         ROOT / "vllm_musa/model_executor/layers/shared_experts.py",
@@ -38,8 +46,8 @@ def eligibility(monkeypatch):
             enable_eplb=False,
             enable_dbo=False,
         ),
+        contract_prefers_overlap=True,
     )
-    monkeypatch.delenv("VLLM_MUSA_W4AFP8_SHARED_OVERLAP", raising=False)
     return module, config, quantization.MusaW4AFp8MoEMethod()
 
 
@@ -47,34 +55,28 @@ def test_only_the_validated_quant_method_is_enabled(eligibility):
     module, config, method = eligibility
     assert module.can_overlap_shared_experts(config, method)
     assert not module.can_overlap_shared_experts(SimpleNamespace(), object())
-    config.model_config.quantization = "fp8"
+    config.contract_prefers_overlap = False
     assert not module.can_overlap_shared_experts(config, method)
 
 
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("tensor_parallel_size", 4),
-        ("enable_expert_parallel", False),
-        ("data_parallel_size", 2),
-        ("pipeline_parallel_size", 2),
-        ("enable_eplb", True),
-        ("enable_dbo", True),
-    ],
-)
-def test_untested_parallel_modes_remain_disabled(eligibility, field, value):
+def test_contract_is_the_only_policy_gate(eligibility):
     module, config, method = eligibility
-    setattr(config.parallel_config, field, value)
+    config.contract_prefers_overlap = False
     assert not module.can_overlap_shared_experts(config, method)
+    config.contract_prefers_overlap = True
+    assert module.can_overlap_shared_experts(config, method)
 
 
-@pytest.mark.parametrize("value,expected", [("0", False), ("1", True), ("yes", False)])
-def test_environment_escape_hatch_is_read_at_initialization(
-    eligibility, monkeypatch, value, expected
-):
-    module, config, method = eligibility
-    monkeypatch.setenv("VLLM_MUSA_W4AFP8_SHARED_OVERLAP", value)
-    assert module.can_overlap_shared_experts(config, method) is expected
+def test_overlap_helper_has_no_environment_gate():
+    source = (ROOT / "vllm_musa/model_executor/layers/shared_experts.py").read_text()
+    assert "VLLM_MUSA_W4AFP8_SHARED_OVERLAP" not in source
+    assert "prefers_feature" in source
+
+
+def test_single_row_router_has_no_environment_gate():
+    source = (ROOT / "vllm_musa/jit_kernel/csrc/topk/sqrtsoftplus_topk.mu").read_text()
+    assert "VLLM_MUSA_SINGLE_ROW_ROUTER" not in source
+    assert "sqrtsoftplus_single_row_kernel" in source
 
 
 @pytest.fixture
@@ -149,7 +151,11 @@ def shared():
 
     def make(*, enabled=True, dbo=False, internal=False):
         return namespace["SharedExperts"](
-            torch.nn.Identity(), config, dbo, lambda: internal, musa_overlap=enabled
+            torch.nn.Identity(),
+            config,
+            dbo,
+            lambda: internal,
+            external_overlap=lambda: enabled,
         )
 
     return SimpleNamespace(
@@ -167,9 +173,11 @@ def shared():
 
 @pytest.mark.parametrize(
     "tokens,enabled,expected",
-    [(1, True, True), (2, True, False), (32, True, False), (1, False, False)],
+    [(1, True, True), (2, True, True), (32, True, True), (1, False, False)],
 )
-def test_musa_external_overlap_is_c1_and_opt_in_only(shared, tokens, enabled, expected):
+def test_musa_external_overlap_honors_token_threshold_and_opt_in(
+    shared, tokens, enabled, expected
+):
     experts = shared.make(enabled=enabled)
     actual = experts._determine_shared_experts_order(shared.tensor(tokens))
     assert (actual == shared.order.MULTI_STREAM_OVERLAPPED) is expected
@@ -200,7 +208,7 @@ def test_constructor_stream_guard_overrides_overlap_eligibility(shared, musa, di
     experts = shared.make(enabled=musa)
     inputs = shared.tensor(1)
 
-    assert experts._musa_overlap is musa
+    assert experts._external_overlap_allowed is musa
     expected_stream = None if disabled else shared.auxiliary
     assert experts._stream is expected_stream
     assert len(shared.events) == (0 if disabled else 4)

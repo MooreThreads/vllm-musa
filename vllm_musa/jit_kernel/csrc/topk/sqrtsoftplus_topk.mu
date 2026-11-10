@@ -9,7 +9,6 @@
 // into the routed expert stack) follows the routed top-k. The logits are FP32 or the
 // BF16 gate output, which is widened exactly.
 #include <cstdint>
-#include <cstdlib>
 #include <cmath>
 
 #include <musa_bf16.h>
@@ -18,7 +17,6 @@
 #include <tvm/ffi/container/tensor.h>
 #include <tvm/ffi/dtype.h>
 #include <tvm/ffi/error.h>
-#include <tvm/ffi/extra/c_env_api.h>
 #include <tvm/ffi/extra/musa/device_guard.h>
 #include <tvm/ffi/function.h>
 
@@ -467,13 +465,10 @@ void launch_topk(int top_k, dim3 grid, musaStream_t stream, const LT* logits,
                  int64_t x_stride, uint8_t* xq, float* xs, int hidden, int rows, int experts,
                  float scaling, bool renormalize, int shared_id, float shared_weight) {
   if (rows == 1 && experts == 384 && top_k == 6 && route_map == nullptr) {
-    const char* enabled = std::getenv("VLLM_MUSA_SINGLE_ROW_ROUTER");
-    if (enabled == nullptr || enabled[0] != '0') {
-      sqrtsoftplus_single_row_kernel<LT><<<1, 512, 0, stream>>>(
-          logits, bias, is_padding, out_w, out_ids, renormalize, scaling,
-          shared_id, shared_weight);
-      return;
-    }
+    sqrtsoftplus_single_row_kernel<LT><<<1, 512, 0, stream>>>(
+        logits, bias, is_padding, out_w, out_ids, renormalize, scaling,
+        shared_id, shared_weight);
+    return;
   }
   const int quant_ctas =
       x == nullptr ? 0 : (rows * (hidden / kQuantVec) + kMapTokens * kWarpSize - 1) /
