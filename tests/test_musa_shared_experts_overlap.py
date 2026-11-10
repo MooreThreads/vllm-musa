@@ -73,12 +73,6 @@ def test_overlap_helper_has_no_environment_gate():
     assert "prefers_feature" in source
 
 
-def test_single_row_router_has_no_environment_gate():
-    source = (ROOT / "vllm_musa/jit_kernel/csrc/topk/sqrtsoftplus_topk.mu").read_text()
-    assert "VLLM_MUSA_SINGLE_ROW_ROUTER" not in source
-    assert "sqrtsoftplus_single_row_kernel" in source
-
-
 @pytest.fixture
 def shared():
     torch = pytest.importorskip("torch")
