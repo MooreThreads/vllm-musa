@@ -5,7 +5,7 @@
       "legacy_id": "0065",
       "disposition": "superseded",
       "owners": [
-        "0172"
+        "0167"
       ],
       "rationale": "Compiler fix provides the final Triton grouping directly.",
       "validation_required": "No separate intermediate patch; test Triton compilation."
@@ -44,7 +44,7 @@
       "legacy_id": "0093",
       "disposition": "folded",
       "owners": [
-        "0138"
+        "0133"
       ],
       "rationale": "Sparse-compressor adaptation owns C4 indexer compression.",
       "validation_required": "Check DeepSeek-V4 C4 on MUSA."
@@ -53,7 +53,7 @@
       "legacy_id": "0114",
       "disposition": "superseded",
       "owners": [
-        "0163"
+        "0158"
       ],
       "rationale": "Regular-ABI MUSA view implementation and registration replace the old CUDA view source.",
       "validation_required": "Native build/import and pinned-memory CPU-offload view smoke."
@@ -78,7 +78,7 @@
       "legacy_id": "0118",
       "disposition": "folded",
       "owners": [
-        "0105"
+        "0104"
       ],
       "rationale": "Triton and Gluon import compatibility lives in the current guard.",
       "validation_required": "Import with the installed Triton distribution."
@@ -94,7 +94,7 @@
       "legacy_id": "0126",
       "disposition": "folded",
       "owners": [
-        "0111"
+        "0109"
       ],
       "rationale": "Chained rejection predicate is part of scalarized rejection.",
       "validation_required": "Speculative rejection test on MUSA."
@@ -103,7 +103,7 @@
       "legacy_id": "0129",
       "disposition": "folded",
       "owners": [
-        "0111"
+        "0109"
       ],
       "rationale": "Stochastic rejection predicate is part of scalarized rejection.",
       "validation_required": "Speculative rejection test on MUSA."
@@ -126,7 +126,7 @@
       "legacy_id": "0140",
       "disposition": "folded",
       "owners": [
-        "0137"
+        "0132"
       ],
       "rationale": "SSD shape-key pruning and tile selection share the fixed autotune contract.",
       "validation_required": "SSD shape and model test."
@@ -151,7 +151,7 @@
       "legacy_id": "0161",
       "disposition": "folded",
       "owners": [
-        "0174"
+        "0169"
       ],
       "rationale": "Attention-layer adaptation owns the learned decode graph guard.",
       "validation_required": "Captured DeepSeek-V4 learned-indexer decode."
@@ -161,7 +161,7 @@
       "disposition": "folded",
       "owners": [
         "0013",
-        "0080"
+        "0079"
       ],
       "rationale": "Sparse indexer and MLA indexer own learned paged-MQA decode.",
       "validation_required": "Captured DeepSeek-V4 paged-MQA decode."
@@ -177,7 +177,7 @@
       "legacy_id": "0177",
       "disposition": "superseded",
       "owners": [
-        "0192"
+        "0186"
       ],
       "rationale": "Staged indexer dispatch directly replaces the intermediate top-k selector.",
       "validation_required": "No separate intermediate patch; test staged indexer on MUSA."

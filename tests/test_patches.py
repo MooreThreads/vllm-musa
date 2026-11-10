@@ -771,9 +771,11 @@ class TestMUSAPlatformDefaults:
                 max_num_seqs=1 if is_deepseek_v4 else 64,
             ),
             attention_config=SimpleNamespace(backend=attention_backend),
-            quant_config=SimpleNamespace(weight_block_size=[128, 128])
-            if is_deepseek_v4
-            else None,
+            quant_config=(
+                SimpleNamespace(weight_block_size=[128, 128])
+                if is_deepseek_v4
+                else None
+            ),
             compilation_config=SimpleNamespace(
                 custom_ops=[],
                 inductor_compile_config={},
@@ -1106,8 +1108,7 @@ class TestMUSAPlatformDefaults:
         # The MUSA platform seeds a 64-element KV page for non-hybrid,
         # non-user-specified configs so paged FMHA/MLA decode takes the TME
         # bulk-gather path. Fixed-page kernels and explicit user overrides are
-        # preserved. Hybrid models with separate physical Mamba pools keep the
-        # attention page independent in both none and align cache modes.
+        # preserved.
         from types import SimpleNamespace
 
         from vllm.v1.attention.backend import AttentionBackend, MultipleOf
@@ -1174,20 +1175,6 @@ class TestMUSAPlatformDefaults:
         cfg = _cfg(user_specified=True, block_size=32)
         MUSAPlatformBase.update_block_size_for_backend(cfg)
         assert cfg.cache_config.block_size == 32
-
-        # Separate-pool hybrid models keep 64-token attention pages.
-        _use_backend(_MultipleOf16Backend)
-        cfg = _cfg(is_hybrid=True)
-        MUSAPlatformBase.update_block_size_for_backend(cfg)
-        assert cfg.cache_config.block_size == 64
-        assert cfg.cache_config.mamba_page_size_padded is None
-
-        # Prefix-cached align mode keeps the same independent attention page.
-        cfg = _cfg(is_hybrid=True, mamba_cache_mode="align")
-        MUSAPlatformBase.update_block_size_for_backend(cfg)
-        assert cfg.cache_config.block_size == 64
-        assert cfg.cache_config.mamba_block_size == 64
-        assert cfg.cache_config.mamba_page_size_padded is None
 
     def test_dense_fp8_does_not_cap_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase
@@ -1275,11 +1262,7 @@ class TestMUSAFp8MoEPadding:
         monkeypatch.setattr(
             musa_fp8,
             "_ORIGINAL_FP8_MOE_MAYBE_ROUNDUP_SIZES",
-            lambda self,
-            hidden_size,
-            intermediate_size_per_partition,
-            act_dtype,
-            moe_parallel_config: (
+            lambda self, hidden_size, intermediate_size_per_partition, act_dtype, moe_parallel_config: (
                 hidden_size,
                 intermediate_size_per_partition,
             ),
@@ -1731,11 +1714,9 @@ class TestBuildTimeSeries:
             (self._SERIES_DIR / "upstream").glob("*.patch")
         )
 
-
     def test_apply_patch_series_missing_dir_is_noop(self, tmp_path):
         ba = self._load_build_apply()
         assert ba.apply_patch_series(tmp_path, tmp_path / "nope") == []
-
 
     def test_deepseek_v4_rerank_prefill_requires_enough_candidates(self):
         source = (

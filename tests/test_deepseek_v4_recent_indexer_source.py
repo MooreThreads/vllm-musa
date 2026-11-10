@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa/patches/series"
 INDEXER = ROOT / "third_party/vllm/vllm/model_executor/layers/sparse_attn_indexer.py"
@@ -39,7 +38,9 @@ def test_attention_dispatch_keeps_learned_indexer_only() -> None:
 
 
 def test_graph_decode_uses_learned_indexer_not_recent_window() -> None:
-    patch = (SERIES / "0174-MUSA-carry-the-DeepSeek-V4-MUSA-paths-onto-the-atten.patch").read_text()
+    patch = (
+        SERIES / "0169-MUSA-carry-the-DeepSeek-V4-MUSA-paths-onto-the-atten.patch"
+    ).read_text()
     source = INDEXER.read_text()
 
     assert "-    def uses_musa_recent_indices(self) -> bool:" in patch
@@ -52,12 +53,15 @@ def test_graph_decode_uses_learned_indexer_not_recent_window() -> None:
 
 def test_graph_decode_length_gate_never_host_syncs() -> None:
     additions = _additions(
-        SERIES / "0174-MUSA-carry-the-DeepSeek-V4-MUSA-paths-onto-the-atten.patch"
+        SERIES / "0169-MUSA-carry-the-DeepSeek-V4-MUSA-paths-onto-the-atten.patch"
     )
 
     assert "def _musa_decode_seq_len_fits_native_contract(" in additions
     source = INDEXER.read_text()
-    assert "if _musa_sparse_indexer_is_current_stream_capturing():\n        return True" in source
+    assert (
+        "if _musa_sparse_indexer_is_current_stream_capturing():\n        return True"
+        in source
+    )
     assert "_musa_decode_seq_len_fits_native_contract(" in source
     assert "block_table.size(1) * kv_cache.size(1) <= kMaxSeqLen" in NATIVE.read_text()
 
@@ -70,5 +74,8 @@ def test_dsv4_decode_can_use_learned_paged_mqa() -> None:
 
     assert "q_quant.shape[1] == 64" in source
     assert "or is_deepseek_v4" in source
-    assert "materialized_width = max(int(topk), min(int(max_model_len), page_capacity))" in source
+    assert (
+        "materialized_width = max(int(topk), min(int(max_model_len), page_capacity))"
+        in source
+    )
     assert "meta_lens = seq_lens" in builder

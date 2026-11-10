@@ -21,10 +21,10 @@ index 1bb74c2522..bfeeba03e1 100644
          self.speculative_config = vllm_config.speculative_config
          self.draft_model_config = self.speculative_config.draft_model_config
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 2cdd01ebad..e7ef9e5d9e 100644
+index 18de4ba13b..750a9ef5bb 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -987,7 +987,9 @@ class GPUModelRunner(
+@@ -985,7 +985,9 @@ class GPUModelRunner(
          self.num_accepted_tokens_event: torch.Event | None = None
          if self.num_spec_tokens:
              self.draft_token_ids_event = torch.Event()

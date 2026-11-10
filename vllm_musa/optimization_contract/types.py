@@ -70,7 +70,6 @@ class OptimizationFeature(str, Enum):
     GLM5_SPARSE_MLA_MATE_PREFILL = "glm5.sparse_mla_mate_prefill"
     GLM5_EAGER_MCCL_INIT = "glm5.eager_mccl_init"
     PADDLEOCR_VL_ROTARY = "paddleocr_vl.rotary"
-    HYBRID_SEPARATE_MAMBA_POOL = "hybrid.separate_mamba_pool"
 
 
 @dataclass(frozen=True, slots=True)

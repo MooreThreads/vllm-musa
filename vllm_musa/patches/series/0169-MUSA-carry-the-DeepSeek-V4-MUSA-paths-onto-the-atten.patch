@@ -11,7 +11,7 @@ Subject: [PATCH] MUSA: carry the DeepSeek-V4 MUSA paths onto the attention
  3 files changed, 185 insertions(+), 281 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index c9532e9708..66d484a4f9 100644
+index 2f5a726316..5a42b21639 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -84,153 +84,27 @@ def _musa_sparse_indexer_is_current_stream_capturing() -> bool:
@@ -209,7 +209,7 @@ index c9532e9708..66d484a4f9 100644
      ):
          return False
  
-@@ -1379,11 +1257,8 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+@@ -1381,11 +1259,8 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
      # Avoid logger calls in fallback forward paths; these functions may be
      # reached while TorchDynamo/CUDA Graph capture is active.
      if use_fp4_cache or isinstance(q_quant, tuple):
@@ -223,7 +223,7 @@ index c9532e9708..66d484a4f9 100644
          )
  
      attn_metadata = get_forward_context().attn_metadata
-@@ -1407,25 +1282,14 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+@@ -1409,25 +1284,14 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
              head_dim,
              max_model_len,
          ):
@@ -255,7 +255,7 @@ index c9532e9708..66d484a4f9 100644
  
      return topk_indices_buffer
  
-@@ -1503,30 +1367,17 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1505,30 +1369,17 @@ def _musa_fill_exact_sparse_indexer_indices(
          return topk_indices_buffer
  
      if _musa_sparse_indexer_is_current_stream_capturing():
@@ -293,7 +293,7 @@ index c9532e9708..66d484a4f9 100644
          )
  
      if use_fp4_cache or isinstance(q_quant, tuple):
-@@ -2540,6 +2391,8 @@ class SparseAttnIndexer(CustomOp):
+@@ -2542,6 +2393,8 @@ class SparseAttnIndexer(CustomOp):
          self.skip_k_cache_insert = skip_k_cache_insert
          self.use_fp4_cache = use_fp4_cache
          self.compress_ratio = compress_ratio
@@ -302,7 +302,7 @@ index c9532e9708..66d484a4f9 100644
          self.candidate_blocks = candidate_blocks
          self.candidate_block_size = candidate_block_size
          self.candidate_write = candidate_write
-@@ -2564,12 +2417,40 @@ class SparseAttnIndexer(CustomOp):
+@@ -2566,12 +2419,40 @@ class SparseAttnIndexer(CustomOp):
                  "the current vLLM environment."
              )
  
@@ -346,7 +346,7 @@ index c9532e9708..66d484a4f9 100644
          return self._cp_kv_cache_interleave_size
  
      def forward_native(
-@@ -2582,7 +2463,13 @@ class SparseAttnIndexer(CustomOp):
+@@ -2584,7 +2465,13 @@ class SparseAttnIndexer(CustomOp):
          if current_platform.is_cuda() or current_platform.is_xpu():
              return self.forward_cuda(hidden_states, q_quant, k, weights)
          elif current_platform.is_rocm():
@@ -360,7 +360,7 @@ index c9532e9708..66d484a4f9 100644
          elif (
              current_platform.is_musa()
              and (
-@@ -2619,70 +2506,13 @@ class SparseAttnIndexer(CustomOp):
+@@ -2621,70 +2508,13 @@ class SparseAttnIndexer(CustomOp):
                      self.use_musa_materialized_prefill,
                  )
              except NotImplementedError:

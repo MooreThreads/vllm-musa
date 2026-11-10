@@ -3,13 +3,12 @@
 
 from pathlib import Path
 
-
 PATCH = (
     Path(__file__).resolve().parent.parent
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0096-perf-specialize-Qwen3.6-BF16-W1-tile-at-C25.patch"
+    / "0095-perf-specialize-Qwen3.6-BF16-W1-tile-at-C25.patch"
 )
 
 

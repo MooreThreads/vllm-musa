@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PATCH = (
     ROOT
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0170-MUSA-bound-DSV4-long-prefill-indexer-logits.patch"
+    / "0139-MUSA-bound-DSV4-long-prefill-indexer-logits.patch"
 )
 POLICY = ROOT / "vllm_musa" / "optimization_contract" / "policy.py"
 INIT = ROOT / "vllm_musa" / "optimization_contract" / "__init__.py"

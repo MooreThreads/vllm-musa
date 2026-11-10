@@ -11,7 +11,7 @@ KERNEL = ROOT / "csrc/musa/attention/deepseek_v4_c4_indexer_compressor.mu"
 WRAPPER = ROOT / "vllm_musa/kernels/deepseek_v4_c4_indexer_compressor.py"
 SERIES_PATCH = (
     ROOT
-    / "vllm_musa/patches/series/0093-MUSA-dispatch-DeepSeek-V4-C4-indexer-compression-to-.patch"
+    / "vllm_musa/patches/series/0133-MUSA-dispatch-DeepSeek-V4-sparse-compressor-to-nativ.patch"
 )
 
 
@@ -46,9 +46,7 @@ def _cpu_reference_row(
             page_offset = source_position % 4
             head_offset = 128 if row >= 4 else 0
             row_values.append(_state_value(page, page_offset, head_offset + dim))
-            row_scores.append(
-                _state_value(page, page_offset, 256 + head_offset + dim)
-            )
+            row_scores.append(_state_value(page, page_offset, 256 + head_offset + dim))
         max_score = max(row_scores)
         softmax = [
             0.0 if score == float("-inf") else math.exp(score - max_score)
@@ -162,7 +160,7 @@ def test_source_patch_keeps_triton_fallback() -> None:
 def test_wrapper_is_default_on_and_shape_bounded() -> None:
     source = WRAPPER.read_text()
 
-    assert '_SUPPORTED_KV_BLOCK_SIZES = (64, 256)' in source
+    assert "_SUPPORTED_KV_BLOCK_SIZES = (64, 256)" in source
     assert "0 < num_rows <= _MAX_DECODE_ROWS" in source
     assert "return False, reason" in source
     assert "VLLM_MUSA_DEEPSEEK_V4_C4_INDEXER_COMPRESS_IMPL" not in source

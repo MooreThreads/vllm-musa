@@ -2,14 +2,12 @@
 
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_unquantized_moe_keeps_shared_topk_extension_fallback() -> None:
     source = (
-        REPO_ROOT
-        / "vllm_musa/model_executor/layers/fused_moe/"
+        REPO_ROOT / "vllm_musa/model_executor/layers/fused_moe/"
         "unquantized_fused_moe_method.py"
     ).read_text()
 
@@ -22,8 +20,7 @@ def test_unquantized_moe_keeps_shared_topk_extension_fallback() -> None:
 
 def test_plain_router_moves_shared_gate_before_jit_topk() -> None:
     source = (
-        REPO_ROOT
-        / "vllm_musa/model_executor/layers/fused_moe/router/"
+        REPO_ROOT / "vllm_musa/model_executor/layers/fused_moe/router/"
         "fused_topk_router.py"
     ).read_text()
 
@@ -36,18 +33,14 @@ def test_plain_router_moves_shared_gate_before_jit_topk() -> None:
 
 def test_combined_qwen_gate_output_remains_supported() -> None:
     router = (
-        REPO_ROOT
-        / "vllm_musa/model_executor/layers/fused_moe/router/"
+        REPO_ROOT / "vllm_musa/model_executor/layers/fused_moe/router/"
         "grouped_topk_router.py"
     ).read_text()
     fallback = (
-        REPO_ROOT
-        / "vllm_musa/model_executor/layers/fused_moe/router/"
+        REPO_ROOT / "vllm_musa/model_executor/layers/fused_moe/router/"
         "fused_topk_router.py"
     ).read_text()
-    kernel = (
-        REPO_ROOT / "vllm_musa/jit_kernel/csrc/topk/topk_gating.mu"
-    ).read_text()
+    kernel = (REPO_ROOT / "vllm_musa/jit_kernel/csrc/topk/topk_gating.mu").read_text()
 
     assert "has_combined_shared_experts" in router
     assert "router_logits[:, :routed_experts].contiguous()" in fallback
@@ -57,9 +50,7 @@ def test_combined_qwen_gate_output_remains_supported() -> None:
 
 
 def test_jit_topk_writes_shared_column_with_input_dtype_rounding() -> None:
-    source = (
-        REPO_ROOT / "vllm_musa/jit_kernel/csrc/topk/topk_gating.mu"
-    ).read_text()
+    source = (REPO_ROOT / "vllm_musa/jit_kernel/csrc/topk/topk_gating.mu").read_text()
 
     assert "topk_softmax_no_bias_warp_shared1_kernel_fixed_k" in source
     assert "const SharedT shared_weight" in source
@@ -70,9 +61,7 @@ def test_jit_topk_writes_shared_column_with_input_dtype_rounding() -> None:
 
 
 def test_fused_shared_topk_preserves_bf16_sigmoid_rounding() -> None:
-    source = (
-        REPO_ROOT / "vllm_musa/jit_kernel/extend_topk_shared.py"
-    ).read_text()
+    source = (REPO_ROOT / "vllm_musa/jit_kernel/extend_topk_shared.py").read_text()
 
     assert "shared_logits_ptr.dtype.element_ty" in source
 
@@ -85,9 +74,8 @@ def test_fused_shared_topk_has_no_runtime_gate() -> None:
 
 def test_qwen35_tp_only_fold_uses_explicit_ep_setting() -> None:
     patch = (
-        REPO_ROOT
-        / "vllm_musa/patches/series/"
-        "0102-MUSA-enable-Qwen3.5-shared-fold-for-TP-only-MoE.patch"
+        REPO_ROOT / "vllm_musa/patches/series/"
+        "0101-MUSA-enable-Qwen3.5-shared-fold-for-TP-only-MoE.patch"
     ).read_text()
 
     assert "+            and not parallel_config.enable_expert_parallel" in patch
@@ -96,9 +84,8 @@ def test_qwen35_tp_only_fold_uses_explicit_ep_setting() -> None:
 
 def test_qwen35_fold_stashes_owning_router() -> None:
     patch = (
-        REPO_ROOT
-        / "vllm_musa/patches/series/"
-        "0103-MUSA-bind-Qwen3.5-folded-shared-gate-to-router.patch"
+        REPO_ROOT / "vllm_musa/patches/series/"
+        "0102-MUSA-bind-Qwen3.5-folded-shared-gate-to-router.patch"
     ).read_text()
 
     assert "+            routed._musa_shared_router = self.experts.router" in patch

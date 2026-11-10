@@ -4,11 +4,11 @@ Date: Tue, 27 Oct 2026 10:43:04 +0800
 Subject: [PATCH] MUSA: vllm.model_executor.layers.sparse_attn_indexer
 
 ---
- .../layers/sparse_attn_indexer.py             | 1578 ++++++++++++++++-
- 1 file changed, 1542 insertions(+), 36 deletions(-)
+ .../layers/sparse_attn_indexer.py             | 1580 ++++++++++++++++-
+ 1 file changed, 1544 insertions(+), 36 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 935e4c0d2d..96264c05bb 100644
+index 935e4c0d2d..7caf905907 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -2,10 +2,13 @@
@@ -25,7 +25,7 @@ index 935e4c0d2d..96264c05bb 100644
  from vllm import _custom_ops as ops
  from vllm._aiter_ops import rocm_aiter_ops
  from vllm.compilation.breakable_cudagraph import eager_break_during_capture
-@@ -60,6 +63,1497 @@ from vllm.v1.worker.workspace import current_workspace_manager
+@@ -60,6 +63,1499 @@ from vllm.v1.worker.workspace import current_workspace_manager
  
  logger = init_logger(__name__)
  
@@ -1072,8 +1072,10 @@ index 935e4c0d2d..96264c05bb 100644
 +
 +
 +def _musa_indexer_cache_rows(kv_cache: torch.Tensor) -> torch.Tensor:
++    # One row per block over that block's own bytes: the block stride can also
++    # span other caches that share the page.
 +    return kv_cache.as_strided(
-+        (kv_cache.shape[0], kv_cache.stride(0)),
++        (kv_cache.shape[0], kv_cache[0].numel()),
 +        (kv_cache.stride(0), 1),
 +    )
 +
@@ -1523,7 +1525,7 @@ index 935e4c0d2d..96264c05bb 100644
  # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
  MXFP4_BLOCK_SIZE = 32
  
-@@ -997,49 +2491,23 @@ class SparseAttnIndexer(CustomOp):
+@@ -997,49 +2493,23 @@ class SparseAttnIndexer(CustomOp):
          self._parallel_config = parallel_config
          self.dcp_world_size = parallel_config.decode_context_parallel_size
          self.dcp_rank = get_dcp_group().rank_in_group if self.dcp_world_size > 1 else 0
@@ -1579,7 +1581,7 @@ index 935e4c0d2d..96264c05bb 100644
          return self._cp_kv_cache_interleave_size
  
      def forward_native(
-@@ -1052,11 +2520,49 @@ class SparseAttnIndexer(CustomOp):
+@@ -1052,11 +2522,49 @@ class SparseAttnIndexer(CustomOp):
          if current_platform.is_cuda() or current_platform.is_xpu():
              return self.forward_cuda(hidden_states, q_quant, k, weights)
          elif current_platform.is_rocm():

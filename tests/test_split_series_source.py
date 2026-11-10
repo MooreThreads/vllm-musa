@@ -3,7 +3,6 @@
 
 from pathlib import Path
 
-
 SERIES = Path(__file__).resolve().parents[1] / "vllm_musa/patches/series"
 
 
@@ -21,7 +20,7 @@ def _read_patch(path: Path) -> str:
 def test_modelopt_fp8_uses_musa_capability_floor() -> None:
     patch_path = (
         Path(__file__).parent.parent
-        / "vllm_musa/patches/series/0091-MUSA-allow-ModelOpt-FP8-on-MUSA-capability.patch"
+        / "vllm_musa/patches/series/0090-MUSA-allow-ModelOpt-FP8-on-MUSA-capability.patch"
     )
     section = _patch_section(
         patch_path.read_text(),
@@ -34,9 +33,7 @@ def test_modelopt_fp8_uses_musa_capability_floor() -> None:
 
 def test_gemma_norm_series_patch_uses_generic_inplace_ir_contract() -> None:
     series = _patch_section(
-        _read_patch(
-            SERIES / "0075-MUSA-allow-Gemma-RMSNorm-residual-donation.patch"
-        ),
+        _read_patch(SERIES / "0075-MUSA-allow-Gemma-RMSNorm-residual-donation.patch"),
         "vllm/model_executor/layers/layernorm.py",
     )
 
@@ -45,16 +42,10 @@ def test_gemma_norm_series_patch_uses_generic_inplace_ir_contract() -> None:
 
 
 def test_gated_qkv_series_patch_uses_generic_ir_contract() -> None:
-    base = _read_patch(
-        SERIES / "0076-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch"
-    )
+    base = _read_patch(SERIES / "0076-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch")
     op = _patch_section(base, "vllm/ir/ops/gated_qkv.py")
-    caller = _read_patch(
-        SERIES / "0104-MUSA-fuse-Qwen3.5-QK-mRoPE-cache-update.patch"
-    )
-    section = _patch_section(
-        caller, "vllm/model_executor/models/qwen3_next.py"
-    )
+    caller = _read_patch(SERIES / "0103-MUSA-fuse-Qwen3.5-QK-mRoPE-cache-update.patch")
+    section = _patch_section(caller, "vllm/model_executor/models/qwen3_next.py")
 
     assert '@register_op(activations=["packed_qkv"])' in op
     assert "def gated_qkv_rms_norm_rope(" in op

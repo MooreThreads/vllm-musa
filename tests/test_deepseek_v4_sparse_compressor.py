@@ -9,6 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 KERNEL = ROOT / "csrc/musa/attention/deepseek_v4_sparse_compressor.mu"
 WRAPPER = ROOT / "vllm_musa/kernels/deepseek_v4_sparse_compressor.py"
+
+
 def _series_patch(number: str) -> Path:
     # Entries are addressed by number: `musa_sync regen` owns the slug part of
     # the file name, so a rename must not break a source assertion.
@@ -17,8 +19,8 @@ def _series_patch(number: str) -> Path:
     return matches[0]
 
 
-SERIES_PATCH = _series_patch("0164")
-FUSED_SAVE_PATCH = _series_patch("0165")
+SERIES_PATCH = _series_patch("0133")
+FUSED_SAVE_PATCH = _series_patch("0134")
 
 
 def _bf16_roundtrip(value: float) -> float:
@@ -37,7 +39,10 @@ def test_native_op_is_registered_and_built() -> None:
     assert "deepseek_v4_sparse_compressor.mu" in setup
     assert "void deepseek_v4_sparse_compress_cache(" in header
     assert "deepseek_v4_sparse_compress_cache(Tensor! state_cache" in bindings
-    assert "Tensor? kv_states=None, Tensor? score_states=None, Tensor? ape=None" in bindings
+    assert (
+        "Tensor? kv_states=None, Tensor? score_states=None, Tensor? ape=None"
+        in bindings
+    )
     assert "def deepseek_v4_sparse_compress_cache(" in custom_ops
     assert "kv_states: Optional[torch.Tensor] = None" in custom_ops
     assert "deepseek_v4_sparse_compressor_kernel" in kernel
@@ -52,7 +57,10 @@ def test_kernel_uses_block_per_token_512d_geometry() -> None:
     assert "constexpr int64_t kTokenStride = 576;" in source
     assert "constexpr int64_t kScaleDim = 8;" in source
     assert "constexpr int64_t kThreadsPerBlock = 128;" in source
-    assert "constexpr int kCompressRows = (1 + static_cast<int>(kOverlap)) * kCompressRatio;" in source
+    assert (
+        "constexpr int kCompressRows = (1 + static_cast<int>(kOverlap)) * kCompressRatio;"
+        in source
+    )
     assert "const int64_t token = static_cast<int64_t>(blockIdx.x);" in source
     assert "half_warp_reduce_max_u32" in source
     assert "const __mt_fp8x4_e4m3 packed" in source
@@ -174,7 +182,10 @@ def _cpu_reference_store_c4(
             ]
             denominator = sum(softmax)
             values_by_dim.append(
-                sum(value * score for value, score in zip(row_values, softmax, strict=True))
+                sum(
+                    value * score
+                    for value, score in zip(row_values, softmax, strict=True)
+                )
                 / denominator
             )
         variance = sum(value * value for value in values_by_dim) / 512.0

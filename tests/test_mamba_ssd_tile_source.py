@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
-MEMBER = "0137-MUSA-mamba2-ssd-nemotron-prefill-tile.patch"
+MEMBER = "0132-MUSA-mamba2-ssd-nemotron-prefill-tile.patch"
 
 
 def _member() -> str:
@@ -48,7 +48,10 @@ def test_tile_selection_stays_shape_scoped():
     # the platform guard: the pruning and the widened key are for MUSA Triton 3.2 only, and
     # every other stack keeps the upstream autotune key and search
     assert "if not is_musa_triton_32():" in body
-    assert '"key": ["chunk_size", "hdim", "dstate", "nheads_ngroups_ratio", "IS_CAUSAL"]' in body
+    assert (
+        '"key": ["chunk_size", "hdim", "dstate", "nheads_ngroups_ratio", "IS_CAUSAL"]'
+        in body
+    )
     assert 'return {"key": ["chunk_size", "hdim", "dstate", "IS_CAUSAL"]}' in body
     # the gate itself must stay, and so must the wiring that installs it
     assert "prune_configs_by" in body

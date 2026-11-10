@@ -77,9 +77,9 @@ def test_linear_kernel_takes_only_fine_k_blocks_and_small_m() -> None:
 
 
 def test_series_lists_block_gemv_between_deepgemm_and_triton() -> None:
-    added = _added(_patch("0189"))
+    added = _added(_patch("0183"))
     assert "MUSAFp8BlockGemvScaledMMKernel," in added
-    text = _patch("0189")
+    text = _patch("0183")
     order = [
         text.index(
             "MUSADeepGemmFp8BlockScaledMMKernel,\n+                MUSAFp8BlockGemvScaledMMKernel,"
@@ -90,7 +90,7 @@ def test_series_lists_block_gemv_between_deepgemm_and_triton() -> None:
 
 
 def test_prefill_indexer_rows_are_scored_without_host_syncs() -> None:
-    text = _patch("0188")
+    text = _patch("0182")
     added = _added(text)
     removed = "\n".join(
         line[1:]
@@ -223,7 +223,7 @@ def test_block32_moe_policy_is_triton_only_and_leaves_other_shapes() -> None:
 
 
 def test_prefill_indexer_scores_fp8_keys_before_the_fp32_fallback() -> None:
-    text = _patch("0190")
+    text = _patch("0184")
     added = _added(text)
     assert "def _musa_gather_indexer_fp8_cache_quantized(" in added
     assert "fp8_mqa_logits(" in added
@@ -237,7 +237,7 @@ def test_prefill_indexer_scores_fp8_keys_before_the_fp32_fallback() -> None:
 
 
 def test_decode_indexer_scores_fp8_tiles_with_one_dot() -> None:
-    text = _patch("0191")
+    text = _patch("0185")
     added = _added(text)
     removed = "\n".join(
         line[1:]
@@ -251,7 +251,7 @@ def test_decode_indexer_scores_fp8_tiles_with_one_dot() -> None:
 
 
 def test_indexer_topk_up_to_512_uses_the_staged_radix_select() -> None:
-    text = _patch("0192")
+    text = _patch("0186")
     added = _added(text)
     removed = "\n".join(
         line[1:]
