@@ -16,6 +16,7 @@
 torch==2.13.0.post1+musa5.2.0
 torch_musa==2.13.0.post1+musa5.2.0
 torchvision==0.28.0.post1+musa5.2.0
+# torchaudio has no 2.13 release; 2.11.0.post2 is the build paired with torch 2.13.
 torchaudio==2.11.0.post2+musa5.2.0
 mate==0.2.8.post1
 mate-mubin==0.2.8.post1
