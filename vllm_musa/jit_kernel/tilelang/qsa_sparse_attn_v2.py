@@ -671,7 +671,8 @@ def qsa_prefill_attention_v2(
 def _split_scratch(num_rows, head_dim, device, num_splits, *, pin=False):
     key = (num_splits, num_rows, head_dim, str(device))
     buf = _SCRATCH.get(key)
-    if buf is None:
+    created = buf is None
+    if created:
         buf = (
             torch.empty(
                 num_splits,
@@ -689,7 +690,9 @@ def _split_scratch(num_rows, head_dim, device, num_splits, *, pin=False):
         _SCRATCH_ORDER.append(key)
     if pin:
         _SCRATCH_PINNED.add(key)
-    else:
+    elif created:
+        # Only a new eager entry can push the cache past the budget; a hit has
+        # to stay off the per-step path.
         _evict_scratch()
     return buf
 
