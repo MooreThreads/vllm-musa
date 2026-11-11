@@ -29,11 +29,11 @@ The block-table width and the page stride are read off the tensors, so the
 packed v0.32 layout that stores K and V for one token side by side works
 without a cache-layout change.
 ---
- vllm/models/qwen4_exp/nvidia/qsa.py | 160 +++++++++++++++++++++++++++-
- 1 file changed, 157 insertions(+), 3 deletions(-)
+ vllm/models/qwen4_exp/nvidia/qsa.py | 172 +++++++++++++++++++++++++++-
+ 1 file changed, 169 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/models/qwen4_exp/nvidia/qsa.py b/vllm/models/qwen4_exp/nvidia/qsa.py
-index bde1366b02..0a8584d983 100644
+index bde1366b02..fb80cd0cb4 100644
 --- a/vllm/models/qwen4_exp/nvidia/qsa.py
 +++ b/vllm/models/qwen4_exp/nvidia/qsa.py
 @@ -4,6 +4,7 @@
@@ -120,7 +120,7 @@ index bde1366b02..0a8584d983 100644
      def forward_qsa(
          self,
          layer: torch.nn.Module,
-@@ -326,20 +382,81 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
+@@ -326,20 +382,93 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
                  "Qwen4Exp QSA requires BF16 Q and BF16 or FP8-e4m3 K/V"
              )
  
@@ -142,13 +142,25 @@ index bde1366b02..0a8584d983 100644
 +                    tuple(query.shape),
 +                    tuple(key_cache.shape),
 +                )
-+                dense_layout = qsa_dense_layout(
-+                    attn_metadata.query_start_loc,
-+                    attn_metadata.seq_lens,
-+                    token_to_req,
-+                    num_tokens,
-+                    logical_indices.shape[1] - 1,
-+                )
++                # The dense-prefix layout belongs to the step, and the
++                # metadata is rebuilt for every step, so cache it there: every
++                # QSA layer of the model would otherwise rebuild it.
++                width = logical_indices.shape[1] - 1
++                cached = getattr(attn_metadata, "qsa_dense_layout", None)
++                if cached is None or cached[:2] != (width, num_tokens):
++                    cached = (
++                        width,
++                        num_tokens,
++                        qsa_dense_layout(
++                            attn_metadata.query_start_loc,
++                            attn_metadata.seq_lens,
++                            token_to_req,
++                            num_tokens,
++                            width,
++                        ),
++                    )
++                    attn_metadata.qsa_dense_layout = cached
++                dense_layout = cached[2]
 +                qsa_prefill_attention_v2(
 +                    query,
 +                    key_cache,
@@ -205,7 +217,7 @@ index bde1366b02..0a8584d983 100644
          )
          return output
  
-@@ -545,6 +662,43 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
+@@ -545,6 +674,43 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
              raise ValueError(f"Duplicate layer name: {self.layer_name}")
          static_context[self.layer_name] = self
  

@@ -571,7 +571,8 @@ def qsa_dense_layout(
     """Row layout of the dense-prefix split for one forward step.
 
     Returns per-request dense query and key counts for FlashAttention and each
-    row's token index within its request. Every QSA layer of a step shares it.
+    row's token index within its request. The layout belongs to the step, so
+    the caller builds it once per metadata object and every QSA layer reuses it.
     Each request's rows are consecutive positions ending at ``seq_len - 1``, so
     its dense rows are a prefix of its query rows, and bottom-right causal
     alignment of ``used_q`` rows against ``used_k`` keys gives each row exactly
