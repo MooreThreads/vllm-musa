@@ -33,6 +33,7 @@ indices of the v0.28 unpacked layout have no layout to pair with here.
 """
 
 import functools
+from collections import deque
 
 import tilelang
 import tilelang.language as T
@@ -507,7 +508,30 @@ _qsa_decode_kernel.mode = "lazy"
 _qsa_merge_kernel.mode = "lazy"
 
 # Split-k scratch, keyed so a captured decode graph always sees the same buffers.
+# A captured graph bakes in the addresses it ran on, so the buffers warmed before
+# capture (``_SCRATCH_PINNED``) are never evicted. Eager decode steps allocate
+# their row count on demand and are evicted oldest-first once the cache passes
+# ``_SCRATCH_BUDGET_BYTES``, so a large ``--max-num-seqs`` cannot reserve
+# gigabytes that the run never touches.
 _SCRATCH: dict = {}
+_SCRATCH_PINNED: set = set()
+_SCRATCH_ORDER: deque = deque()
+_SCRATCH_BUDGET_BYTES = 64 << 20
+
+
+def _scratch_nbytes(key) -> int:
+    num_splits, num_rows, head_dim, _ = key
+    return num_rows * num_splits * _BLOCK_M * (head_dim + 1) * 4
+
+
+def _evict_scratch() -> None:
+    total = sum(_scratch_nbytes(key) for key in _SCRATCH)
+    while total > _SCRATCH_BUDGET_BYTES and _SCRATCH_ORDER:
+        key = _SCRATCH_ORDER.popleft()
+        if key in _SCRATCH_PINNED or key not in _SCRATCH:
+            continue
+        total -= _scratch_nbytes(key)
+        del _SCRATCH[key]
 
 
 def _shape_args(q, k_cache, logical_indices, prefill=False):
@@ -643,7 +667,7 @@ def qsa_prefill_attention_v2(
     return out
 
 
-def _split_scratch(num_rows, head_dim, device, num_splits):
+def _split_scratch(num_rows, head_dim, device, num_splits, *, pin=False):
     key = (num_splits, num_rows, head_dim, str(device))
     buf = _SCRATCH.get(key)
     if buf is None:
@@ -661,6 +685,11 @@ def _split_scratch(num_rows, head_dim, device, num_splits):
             ),
         )
         _SCRATCH[key] = buf
+        _SCRATCH_ORDER.append(key)
+    if pin:
+        _SCRATCH_PINNED.add(key)
+    else:
+        _evict_scratch()
     return buf
 
 
@@ -720,6 +749,9 @@ def prewarm_qsa_kernels(
     build and the split-k scratch land in the graph memory pool: with more than
     one captured size the scratch aliases another graph's tensors and the merge
     kernel reads non-finite partials.
+
+    ``decode_rows`` is the set of row counts capture will replay; pass nothing
+    when decode does not take this kernel, and the run pays no scratch memory.
     """
     _compile_all(
         (
@@ -748,4 +780,4 @@ def prewarm_qsa_kernels(
         return
     device = torch.device("musa", torch.musa.current_device())
     for rows in decode_rows:
-        _split_scratch(rows, head_dim, device, num_splits)
+        _split_scratch(rows, head_dim, device, num_splits, pin=True)

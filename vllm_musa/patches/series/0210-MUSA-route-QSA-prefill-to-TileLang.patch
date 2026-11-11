@@ -29,11 +29,11 @@ The block-table width and the page stride are read off the tensors, so the
 packed v0.32 layout that stores K and V for one token side by side works
 without a cache-layout change.
 ---
- vllm/models/qwen4_exp/nvidia/qsa.py | 152 +++++++++++++++++++++++++++-
- 1 file changed, 149 insertions(+), 3 deletions(-)
+ vllm/models/qwen4_exp/nvidia/qsa.py | 160 +++++++++++++++++++++++++++-
+ 1 file changed, 157 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/models/qwen4_exp/nvidia/qsa.py b/vllm/models/qwen4_exp/nvidia/qsa.py
-index bde1366b02..510b848698 100644
+index bde1366b02..0a8584d983 100644
 --- a/vllm/models/qwen4_exp/nvidia/qsa.py
 +++ b/vllm/models/qwen4_exp/nvidia/qsa.py
 @@ -4,6 +4,7 @@
@@ -205,7 +205,7 @@ index bde1366b02..510b848698 100644
          )
          return output
  
-@@ -545,6 +662,35 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
+@@ -545,6 +662,43 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
              raise ValueError(f"Duplicate layer name: {self.layer_name}")
          static_context[self.layer_name] = self
  
@@ -225,15 +225,23 @@ index bde1366b02..510b848698 100644
 +                prewarm_qsa_kernels,
 +            )
 +
-+            rows = set(vllm_config.compilation_config.cudagraph_capture_sizes or ())
-+            rows.update(range(1, vllm_config.scheduler_config.max_num_seqs + 1))
++            # Only the sizes capture replays need buffers warmed outside the
++            # graph pool; an eager decode step allocates its own row count on
++            # demand. Decode takes the TileLang path only when explicitly
++            # enabled, so otherwise reserve no scratch at all (a captured size
++            # costs ~64 KiB per row at head_dim=128).
++            decode_rows: tuple[int, ...] = ()
++            if os.environ.get("VLLM_MUSA_QSA_TILELANG_DECODE") == "1":
++                decode_rows = tuple(
++                    sorted(vllm_config.compilation_config.cudagraph_capture_sizes or ())
++                )
 +            prewarm_qsa_kernels(
 +                self.num_heads // self.num_kv_heads,
 +                self.head_dim,
 +                self.indexer.packed_output_width - 1,
 +                vllm_config.cache_config.block_size,
 +                self.kv_cache_torch_dtype,
-+                decode_rows=tuple(sorted(rows)),
++                decode_rows=decode_rows,
 +            )
 +        except Exception as error:  # a prewarm failure must not break serving
 +            logger.warning_once("QSA TileLang prewarm skipped: %s", error)
