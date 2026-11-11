@@ -24,6 +24,6 @@ supervisor
 opentelemetry-exporter-otlp-proto-grpc
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-semantic-conventions
-mcp-types
+mcp-types>=2,<3
 soundfile
 av
