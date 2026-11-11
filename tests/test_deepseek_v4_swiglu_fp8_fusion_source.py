@@ -53,9 +53,7 @@ def test_native_kernel_has_a_separate_clamp_aware_entrypoint() -> None:
     assert "if constexpr (APPLY_CLAMP)" in kernel
     assert "const T sigmoid_rounded" in kernel
     assert "const T silu_rounded" in kernel
-    assert (
-        "rounded = static_cast<T>(static_cast<float>(silu_rounded) * up);" in kernel
-    )
+    assert "rounded = static_cast<T>(static_cast<float>(silu_rounded) * up);" in kernel
     assert "silu_and_mul_clamp_per_token_group_fp8_quant" in kernel
     assert "silu_and_mul_clamp_per_token_group_fp8_quant" in bindings
     assert "silu_and_mul_clamp_per_token_group_fp8_quant" in header
@@ -99,7 +97,7 @@ def test_row_parallel_dispatch_is_narrow_and_preserves_tp_semantics() -> None:
         "self.bias is None",
         "gate_up.dtype == torch.bfloat16",
         "gate_up.is_contiguous()",
-        '== (128, 128)',
+        "== (128, 128)",
         "swiglu_limit == 10.0",
     ):
         assert guard in block
@@ -123,7 +121,7 @@ def test_deepseek_model_patch_uses_optional_hook_before_activation() -> None:
         / "vllm_musa"
         / "patches"
         / "series"
-        / "0085-MUSA-DeepSeek-V4-fuse-clamp-SwiGLU-FP8-down-projecti.patch"
+        / "0084-MUSA-DeepSeek-V4-fuse-clamp-SwiGLU-FP8-down-projecti.patch"
     ).read_text()
 
     assert "isinstance(self.act_fn, SiluAndMulWithClamp)" in patch

@@ -16,8 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
 
-ROUTE = "0209-MUSA-route-Mamba2-SSD-to-FlashInfer.patch"
-PROFILE = "0210-MUSA-initialize-the-Mamba2-profiling-output.patch"
+ROUTE = "0200-MUSA-route-Mamba2-SSD-to-FlashInfer.patch"
+PROFILE = "0201-MUSA-initialize-the-Mamba2-profiling-output.patch"
 
 GATE = (
     "+    if (\n"

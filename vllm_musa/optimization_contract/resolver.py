@@ -275,9 +275,12 @@ def _execution_signature(
         ),
         batch_invariant_enabled=batch_invariant_enabled,
         speculative_method=_normalize_name(getattr(speculative_config, "method", None)),
-        async_scheduling=bool(
-            getattr(scheduler_config, "async_scheduling", False)
+        async_scheduling=bool(getattr(scheduler_config, "async_scheduling", False)),
+        enable_expert_parallel=bool(
+            getattr(parallel_config, "enable_expert_parallel", False)
         ),
+        enable_eplb=bool(getattr(parallel_config, "enable_eplb", False)),
+        enable_dbo=bool(getattr(parallel_config, "enable_dbo", False)),
     )
 
 
@@ -360,13 +363,6 @@ def resolve_optimization_contract(
 
         contract = resolve_rotary_contract(contract, model_config)
 
-    if model.is_hybrid is True:
-        feature = OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
-        contract = replace(
-            contract,
-            supported_features=contract.supported_features | {feature},
-            preferred_features=contract.preferred_features | {feature},
-        )
     return contract
 
 

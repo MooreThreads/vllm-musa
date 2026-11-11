@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 10 Nov 2026 19:40:25 +0800
+Subject: [PATCH] MUSA: overlap validated W4AFP8 shared experts
+
+---
+ .../layers/fused_moe/runner/moe_runner.py     | 10 +++++++++
+ .../layers/fused_moe/runner/shared_experts.py | 22 ++++++++++++++-----
+ 2 files changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/layers/fused_moe/runner/moe_runner.py b/vllm/model_executor/layers/fused_moe/runner/moe_runner.py
+index d220f8da36..57526797bf 100644
+--- a/vllm/model_executor/layers/fused_moe/runner/moe_runner.py
++++ b/vllm/model_executor/layers/fused_moe/runner/moe_runner.py
+@@ -282,12 +282,22 @@ class MoERunner(MoERunnerInterface):
+ 
+         self._shared_experts: SharedExperts | None = None
+         if shared_experts is not None:
++            external_overlap = None
++            if current_platform.is_musa():
++                from vllm_musa.model_executor.layers.shared_experts import (
++                    can_overlap_shared_experts,
++                )
++
++                external_overlap = lambda: can_overlap_shared_experts(
++                    get_current_vllm_config(), self._quant_method
++                )
+             can_overlap = lambda: self._quant_method.mk_can_overlap_shared_experts
+             self._shared_experts = SharedExperts(
+                 shared_experts,
+                 moe_config=moe_config,
+                 enable_dbo=enable_dbo,
+                 mk_can_overlap_shared_experts=can_overlap,
++                external_overlap=external_overlap,
+             )
+ 
+         # Needed for string -> MoERunner layer lookup in custom ops.
+diff --git a/vllm/model_executor/layers/fused_moe/runner/shared_experts.py b/vllm/model_executor/layers/fused_moe/runner/shared_experts.py
+index 3fb44befca..55df777924 100644
+--- a/vllm/model_executor/layers/fused_moe/runner/shared_experts.py
++++ b/vllm/model_executor/layers/fused_moe/runner/shared_experts.py
+@@ -43,6 +43,7 @@ class SharedExperts(torch.nn.Module):
+         moe_config: FusedMoEConfig,
+         enable_dbo: bool,
+         mk_can_overlap_shared_experts: Callable[[], bool],
++        external_overlap: Callable[[], bool] | None = None,
+     ):
+         super().__init__()
+ 
+@@ -56,6 +57,9 @@ class SharedExperts(torch.nn.Module):
+         self._moe_config = moe_config
+ 
+         self._mk_can_overlap_shared_experts = mk_can_overlap_shared_experts
++        self._external_overlap_allowed = (
++            external_overlap() if external_overlap is not None else False
++        )
+ 
+         # Allow disabling of the separate shared experts stream for
+         # debug purposes.
+@@ -108,11 +112,12 @@ class SharedExperts(torch.nn.Module):
+         if self._mk_can_overlap_shared_experts():
+             return SharedExpertsOrder.MK_INTERNAL_OVERLAPPED
+ 
++        is_musa = current_platform.is_musa()
++        platform_allows_overlap = (
++            current_platform.is_cuda_alike() and not is_musa
++        ) or (is_musa and self._external_overlap_allowed)
+         should_run_shared_in_aux_stream = (
+-            current_platform.is_cuda_alike()
+-            # MUSA: graph capture runs on a torch_musa-owned stream that the
+-            # cached current_stream() does not track, so the fork escapes it.
+-            and not current_platform.is_musa()
++            platform_allows_overlap
+             and self._stream is not None
+             and hidden_states.shape[0]
+             <= envs.VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD
+@@ -123,6 +128,11 @@ class SharedExperts(torch.nn.Module):
+         else:
+             return SharedExpertsOrder.NO_OVERLAP
+ 
++    def _current_stream(self) -> torch.cuda.Stream:
++        if current_platform.is_musa():
++            return torch.musa.current_stream()
++        return current_stream()
++
+     def maybe_forward_async(self, shared_experts_input: torch.Tensor) -> bool:
+         """Enqueue shared experts on the aux stream without waiting for them.
+ 
+@@ -137,7 +147,7 @@ class SharedExperts(torch.nn.Module):
+         assert self._stream is not None
+         idx = self._output_idx
+         assert self._output[idx] is None
+-        self._input_ready_event[idx].record(current_stream())
++        self._input_ready_event[idx].record(self._current_stream())
+         with torch.cuda.stream(self._stream):
+             self._input_ready_event[idx].wait(self._stream)
+             self._output[idx] = self._layer(shared_experts_input)
+@@ -147,7 +157,7 @@ class SharedExperts(torch.nn.Module):
+     def wait(self) -> None:
+         """Block the main stream until `maybe_forward_async` output is ready."""
+         assert self._stream is not None
+-        self._output_ready_event[self._output_idx].wait(current_stream())
++        self._output_ready_event[self._output_idx].wait(self._current_stream())
+ 
+     @property
+     def _output_idx(self) -> int:

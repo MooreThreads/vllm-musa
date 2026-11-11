@@ -47,6 +47,9 @@ class OptimizationFeature(str, Enum):
     )
     DEEPSEEK_V4_MTP_CAR_GRAPH_STAGING_ARENA = "deepseek_v4.mtp_car_graph_staging_arena"
     DEEPSEEK_V41_SHARED_EXPERT_FOLD = "deepseek_v4.1.shared_expert_fold"
+    DEEPSEEK_V41_W4AFP8_SHARED_EXPERT_OVERLAP = (
+        "deepseek_v4.1.w4afp8_shared_expert_overlap"
+    )
     QWEN_V2_SAMPLING = "qwen.v2_sampling"
     QWEN_LEGACY_SAMPLING = "qwen.legacy_sampling"
     QWEN_FA3_SCHEDULER = "qwen.fa3_scheduler"
@@ -70,7 +73,6 @@ class OptimizationFeature(str, Enum):
     GLM5_SPARSE_MLA_MATE_PREFILL = "glm5.sparse_mla_mate_prefill"
     GLM5_EAGER_MCCL_INIT = "glm5.eager_mccl_init"
     PADDLEOCR_VL_ROTARY = "paddleocr_vl.rotary"
-    HYBRID_SEPARATE_MAMBA_POOL = "hybrid.separate_mamba_pool"
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +129,9 @@ class ExecutionSignature:
     batch_invariant_enabled: bool = False
     speculative_method: str | None = None
     async_scheduling: bool = False
+    enable_expert_parallel: bool = False
+    enable_eplb: bool = False
+    enable_dbo: bool = False
 
 
 @dataclass(frozen=True, slots=True)

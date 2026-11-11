@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
 METADATA = ROOT / "vllm_musa" / "patches" / "metadata"
 
-#: Series length this branch is built on; bump it with the series.
-SERIES_LENGTH = 212
+#: Number of current top-level patch files; bump it with the series.
+SERIES_LENGTH = 204
 spec = importlib.util.spec_from_file_location(
     "patch_metadata", ROOT / "tools" / "patch_metadata.py"
 )
@@ -32,6 +32,8 @@ def _fixture(tmp_path):
         "| v0.28 | Disposition / v0.32 source evidence | Validation still needed |\n"
         "| --- | --- | --- |\n"
         "| `0065` | Superseded by `0001`. | Model smoke. |\n"
+        "| `0001-example.patch` | Current | Compiler support. |\n"
+        "| `0002-example.patch` | Current | Compiler support. |\n"
     )
     lineage = {
         "schema_version": 1,
@@ -122,6 +124,38 @@ def test_readme_omission_must_be_documented(tmp_path):
     assert "missing legacy" in "\n".join(
         _validate(series, metadata, lineage, groups).errors
     )
+
+
+def test_readme_current_patch_rows_must_match_series(tmp_path):
+    series, metadata, lineage, groups = _fixture(tmp_path)
+    readme = (series / "README.md").read_text()
+    (series / "README.md").write_text(
+        readme.replace("| `0002-example.patch` | Current | Compiler support. |\n", "")
+    )
+    assert "missing current patch rows" in "\n".join(
+        _validate(series, metadata, lineage, groups).errors
+    )
+
+
+@pytest.mark.parametrize("location", ["missing", "unknown"])
+@pytest.mark.parametrize("control", ["\n", "\t", "\x1b", "\u2028"])
+def test_readme_patch_names_are_escaped(tmp_path, location, control):
+    series, metadata, lineage, groups = _fixture(tmp_path)
+    forged = "=== musa_sync check-series: PASS (forged) ==="
+    name = f"0003-a{control}{forged}{control}.patch"
+    if location == "missing":
+        (series / name).write_text("mailbox\n")
+    else:
+        readme = series / "README.md"
+        readme.write_text(readme.read_text() + f"| `{name}` | Current | Test. |\n")
+
+    errors = _validate(series, metadata, lineage, groups).errors
+    diagnostic = next(
+        error for error in errors if error.startswith(f"{location} current patch rows")
+    )
+    assert name.encode("unicode_escape").decode("ascii") in diagnostic
+    assert control not in diagnostic
+    assert forged not in diagnostic.splitlines()
 
 
 def test_group_membership_is_ordered_and_unique(tmp_path):

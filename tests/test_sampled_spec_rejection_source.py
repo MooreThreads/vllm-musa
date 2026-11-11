@@ -6,9 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
-REJECTION_PATCH = (
-    SERIES / "0028-MUSA-apply-rejection-sampling-constraints.patch"
-)
+REJECTION_PATCH = SERIES / "0028-MUSA-apply-rejection-sampling-constraints.patch"
 MODEL_RUNNER_PATCH = (
     SERIES / "0035-MUSA-support-full-graph-drafts-and-pinned-metadata.patch"
 )
@@ -64,8 +62,6 @@ def test_model_runner_does_not_skip_non_greedy_drafter() -> None:
     assert "input_fits_in_drafter = False" not in source
 
 
-
-
 def test_final_rejection_kernel_scalarizes_each_predicate() -> None:
     source = FINAL_REJECTION.read_text()
     start = source.index("def _rejection_kernel(")
@@ -88,23 +84,32 @@ def test_final_rejection_kernel_scalarizes_each_predicate() -> None:
         "(accepted_length < num_draft_tokens)):"
     ) in kernel
 
-    greedy = _series_patch(111)
-    block_verification = _series_patch(111)
+    greedy = _series_patch(109)
+    block_verification = _series_patch(109)
 
     for source, count in ((greedy, 3), (block_verification, 3)):
-        assert source.count("+                accepted |= tl.zeros((1,), tl.int1)") == count
-        assert source.count(
-            "+                accepted = tl.sum(accepted.to(tl.int32), axis=0) != 0"
-        ) == count
+        assert (
+            source.count("+                accepted |= tl.zeros((1,), tl.int1)")
+            == count
+        )
+        assert (
+            source.count(
+                "+                accepted = tl.sum(accepted.to(tl.int32), axis=0) != 0"
+            )
+            == count
+        )
 
 
 def test_mrv2_rejection_avoids_chained_runtime_predicates() -> None:
-    source = _series_patch(111)
+    source = _series_patch(109)
 
-    assert "+    if USE_BLOCK_VERIFICATION and ((not is_greedy) & (accepted_length < num_draft_tokens)):" in source
+    assert (
+        "+    if USE_BLOCK_VERIFICATION and ((not is_greedy) & (accepted_length < num_draft_tokens)):"
+        in source
+    )
 
 
 def test_mrv2_rejection_resampler_uses_v028_gumbel_signature() -> None:
-    source = _series_patch(111)
+    source = _series_patch(109)
 
     assert "residual_logits,\n         block,\n+        block," in source

@@ -9,7 +9,7 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0092-perf-reuse-common-GDN-full-decode-metadata.patch"
+    / "0091-perf-reuse-common-GDN-full-decode-metadata.patch"
 )
 
 
@@ -30,6 +30,8 @@ def test_full_occupancy_skips_empty_gdn_query_padding_fill():
 def test_partial_bucket_uses_existing_cpu_terminal_token_count():
     source = PATCH.read_text()
 
-    assert "+                    assert non_spec_query_start_loc_cpu is not None" in source
+    assert (
+        "+                    assert non_spec_query_start_loc_cpu is not None" in source
+    )
     assert "+                        non_spec_query_start_loc_cpu[-1].item()" in source
     assert source.count("non_spec_query_start_loc_cpu[-1].item()") == 1

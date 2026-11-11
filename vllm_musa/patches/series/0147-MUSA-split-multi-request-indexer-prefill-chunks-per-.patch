@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: split multi-request indexer prefill chunks per request
  1 file changed, 59 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 0cef23dd5e..c9532e9708 100644
+index df9d57b40d..2f5a726316 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -2,6 +2,7 @@
@@ -19,7 +19,7 @@ index 0cef23dd5e..c9532e9708 100644
  import os
  
  import torch
-@@ -1429,6 +1430,57 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+@@ -1431,6 +1432,57 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
      return topk_indices_buffer
  
  
@@ -77,7 +77,7 @@ index 0cef23dd5e..c9532e9708 100644
  def _musa_fill_exact_sparse_indexer_indices(
      hidden_states: torch.Tensor,
      k_cache_prefix: LayerNameType,
-@@ -1496,7 +1548,9 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1498,7 +1550,9 @@ def _musa_fill_exact_sparse_indexer_indices(
      weights_fp32 = None
  
      if metadata.num_prefills > 0 and metadata.prefill is not None:
@@ -88,7 +88,7 @@ index 0cef23dd5e..c9532e9708 100644
              token_start = int(chunk.token_start)
              token_end = int(chunk.token_end)
              if _musa_try_fill_prefill_topk_from_indexer_cache_native(
-@@ -1510,6 +1564,10 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1512,6 +1566,10 @@ def _musa_fill_exact_sparse_indexer_indices(
                  use_musa_materialized_prefill,
              ):
                  continue

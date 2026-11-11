@@ -23,7 +23,7 @@ def test_shared_mlp_owner_guards_and_rmsnorm_instance_contract() -> None:
     layernorm = _source("vllm_musa/model_executor/layers/layernorm.py")
     model_patch = _source(
         "vllm_musa/patches/series/"
-        "0095-MUSA-bind-DeepSeek-V4-optimization-contract.patch"
+        "0094-MUSA-bind-DeepSeek-V4-optimization-contract.patch"
     )
 
     assert "def forward_swiglu_clamp(" in linear
@@ -43,7 +43,7 @@ def test_shared_mlp_owner_guards_and_rmsnorm_instance_contract() -> None:
 def test_sparse_indexer_contract_keeps_glm_entry_shape_local() -> None:
     patch = _source(
         "vllm_musa/patches/series/"
-        "0095-MUSA-bind-DeepSeek-V4-optimization-contract.patch"
+        "0094-MUSA-bind-DeepSeek-V4-optimization-contract.patch"
     )
 
     assert "DEEPSEEK_V4_NATIVE_SPARSE_INDEXER" in patch
@@ -59,7 +59,7 @@ def test_sparse_indexer_contract_keeps_glm_entry_shape_local() -> None:
 def test_mtp_sparse_prefill_fixes_are_bound_at_the_dsv4_owner() -> None:
     patch = _source(
         "vllm_musa/patches/series/"
-        "0097-MUSA-preserve-DeepSeek-V4-MTP-sparse-prefill-headroo.patch"
+        "0096-MUSA-preserve-DeepSeek-V4-MTP-sparse-prefill-headroo.patch"
     )
 
     assert "_allow_dsv4_tp8_mtp_direct_out" in patch
@@ -70,7 +70,7 @@ def test_mtp_sparse_prefill_fixes_are_bound_at_the_dsv4_owner() -> None:
 
     queue_fence = _source(
         "vllm_musa/patches/series/"
-        "0098-MUSA-fence-DeepSeek-V4-MTP-mixed-prefill-queues.patch"
+        "0097-MUSA-fence-DeepSeek-V4-MTP-mixed-prefill-queues.patch"
     )
     assert "deepseek_v4_mtp_prefill_step_requires_sync" in queue_fence
     assert "scheduled_spec_decode_tokens" not in queue_fence

@@ -16,8 +16,7 @@ def test_triton_gluon_is_optional_for_musa_triton_32() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.Try)
         and any(
-            isinstance(child, ast.ImportFrom)
-            and child.module == "triton.experimental"
+            isinstance(child, ast.ImportFrom) and child.module == "triton.experimental"
             for child in node.body
         )
         and any(
@@ -27,8 +26,7 @@ def test_triton_gluon_is_optional_for_musa_triton_32() -> None:
             for child in node.body
         )
         and any(
-            isinstance(handler.type, ast.Name)
-            and handler.type.id == "ImportError"
+            isinstance(handler.type, ast.Name) and handler.type.id == "ImportError"
             for handler in node.handlers
         )
     ]
@@ -39,12 +37,7 @@ def test_triton_gluon_is_optional_for_musa_triton_32() -> None:
 
 def test_moe_overrides_use_v028_routed_experts_api() -> None:
     fp8_source = (
-        ROOT
-        / "vllm_musa"
-        / "model_executor"
-        / "layers"
-        / "quantization"
-        / "fp8.py"
+        ROOT / "vllm_musa" / "model_executor" / "layers" / "quantization" / "fp8.py"
     ).read_text()
     unquantized_source = (
         ROOT
@@ -80,8 +73,9 @@ def test_qwen_uniform_decode_selector_uses_v028_scheduled_tokens_array() -> None
 
     assert "req_ids,\n                num_scheduled_tokens_np," in source
     assert "req_ids,\n                num_scheduled_tokens," not in source
-    assert "num_scheduled_tokens_np,\n                batch_req_state.is_prefilling_np," in (
-        source
+    assert (
+        "num_scheduled_tokens_np,\n                batch_req_state.is_prefilling_np,"
+        in (source)
     )
 
 
@@ -105,13 +99,7 @@ def test_fused_moe_tensor_descriptor_is_hashable_on_musa_triton_32() -> None:
 
 def test_musa_mla_prefill_backend_uses_v028_clone_contract() -> None:
     source = (
-        ROOT
-        / "vllm_musa"
-        / "v1"
-        / "attention"
-        / "backends"
-        / "mla"
-        / "common.py"
+        ROOT / "vllm_musa" / "v1" / "attention" / "backends" / "mla" / "common.py"
     ).read_text()
 
     assert "class MUSAMLAPrefillBackend(MLAPrefillBackend):" in source
@@ -120,18 +108,11 @@ def test_musa_mla_prefill_backend_uses_v028_clone_contract() -> None:
 
 def test_musa_mla_uses_v028_decode_context_parallel_size() -> None:
     source = (
-        ROOT
-        / "vllm_musa"
-        / "v1"
-        / "attention"
-        / "backends"
-        / "mla"
-        / "common.py"
+        ROOT / "vllm_musa" / "v1" / "attention" / "backends" / "mla" / "common.py"
     ).read_text()
 
     assert (
-        "self.dcp_world_size: int = "
-        "parallel_config.decode_context_parallel_size"
+        "self.dcp_world_size: int = " "parallel_config.decode_context_parallel_size"
     ) in source
     assert "self.dcp_world_size: int = -1" not in source
 
@@ -180,23 +161,7 @@ def test_cuda_only_fa4_warmup_is_skipped_on_musa() -> None:
     ).read_text()
 
     assert "if not current_platform.is_cuda():" in source
-    assert 'Skipping CuTeDSL warmup on non-CUDA platform.' in source
-
-
-def test_musa_mamba_pools_accept_v028_graph_profiling_override() -> None:
-    source = (
-        ROOT
-        / "third_party"
-        / "vllm"
-        / "vllm"
-        / "v1"
-        / "core"
-        / "kv_cache_utils.py"
-    ).read_text()
-
-    assert "profiling_num_blocks = (" in source
-    assert "if available_memory == 0" in source
-    assert "attn_num_blocks = profiling_num_blocks" in source
+    assert "Skipping CuTeDSL warmup on non-CUDA platform." in source
 
 
 UPSTREAM_MLA_ATTENTION = (
@@ -413,7 +378,9 @@ def test_mla_drift_tripwire_matches_its_two_sources() -> None:
 
     shadow = MUSA_MLA_COMMON.relative_to(ROOT).as_posix()
     entries = [entry for entry in tool.manifest.ENTRIES if entry.path == shadow]
-    assert len(entries) == 1, f"expected one manifest row for {shadow}, got {len(entries)}"
+    assert (
+        len(entries) == 1
+    ), f"expected one manifest row for {shadow}, got {len(entries)}"
     entry = entries[0]
 
     stored = (MODULE_DRIFT_DIR / f"{entry.id}.diff").read_text()

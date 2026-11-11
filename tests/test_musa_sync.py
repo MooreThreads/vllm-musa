@@ -71,7 +71,7 @@ def test_report(ms, capsys):
 
 
 #: Series length this branch is built on; bump it with the series.
-SERIES_LENGTH = 212
+SERIES_LENGTH = 204
 
 
 def test_report_metadata_and_gate_rejects_stale_metadata(ms, capsys, monkeypatch):
@@ -256,7 +256,7 @@ def test_regen_replaces_series_and_prunes_stale_files(
     series_dir = tmp_path / "series"
     series_dir.mkdir()
     (series_dir / "README.md").write_text("keep me\n")
-    (series_dir / "0099-stale.patch").write_text("stale\n")
+    (series_dir / "0098-stale.patch").write_text("stale\n")
     monkeypatch.setattr(ms, "WORKDIR", workdir)
     monkeypatch.setattr(ms, "SERIES_DIR", series_dir)
     monkeypatch.setattr(ms, "_default_target", lambda: base)
@@ -496,7 +496,9 @@ def _cli_tree(tmp_path: Path, files: dict) -> Path:
     (metadata / "patch-groups.json").write_text(
         json.dumps({"schema_version": 1, "groups": groups})
     )
-    (tmp_path / "vllm_musa" / "patches" / "series" / "README.md").write_text("")
+    (tmp_path / "vllm_musa" / "patches" / "series" / "README.md").write_text(
+        "".join(f"| `{name}` | Fixture patch. |\n" for name in sorted(files))
+    )
     for rel in ("vllm_musa/patches/manifest.py", "vllm_musa/patches/build_apply.py"):
         shutil.copyfile(ROOT / rel, tmp_path / rel)
     for name, text in files.items():
