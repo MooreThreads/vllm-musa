@@ -14,9 +14,9 @@ the first captured _topk call does not run Python/JIT work on the capture
 stream. The existing 1 MiB workspace supplies the per-row starts in place.
 ---
  vllm/model_executor/warmup/kernel_warmup.py   |  2 ++
- .../warmup/qwen4_exp_qsa_warmup.py            | 14 +++++++++++++
+ .../warmup/qwen4_exp_qsa_warmup.py            | 15 ++++++++++++++
  .../qwen4_exp/nvidia/ops/qsa_indexer.py       | 20 ++++++++++++++++++-
- 3 files changed, 35 insertions(+), 1 deletion(-)
+ 3 files changed, 36 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
 index 8aebdffdeb..976470b38f 100644
@@ -32,7 +32,7 @@ index 8aebdffdeb..976470b38f 100644
          if sparse_mla_warmup is not None:
              sparse_mla_warmup(worker)
 diff --git a/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py b/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
-index 2065b38338..b944ea8658 100644
+index 2065b38338..ed45cd0155 100644
 --- a/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
 +++ b/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
 @@ -19,6 +19,8 @@ logger = init_logger(__name__)
@@ -44,7 +44,7 @@ index 2065b38338..b944ea8658 100644
      qsa_module = sys.modules.get("vllm.models.qwen4_exp.nvidia.indexer_qsa")
      attn_module = sys.modules.get("vllm.models.qwen4_exp.nvidia.qsa")
      if qsa_module is None or attn_module is None:
-@@ -33,6 +35,18 @@ def qwen4_exp_qsa_triton_warmup(worker: "Worker") -> None:
+@@ -33,6 +35,19 @@ def qwen4_exp_qsa_triton_warmup(worker: "Worker") -> None:
      if indexer is None or owner is None:
          return
  
@@ -53,12 +53,13 @@ index 2065b38338..b944ea8658 100644
 +        # Loading it lazily from _topk during capture would invoke Python/JIT
 +        # work on the capturing stream and fail with an illegal synchronize.
 +        # Only a model that actually carries QSA layers reaches this point.
++        # The Triton warmups below stay shared: MUSA decode still falls back to
++        # them whenever the TileLang kernels cannot take a shape.
 +        from vllm_musa.jit_kernel.csrc.qsa_topk import qsa_fast_topk_available
 +
 +        if not qsa_fast_topk_available():
 +            raise RuntimeError("MUSA QSA fast top-k kernel is unavailable")
 +        logger.info("Loaded MUSA Qwen4Exp QSA fast top-k kernel.")
-+        return
 +
      runner = worker.model_runner
  
