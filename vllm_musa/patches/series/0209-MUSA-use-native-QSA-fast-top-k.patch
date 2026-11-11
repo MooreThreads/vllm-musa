@@ -14,9 +14,9 @@ the first captured _topk call does not run Python/JIT work on the capture
 stream. The existing 1 MiB workspace supplies the per-row starts in place.
 ---
  vllm/model_executor/warmup/kernel_warmup.py   |  2 ++
- .../warmup/qwen4_exp_qsa_warmup.py            | 13 ++++++++++++
+ .../warmup/qwen4_exp_qsa_warmup.py            | 14 +++++++++++++
  .../qwen4_exp/nvidia/ops/qsa_indexer.py       | 20 ++++++++++++++++++-
- 3 files changed, 34 insertions(+), 1 deletion(-)
+ 3 files changed, 35 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
 index 8aebdffdeb..976470b38f 100644
@@ -32,19 +32,27 @@ index 8aebdffdeb..976470b38f 100644
          if sparse_mla_warmup is not None:
              sparse_mla_warmup(worker)
 diff --git a/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py b/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
-index 2065b38338..87b146d9ed 100644
+index 2065b38338..b944ea8658 100644
 --- a/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
 +++ b/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
-@@ -19,6 +19,19 @@ logger = init_logger(__name__)
+@@ -19,6 +19,8 @@ logger = init_logger(__name__)
  def qwen4_exp_qsa_triton_warmup(worker: "Worker") -> None:
      """Warm every reachable QSA specialization: indexer decode-query-length
      profiles plus the sparse attention split-K/merge configs."""
 +    from vllm.platforms import current_platform
 +
+     qsa_module = sys.modules.get("vllm.models.qwen4_exp.nvidia.indexer_qsa")
+     attn_module = sys.modules.get("vllm.models.qwen4_exp.nvidia.qsa")
+     if qsa_module is None or attn_module is None:
+@@ -33,6 +35,18 @@ def qwen4_exp_qsa_triton_warmup(worker: "Worker") -> None:
+     if indexer is None or owner is None:
+         return
+ 
 +    if current_platform.is_musa():
 +        # Build/load the MUSA radix-select top-k module before graph capture.
 +        # Loading it lazily from _topk during capture would invoke Python/JIT
 +        # work on the capturing stream and fail with an illegal synchronize.
++        # Only a model that actually carries QSA layers reaches this point.
 +        from vllm_musa.jit_kernel.csrc.qsa_topk import qsa_fast_topk_available
 +
 +        if not qsa_fast_topk_available():
@@ -52,9 +60,9 @@ index 2065b38338..87b146d9ed 100644
 +        logger.info("Loaded MUSA Qwen4Exp QSA fast top-k kernel.")
 +        return
 +
-     qsa_module = sys.modules.get("vllm.models.qwen4_exp.nvidia.indexer_qsa")
-     attn_module = sys.modules.get("vllm.models.qwen4_exp.nvidia.qsa")
-     if qsa_module is None or attn_module is None:
+     runner = worker.model_runner
+ 
+     def block_table_for(prefix: str) -> torch.Tensor:
 diff --git a/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py b/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
 index c3967b58b8..6aa1f0de7c 100644
 --- a/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
