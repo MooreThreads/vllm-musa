@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-
 from vllm.models.qwen4_exp.nvidia.ops import qsa_indexer
 
 

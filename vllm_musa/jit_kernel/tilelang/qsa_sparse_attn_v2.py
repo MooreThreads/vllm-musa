@@ -238,9 +238,11 @@ def _qsa_prefill_kernel(
                     for i, c in T.Parallel(block_n, head_dim // _GATHER_VEC):
                         for e in T.vectorized(_GATHER_VEC):
                             s_k[i, c * _GATHER_VEC + e] = k_cache[
-                                s_phys[i], s_off[i], c * _GATHER_VEC + e]
+                                s_phys[i], s_off[i], c * _GATHER_VEC + e
+                            ]
                             s_v[i, c * _GATHER_VEC + e] = v_cache[
-                                s_phys[i], s_off[i], c * _GATHER_VEC + e]
+                                s_phys[i], s_off[i], c * _GATHER_VEC + e
+                            ]
                     T.sync_threads()
 
                     for m, n in T.Parallel(block_m, block_n):
@@ -564,8 +566,11 @@ def qsa_dense_layout(
     used_q = torch.where(query_lens > 0, used_q, torch.zeros_like(used_q))
     # Token index within the request; rope positions may differ from it.
     req = token_to_req[:num_rows].long().clamp(0, num_reqs - 1)
-    positions = (seq_lens.long()[req] - query_start_loc.long()[req + 1]
-                 + torch.arange(num_rows, device=seq_lens.device))
+    positions = (
+        seq_lens.long()[req]
+        - query_start_loc.long()[req + 1]
+        + torch.arange(num_rows, device=seq_lens.device)
+    )
     return used_q, used_k, positions
 
 
@@ -624,8 +629,17 @@ def qsa_prefill_attention_v2(
     kernel = _qsa_prefill_kernel(*shape_args)
     # The upstream forward canonicalizes the singleton KV-head stride to 0;
     # TileLang takes dense tensors, so drop the singleton dim (a view).
-    kernel(q, k_cache.squeeze(2), v_cache.squeeze(2), logical_indices,
-           block_table, token_to_req, positions[:num_rows], dense_below, out)
+    kernel(
+        q,
+        k_cache.squeeze(2),
+        v_cache.squeeze(2),
+        logical_indices,
+        block_table,
+        token_to_req,
+        positions[:num_rows],
+        dense_below,
+        out,
+    )
     return out
 
 
@@ -634,10 +648,17 @@ def _split_scratch(num_rows, head_dim, device, num_splits):
     buf = _SCRATCH.get(key)
     if buf is None:
         buf = (
-            torch.empty(num_splits, num_rows, _BLOCK_M, head_dim,
-                        device=device, dtype=torch.float32),
-            torch.empty(num_splits, num_rows, _BLOCK_M,
-                        device=device, dtype=torch.float32),
+            torch.empty(
+                num_splits,
+                num_rows,
+                _BLOCK_M,
+                head_dim,
+                device=device,
+                dtype=torch.float32,
+            ),
+            torch.empty(
+                num_splits, num_rows, _BLOCK_M, device=device, dtype=torch.float32
+            ),
         )
         _SCRATCH[key] = buf
     return buf
@@ -666,8 +687,16 @@ def qsa_decode_attention(
     )
     partial_o, partial_l = _split_scratch(num_rows, head_dim, q.device, num_splits)
     split = _qsa_decode_kernel(*shape_args, num_splits)
-    split(q, k_cache.squeeze(2), v_cache.squeeze(2), logical_indices,
-          block_table, token_to_req, partial_o, partial_l)
+    split(
+        q,
+        k_cache.squeeze(2),
+        v_cache.squeeze(2),
+        logical_indices,
+        block_table,
+        token_to_req,
+        partial_o,
+        partial_l,
+    )
     merge = _qsa_merge_kernel(
         group_size, head_dim, num_splits, tilelang_dtype(q.dtype), _THREADS
     )
@@ -694,12 +723,24 @@ def prewarm_qsa_kernels(
     """
     _compile_all(
         (
-            group_size, head_dim, topk, _PREFILL_BLOCK_N, page_size,
-            tilelang_dtype(dtype), _PREFILL_THREADS, _PREFILL_DUP,
+            group_size,
+            head_dim,
+            topk,
+            _PREFILL_BLOCK_N,
+            page_size,
+            tilelang_dtype(dtype),
+            _PREFILL_THREADS,
+            _PREFILL_DUP,
         ),
         (
-            group_size, head_dim, topk, _BLOCK_N, page_size,
-            tilelang_dtype(dtype), _THREADS, _DUP,
+            group_size,
+            head_dim,
+            topk,
+            _BLOCK_N,
+            page_size,
+            tilelang_dtype(dtype),
+            _THREADS,
+            _DUP,
         ),
         num_splits,
     )
