@@ -6,6 +6,9 @@ import torch
 
 _QWEN_MIN_P_VOCABS = (151936, 248320)
 _QWEN_MIN_P_MAX_BATCH = 64
+_QWEN_TOP_K_RADIX_K = 50
+_QWEN_TOP_K_RADIX_MAX_BATCH = 256
+_QWEN_TOP_K_RADIX_VOCABS = (151936, 248320)
 
 try:
     import vllm_musa._C  # noqa: F401
@@ -299,8 +302,8 @@ def _top_k_renorm_probs_internal(
         and _is_validated_musa_device(probs.device)
         and probs.ndim == 2
         and probs.is_contiguous()
-        and 0 < probs.shape[0] <= 64
-        and probs.shape[1] in (151936, 248320)
+        and 0 < probs.shape[0] <= _QWEN_TOP_K_RADIX_MAX_BATCH
+        and probs.shape[1] in _QWEN_TOP_K_RADIX_VOCABS
     )
     if use_rubymine:
         torch.ops._C_musa_ops.musa_rubymine_top_k_renorm_probs.default(
@@ -318,6 +321,38 @@ def top_k_renorm_probs(
     top_k: Union[torch.Tensor, int],
 ) -> torch.Tensor:
     return _top_k_renorm_probs_internal(probs, *_to_tensor_scalar_tuple(top_k))
+
+
+def _can_mask_logits_with_radix_top_k(logits: torch.Tensor, top_k: int) -> bool:
+    """Whether the radix top-k renorm kernel can define the logits mask."""
+    return (
+        top_k == _QWEN_TOP_K_RADIX_K
+        and logits.device.type == "musa"
+        and _is_validated_musa_device(logits.device)
+        and logits.ndim == 2
+        and logits.is_contiguous()
+        and 0 < logits.shape[0] <= _QWEN_TOP_K_RADIX_MAX_BATCH
+        and logits.shape[1] in _QWEN_TOP_K_RADIX_VOCABS
+    )
+
+
+def top_k_mask_logits_radix(logits: torch.Tensor, top_k: int) -> Optional[torch.Tensor]:
+    """Mask ``logits`` to its uniform top-k set without ``torch.topk``.
+
+    The radix renormalization resolves the k-th largest probability, so the same
+    threshold is recovered without a sort.  Values tied with the k-th largest
+    stay eligible, matching ``apply_top_k_pytorch``.  The mask is applied in
+    place, like ``masked_fill_`` in the pytorch fallback.  Returns ``None`` when
+    the radix specialization does not apply, so callers can fall back.
+    """
+    if not _can_mask_logits_with_radix_top_k(logits, top_k):
+        return None
+    probs = logits.softmax(dim=-1, dtype=torch.float32)
+    renorm_probs = _top_k_renorm_probs_internal(probs, None, top_k)
+    threshold = torch.where(
+        renorm_probs > 0, probs, float("inf")
+    ).amin(dim=-1, keepdim=True)
+    return logits.masked_fill_(probs < threshold, float("-inf"))
 
 
 def _top_p_renorm_probs_internal(

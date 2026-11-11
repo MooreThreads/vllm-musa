@@ -287,6 +287,12 @@ def _apply_top_k_top_p(
         if k <= 0 or k >= logits.shape[1]:
             return logits
         if p is None:
+            # k=50 on a validated Qwen vocab resolves its own threshold with a
+            # radix select, which is several times cheaper than torch.topk on
+            # MUSA. Fall back when the specialization does not apply.
+            radix_masked = _ops.top_k_mask_logits_radix(logits, k)
+            if radix_masked is not None:
+                return radix_masked
             threshold = logits.topk(k, dim=1).values[:, -1:]
             return logits.masked_fill_(logits < threshold, -float("inf"))
         return _apply_top_k_top_p_musa_uniform_k_prefilter(logits, k, p)
