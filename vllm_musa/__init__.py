@@ -142,8 +142,8 @@ def _register_patches() -> None:
 
 def _register_ops() -> None:
     """Register OOT custom ops (activation, layernorm, fused_moe, etc.)."""
-    import vllm_musa.model_executor  # noqa: F401
     import vllm_musa.jit_kernel.csrc.moe as _moe  # noqa: F401
+    import vllm_musa.model_executor  # noqa: F401
 
     from .custom_op_modules import preload_custom_op_modules
 
@@ -152,10 +152,24 @@ def _register_ops() -> None:
 
 
 def _register_modules() -> None:
-    """Register distributed connectors, utils, and v1 attention backends."""
+    """Register connectors, utils, v1 backends, and the Qwen runner hooks."""
     import vllm_musa.distributed  # noqa: F401
     import vllm_musa.utils  # noqa: F401
     import vllm_musa.v1  # noqa: F401
+
+    # Installed by the general plugin rather than on import: vLLM imports
+    # vllm_musa.v1 from inside a partially initialized model_runner.
+    from vllm_musa.v1.sample.qwen_sample_input_views import (
+        install_qwen_sample_input_views,
+    )
+    from vllm_musa.v1.worker import (
+        qwen_fused_next_input_ids,
+        qwen_identity_logits_view,
+    )
+
+    install_qwen_sample_input_views()
+    qwen_fused_next_input_ids.install_hooks()
+    qwen_identity_logits_view.install_hooks()
 
 
 def register_custom_ops() -> None:
