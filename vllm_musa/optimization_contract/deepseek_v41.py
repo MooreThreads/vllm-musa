@@ -73,7 +73,7 @@ def _matches_w4afp8_shape(model: ModelSignature) -> bool:
         and model.num_experts_per_tok == 6
         and model.num_shared_experts == 1
         and model.moe_intermediate_size == 2304
-        and model.expert_dtype == "int4"
+        and model.expert_dtype in ("int4", "fp4")
         and model.hidden_act == "silu"
         and model.swiglu_limit == 10.0
         and model.quant_block_shape == (32, 32)
