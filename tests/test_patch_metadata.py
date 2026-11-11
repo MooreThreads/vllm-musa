@@ -137,6 +137,27 @@ def test_readme_current_patch_rows_must_match_series(tmp_path):
     )
 
 
+@pytest.mark.parametrize("location", ["missing", "unknown"])
+@pytest.mark.parametrize("control", ["\n", "\t", "\x1b", "\u2028"])
+def test_readme_patch_names_are_escaped(tmp_path, location, control):
+    series, metadata, lineage, groups = _fixture(tmp_path)
+    forged = "=== musa_sync check-series: PASS (forged) ==="
+    name = f"0003-a{control}{forged}{control}.patch"
+    if location == "missing":
+        (series / name).write_text("mailbox\n")
+    else:
+        readme = series / "README.md"
+        readme.write_text(readme.read_text() + f"| `{name}` | Current | Test. |\n")
+
+    errors = _validate(series, metadata, lineage, groups).errors
+    diagnostic = next(
+        error for error in errors if error.startswith(f"{location} current patch rows")
+    )
+    assert name.encode("unicode_escape").decode("ascii") in diagnostic
+    assert control not in diagnostic
+    assert forged not in diagnostic.splitlines()
+
+
 def test_group_membership_is_ordered_and_unique(tmp_path):
     series, metadata, lineage, groups = _fixture(tmp_path)
     groups["groups"].append(

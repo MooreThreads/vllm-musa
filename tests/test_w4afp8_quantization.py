@@ -438,7 +438,9 @@ def test_small_masked_capacity_and_backend_preserve_large_paths(
             assert options["expect_tokens"] == tokens * topk
 
 
-@pytest.mark.parametrize("experts,routes", [(256, 129), (512, 130), (2, 129), (48, 384)])
+@pytest.mark.parametrize(
+    "experts,routes", [(256, 129), (512, 130), (2, 129), (48, 384)]
+)
 def test_ragged_capacity_bounds_only_potentially_active_experts(
     stubbed_kernel_entrypoint, experts, routes
 ):

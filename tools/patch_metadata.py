@@ -119,11 +119,19 @@ def validate(series: Path, metadata: Path) -> Result:
     extra_current_rows = sorted(set(current_rows) - current_patch_names)
     if missing_current_rows:
         errors.append(
-            "missing current patch rows from README: " + ", ".join(missing_current_rows)
+            "missing current patch rows from README: "
+            + ", ".join(
+                name.encode("unicode_escape").decode("ascii")
+                for name in missing_current_rows
+            )
         )
     if extra_current_rows:
         errors.append(
-            "unknown current patch rows in README: " + ", ".join(extra_current_rows)
+            "unknown current patch rows in README: "
+            + ", ".join(
+                name.encode("unicode_escape").decode("ascii")
+                for name in extra_current_rows
+            )
         )
 
     lineage_path = metadata / "legacy-lineage.json"
