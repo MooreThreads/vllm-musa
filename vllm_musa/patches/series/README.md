@@ -23,6 +23,12 @@ the applicable `metadata/patch-groups.json` ownership. Changing a patch's
 intent also requires refreshing its row description and the required checks.
 `tools/patch_metadata.py` validates the table and metadata coverage together.
 
+Do not edit `.patch` files directly. Edit the corresponding commits in the
+applied vLLM checkout, then export them with `musa_sync regen`. Preserve the
+generated space-only context lines; whitespace fixers must not rewrite patch
+bodies. Successful replay does not prove canonical generation: also run
+`check-series --round-trip` against the commit-bearing checkout.
+
 `.github/workflows/patch-series.yml` runs Python 3.10 offline unit/source
 contracts, canonical format/metadata checks, strict build-path and `git am -3`
 replay plus `verify` on a pristine pinned checkout, and regeneration round-trip
@@ -321,7 +327,7 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0200-MUSA-route-Mamba2-SSD-to-FlashInfer.patch` | v0.32 new | route the Mamba2 SSD/`--mamba-backend flashinfer` prefill to MATE's `flashinfer.mamba` |
 | `0201-MUSA-initialize-the-Mamba2-profiling-output.patch` | v0.32 new | initialize the supplied Mamba2 output during the profiling run |
 | `0202-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch` | v0.28 0194 follow-up | DeepSeek-OCR defaults to Triton on MUSA only when no encoder backend is configured. All explicit backend choices and non-MUSA behavior are preserved. |
-| `0203-MUSA-enable-DeepSeek-V41-packed-W4AFP8-experts.patch` | v0.32 W4AFP8 adaptation | register the MUSA `w4afp8` quantization method and resolve DeepSeek-V4.1 expert weights as packed INT4 |
+| `0203-MUSA-enable-DeepSeek-V41-packed-W4AFP8-experts.patch` | v0.32 W4AFP8 adaptation | register MUSA `w4afp8` in `get_quantization_config` and return packed INT4 from DeepSeek-V4.1 expert dtype resolution; export from the applied vLLM commits with `musa_sync regen` |
 | `0204-MUSA-overlap-validated-W4AFP8-shared-experts.patch` | v0.32 W4AFP8 optimization | enable contract-gated MUSA shared-expert overlap and synchronize events with the MUSA current stream |
 
 Currently **204 patches** and **0 upstream entries** in `upstream/`.
