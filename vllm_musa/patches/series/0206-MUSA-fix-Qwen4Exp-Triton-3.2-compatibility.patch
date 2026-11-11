@@ -18,9 +18,9 @@ Three Triton 3.2 differences break the Qwen4Exp kernels on MUSA:
 The indexer also dispatched to vLLM's CUDA-only persistent_topk, so this
 selects blocks with torch.topk until the MUSA radix-select kernel lands.
 ---
- vllm/models/qwen4_exp/common/ngram_embedding.py |   7 +-
- vllm/models/qwen4_exp/common/qsa_cache.py       | 136 ++++++++++++++----------
- vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py |  24 ++++-
+ .../qwen4_exp/common/ngram_embedding.py       |   7 +-
+ vllm/models/qwen4_exp/common/qsa_cache.py     | 136 +++++++++++-------
+ .../qwen4_exp/nvidia/ops/qsa_indexer.py       |  24 +++-
  3 files changed, 108 insertions(+), 59 deletions(-)
 
 diff --git a/vllm/models/qwen4_exp/common/ngram_embedding.py b/vllm/models/qwen4_exp/common/ngram_embedding.py

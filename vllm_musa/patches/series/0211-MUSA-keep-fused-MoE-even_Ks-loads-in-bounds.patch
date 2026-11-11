@@ -12,7 +12,7 @@ Mask those loads with the scalar K-iteration bound, which is true inside the
 loop and false for the prefetches past it. Single-stage configs keep the
 unmasked loads.
 ---
- .../vllm/model_executor/layers/fused_moe/fused_moe.py  | 18 ++++++++++++++++--
+ .../layers/fused_moe/fused_moe.py              | 18 ++++++++++++++++--
  1 file changed, 16 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py

@@ -29,7 +29,7 @@ The block-table width and the page stride are read off the tensors, so the
 packed v0.32 layout that stores K and V for one token side by side works
 without a cache-layout change.
 ---
- vllm/models/qwen4_exp/nvidia/qsa.py | 152 ++++++++++++++++++++++-
+ vllm/models/qwen4_exp/nvidia/qsa.py | 152 +++++++++++++++++++++++++++-
  1 file changed, 149 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/models/qwen4_exp/nvidia/qsa.py b/vllm/models/qwen4_exp/nvidia/qsa.py
@@ -37,13 +37,13 @@ index bde1366b02..510b848698 100644
 --- a/vllm/models/qwen4_exp/nvidia/qsa.py
 +++ b/vllm/models/qwen4_exp/nvidia/qsa.py
 @@ -4,6 +4,7 @@
-
+ 
  from __future__ import annotations
-
+ 
 +import os
  from collections.abc import Callable, Iterable
  from typing import ClassVar, cast
-
+ 
 @@ -16,6 +17,7 @@ from vllm.config import VllmConfig
  from vllm.config.cache import CacheConfig, CacheDType
  from vllm.distributed import get_tensor_model_parallel_world_size
@@ -55,7 +55,7 @@ index bde1366b02..510b848698 100644
 @@ -76,6 +78,30 @@ from ..common.qsa_cache import QSAForwardMetadata
  from . import model
  from .indexer_qsa import QSAIndexer
-
+ 
 +logger = init_logger(__name__)
 +
 +
@@ -80,13 +80,13 @@ index bde1366b02..510b848698 100644
 +        return False
 +    return paged.stride(2) == 1
 +
-
+ 
  class Qwen4ExpQSAQKVIndexerLinear(MergedColumnParallelLinear):
      """Pack sharded Q/gate, K, V and replicated indexer Q/K in one GEMM."""
 @@ -274,6 +300,36 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
              )
          self.supports_quant_query_input = False
-
+ 
 +    def _musa_tilelang_ok(
 +        self,
 +        query: torch.Tensor,
@@ -123,7 +123,7 @@ index bde1366b02..510b848698 100644
 @@ -326,20 +382,81 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
                  "Qwen4Exp QSA requires BF16 Q and BF16 or FP8-e4m3 K/V"
              )
-
+ 
 +        query = query[:num_tokens]
 +        out = output[:num_tokens]
 +        gate = output_gate[:num_tokens].view_as(query)
@@ -186,7 +186,7 @@ index bde1366b02..510b848698 100644
 +            return output
 +
          from .ops.qsa import qsa_sparse_paged_attention
-
+ 
          qsa_sparse_paged_attention(
 -            query[:num_tokens],
 +            query,
@@ -204,11 +204,11 @@ index bde1366b02..510b848698 100644
 +            output_gate=gate,
          )
          return output
-
+ 
 @@ -545,6 +662,35 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
              raise ValueError(f"Duplicate layer name: {self.layer_name}")
          static_context[self.layer_name] = self
-
+ 
 +        self._musa_prewarm_qsa_tilelang(vllm_config)
 +
 +    def _musa_prewarm_qsa_tilelang(self, vllm_config: VllmConfig) -> None:

@@ -14,7 +14,7 @@ dispatch flags unset and aborted the first forward pass. Initialize them
 disabled, and unpack the projection's KV-cache dependency, since QSA keeps the
 eager QK-norm/RoPE path.
 ---
- vllm/models/qwen4_exp/nvidia/qsa.py | 36 ++++++++++++++++++++++++++++ --------
+ vllm/models/qwen4_exp/nvidia/qsa.py | 36 ++++++++++++++++++++++-------
  1 file changed, 28 insertions(+), 8 deletions(-)
 
 diff --git a/vllm/models/qwen4_exp/nvidia/qsa.py b/vllm/models/qwen4_exp/nvidia/qsa.py
