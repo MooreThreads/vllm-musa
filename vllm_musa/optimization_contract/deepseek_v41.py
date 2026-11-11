@@ -34,10 +34,9 @@ def _has_complete_identity(model: ModelSignature) -> bool:
     )
 
 
-def _matches_flash_fp8_shape(model: ModelSignature) -> bool:
+def _matches_flash_shape(model: ModelSignature) -> bool:
     return (
         model.dtype == "bfloat16"
-        and model.quantization in _DEEPSEEK_V41_QUANTIZATION
         and model.hidden_size == 5120
         and model.num_hidden_layers == 40
         and model.num_attention_heads == 64
@@ -48,7 +47,6 @@ def _matches_flash_fp8_shape(model: ModelSignature) -> bool:
         and model.num_experts_per_tok == 6
         and model.num_shared_experts == 1
         and model.moe_intermediate_size == 2304
-        and model.expert_dtype == "fp8"
         and model.hidden_act == "silu"
         and model.swiglu_limit == 10.0
         and model.quant_block_shape == (32, 32)
@@ -59,28 +57,19 @@ def _matches_flash_fp8_shape(model: ModelSignature) -> bool:
     )
 
 
+def _matches_flash_fp8_shape(model: ModelSignature) -> bool:
+    return (
+        _matches_flash_shape(model)
+        and model.quantization in _DEEPSEEK_V41_QUANTIZATION
+        and model.expert_dtype == "fp8"
+    )
+
+
 def _matches_w4afp8_shape(model: ModelSignature) -> bool:
     return (
-        model.dtype == "bfloat16"
+        _matches_flash_shape(model)
         and model.quantization == _DEEPSEEK_V41_W4AFP8_QUANTIZATION
-        and model.hidden_size == 5120
-        and model.num_hidden_layers == 40
-        and model.num_attention_heads == 64
-        and model.num_key_value_heads == 1
-        and model.head_dim == 512
-        and model.vocab_size == 129280
-        and model.num_experts == 384
-        and model.num_experts_per_tok == 6
-        and model.num_shared_experts == 1
-        and model.moe_intermediate_size == 2304
         and model.expert_dtype in ("int4", "fp4")
-        and model.hidden_act == "silu"
-        and model.swiglu_limit == 10.0
-        and model.quant_block_shape == (32, 32)
-        and model.has_routed_experts is True
-        and model.uses_mla is True
-        and model.index_topk == 512
-        and model.is_hybrid is False
     )
 
 

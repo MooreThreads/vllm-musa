@@ -86,12 +86,12 @@ def _v41_flash_config(
     )
 
 
-def _v41_w4afp8_config(**overrides):
-    config = _v41_flash_config(**overrides)
+def _v41_w4afp8_config(*, expert_dtype="fp4", **overrides):
+    config = _v41_flash_config(expert_dtype=expert_dtype, **overrides)
     text_config = config.model_config.hf_text_config
-    text_config.expert_dtype = "int4"
     text_config.quantization_config = {
         "quant_method": "w4afp8",
+        "expert_dtype": expert_dtype,
         "weight_block_size": [32, 32],
         "moe_group_size": 128,
     }
@@ -110,8 +110,11 @@ def test_v41_flash_tp8_prefers_the_shared_expert_fold() -> None:
     assert contract.preferred_features == {FOLD}
 
 
-def test_v41_w4afp8_ep_prefers_external_shared_expert_overlap() -> None:
-    contract = resolve_optimization_contract(_v41_w4afp8_config())
+@pytest.mark.parametrize("expert_dtype", ["int4", "fp4"])
+def test_v41_w4afp8_ep_prefers_external_shared_expert_overlap(expert_dtype) -> None:
+    contract = resolve_optimization_contract(
+        _v41_w4afp8_config(expert_dtype=expert_dtype)
+    )
 
     assert contract.model.family is ModelFamily.DEEPSEEK_V41
     assert contract.supported_features == {W4AFP8_OVERLAP}
@@ -119,6 +122,7 @@ def test_v41_w4afp8_ep_prefers_external_shared_expert_overlap() -> None:
     assert not contract.prefers(FOLD)
 
 
+@pytest.mark.parametrize("expert_dtype", ["int4", "fp4"])
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -130,14 +134,46 @@ def test_v41_w4afp8_ep_prefers_external_shared_expert_overlap() -> None:
         ("enable_dbo", True),
     ],
 )
-def test_v41_w4afp8_overlap_fails_closed_on_unvalidated_execution(field, value) -> None:
-    config = _v41_w4afp8_config()
+def test_v41_w4afp8_overlap_fails_closed_on_unvalidated_execution(
+    expert_dtype, field, value
+) -> None:
+    config = _v41_w4afp8_config(expert_dtype=expert_dtype)
     setattr(config.parallel_config, field, value)
 
     contract = resolve_optimization_contract(config)
 
     assert contract.supports(W4AFP8_OVERLAP)
     assert not contract.prefers(W4AFP8_OVERLAP)
+
+
+@pytest.mark.parametrize("expert_dtype", ["fp8", "int8", None])
+def test_v41_w4afp8_rejects_other_expert_dtypes(expert_dtype) -> None:
+    contract = resolve_optimization_contract(
+        _v41_w4afp8_config(expert_dtype=expert_dtype)
+    )
+
+    assert not contract.supports(W4AFP8_OVERLAP)
+    assert not contract.supports(FOLD)
+
+
+@pytest.mark.parametrize("quantization", ["fp8", "deepseek_v4_fp8", "w4afp8"])
+@pytest.mark.parametrize("expert_dtype", ["fp8", "int4", "fp4"])
+def test_v41_quantization_and_expert_dtype_must_match(
+    quantization, expert_dtype
+) -> None:
+    config = _v41_w4afp8_config(expert_dtype=expert_dtype)
+    config.model_config.quantization = quantization
+    config.model_config.hf_text_config.quantization_config["quant_method"] = (
+        quantization
+    )
+    contract = resolve_optimization_contract(config)
+
+    assert contract.supports(FOLD) == (
+        quantization in ("fp8", "deepseek_v4_fp8") and expert_dtype == "fp8"
+    )
+    assert contract.supports(W4AFP8_OVERLAP) == (
+        quantization == "w4afp8" and expert_dtype in ("int4", "fp4")
+    )
 
 
 def test_v41_dspark_target_and_draft_prefer_the_fold() -> None:
