@@ -63,7 +63,8 @@ legacy group. Old `0137` (Mooncake P/D dedicated Mamba pools) and `0192`
 their v0.32 behavior still requires separate review. The historical observations
 below describe the earlier baseline, not a measured failure of these follow-ups.
 The DeepSeek-V4.1 W4AFP8 adaptation and overlap follow-ups are carried as
-`0203`–`0204` after this baseline. Hardware validation remains required.
+`0203`–`0204` after this baseline, and the Qwen4Exp QSA migration as
+`0205`–`0211`. Hardware validation remains required.
 
 A patch may update several files when they form one atomic feature. The grouped
 entries are intentionally multi-file: `0037` contains
@@ -329,8 +330,15 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0202-MUSA-default-DeepSeek-OCR-vision-attention-to-Triton.patch` | v0.28 0194 follow-up | DeepSeek-OCR defaults to Triton on MUSA only when no encoder backend is configured. All explicit backend choices and non-MUSA behavior are preserved. |
 | `0203-MUSA-enable-DeepSeek-V41-packed-W4AFP8-experts.patch` | v0.32 W4AFP8 adaptation | register MUSA `w4afp8` in `get_quantization_config` and return packed INT4 from DeepSeek-V4.1 expert dtype resolution; export from the applied vLLM commits with `musa_sync regen` |
 | `0204-MUSA-overlap-validated-W4AFP8-shared-experts.patch` | v0.32 W4AFP8 optimization | enable contract-gated MUSA shared-expert overlap and synchronize events with the MUSA current stream |
+| `0205-MUSA-route-Qwen4Exp-QSA-through-the-MUSA-backend.patch` | v0.32 new/updated | route Qwen4Exp QSA through the MUSA backend |
+| `0206-MUSA-fix-Qwen4Exp-Triton-3.2-compatibility.patch` | v0.32 new/updated | fix Qwen4Exp Triton 3.2 compatibility (PLE pointers, QSA metadata kernel, indexer block sizes, top-k fallback) |
+| `0207-MUSA-pin-QSA-sparse-attention-to-four-warps.patch` | v0.32 new/updated | pin QSA sparse attention to four warps |
+| `0208-MUSA-bound-the-QSA-cached-rotary-positions.patch` | v0.32 new/updated | bound the QSA cached rotary positions |
+| `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
+| `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
+| `0211-MUSA-keep-fused-MoE-even_Ks-loads-in-bounds.patch` | v0.32 new/updated | mask the fused MoE even_Ks A/B loads under the MUSA pipeliner |
 
-Currently **204 patches** and **0 upstream entries** in `upstream/`.
+Currently **211 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and

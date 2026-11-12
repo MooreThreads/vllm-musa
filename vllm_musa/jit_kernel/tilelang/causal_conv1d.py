@@ -63,6 +63,11 @@ def _should_use_width4_prefill_split(
 
 
 _CAUSAL_CONV1D_PASS_CONFIGS = dict(MUSA_COMMON_PASS_CONFIGS)
+# MUSA: the conv-state cache is one view into a multi-GiB paged pool, so a
+# slot index times its stride leaves the 2 GiB a signed 32-bit byte offset
+# can reach. Every kernel here keeps state_base in int64; the remaining
+# indices stay 32-bit. Widening the pass-level index bitwidth is not enough,
+# because the offset is bound to a local of the declared type first.
 for _key, _value in (
     ("TL_ENABLE_LOWER_LDGSTG", True),
     ("TL_ENABLE_LOWER_LDGSTG_PREDICATED", True),

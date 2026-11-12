@@ -1,0 +1,263 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 4 Nov 2026 10:40:00 +0000
+Subject: [PATCH] MUSA: route QSA prefill to TileLang
+
+Route QSA prefill through the TileLang sparse paged GQA kernels that the
+previous commit brought over, and apply the output gate the Triton epilogue
+uses after whichever attention path ran.
+
+The kernels tile the grouped-query axis, so they are only selected when the
+step fits one tile: 16 rows for prefill, 8 for split-k decode. The guard also
+requires BF16 and a single KV head per rank. Prefill is unconditional, as on
+the v0.28 branch; decode stays behind VLLM_MUSA_QSA_TILELANG_DECODE because
+its split-k scratch and merge kernel have not been measured on v0.32 yet.
+
+Prefill sends the requests whose sequence fits one selection to
+FlashAttention and keeps the sparse kernel for the rest, which is what the
+earlier branch settled on: a dense request costs one varlen call instead of a
+selection walk over its whole prefix. The split needs the padded v0.32
+metadata, so the dense layout also zeroes the key count of the padded
+requests whose sequence length is stale.
+
+Build the kernels and allocate the split-k scratch in the layer constructor,
+before graph capture. The decode path is first reached while the decode
+graphs are being captured, so a lazy build there would be recorded into the
+graph memory pool and alias another captured size.
+
+The block-table width and the page stride are read off the tensors, so the
+packed v0.32 layout that stores K and V for one token side by side works
+without a cache-layout change.
+---
+ vllm/models/qwen4_exp/nvidia/qsa.py | 172 +++++++++++++++++++++++++++-
+ 1 file changed, 169 insertions(+), 3 deletions(-)
+
+diff --git a/vllm/models/qwen4_exp/nvidia/qsa.py b/vllm/models/qwen4_exp/nvidia/qsa.py
+index bde1366b02..fb80cd0cb4 100644
+--- a/vllm/models/qwen4_exp/nvidia/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+@@ -4,6 +4,7 @@
+ 
+ from __future__ import annotations
+ 
++import os
+ from collections.abc import Callable, Iterable
+ from typing import ClassVar, cast
+ 
+@@ -16,6 +17,7 @@ from vllm.config import VllmConfig
+ from vllm.config.cache import CacheConfig, CacheDType
+ from vllm.distributed import get_tensor_model_parallel_world_size
+ from vllm.forward_context import get_forward_context
++from vllm.logger import init_logger
+ from vllm.model_executor.layers.attention.attention import (
+     set_default_quant_scales,
+ )
+@@ -76,6 +78,30 @@ from ..common.qsa_cache import QSAForwardMetadata
+ from . import model
+ from .indexer_qsa import QSAIndexer
+ 
++logger = init_logger(__name__)
++
++
++def _apply_qsa_output_gate(output: torch.Tensor, gate: torch.Tensor) -> None:
++    """Multiply the attention output by ``sigmoid(gate)`` like the Triton path.
++
++    The Triton epilogue rounds the attention output to its storage dtype and
++    then gates in FP32, so the same order is kept here.
++    """
++    output.mul_(torch.sigmoid(gate.float()))
++
++
++def _is_dense_page_cache(cache: torch.Tensor) -> bool:
++    """Whether a paged K/V cache has a dense innermost dim.
++
++    The TileLang kernels read the block and page strides off the tensor, so a
++    slab that stores K and V for one token side by side works; only the last
++    dim has to be contiguous for the vector gather.
++    """
++    paged = cache.squeeze(2)
++    if paged.ndim != 3:
++        return False
++    return paged.stride(2) == 1
++
+ 
+ class Qwen4ExpQSAQKVIndexerLinear(MergedColumnParallelLinear):
+     """Pack sharded Q/gate, K, V and replicated indexer Q/K in one GEMM."""
+@@ -274,6 +300,36 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
+             )
+         self.supports_quant_query_input = False
+ 
++    def _musa_tilelang_ok(
++        self,
++        query: torch.Tensor,
++        key_cache: torch.Tensor,
++        value_cache: torch.Tensor,
++        use_prefill_config: bool,
++    ) -> bool:
++        """Whether the TileLang sparse kernels can take this step.
++
++        The kernels tile the grouped-query axis, so the number of query heads
++        per KV head has to fit one tile: 16 rows for prefill, 8 for split-k
++        decode. Every layout detail is read off the tensors.
++        """
++        if not current_platform.is_musa():
++            return False
++        if query.dtype is not torch.bfloat16:
++            return False
++        if key_cache.dtype is not torch.bfloat16:
++            return False
++        if value_cache.dtype is not torch.bfloat16:
++            return False
++        if key_cache.shape[2] != 1 or value_cache.shape[2] != 1:
++            return False
++        group_size = query.shape[1] // key_cache.shape[2]
++        if group_size > (16 if use_prefill_config else 8):
++            return False
++        if self.head_size % 8:
++            return False
++        return _is_dense_page_cache(key_cache) and _is_dense_page_cache(value_cache)
++
+     def forward_qsa(
+         self,
+         layer: torch.nn.Module,
+@@ -326,20 +382,93 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
+                 "Qwen4Exp QSA requires BF16 Q and BF16 or FP8-e4m3 K/V"
+             )
+ 
++        query = query[:num_tokens]
++        out = output[:num_tokens]
++        gate = output_gate[:num_tokens].view_as(query)
++        tilelang_ready = self._musa_tilelang_ok(
++            query, key_cache, value_cache, use_prefill_config
++        )
++        if use_prefill_config:
++            if tilelang_ready:
++                from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
++                    qsa_dense_layout,
++                    qsa_prefill_attention_v2,
++                )
++
++                logger.info_once(
++                    "QSA prefill routed to the TileLang kernel: q=%s cache=%s",
++                    tuple(query.shape),
++                    tuple(key_cache.shape),
++                )
++                # The dense-prefix layout belongs to the step, and the
++                # metadata is rebuilt for every step, so cache it there: every
++                # QSA layer of the model would otherwise rebuild it.
++                width = logical_indices.shape[1] - 1
++                cached = getattr(attn_metadata, "qsa_dense_layout", None)
++                if cached is None or cached[:2] != (width, num_tokens):
++                    cached = (
++                        width,
++                        num_tokens,
++                        qsa_dense_layout(
++                            attn_metadata.query_start_loc,
++                            attn_metadata.seq_lens,
++                            token_to_req,
++                            num_tokens,
++                            width,
++                        ),
++                    )
++                    attn_metadata.qsa_dense_layout = cached
++                dense_layout = cached[2]
++                qsa_prefill_attention_v2(
++                    query,
++                    key_cache,
++                    value_cache,
++                    logical_indices,
++                    attn_metadata.block_table,
++                    token_to_req,
++                    out,
++                    query_start_loc=attn_metadata.query_start_loc,
++                    dense_layout=dense_layout,
++                    max_query_len=attn_metadata.max_query_len,
++                    max_seq_len=attn_metadata.max_seq_len,
++                )
++                _apply_qsa_output_gate(out, gate)
++                return output
++        elif (
++            tilelang_ready
++            and os.environ.get("VLLM_MUSA_QSA_TILELANG_DECODE") == "1"
++        ):
++            from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
++                qsa_decode_attention,
++            )
++
++            logger.info_once("QSA decode routed to the TileLang split-k kernel")
++            qsa_decode_attention(
++                query,
++                key_cache,
++                value_cache,
++                logical_indices,
++                attn_metadata.block_table,
++                token_to_req,
++                out,
++            )
++            _apply_qsa_output_gate(out, gate)
++            return output
++
+         from .ops.qsa import qsa_sparse_paged_attention
+ 
+         qsa_sparse_paged_attention(
+-            query[:num_tokens],
++            query,
+             key_cache,
+             value_cache,
+             logical_indices,
+             attn_metadata.block_table,
+             token_to_req,
+             use_prefill_config,
+-            output[:num_tokens],
++            out,
+             k_scale=k_scale,
+             v_scale=v_scale,
+-            output_gate=output_gate[:num_tokens],
++            output_gate=gate,
+         )
+         return output
+ 
+@@ -545,6 +674,43 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
+             raise ValueError(f"Duplicate layer name: {self.layer_name}")
+         static_context[self.layer_name] = self
+ 
++        self._musa_prewarm_qsa_tilelang(vllm_config)
++
++    def _musa_prewarm_qsa_tilelang(self, vllm_config: VllmConfig) -> None:
++        """Build the TileLang kernels and their scratch before graph capture.
++
++        The decode path is first reached while the decode graphs are being
++        captured, so a lazy build or allocation there would land in the graph
++        memory pool and alias another captured size.
++        """
++        if not current_platform.is_musa():
++            return
++        try:
++            from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
++                prewarm_qsa_kernels,
++            )
++
++            # Only the sizes capture replays need buffers warmed outside the
++            # graph pool; an eager decode step allocates its own row count on
++            # demand. Decode takes the TileLang path only when explicitly
++            # enabled, so otherwise reserve no scratch at all (a captured size
++            # costs ~64 KiB per row at head_dim=128).
++            decode_rows: tuple[int, ...] = ()
++            if os.environ.get("VLLM_MUSA_QSA_TILELANG_DECODE") == "1":
++                decode_rows = tuple(
++                    sorted(vllm_config.compilation_config.cudagraph_capture_sizes or ())
++                )
++            prewarm_qsa_kernels(
++                self.num_heads // self.num_kv_heads,
++                self.head_dim,
++                self.indexer.packed_output_width - 1,
++                vllm_config.cache_config.block_size,
++                self.kv_cache_torch_dtype,
++                decode_rows=decode_rows,
++            )
++        except Exception as error:  # a prewarm failure must not break serving
++            logger.warning_once("QSA TileLang prewarm skipped: %s", error)
++
+     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+         mapper = None
+         if self.fuse_indexer_projection:

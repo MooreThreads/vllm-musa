@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 4 Nov 2026 11:20:00 +0800
+Subject: [PATCH] MUSA: bound the QSA cached rotary positions
+
+The QSA prepare kernel takes the first pooled group's MRoPE coordinates
+from the raw-state ring when that group predates the current chunk.
+Recycled side-cache pages can still hold a stale tail, and those values
+were used as rotary-cache indices unchecked, so a long run could index
+past `cos_sin_cache` or wrap to a negative offset.
+
+Clamp the cached coordinates to `[0, cos_sin_cache.shape[0])` and fall
+back to the pooled group's first position, as the 0.28 enablement did.
+---
+ vllm/models/qwen4_exp/nvidia/ops/qsa_prepare.py | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/vllm/models/qwen4_exp/nvidia/ops/qsa_prepare.py b/vllm/models/qwen4_exp/nvidia/ops/qsa_prepare.py
+index a26b699657..789acce501 100644
+--- a/vllm/models/qwen4_exp/nvidia/ops/qsa_prepare.py
++++ b/vllm/models/qwen4_exp/nvidia/ops/qsa_prepare.py
+@@ -153,6 +153,7 @@ def _qsa_prepare_kernel(
+     CACHE_HAS_ROPE_POS: tl.constexpr,
+     MROPE_H: tl.constexpr,
+     MROPE_W: tl.constexpr,
++    MAX_ROPE_POS: tl.constexpr,
+     main_qkv_ptr,
+     main_qkv_stride_token,
+     main_q_norm_weight_ptr,
+@@ -416,6 +417,17 @@ def _qsa_prepare_kernel(
+                 pos_t = tl.where(first_in_chunk, first_pos_t.to(tl.int64), cached_pos_t)
+                 pos_h = tl.where(first_in_chunk, first_pos_h.to(tl.int64), cached_pos_h)
+                 pos_w = tl.where(first_in_chunk, first_pos_w.to(tl.int64), cached_pos_w)
++                # Recycled side-cache pages can carry stale MRoPE tails. Keep
++                # those values from becoming unchecked rotary-cache addresses.
++                pos_t = tl.where(
++                    (pos_t >= 0) & (pos_t < MAX_ROPE_POS), pos_t, first_position
++                )
++                pos_h = tl.where(
++                    (pos_h >= 0) & (pos_h < MAX_ROPE_POS), pos_h, first_position
++                )
++                pos_w = tl.where(
++                    (pos_w >= 0) & (pos_w < MAX_ROPE_POS), pos_w, first_position
++                )
+             else:
+                 pos_t = first_position
+                 pos_h = first_position
+@@ -624,6 +636,7 @@ def qsa_prepare(
+         CACHE_HAS_ROPE_POS=cache_has_rope_pos,
+         MROPE_H=section[1],
+         MROPE_W=section[2],
++        MAX_ROPE_POS=cos_sin_cache.shape[0],
+         main_qkv_ptr=main_qkv,
+         main_qkv_stride_token=main_qkv.stride(0),
+         main_q_norm_weight_ptr=main_q_norm_weight,
