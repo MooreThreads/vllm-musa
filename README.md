@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10-blue.svg" alt="Python 3.10"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12-blue.svg" alt="Python 3.12"></a>
 </p>
 
 ---
@@ -47,8 +47,8 @@ vLLM-MUSA is the Moore Threads backend for [vLLM](https://github.com/vllm-projec
 providing an OpenAI-compatible inference and serving engine for MUSA GPUs.
 
 - v0.32.0-dev development line with the vLLM V1 engine.
-- Uses the pinned MUSA stack: PyTorch/torch_musa 2.11.0.post2 (MUSA 5.2.0),
-  MATE 0.2.8.post1, and torchada 0.1.105; this branch remains an upgrade candidate.
+- Uses the pinned MUSA stack: PyTorch/torch_musa 2.13.0.post1 (MUSA 5.2.0),
+  MATE 0.2.8.post1, and torchada 0.1.109; this branch remains an upgrade candidate.
 - MUSA-native attention, communication, custom ops, and compilation support.
 - Per-checkpoint recipes for Qwen, DeepSeek-V4-Flash, Nemotron-3.5, and
   DiffusionGemma on S5000.
@@ -101,12 +101,12 @@ use the [serving cookbook](docs/cookbook/README.md).
 
 | vLLM-MUSA | PyTorch/MUSA | Engine | Status |
 |---|---|---|---|
-| v0.32.0-dev | 2.11.x | V1 engine; Runner V2 where supported | Upgrade candidate |
+| v0.32.0-dev | 2.13.x | V1 engine; Runner V2 where supported | Upgrade candidate |
 
 The V1 engine may automatically select Model Runner V2 for supported model
 architectures; both runners are supported on MUSA.
 This branch tracks the upstream v0.32.0 commit in `third_party/PINS` and
-intentionally keeps the MUSA PyTorch 2.11.x stack; promote it to a supported
+uses the MUSA PyTorch 2.13.x stack on CPython 3.12; promote it to a supported
 release only after build and model-smoke validation.
 
 ## Contributing

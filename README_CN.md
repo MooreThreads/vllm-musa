@@ -13,7 +13,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="许可证"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10-blue.svg" alt="Python 3.10"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12-blue.svg" alt="Python 3.12"></a>
 </p>
 
 ---
@@ -45,8 +45,8 @@ vLLM-MUSA 是摩尔线程为 [vLLM](https://github.com/vllm-project/vllm) 提供
 为 MUSA GPU 提供 OpenAI 兼容接口的推理服务引擎。
 
 - v0.32.0-dev 系列开发版本，采用 vLLM V1 引擎。
-- 使用固定的 MUSA 软件栈：PyTorch/torch_musa 2.11.0.post2（MUSA 5.2.0）、
-  MATE 0.2.8.post1 和 torchada 0.1.105；当前分支仍属于升级候选版本。
+- 使用固定的 MUSA 软件栈：PyTorch/torch_musa 2.13.0.post1（MUSA 5.2.0）、
+  MATE 0.2.8.post1 和 torchada 0.1.109；当前分支仍属于升级候选版本。
 - 提供 MUSA 原生注意力机制、通信、自定义算子和编译支持。
 - 针对 S5000 上 Qwen、DeepSeek-V4-Flash、Nemotron-3.5 和 DiffusionGemma 的各个模型检查点提供配置示例。
 
@@ -96,11 +96,11 @@ OpenAI 兼容接口地址为 `http://localhost:8000/v1`。
 
 | vLLM-MUSA | PyTorch/MUSA | 引擎 | 状态 |
 |---|---|---|---|
-| v0.32.0-dev | 2.11.x | V1 引擎；支持时使用运行器 V2 | 升级候选 |
+| v0.32.0-dev | 2.13.x | V1 引擎；支持时使用运行器 V2 | 升级候选 |
 
 V1 引擎会在支持的模型架构上自动选择模型运行器 V2；MUSA 同时支持两种运行器。
-当前分支跟踪 `third_party/PINS` 中固定的上游 v0.32.0 提交，并保留 MUSA
-PyTorch 2.11.x 软件栈；只有完成构建和模型冒烟测试后，才能将其提升为正式支持版本。
+当前分支跟踪 `third_party/PINS` 中固定的上游 v0.32.0 提交，并使用 CPython 3.12 上的 MUSA
+PyTorch 2.13.x 软件栈；只有完成构建和模型冒烟测试后，才能将其提升为正式支持版本。
 
 ## 贡献
 

@@ -5,12 +5,12 @@ model-specific launch command, start with the [serving cookbook](cookbook/README
 
 ## Requirements
 
-- x86_64 Linux and CPython 3.10 (the pinned MUSA wheels target this
+- x86_64 Linux and CPython 3.12 (the pinned MUSA wheels target this
   interpreter/platform pair).
 - A Moore Threads GPU with a compatible MUSA driver and toolkit.
 - vLLM-MUSA v0.32.0-dev and its matching PyTorch/MUSA wheels.
 
-The v0.32.0-dev dependency stack uses PyTorch 2.11.x. Keep the driver, toolkit,
+The v0.32.0-dev dependency stack uses PyTorch 2.13.x. Keep the driver, toolkit,
 and wheel versions from the same release family.
 
 ## Package indexes

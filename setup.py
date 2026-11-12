@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import importlib.util
 import os
 import platform
 import shutil
@@ -10,9 +11,12 @@ import time
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
+# isort: off
 # Activate MUSA patches before importing the torch ecosystem.
 import torchada  # noqa: F401
 import torch
+
+# isort: on
 
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
@@ -27,7 +31,7 @@ arch = platform.machine().lower()
 
 
 def _read_pins():
-    """Read third_party/PINS (KEY=VALUE; py3.10 has no tomllib). Shared with
+    """Read third_party/PINS (KEY=VALUE, no parser dependency). Shared with
     Makefile.sync so the build and patch-gen pins can't desync."""
     pins = {}
     pins_path = root / "third_party" / "PINS"
@@ -182,14 +186,18 @@ VLLM_STABLE_CSRC_SOURCES = [
     str(_VLLM_REPO.source_dir / "csrc/attention/merge_attn_states.cu"),
     str(_VLLM_REPO.source_dir / "csrc/sampler.cu"),
     str(_VLLM_REPO.source_dir / "csrc/topk.cu"),
-    str(_VLLM_REPO.source_dir
-        / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"),
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"
+    ),
     # Layernorm+quant fusion kernels (rms_norm_static_fp8_quant,
     # fused_add_rms_norm_static_fp8_quant, rms_norm_dynamic_per_token_quant,
     # rms_norm_per_block_quant): emitted by the rms_quant_fusion compile pass.
     str(_VLLM_REPO.source_dir / "csrc/layernorm_quant_kernels.cu"),
-    str(_VLLM_REPO.source_dir
-        / "csrc/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu"),
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu"
+    ),
     str(_VLLM_REPO.source_dir / "csrc/quantization/activation_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/custom_all_reduce.cu"),
     str(_VLLM_REPO.source_dir / "csrc/minimax_reduce_rms_kernel.cu"),
@@ -301,18 +309,28 @@ COMPILE_ARGS = {
 # paths compile out on MUSA), and link torch_cpu (the AOTI stable-ABI shims live
 # in libtorch_cpu.so). torchada's include_paths() auto-appends the stable_compat
 # include dir, and its import patches torch_musa's stable::Tensor accessors.
-from torchada.utils.cpp_extension import (
-    stable_compat_box_header as _ta_stable_box,
-    stable_compat_include_dir as _ta_stable_inc,
-)
+from torchada.utils.cpp_extension import stable_compat_box_header as _ta_stable_box
+from torchada.utils.cpp_extension import stable_compat_include_dir as _ta_stable_inc
 
 _STABLE_BOX_HEADER = _ta_stable_box()
 # Explicitly add torchada's stable_compat include dir (the include_paths()
 # auto-append does not reach the torch_musa MUSAExtension compile path).
-STABLE_INCLUDE_DIRS = INCLUDE_DIRS + [_ta_stable_inc()]
+# torch_musa's headers go first: on torch >= 2.11 its stable macros.h and
+# device.h are the real ones, and torchada's torch 2.9 forwards must not win.
+_TORCH_MUSA_INCLUDE_DIR = (
+    Path(importlib.util.find_spec("torch_musa").origin).parent
+    / "share"
+    / "generated_cuda_compatible"
+    / "include"
+)
+STABLE_INCLUDE_DIRS = INCLUDE_DIRS + [_TORCH_MUSA_INCLUDE_DIR, _ta_stable_inc()]
+# Shared quantization headers use TORCH_CHECK, which torch 2.13's stable headers
+# do not provide; STD_TORCH_CHECK is the stable-ABI spelling.
+_STABLE_TORCH_CHECK = "-DTORCH_CHECK=STD_TORCH_CHECK"
 STABLE_COMPILE_ARGS = {
-    "mcc": MCC_FLAGS + ["-DCUDA_VERSION=0", "-include", _STABLE_BOX_HEADER],
-    "cxx": CXX_FLAGS + ["-include", _STABLE_BOX_HEADER],
+    "mcc": MCC_FLAGS
+    + ["-DCUDA_VERSION=0", _STABLE_TORCH_CHECK, "-include", _STABLE_BOX_HEADER],
+    "cxx": CXX_FLAGS + [_STABLE_TORCH_CHECK, "-include", _STABLE_BOX_HEADER],
 }
 STABLE_LINK_LIBRARIES = LINK_LIBRARIES + ["torch_cpu"]
 

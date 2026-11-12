@@ -14,7 +14,7 @@ filename replay order. The README table below explains each legacy disposition;
 `musa_sync check-series` validates its IDs against the JSON and validates every
 group member against the current filenames. `third_party/PINS` alone selects
 the base and `manifest.py` remains the divergence census. Run
-`python3.10 tools/musa_sync.py report --metadata` for a concise index.
+`python3.12 tools/musa_sync.py report --metadata` for a concise index.
 
 Every top-level `series/*.patch` must have exactly one row in the current-patch
 table below, using its complete filename. Adding, removing, renaming, or
@@ -29,7 +29,7 @@ generated space-only context lines; whitespace fixers must not rewrite patch
 bodies. Successful replay does not prove canonical generation: also run
 `check-series --round-trip` against the commit-bearing checkout.
 
-`.github/workflows/patch-series.yml` runs Python 3.10 offline unit/source
+`.github/workflows/patch-series.yml` runs Python 3.12 offline unit/source
 contracts, canonical format/metadata checks, strict build-path and `git am -3`
 replay plus `verify` on a pristine pinned checkout, and regeneration round-trip
 against a separate commit-bearing checkout. These are source-level gates;
@@ -362,7 +362,7 @@ The round-trip holder is produced by applying this exact series to a clean
 checkout at `VLLM_COMMIT`; an already-patched v0.32 checkout with a different
 commit grouping is not a valid holder for that check. To verify the stack, use a
 **pristine** checkout or archive of the pinned vLLM commit with
-`python3.10 tools/musa_sync.py verify --repo <pristine-vllm>`. The verifier checks
+`python3.12 tools/musa_sync.py verify --repo <pristine-vllm>`. The verifier checks
 every patch in order; an already-patched tree is not a valid input for that
 command. A strict replay is `git apply --check` followed by `git apply` for each
 patch in filename order. Compare the resulting source hashes with the runtime
