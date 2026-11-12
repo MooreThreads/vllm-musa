@@ -9,6 +9,9 @@ _QWEN_MIN_P_MAX_BATCH = 64
 _QWEN_TOP_K_RADIX_K = 50
 _QWEN_TOP_K_RADIX_MAX_BATCH = 256
 _QWEN_TOP_K_RADIX_VOCABS = (151936, 248320)
+_TOP_K_MASK_MAX_ROWS = 4096
+_TOP_K_MASK_MAX_K = 1024
+_TOP_K_MASK_VOCABS = (151936, 152064, 248320)
 
 try:
     import vllm_musa._C  # noqa: F401
@@ -321,6 +324,37 @@ def top_k_renorm_probs(
     top_k: Union[torch.Tensor, int],
 ) -> torch.Tensor:
     return _top_k_renorm_probs_internal(probs, *_to_tensor_scalar_tuple(top_k))
+
+
+def _can_use_native_top_k_mask(logits: torch.Tensor, top_k: int) -> bool:
+    """Whether the native logits-domain radix top-k mask applies."""
+    return (
+        isinstance(top_k, int)
+        and 1 <= top_k <= _TOP_K_MASK_MAX_K
+        and logits.device.type == "musa"
+        and _is_validated_musa_device(logits.device)
+        and logits.ndim == 2
+        and logits.is_contiguous()
+        and logits.dtype in (torch.bfloat16, torch.float32)
+        and 0 < logits.shape[0] <= _TOP_K_MASK_MAX_ROWS
+        and logits.shape[1] in _TOP_K_MASK_VOCABS
+        and (logits.shape[1] % 4) == 0
+        and top_k < logits.shape[1]
+    )
+
+
+def top_k_mask_logits(
+    logits: torch.Tensor, top_k: int
+) -> Optional[torch.Tensor]:
+    """Mask ``logits`` to its top-k values in place, without a softmax pass.
+
+    Returns ``None`` when the native kernel does not apply so callers can fall
+    back.  Values tied with the k-th largest stay eligible.
+    """
+    if not _can_use_native_top_k_mask(logits, top_k):
+        return None
+    torch.ops._C_musa_ops.musa_top_k_mask_logits.default(logits, logits, None, top_k)
+    return logits
 
 
 def _can_mask_logits_with_radix_top_k(logits: torch.Tensor, top_k: int) -> bool:

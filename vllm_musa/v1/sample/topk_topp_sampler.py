@@ -32,6 +32,10 @@ _SAMPLING_EPS = 1e-5
 _MUSA_QWEN_SAMPLER_VOCAB_SIZES = frozenset((151936, 152064, 248320))
 # Keep chunked-prefill and first-token response draining on the original path.
 _QWEN_LEGACY_UNFILTERED_GUMBEL_MIN_ROWS = 16
+# Below this batch size the probability-domain radix mask is still cheaper than
+# the logits-domain kernel; the crossover measured on MTT S5000 at
+# vocab=248320 is 32 rows (0.67 vs 0.97 ms) and 128 rows (1.74 vs 1.31 ms).
+_QWEN_NATIVE_LOGITS_MASK_MIN_ROWS = 64
 _QWEN_LEGACY_UNFILTERED_GUMBEL_MIN_OFFSET = 64
 _MUSA_QWEN_SHARDED_MIN_BATCH = 32
 
@@ -287,9 +291,14 @@ def _apply_top_k_top_p(
         if k <= 0 or k >= logits.shape[1]:
             return logits
         if p is None:
-            # k=50 on a validated Qwen vocab resolves its own threshold with a
-            # radix select, which is several times cheaper than torch.topk on
-            # MUSA. Fall back when the specialization does not apply.
+            # Radix selection resolves the k-th largest value several times
+            # cheaper than torch.topk on MUSA. The logits-domain kernel skips
+            # the softmax pass but needs enough rows to fill the device, so
+            # small batches stay on the probability-domain specialization.
+            if logits.shape[0] > _QWEN_NATIVE_LOGITS_MASK_MIN_ROWS:
+                native_masked = _ops.top_k_mask_logits(logits, k)
+                if native_masked is not None:
+                    return native_masked
             radix_masked = _ops.top_k_mask_logits_radix(logits, k)
             if radix_masked is not None:
                 return radix_masked
