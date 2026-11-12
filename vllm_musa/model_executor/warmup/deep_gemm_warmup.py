@@ -4,7 +4,6 @@
 import torch
 from vllm.logger import init_logger
 
-
 logger = init_logger(__name__)
 
 _BF16_WARMUP_CACHE: set[tuple[torch.Size, torch.Size, int, int]] = set()
@@ -25,9 +24,7 @@ def _alignment_m() -> int:
     from vllm.utils.deep_gemm import get_mk_alignment_for_contiguous_layout
 
     alignment = get_mk_alignment_for_contiguous_layout()
-    return int(
-        alignment[0] if isinstance(alignment, (list, tuple)) else alignment
-    )
+    return int(alignment[0] if isinstance(alignment, (list, tuple)) else alignment)
 
 
 def _aligned_grouped_tokens(
