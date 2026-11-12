@@ -7,7 +7,6 @@ import numpy as np
 import torch
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
-from vllm.v1.worker.gpu.model_runner import GPUModelRunner
 
 from vllm_musa.v1.worker.qwen_identity_logits_view import (
     _is_musa_tensor,
@@ -97,12 +96,14 @@ def select_qwen_next_input_ids_buffer(runner: Any) -> torch.Tensor | None:
 
 
 def install_hooks() -> None:
+    """Attach the Qwen fused-decode hooks to vLLM's ``GPUModelRunner``."""
+    # Local import: at module scope this re-enters model_runner while vLLM is
+    # still importing it.
+    from vllm.v1.worker.gpu.model_runner import GPUModelRunner
+
     GPUModelRunner._musa_select_uniform_decode_model_inputs = (  # type: ignore[attr-defined]
         select_qwen_fused_decode_inputs
     )
     GPUModelRunner._musa_select_next_input_ids_buffer = (  # type: ignore[attr-defined]
         select_qwen_next_input_ids_buffer
     )
-
-
-install_hooks()
