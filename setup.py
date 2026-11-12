@@ -415,8 +415,7 @@ class _CustomBuildExt(BuildExtension):
         source_dir = Path(repo_path)
 
         env = os.environ.copy()
-        env["VLLM_TARGET_DEVICE"] = "musa"
-        env["MTGPU_TARGET"] = MTGPU_TARGET
+        env["VLLM_TARGET_DEVICE"] = "empty"
 
         # The exact upstream release commit is pinned in third_party/PINS, but
         # its local Git object set may not contain the corresponding tag.

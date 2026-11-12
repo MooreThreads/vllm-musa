@@ -10,6 +10,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,7 +46,9 @@ def _deepselect_source(relative_path: str) -> Path:
     root = Path(os.environ.get("DEEPSELECT_SRC_DIR", ROOT.parent / "DeepSelect"))
     source = root / relative_path
     if not source.is_file():
-        pytest.skip(f"set DEEPSELECT_SRC_DIR to an updated MUSA checkout: missing {source}")
+        pytest.skip(
+            f"set DEEPSELECT_SRC_DIR to an updated MUSA checkout: missing {source}"
+        )
     return source
 
 
@@ -160,7 +163,9 @@ def test_series_patch_routes_supported_windows_to_explicit_backend() -> None:
     assert "requires zero-based indexer windows" not in added
 
 
-def _indexer_selection_helpers(capturing: bool = False) -> tuple[dict, list]:
+def _indexer_selection_helpers(
+    capturing: bool = False, supported: bool = True
+) -> tuple[dict, list]:
     staged_patch = (
         SERIES / "0192-MUSA-select-indexer-top-k-with-the-staged-radix-kern.patch"
     )
@@ -181,6 +186,7 @@ def _indexer_selection_helpers(capturing: bool = False) -> tuple[dict, list]:
 
     namespace = {
         "deep_select_topk": record("deep_select"),
+        "is_deep_select_supported": lambda logits, topk: supported,
         "_musa_sparse_indexer_is_current_stream_capturing": lambda: capturing,
         "_musa_custom_ops": SimpleNamespace(
             deepseek_v4_sparse_indexer_topk_decode=record("staged"),
@@ -226,6 +232,18 @@ def test_window_dispatch_preserves_legacy_fallback(
         assert calls == [(expected, (logits, starts, ends, output, topk), {})]
     else:
         assert calls == [(expected, (logits, ends, output, topk), {})]
+
+
+@pytest.mark.parametrize("topk, expected", [(512, "staged"), (1024, "decode")])
+def test_unsupported_deep_select_layout_uses_native_topk(
+    topk: int, expected: str
+) -> None:
+    namespace, calls = _indexer_selection_helpers(capturing=True, supported=False)
+    logits, starts, ends, output = (object() for _ in range(4))
+    namespace["_musa_select_indexer_topk_windows"](
+        logits, starts, ends, output, topk, True, "deep_select"
+    )
+    assert calls == [(expected, (logits, ends, output, topk), {})]
 
 
 @pytest.mark.parametrize(
@@ -307,10 +325,17 @@ def test_build_provides_vllm_extension_from_deepselect_source() -> None:
     assert 'CMakeExtension(name="vllm._deepselect_C")' in build
     assert "deepselect_extension.py_limited_api = False" in build
     assert 'include("${deepselect_SOURCE_DIR}/cmake/vllm_musa.cmake")' in build
-    assert 'if(VLLM_TARGET_DEVICE STREQUAL "musa")' in build
+    assert 'if(VLLM_TARGET_DEVICE STREQUAL "empty")' in build
+    assert (
+        'include("${deepselect_SOURCE_DIR}/cmake/vllm_musa_toolchain.cmake")' in build
+    )
     cmake = _deepselect_source("cmake/vllm_musa.cmake").read_text(encoding="utf-8")
     assert "define_extension_target(\n    _deepselect_C" in cmake
     assert 'SOURCES "${deepselect_SOURCE_DIR}/csrc/musa_api.cpp"' in cmake
+    assert (
+        "include cmake/vllm_musa_toolchain.cmake"
+        in _deepselect_source("MANIFEST.in").read_text()
+    )
     assert not (ROOT / "csrc/deep_select/torch_bindings.mu").exists()
 
 
@@ -381,18 +406,18 @@ def test_installation_documentation_exists() -> None:
 
 def test_deepselect_source_selection_stays_upstream() -> None:
     assert "DEEPSELECT_" not in PINS.read_text(encoding="utf-8")
-    changed = [
-        line[1:]
-        for line in BUILD_PATCH.read_text().splitlines()
-        if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
-    ]
-    assert not any("GIT_REPOSITORY" in line or "GIT_TAG" in line for line in changed)
-    assert not any("DEEPSELECT_REVISION" in line for line in changed)
+    added = _added_lines(BUILD_PATCH.read_text())
+    assert "GIT_REPOSITORY https://github.com/vllm-project/DeepSelect.git" in added
+    assert "GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea" in added
+    assert "DEEPSELECT_REVISION" not in added
 
 
-@pytest.mark.parametrize("target", ["mp_31", "mp_22"])
-def test_install_vllm_preserves_musa_target_architecture_and_source_override(
-    target: str,
+@pytest.mark.parametrize(
+    "configured",
+    [{}, {"VLLM_TARGET_DEVICE": "empty", "MTGPU_TARGET": "mp_22"}],
+)
+def test_install_vllm_keeps_empty_mode_without_injecting_hardware(
+    configured: dict[str, str],
 ) -> None:
     tree = ast.parse((ROOT / "setup.py").read_text())
     build_class = next(
@@ -423,42 +448,119 @@ def test_install_vllm_preserves_musa_target_architecture_and_source_override(
         decorator_list=[],
     )
     module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    inherited = {"DEEPSELECT_SRC_DIR": "/prepared/DeepSelect", **configured}
     namespace = {
         "Path": Path,
-        "os": SimpleNamespace(environ={"DEEPSELECT_SRC_DIR": "/prepared/DeepSelect"}),
-        "MTGPU_TARGET": target,
+        "os": SimpleNamespace(environ=inherited),
         "_PINS": {"VLLM_TAG": "v0.32.0"},
     }
     exec(compile(module, "setup.py", "exec"), namespace)
     environment = namespace["environment"]("/prepared/vllm")
-    assert environment["VLLM_TARGET_DEVICE"] == "musa"
-    assert environment["MTGPU_TARGET"] == target
-    assert environment["DEEPSELECT_SRC_DIR"] == "/prepared/DeepSelect"
-    assert environment["VLLM_VERSION_OVERRIDE"] == "0.32.0"
+    assert environment == {
+        **inherited,
+        "VLLM_TARGET_DEVICE": "empty",
+        "VLLM_VERSION_OVERRIDE": "0.32.0",
+    }
+
+
+def test_vllm_build_does_not_add_musa_platform_or_compiler_detection() -> None:
+    added = _added_lines(BUILD_PATCH.read_text())
+    for forbidden in (
+        "torch.version.musa",
+        'getattr(torch.version, "musa"',
+        "_is_musa()",
+        'VLLM_TARGET_DEVICE = "musa"',
+        'VLLM_TARGET_DEVICE STREQUAL "musa"',
+        "CMAKE_CXX_COMPILER=",
+        "MTGPU_TARGET",
+    ):
+        assert forbidden not in added
 
 
 @pytest.mark.parametrize("target", [None, "mp_31", "mp_22"])
-def test_vllm_limits_only_the_deepselect_extension_to_mp31(target: str | None) -> None:
-    hunk = BUILD_PATCH.read_text().rsplit("@@", 1)[-1]
-    source = "\n".join(
-        line[1:] for line in hunk.splitlines() if line.startswith((" ", "+"))
-    )
-    source = source[source.index("\nif _is_musa()") + 1 :]
-    extensions = []
+@pytest.mark.parametrize("empty", [False, True])
+def test_vllm_empty_mode_builds_only_deepselect_without_architecture_gating(
+    target: str | None,
+    empty: bool,
+) -> None:
+    setup_patch = BUILD_PATCH.read_text().split("diff --git a/setup.py", 1)[1]
+    source = "if _no_device():\n" + _added_lines(setup_patch)
+    extensions = [SimpleNamespace(name="existing")]
     environment = {} if target is None else {"MTGPU_TARGET": target}
     namespace = {
-        "_is_musa": lambda: True,
-        "_is_xpu": lambda: False,
+        "_no_device": lambda: empty,
         "os": SimpleNamespace(environ=environment),
         "CMakeExtension": lambda **kwargs: SimpleNamespace(**kwargs),
         "ext_modules": extensions,
     }
     exec(compile(source, str(BUILD_PATCH), "exec"), namespace)
-    assert [extension.name for extension in extensions] == (
-        ["vllm._deepselect_C"] if target in (None, "mp_31") else []
+    result = namespace["ext_modules"]
+    if empty:
+        assert [extension.name for extension in result] == ["vllm._deepselect_C"]
+        assert result[0].py_limited_api is False
+    else:
+        assert result is extensions
+
+
+@pytest.mark.parametrize("missing_toolchain", [False, True])
+def test_deepselect_selects_compiler_before_vllm_project(
+    tmp_path: Path, missing_toolchain: bool
+) -> None:
+    patch = BUILD_PATCH.read_text()
+    root_patch = patch.split("diff --git a/CMakeLists.txt", 1)[1]
+    configure = _added_lines(root_patch.split("@@")[2])
+    source_patch = patch.split(
+        "diff --git a/cmake/external_projects/deepselect_source.cmake", 1
+    )[1].split("diff --git", 1)[0]
+    acquisition = tmp_path / "cmake/external_projects/deepselect_source.cmake"
+    acquisition.parent.mkdir(parents=True)
+    acquisition.write_text(_added_lines(source_patch) + "\n")
+    backend = tmp_path / "DeepSelect source"
+    (backend / "cmake").mkdir(parents=True)
+    (backend / "CMakeLists.txt").write_text(
+        'message(FATAL_ERROR "DeepSelect must not configure before vLLM")\n'
     )
-    if extensions:
-        assert extensions[0].py_limited_api is False
+    if not missing_toolchain:
+        shutil.copy2(
+            _deepselect_source("cmake/vllm_musa_toolchain.cmake"),
+            backend / "cmake/vllm_musa_toolchain.cmake",
+        )
+    compiler = tmp_path / "toolkit/bin/mcc"
+    compiler.parent.mkdir(parents=True)
+    host_compiler = shutil.which("c++")
+    assert host_compiler is not None
+    compiler.write_text(f'#!/bin/sh\nexec {shlex.quote(host_compiler)} "$@"\n')
+    compiler.chmod(0o755)
+    (tmp_path / "CMakeLists.txt").write_text(
+        "cmake_minimum_required(VERSION 3.18)\n"
+        'set(VLLM_TARGET_DEVICE "empty")\n'
+        + configure
+        + "\nproject(deepselect_toolchain LANGUAGES CXX)\n"
+        + 'file(WRITE "${CMAKE_BINARY_DIR}/compiler" "${CMAKE_CXX_COMPILER}")\n'
+    )
+    result = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(tmp_path),
+            "-B",
+            str(tmp_path / "build"),
+            "-DDEEPSELECT_SRC_DIR=/must-not-download",
+        ],
+        env={
+            **os.environ,
+            "DEEPSELECT_SRC_DIR": str(backend),
+            "MUSA_HOME": str(compiler.parent.parent),
+        },
+        capture_output=True,
+        text=True,
+    )
+    if missing_toolchain:
+        assert result.returncode != 0
+        assert "DeepSelect build integration missing" in result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (tmp_path / "build/compiler").read_text() == str(compiler)
 
 
 @pytest.mark.parametrize("stale_only", [False, True])
@@ -495,7 +597,13 @@ def test_editable_copy_does_not_overwrite_vllm_owned_deepselect(
 @pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake unavailable")
 @pytest.mark.parametrize(
     ("target", "missing", "success"),
-    [("mp_31", False, True), ("mp_22", False, False), ("mp_31", True, False)],
+    [
+        ("mp_31", False, True),
+        ("mp_22", False, False),
+        ("", False, False),
+        ("mp_22;mp_31", False, False),
+        ("mp_31", True, False),
+    ],
 )
 def test_musa_cmake_target_configuration(
     tmp_path: Path, target: str, missing: bool, success: bool
@@ -511,7 +619,9 @@ def test_musa_cmake_target_configuration(
 project(deepselect_configuration LANGUAGES CXX)
 set(deepselect_SOURCE_DIR "{tmp_path}/DeepSelect")
 function(run_python output)
-  if(output STREQUAL "DEEPSELECT_MUSA_LIBRARIES")
+  if(output STREQUAL "DEEPSELECT_MUSA_ARCHS")
+    set(${{output}} "{target}" PARENT_SCOPE)
+  elseif(output STREQUAL "DEEPSELECT_MUSA_LIBRARIES")
     set(${{output}} "c10;torch;torch_cpu;torch_python;musa_python" PARENT_SCOPE)
   else()
     set(${{output}} "0" PARENT_SCOPE)
@@ -542,7 +652,7 @@ include("{integration}")
             str(tmp_path / "build"),
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
         ],
-        env={**os.environ, "MTGPU_TARGET": target},
+        env={key: value for key, value in os.environ.items() if key != "MTGPU_TARGET"},
         capture_output=True,
         text=True,
     )
@@ -557,5 +667,28 @@ include("{integration}")
         ):
             assert arguments[arguments.index(option) - 1] == "-mllvm"
     if not success:
-        expected = "MTGPU_TARGET=mp_31" if target == "mp_22" else "set DEEPSELECT_SRC_DIR"
+        expected = "set DEEPSELECT_SRC_DIR" if missing else "requires visible MP31 GPUs"
         assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    "capabilities", [[], [(3, 1)], [(2, 2)], [(3, 1), (3, 1)], [(3, 1), (2, 2)]]
+)
+def test_deepselect_probes_architecture_from_its_own_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    capabilities: list,
+) -> None:
+    integration = _deepselect_source("cmake/vllm_musa.cmake").read_text()
+    assert "MTGPU_TARGET" not in integration
+    probe = integration.split('run_python(DEEPSELECT_MUSA_ARCHS\n    "', 1)[1]
+    probe = probe.split('"\n', 1)[0]
+    runtime = SimpleNamespace(
+        device_count=lambda: len(capabilities),
+        get_device_capability=lambda device_index: capabilities[device_index],
+    )
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(musa=runtime))
+    monkeypatch.setitem(sys.modules, "torch_musa", SimpleNamespace())
+    exec(compile(probe, "DeepSelect architecture probe", "exec"), {})
+    expected = ";".join(sorted({f"mp_{major}{minor}" for major, minor in capabilities}))
+    assert capsys.readouterr().out.strip() == expected

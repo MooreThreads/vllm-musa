@@ -3,30 +3,44 @@ From: musa <musa@local>
 Date: Tue, 3 Nov 2026 20:30:00 +0800
 Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
-Keep the upstream DeepSelect repository URL and existing FetchContent source
-overrides. Build and install vllm._deepselect_C with MCC in vLLM instead of the
-out-of-tree plugin; MUSA sources can be supplied through DEEPSELECT_SRC_DIR.
+Keep the upstream DeepSelect FetchContent URL, revision, and source override.
+Build only vllm._deepselect_C in the existing empty target mode. DeepSelect
+owns compiler selection and kernel compatibility; vLLM owns compilation,
+installation, and native torch.ops registration.
 ---
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a71d7e1e5..ffd26a832e 100644
+index 3a71d7e1e5ad3f754c221790d2169e89c0c13eb9..bcc5e8ebec41914880735c451ecc59b5f11cd712 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -47,6 +47,9 @@ install(CODE "set(CMAKE_INSTALL_LOCAL_ONLY TRUE)" ALL_COMPONENTS)
+@@ -11,4 +11,12 @@ cmake_minimum_required(VERSION 3.26)
+ # If you want to only build one target, make sure to install it manually:
+ # cmake --build . --target _C
+ # cmake --install . --component _C
++if(VLLM_TARGET_DEVICE STREQUAL "empty")
++  include(cmake/external_projects/deepselect_source.cmake)
++  if(NOT EXISTS "${deepselect_SOURCE_DIR}/cmake/vllm_musa_toolchain.cmake")
++    message(FATAL_ERROR "DeepSelect build integration missing; set DEEPSELECT_SRC_DIR to the updated MUSA checkout")
++  endif()
++  include("${deepselect_SOURCE_DIR}/cmake/vllm_musa_toolchain.cmake")
++endif()
++
+ project(vllm_extensions LANGUAGES CXX)
+@@ -47,6 +55,9 @@ install(CODE "set(CMAKE_INSTALL_LOCAL_ONLY TRUE)" ALL_COMPONENTS)
  # first match will be selected.  These should be kept in sync with setup.py.
  #
  set(PYTHON_SUPPORTED_VERSIONS "3.11" "3.12" "3.13" "3.14")
-+if(VLLM_TARGET_DEVICE STREQUAL "musa")
++if(VLLM_TARGET_DEVICE STREQUAL "empty")
 +  list(APPEND PYTHON_SUPPORTED_VERSIONS "3.10")
 +endif()
  
  # Supported AMD GPU architectures.
  set(HIP_SUPPORTED_ARCHS "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1250;gfx1030;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201")
-@@ -95,6 +98,11 @@ endif()
+@@ -95,6 +106,11 @@ endif()
  #
  # Update cmake's `CMAKE_PREFIX_PATH` with torch location.
  #
-+if(VLLM_TARGET_DEVICE STREQUAL "musa")
-+  include(cmake/external_projects/deepselect.cmake)
++if(VLLM_TARGET_DEVICE STREQUAL "empty")
++  include("${deepselect_SOURCE_DIR}/cmake/vllm_musa.cmake")
 +  return()
 +endif()
 +
@@ -34,78 +48,91 @@ index 3a71d7e1e5..ffd26a832e 100644
  
  # Ensure the 'nvcc' command is in the PATH
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e61..3f84c37637 100644
+index e2a5592e6167a9008cc6a88922324a13a872bdc8..998e30c5b605ede8f7f44cd5117b79aa67db31a8 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
-@@ -29,6 +29,14 @@ endif()
- FetchContent_MakeAvailable(deepselect)
- message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
+@@ -1,33 +1,4 @@
+-include(FetchContent)
+-
+-# If DEEPSELECT_SRC_DIR is set, DeepSelect is built from that directory
+-# instead of downloading.
+-# It can be set as an environment variable or passed as a cmake argument.
+-# The environment variable takes precedence.
+-if (DEFINED ENV{DEEPSELECT_SRC_DIR})
+-  set(DEEPSELECT_SRC_DIR $ENV{DEEPSELECT_SRC_DIR})
+-endif()
+-
+-if(DEEPSELECT_SRC_DIR)
+-  FetchContent_Declare(
+-        deepselect
+-        SOURCE_DIR ${DEEPSELECT_SRC_DIR}
+-        CONFIGURE_COMMAND ""
+-        BUILD_COMMAND ""
+-  )
+-else()
+-  FetchContent_Declare(
+-        deepselect
+-        GIT_REPOSITORY https://github.com/vllm-project/DeepSelect.git
+-        GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea
+-        GIT_PROGRESS TRUE
+-        CONFIGURE_COMMAND ""
+-        BUILD_COMMAND ""
+-  )
+-endif()
+-
+-FetchContent_MakeAvailable(deepselect)
+-message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
++include(${CMAKE_CURRENT_LIST_DIR}/deepselect_source.cmake)
  
-+if(VLLM_TARGET_DEVICE STREQUAL "musa")
-+    if(NOT EXISTS "${deepselect_SOURCE_DIR}/cmake/vllm_musa.cmake")
-+        message(FATAL_ERROR "DeepSelect MUSA integration missing; set DEEPSELECT_SRC_DIR to the updated MUSA checkout")
-+    endif()
-+    include("${deepselect_SOURCE_DIR}/cmake/vllm_musa.cmake")
-+    return()
-+endif()
-+
  # DeepSelect kernels require CUDA 12.9+; 10.0f (family) covers SM100 and SM103.
  set(DEEPSELECT_SUPPORT_ARCHS)
- if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.9)
+diff --git a/cmake/external_projects/deepselect_source.cmake b/cmake/external_projects/deepselect_source.cmake
+new file mode 100644
+index 0000000000000000000000000000000000000000..e2a9e3c8903a45f16d6e9a2c7e14462a0f732992
+--- /dev/null
++++ b/cmake/external_projects/deepselect_source.cmake
+@@ -0,0 +1,29 @@
++include_guard(GLOBAL)
++include(FetchContent)
++
++if (DEFINED ENV{DEEPSELECT_SRC_DIR})
++  set(DEEPSELECT_SRC_DIR $ENV{DEEPSELECT_SRC_DIR})
++endif()
++
++if(DEEPSELECT_SRC_DIR)
++  FetchContent_Declare(
++        deepselect
++        SOURCE_DIR ${DEEPSELECT_SRC_DIR}
++        SOURCE_SUBDIR _vllm_source_only
++        CONFIGURE_COMMAND ""
++        BUILD_COMMAND ""
++  )
++else()
++  FetchContent_Declare(
++        deepselect
++        GIT_REPOSITORY https://github.com/vllm-project/DeepSelect.git
++        GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea
++        GIT_PROGRESS TRUE
++        SOURCE_SUBDIR _vllm_source_only
++        CONFIGURE_COMMAND ""
++        BUILD_COMMAND ""
++  )
++endif()
++
++FetchContent_MakeAvailable(deepselect)
++message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
 diff --git a/setup.py b/setup.py
-index 37bfc3e41b..4f098ec8da 100644
+index 37bfc3e41bb2b1bc6ce821106e637c660ee358ea..43b7d21f882d3cbb9057d058495821c4bd130a23 100644
 --- a/setup.py
 +++ b/setup.py
-@@ -329,6 +329,9 @@ class cmake_build_ext(build_ext):
-             cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME}/bin/nvcc"]
-         elif _is_hip() and ROCM_HOME is not None:
-             cmake_args += [f"-DROCM_PATH={ROCM_HOME}"]
-+        elif _is_musa():
-+            musa_home = os.environ.get("MUSA_HOME", "/usr/local/musa")
-+            cmake_args += [f"-DCMAKE_CXX_COMPILER={musa_home}/bin/mcc"]
+@@ -1652,7 +1652,9 @@ for rust_extension_path in get_precompiled_rust_extension_paths():
+     add_vllm_package_data(rust_extension_path.name)
  
-         other_cmake_args = os.environ.get("CMAKE_ARGS")
-         if other_cmake_args:
-@@ -1273,6 +1276,10 @@ def _is_cuda() -> bool:
-     return VLLM_TARGET_DEVICE == "cuda" and has_cuda and not _is_tpu()
- 
- 
-+def _is_musa() -> bool:
-+    return VLLM_TARGET_DEVICE == "musa"
-+
-+
- def _is_hip() -> bool:
-     return (
-         VLLM_TARGET_DEVICE == "cuda" or VLLM_TARGET_DEVICE == "rocm"
-@@ -1392,6 +1399,8 @@ def get_vllm_version() -> str:
-                 version += f"{sep}cpu"
-         elif _is_xpu():
-             version += f"{sep}xpu"
-+        elif _is_musa():
-+            version += f"{sep}musa"
-         else:
-             raise RuntimeError("Unknown runtime environment")
- 
-@@ -1485,7 +1494,7 @@ def get_requirements() -> list[str]:
-                 resolved_requirements.append(line)
-         return resolved_requirements
- 
--    if _no_device():
-+    if _no_device() or _is_musa():
-         requirements = _read_requirements("common.txt")
-     elif _is_cuda():
-         requirements = _read_requirements("cuda.txt")
-@@ -1531,7 +1540,12 @@ if _is_cuda() or _is_hip():
-     # copying the relevant .py files from the source repository.
-     ext_modules.append(CMakeExtension(name="vllm.triton_kernels", optional=True))
- 
--if not _is_xpu():
-+if _is_musa() and os.environ.get("MTGPU_TARGET", "mp_31") == "mp_31":
+ if _no_device():
+-    ext_modules = []
 +    deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
 +    deepselect_extension.py_limited_api = False
-+    ext_modules.append(deepselect_extension)
-+
-+if not _is_xpu() and not _is_musa():
-     ext_modules.append(CMakeExtension(name="vllm.spinloop"))
-     ext_modules.append(CMakeExtension(name="vllm.fs_io_C"))
++    ext_modules = [deepselect_extension]
  
+ if not ext_modules:
+     cmdclass = {}
