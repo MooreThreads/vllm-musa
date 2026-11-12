@@ -113,7 +113,7 @@ __global__ __launch_bounds__(BlockSize, 1) void top_k_mask_logits_kernel(
     prefix = 0;
     selected_bin = 0;
     int wanted = top_k_arr != nullptr ? top_k_arr[row] : top_k_val;
-    wanted = wanted < 1 ? 1 : wanted;
+    wanted = wanted < 1 ? vocab : wanted;
     rank = wanted > vocab ? vocab : wanted;
     candidate_count = 0;
   }
@@ -237,8 +237,8 @@ void musa_top_k_mask_logits(const at::Tensor& logits, at::Tensor& output,
               "top-k mask expects matching 2-D tensors");
   TORCH_CHECK(logits.is_contiguous() && output.is_contiguous(),
               "top-k mask expects contiguous tensors");
-  TORCH_CHECK(top_k_val >= 1 && top_k_val <= kMaxTopK,
-              "top-k mask supports 1 <= k <= ", kMaxTopK);
+  TORCH_CHECK(top_k_val >= 0 && top_k_val <= kMaxTopK,
+              "top-k mask supports 0 (no top-k) or 1 <= k <= ", kMaxTopK);
   const int rows = static_cast<int>(logits.size(0));
   const int vocab = static_cast<int>(logits.size(1));
   TORCH_CHECK(vocab > 0 && (vocab % 4) == 0,

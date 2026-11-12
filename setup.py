@@ -219,6 +219,7 @@ VLLM_MUSA_CSRC_SOURCES = [
     "csrc/musa/min_p_sampler.mu",
     "csrc/musa/top_k_renorm.mu",
     "csrc/musa/top_k_mask_logits.mu",
+    "csrc/musa/top_p_mask_logits.mu",
     str(_FLASHINFER_REPO.source_dir / "csrc/norm.cu"),
     str(_FLASHINFER_REPO.source_dir / "csrc/renorm.cu"),
     str(_FLASHINFER_REPO.source_dir / "csrc/sampling.cu"),

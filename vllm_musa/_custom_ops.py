@@ -326,12 +326,9 @@ def top_k_renorm_probs(
     return _top_k_renorm_probs_internal(probs, *_to_tensor_scalar_tuple(top_k))
 
 
-def _can_use_native_top_k_mask(logits: torch.Tensor, top_k: int) -> bool:
-    """Whether the native logits-domain radix top-k mask applies."""
+def _supports_native_mask(logits: torch.Tensor) -> bool:
     return (
-        isinstance(top_k, int)
-        and 1 <= top_k <= _TOP_K_MASK_MAX_K
-        and logits.device.type == "musa"
+        logits.device.type == "musa"
         and _is_validated_musa_device(logits.device)
         and logits.ndim == 2
         and logits.is_contiguous()
@@ -339,21 +336,116 @@ def _can_use_native_top_k_mask(logits: torch.Tensor, top_k: int) -> bool:
         and 0 < logits.shape[0] <= _TOP_K_MASK_MAX_ROWS
         and logits.shape[1] in _TOP_K_MASK_VOCABS
         and (logits.shape[1] % 4) == 0
+    )
+
+
+def _per_row_top_k_applies(logits: torch.Tensor, top_k: torch.Tensor) -> bool:
+    if top_k.dim() != 1 or top_k.numel() != logits.shape[0]:
+        return False
+    if top_k.dtype not in (torch.int32, torch.int64):
+        return False
+    return not bool(
+        ((top_k < 0) | (top_k > _TOP_K_MASK_MAX_K)).any().item()
+    )
+
+
+def _can_use_native_top_k_mask(
+    logits: torch.Tensor, top_k: Union[int, torch.Tensor]
+) -> bool:
+    """Whether the native logits-domain radix top-k mask applies."""
+    if not _supports_native_mask(logits):
+        return False
+    if isinstance(top_k, torch.Tensor):
+        return _per_row_top_k_applies(logits, top_k)
+    return (
+        isinstance(top_k, int)
+        and 1 <= top_k <= _TOP_K_MASK_MAX_K
         and top_k < logits.shape[1]
     )
 
 
 def top_k_mask_logits(
-    logits: torch.Tensor, top_k: int
+    logits: torch.Tensor, top_k: Union[int, torch.Tensor]
 ) -> Optional[torch.Tensor]:
     """Mask ``logits`` to its top-k values in place, without a softmax pass.
 
+    ``top_k`` may be a scalar or a per-row int tensor, so mixed k recipes in one
+    batch stay on the radix kernel.  A per-row 0 means "no top-k" for that row.
     Returns ``None`` when the native kernel does not apply so callers can fall
     back.  Values tied with the k-th largest stay eligible.
     """
     if not _can_use_native_top_k_mask(logits, top_k):
         return None
-    torch.ops._C_musa_ops.musa_top_k_mask_logits.default(logits, logits, None, top_k)
+    if isinstance(top_k, torch.Tensor):
+        k_arr = top_k.to(torch.int32)
+        if not k_arr.is_contiguous():
+            k_arr = k_arr.contiguous()
+        torch.ops._C_musa_ops.musa_top_k_mask_logits.default(
+            logits, logits, k_arr, 0
+        )
+        return logits
+    torch.ops._C_musa_ops.musa_top_k_mask_logits.default(
+        logits, logits, None, int(top_k)
+    )
+    return logits
+
+
+def _can_use_native_top_p_mask(
+    logits: torch.Tensor,
+    top_p: Union[float, torch.Tensor],
+    top_k: Optional[Union[int, torch.Tensor]],
+) -> bool:
+    """Whether the fused native logits-domain top-k/top-p mask applies."""
+    if not _supports_native_mask(logits):
+        return False
+    if isinstance(top_p, torch.Tensor):
+        if top_p.dim() != 1 or top_p.numel() != logits.shape[0]:
+            return False
+        if top_p.dtype != torch.float32:
+            return False
+    elif isinstance(top_p, (int, float)):
+        if not 0.0 < float(top_p) <= 1.0:
+            return False
+    else:
+        return False
+    if top_k is None:
+        return True
+    if isinstance(top_k, torch.Tensor):
+        return _per_row_top_k_applies(logits, top_k)
+    return isinstance(top_k, int) and 0 <= top_k <= _TOP_K_MASK_MAX_K
+
+
+def top_p_mask_logits(
+    logits: torch.Tensor,
+    top_p: Union[float, torch.Tensor],
+    top_k: Optional[Union[int, torch.Tensor]] = None,
+) -> Optional[torch.Tensor]:
+    """Apply top-k then top-p to ``logits`` in place without sorting a row.
+
+    The kernel resolves the k-th largest key by counting radix, then the top-p
+    cut by radix selection over ``exp(value - max)`` mass, so neither a softmax
+    tensor nor a vocabulary sort is materialized.  Values tied with either
+    boundary stay eligible as a group.  Returns ``None`` when unsupported.
+    """
+    if not _can_use_native_top_p_mask(logits, top_p, top_k):
+        return None
+    k_arr = None
+    k_val = 0
+    if isinstance(top_k, torch.Tensor):
+        k_arr = top_k.to(torch.int32)
+        if not k_arr.is_contiguous():
+            k_arr = k_arr.contiguous()
+    elif isinstance(top_k, int) and top_k > 0:
+        k_val = int(top_k)
+    p_arr = None
+    p_val = 1.0
+    if isinstance(top_p, torch.Tensor):
+        p_arr = top_p if top_p.is_contiguous() else top_p.contiguous()
+    else:
+        p_val = float(top_p)
+    torch.ops._C_musa_ops.musa_top_p_mask_logits.default(
+        logits, logits, k_arr, k_val, p_arr, p_val
+    )
     return logits
 
 

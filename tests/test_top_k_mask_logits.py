@@ -114,3 +114,21 @@ def test_wrapper_declines_unsupported_shapes() -> None:
 
     other_vocab = torch.zeros((4, 4096), device="musa", dtype=torch.bfloat16)
     assert top_k_mask_logits(other_vocab, 50) is None
+
+
+@requires_musa
+def test_per_row_top_k_tensor_matches_per_row_topk() -> None:
+    torch.manual_seed(1009)
+    rows = 16
+    logits = (torch.randn((rows, VOCAB), device="musa", dtype=torch.float32) * 2).to(
+        torch.bfloat16
+    )
+    k_row = torch.tensor([20, 40, 50, 100, 1024, 1] * 3, device="musa", dtype=torch.int32)[:rows]
+
+    actual = top_k_mask_logits(logits.clone(), k_row)
+    assert actual is not None
+    torch.musa.synchronize()
+    keep = torch.isfinite(actual)
+    for row in range(rows):
+        expected = _reference(logits[row : row + 1], int(k_row[row]))
+        assert torch.equal(keep[row : row + 1], torch.isfinite(expected)), f"row {row}"
