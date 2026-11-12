@@ -10,10 +10,10 @@ Subject: [PATCH] MUSA: bind DeepSeek-V4 optimization contract
  3 files changed, 27 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 96264c05bb..fb80c84f7d 100644
+index 7caf905907..1870736090 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
-@@ -2463,6 +2463,8 @@ class SparseAttnIndexer(CustomOp):
+@@ -2465,6 +2465,8 @@ class SparseAttnIndexer(CustomOp):
          candidate_blocks: torch.Tensor | None = None,
          candidate_block_size: int = 0,
          candidate_write: bool = False,

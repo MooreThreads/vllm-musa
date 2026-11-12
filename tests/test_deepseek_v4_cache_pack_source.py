@@ -3,9 +3,10 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent.parent
-ATTENTION = ROOT / "third_party" / "vllm" / "vllm" / "models" / "deepseek_v4" / "attention.py"
+ATTENTION = (
+    ROOT / "third_party" / "vllm" / "vllm" / "models" / "deepseek_v4" / "attention.py"
+)
 
 
 def test_flashmla_cache_pack_uses_one_warp_per_fp8_group():
@@ -34,19 +35,21 @@ def test_flashmla_cache_pack_has_no_experiment_only_dispatch_gate():
 def test_flashmla_q_pad_is_written_in_the_fused_kernel():
     source = (ROOT / "csrc/musa/attention/deepseek_v4_cache_store.mu").read_text()
     patch = (
-        ROOT / "vllm_musa/patches/series/0014-MUSA-vllm.models.deepseek_v4.attention.patch"
+        ROOT
+        / "vllm_musa/patches/series/0014-MUSA-vllm.models.deepseek_v4.attention.patch"
     ).read_text()
     wrapper = (ROOT / "vllm_musa/_custom_ops.py").read_text()
 
     assert "int64_t in_heads, int64_t out_heads" in source
     assert "if (head >= in_heads)" in source
     assert "q_head_padded" in source
-    assert "int q_head_padded=0, bool apply_q_norm=True) -> Tensor" in (
-        ROOT / "csrc/musa/torch_bindings.cpp"
-    ).read_text()
+    assert (
+        "int q_head_padded=0, bool apply_q_norm=True) -> Tensor"
+        in (ROOT / "csrc/musa/torch_bindings.cpp").read_text()
+    )
     assert "q_head_padded: int = 0" in wrapper
     pad_removal = next(
-        (ROOT / "vllm_musa/patches/series").glob("0174-*.patch")
+        (ROOT / "vllm_musa/patches/series").glob("0169-*.patch")
     ).read_text()
     assert "+        return F.pad(q," in patch
     assert "-        return F.pad(q," in pad_removal

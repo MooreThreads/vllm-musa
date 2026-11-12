@@ -71,7 +71,7 @@ def test_report(ms, capsys):
 
 
 #: Series length this branch is built on; bump it with the series.
-SERIES_LENGTH = 212
+SERIES_LENGTH = 211
 
 
 def test_report_metadata_and_gate_rejects_stale_metadata(ms, capsys, monkeypatch):
@@ -256,7 +256,7 @@ def test_regen_replaces_series_and_prunes_stale_files(
     series_dir = tmp_path / "series"
     series_dir.mkdir()
     (series_dir / "README.md").write_text("keep me\n")
-    (series_dir / "0099-stale.patch").write_text("stale\n")
+    (series_dir / "0098-stale.patch").write_text("stale\n")
     monkeypatch.setattr(ms, "WORKDIR", workdir)
     monkeypatch.setattr(ms, "SERIES_DIR", series_dir)
     monkeypatch.setattr(ms, "_default_target", lambda: base)
@@ -496,7 +496,9 @@ def _cli_tree(tmp_path: Path, files: dict) -> Path:
     (metadata / "patch-groups.json").write_text(
         json.dumps({"schema_version": 1, "groups": groups})
     )
-    (tmp_path / "vllm_musa" / "patches" / "series" / "README.md").write_text("")
+    (tmp_path / "vllm_musa" / "patches" / "series" / "README.md").write_text(
+        "".join(f"| `{name}` | Fixture patch. |\n" for name in sorted(files))
+    )
     for rel in ("vllm_musa/patches/manifest.py", "vllm_musa/patches/build_apply.py"):
         shutil.copyfile(ROOT / rel, tmp_path / rel)
     for name, text in files.items():
@@ -2327,11 +2329,21 @@ def test_check_series_rejects_a_non_regular_entry(ms, tmp_path, monkeypatch, cap
     assert "not a regular file" in capsys.readouterr().out
 
 
+_IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+
+
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
 @pytest.mark.parametrize(
     "kind,status",
     [
-        ("chmod-000", "unreadable"),
+        pytest.param(
+            "chmod-000",
+            "unreadable",
+            marks=pytest.mark.skipif(
+                _IS_ROOT,
+                reason="root reads mode-000 files, so the entry is never unreadable",
+            ),
+        ),
         ("dangling-symlink", "not-regular-file"),
         ("directory", "not-regular-file"),
         ("fifo", "not-regular-file"),
@@ -2371,6 +2383,66 @@ def test_cli_never_tracebacks_on_a_broken_entry_file(tmp_path, kind, status):
     assert status in result.stdout
     assert result.stdout.strip().endswith(
         "=== musa_sync check-series: FAIL (series-format=1, numbering=0) ==="
+    )
+
+
+def test_read_entry_rows_an_unreadable_file(ms, tmp_path, monkeypatch):
+    """The chmod-000 path as a row, without needing a non-root user.
+
+    ``chmod 000`` cannot make a file unreadable to root, so that case skips
+    there; this keeps the ``read_bytes`` OSError row covered either way.
+
+    Mutation: drop the ``except OSError`` around ``read_bytes``.
+    """
+    entry = tmp_path / "0001-a.patch"
+    entry.write_bytes(_canonical_entry("a"))
+    texts: dict[str, bytes] = {}
+
+    def denied(self: Path) -> bytes:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "read_bytes", denied)
+    assert ms._read_entry(entry, texts) == (
+        "unreadable",
+        "[Errno 13] Permission denied",
+    )
+    assert texts == {}
+
+
+def test_patch_target_returns_empty_when_the_read_fails(ms, tmp_path, monkeypatch):
+    """``ENTRIES`` is built at import time, so a read that raises must not escape.
+
+    Covers the chmod-000 entry where it cannot exist on disk: root reads
+    mode-000 files, so the CLI-level case skips there.
+
+    Mutation: drop the ``except OSError`` around ``read_text`` in
+    ``manifest._patch_target``.
+    """
+    entry = tmp_path / "0001-a.patch"
+    entry.write_bytes(_canonical_entry("a"))
+
+    def denied(self: Path, **kwargs: object) -> str:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "read_text", denied)
+    assert ms.manifest._patch_target(entry) == ""
+
+
+def test_read_entry_rows_an_unstatable_file(ms, tmp_path, monkeypatch):
+    """An entry that cannot be lstat'ed is a row too, never a traceback.
+
+    Mutation: drop the ``except OSError`` around ``lstat``.
+    """
+    entry = tmp_path / "0001-a.patch"
+    entry.write_bytes(_canonical_entry("a"))
+
+    def denied(self: Path) -> os.stat_result:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "lstat", denied)
+    assert ms._read_entry(entry, {}) == (
+        "unreadable",
+        "Permission denied: cannot stat the entry",
     )
 
 

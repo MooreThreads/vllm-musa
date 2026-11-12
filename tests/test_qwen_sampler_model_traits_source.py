@@ -1,7 +1,6 @@
 """Source contract for contract-bound Qwen sampler fast paths."""
 
 import ast
-
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,7 +9,7 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0083-MUSA-perf-musa-unify-Qwen-runtime-fast-paths.patch"
+    / "0082-MUSA-perf-musa-unify-Qwen-runtime-fast-paths.patch"
 )
 AUTO_FAST_PATH_SOURCES = (
     ROOT / "vllm_musa/v1/sample/topk_topp_sampler.py",

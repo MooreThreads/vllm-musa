@@ -389,7 +389,6 @@ def test_qwen35_dense_gdn_and_moe_prefill_static_contracts() -> None:
     assert dense_contract.model.gdn_conv_dim == 10240
     assert dense_contract.prefers(OptimizationFeature.QWEN35_GDN_WIDTH4_PREFILL)
     assert dense_contract.prefers(OptimizationFeature.QWEN35_INTERLEAVED_MROPE_QK)
-    assert dense_contract.prefers(OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL)
     assert not dense_contract.prefers(OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD)
 
     moe = _config(

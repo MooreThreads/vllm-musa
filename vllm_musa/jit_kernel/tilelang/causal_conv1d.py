@@ -63,6 +63,11 @@ def _should_use_width4_prefill_split(
 
 
 _CAUSAL_CONV1D_PASS_CONFIGS = dict(MUSA_COMMON_PASS_CONFIGS)
+# MUSA: the conv-state cache is one view into a multi-GiB paged pool, so a
+# slot index times its stride leaves the 2 GiB a signed 32-bit byte offset
+# can reach. Every kernel here keeps state_base in int64; the remaining
+# indices stay 32-bit. Widening the pass-level index bitwidth is not enough,
+# because the offset is bound to a local of the declared type first.
 for _key, _value in (
     ("TL_ENABLE_LOWER_LDGSTG", True),
     ("TL_ENABLE_LOWER_LDGSTG_PREDICATED", True),
@@ -159,7 +164,7 @@ def _causal_conv1d_fwd_kernel(
             segment_len = T.alloc_var("int32")
             cache_idx = T.alloc_var("int32")
             load_init = T.alloc_var("bool")
-            state_base = T.alloc_var("int32")
+            state_base = T.alloc_var("int64")
             x_base = T.alloc_var("int32")
             w_base = T.alloc_var("int32")
             out_base = T.alloc_var("int32")
@@ -201,7 +206,10 @@ def _causal_conv1d_fwd_kernel(
                 x_base = seq_start * x_stride_token + feat * x_stride_dim
                 w_base = feat * w_stride_dim
                 out_base = seq_start * o_stride_token + feat * o_stride_dim
-                state_base = cache_idx * state_stride_seq + feat * state_stride_dim
+                state_base = (
+                    T.Cast("int64", cache_idx) * state_stride_seq
+                    + feat * state_stride_dim
+                )
 
                 col0 = 0.0
                 col1 = 0.0
@@ -456,7 +464,7 @@ def _causal_conv1d_fwd_width4_vec_kernel(
             load_init = T.alloc_var("bool")
             valid_seq = T.alloc_var("bool")
             state_cut = T.alloc_var("int32")
-            state_base = T.alloc_local((vec_elems,), "int32")
+            state_base = T.alloc_local((vec_elems,), "int64")
             x_base = T.alloc_local((vec_elems,), "int32")
             w_base = T.alloc_local((vec_elems,), "int32")
             out_base = T.alloc_local((vec_elems,), "int32")
@@ -502,7 +510,8 @@ def _causal_conv1d_fwd_width4_vec_kernel(
                     w_base[v] = feat * w_stride_dim
                     out_base[v] = seq_start * o_stride_token + feat
                     state_base[v] = (
-                        cache_idx * state_stride_seq + feat * state_stride_dim
+                        T.Cast("int64", cache_idx) * state_stride_seq
+                        + feat * state_stride_dim
                     )
                     if feat < dim:
                         if chunk_idx == 0:
@@ -675,7 +684,7 @@ def _causal_conv1d_prefill_width4_kernel(
             load_init = T.alloc_var("bool")
             x_base = T.alloc_var("int32")
             w_base = T.alloc_var("int32")
-            state_base = T.alloc_var("int32")
+            state_base = T.alloc_var("int64")
             out_base = T.alloc_var("int32")
             col0 = T.alloc_var("float32")
             col1 = T.alloc_var("float32")
@@ -710,7 +719,10 @@ def _causal_conv1d_prefill_width4_kernel(
                 x_base = seq_start * x_stride_token + feat
                 w_base = feat * w_stride_dim
                 out_base = seq_start * o_stride_token + feat
-                state_base = cache_idx * state_stride_seq + feat * state_stride_dim
+                state_base = (
+                    T.Cast("int64", cache_idx) * state_stride_seq
+                    + feat * state_stride_dim
+                )
 
                 col0 = 0.0
                 col1 = 0.0
@@ -1037,7 +1049,7 @@ def _causal_conv1d_decode_width4_batched_kernel(
             load_init = T.alloc_var("bool")
             x_base = T.alloc_var("int32")
             w_base = T.alloc_var("int32")
-            state_base = T.alloc_var("int32")
+            state_base = T.alloc_var("int64")
             col0 = T.alloc_var("float32")
             col1 = T.alloc_var("float32")
             col2 = T.alloc_var("float32")
@@ -1069,7 +1081,10 @@ def _causal_conv1d_decode_width4_batched_kernel(
 
                 x_base = seq_idx * x_stride_token + feat
                 w_base = feat * w_stride_dim
-                state_base = cache_idx * state_stride_seq + feat * state_stride_dim
+                state_base = (
+                    T.Cast("int64", cache_idx) * state_stride_seq
+                    + feat * state_stride_dim
+                )
                 x_cur = T.Cast("float32", x[x_base])
                 col0 = 0.0
                 col1 = 0.0

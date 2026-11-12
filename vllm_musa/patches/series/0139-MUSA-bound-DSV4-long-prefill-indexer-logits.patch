@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: bound DSV4 long-prefill indexer logits
  1 file changed, 4 insertions(+)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index a8894e9387..0cef23dd5e 100644
+index 97af2cf4d5..df9d57b40d 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -23,6 +23,10 @@ from vllm.distributed import (

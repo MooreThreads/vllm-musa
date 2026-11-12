@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 3 Nov 2026 11:20:00 +0800
+Subject: [PATCH] MUSA: route Qwen4Exp QSA through the MUSA backend
+
+Qwen4Exp QSA imported the upstream FlashAttention implementation
+unconditionally, and the upstream `fa_utils` probe is false on MUSA even
+though vllm_musa exposes the MATE-backed path, so the model failed at the
+FlashAttention availability check. Select the MUSA backend when
+current_platform.is_musa().
+
+Qwen4Exp QSA also skips Qwen3NextAttention.__init__, which left the inherited
+dispatch flags unset and aborted the first forward pass. Initialize them
+disabled, and unpack the projection's KV-cache dependency, since QSA keeps the
+eager QK-norm/RoPE path.
+---
+ vllm/models/qwen4_exp/nvidia/qsa.py | 36 ++++++++++++++++++++++-------
+ 1 file changed, 28 insertions(+), 8 deletions(-)
+
+diff --git a/vllm/models/qwen4_exp/nvidia/qsa.py b/vllm/models/qwen4_exp/nvidia/qsa.py
+index 9f0934d5a0..bde1366b02 100644
+--- a/vllm/models/qwen4_exp/nvidia/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+@@ -46,13 +46,26 @@ from vllm.v1.attention.backend import (
+     AttentionType,
+     MultipleOf,
+ )
+-from vllm.v1.attention.backends.fa_utils import is_flash_attn_varlen_func_available
+-from vllm.v1.attention.backends.flash_attn import (
+-    FlashAttentionBackend,
+-    FlashAttentionImpl,
+-    FlashAttentionMetadata,
+-    FlashAttentionMetadataBuilder,
+-)
++if current_platform.is_musa():
++    from vllm_musa.v1.attention.backends.fa_utils import (
++        is_flash_attn_varlen_func_available,
++    )
++    from vllm_musa.v1.attention.backends.flash_attn import (
++        MUSAFlashAttentionBackend as FlashAttentionBackend,
++        FlashAttentionImpl,
++        FlashAttentionMetadata,
++        FlashAttentionMetadataBuilder,
++    )
++else:
++    from vllm.v1.attention.backends.fa_utils import (
++        is_flash_attn_varlen_func_available,
++    )
++    from vllm.v1.attention.backends.flash_attn import (
++        FlashAttentionBackend,
++        FlashAttentionImpl,
++        FlashAttentionMetadata,
++        FlashAttentionMetadataBuilder,
++    )
+ from vllm.v1.kv_cache_interface import (
+     FullAttentionSpec,
+     KVCacheSpec,
+@@ -455,6 +468,11 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
+             and (text_only or supports_mrope)
+         )
+ 
++        # Qwen4Exp QSA skips Qwen3NextAttention.__init__, so the inherited
++        # dispatch flags it leaves disabled are initialized here.
++        self._musa_fused_qk_mrope = False
++        self.use_gated_qkv_rms_norm_rope = False
++
+         self.layer_name = f"{prefix}.attn"
+         self.attn_type = AttentionType.DECODER
+         self.kv_cache_dtype = qsa_kv_cache_dtype(cache_config, prefix)
+@@ -631,7 +649,9 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
+             projected_qk, _ = self.indexer.index_qk_proj(hidden_states)
+         num_tokens = hidden_states.shape[0]
+         if not self.use_fused_qsa_prepare:
+-            q, k, v, gate = self._project_qkv_gate(qkv, positions)
++            # QSA keeps the eager QK-norm/RoPE path, so the fused projection
++            # returns no KV-cache dependency to carry.
++            q, k, v, gate, _ = self._project_qkv_gate(qkv, positions)
+             assert gate is not None
+             query = q.view(num_tokens, self.num_heads, self.head_dim)
+             key = k.view(num_tokens, self.num_kv_heads, self.head_dim)

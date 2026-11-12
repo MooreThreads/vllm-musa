@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: keep DSV4 learned indexer on graph capture
  1 file changed, 2 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index fb80c84f7d..5ee2364586 100644
+index 1870736090..9ab6e83bc9 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
-@@ -2478,8 +2478,6 @@ class SparseAttnIndexer(CustomOp):
+@@ -2480,8 +2480,6 @@ class SparseAttnIndexer(CustomOp):
          self.skip_k_cache_insert = skip_k_cache_insert
          self.use_fp4_cache = use_fp4_cache
          self.compress_ratio = compress_ratio

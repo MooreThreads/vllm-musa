@@ -6,8 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
-import torchada  # noqa: F401
 import torch
+import torchada  # noqa: F401
 
 from tests.qwen_contract_test_utils import qwen_sampler
 from vllm_musa.v1.sample import uniform_sample_counts as sample_counts
@@ -189,7 +189,7 @@ def test_qwen_async_output_patch_is_tag_gated() -> None:
         / "vllm_musa"
         / "patches"
         / "series"
-        / "0098-perf-elide-qwen-uniform-count-dtoh.patch"
+        / "0089-perf-reuse-proven-Qwen-sample-counts-on-host.patch"
     ).read_text()
     assert sample_counts.UNIFORM_NUM_SAMPLED_TOKENS_HOST_ATTR in patch
     assert "if host_num_sampled_tokens is None" in patch

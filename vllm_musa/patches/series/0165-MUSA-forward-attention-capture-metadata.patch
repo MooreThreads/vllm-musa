@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:11 +0800
+Subject: [PATCH] MUSA: forward attention capture metadata
+
+---
+ vllm/v1/worker/utils.py | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
+index d10cdcec64..166b5da71f 100644
+--- a/vllm/v1/worker/utils.py
++++ b/vllm/v1/worker/utils.py
+@@ -352,10 +352,13 @@ class AttentionGroup:
+         )
+ 
+     def build_metadata_for_cudagraph_capture(
+-        self, common_attn_metadata: CommonAttentionMetadata, ubatch_idx: int = 0
++        self,
++        common_attn_metadata: CommonAttentionMetadata,
++        ubatch_idx: int = 0,
++        **kwargs: Any,
+     ) -> Any:
+         return self.get_metadata_builder(ubatch_idx).build_for_cudagraph_capture(
+-            self._with_kernel_block_table(common_attn_metadata, ubatch_idx)
++            self._with_kernel_block_table(common_attn_metadata, ubatch_idx), **kwargs
+         )
+ 
+     def build_metadata_for_drafting(
