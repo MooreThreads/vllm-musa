@@ -17,6 +17,7 @@ import torchada  # noqa: F401
 import torch
 
 # isort: on
+from torchada import arch as musa_arch
 from typing_extensions import ParamSpec
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability, Platform, PlatformEnum
@@ -869,7 +870,9 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def supports_fp8(cls) -> bool:
-        return cls.has_device_capability((3, 1))
+        return any(
+            cls.is_device_capability(a.capability) for a in musa_arch.ARCHS if a.fp8
+        )
 
     @classmethod
     def use_custom_allreduce(cls) -> bool:
@@ -960,6 +963,13 @@ class MtmlMUSAPlatform(MUSAPlatformBase):
         # nvmlShutdown() pair on every call.
         try:
             return super().has_device_capability(capability, device_id)
+        except RuntimeError:
+            return False
+
+    @classmethod
+    def supports_fp8(cls) -> bool:
+        try:
+            return super().supports_fp8()
         except RuntimeError:
             return False
 

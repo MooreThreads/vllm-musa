@@ -10,16 +10,19 @@ import time
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
+# isort: off
 # Activate MUSA patches before importing the torch ecosystem.
 import torchada  # noqa: F401
-import torch
+import torch  # noqa: F401
 
+# isort: on
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
 
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
+from build_utils.build_info import write_build_info  # noqa: E402
 from build_utils.ccache import configure_compiler_cache  # noqa: E402
 
 third_party = Path("third_party")
@@ -182,14 +185,18 @@ VLLM_STABLE_CSRC_SOURCES = [
     str(_VLLM_REPO.source_dir / "csrc/attention/merge_attn_states.cu"),
     str(_VLLM_REPO.source_dir / "csrc/sampler.cu"),
     str(_VLLM_REPO.source_dir / "csrc/topk.cu"),
-    str(_VLLM_REPO.source_dir
-        / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"),
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"
+    ),
     # Layernorm+quant fusion kernels (rms_norm_static_fp8_quant,
     # fused_add_rms_norm_static_fp8_quant, rms_norm_dynamic_per_token_quant,
     # rms_norm_per_block_quant): emitted by the rms_quant_fusion compile pass.
     str(_VLLM_REPO.source_dir / "csrc/layernorm_quant_kernels.cu"),
-    str(_VLLM_REPO.source_dir
-        / "csrc/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu"),
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu"
+    ),
     str(_VLLM_REPO.source_dir / "csrc/quantization/activation_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/custom_all_reduce.cu"),
     str(_VLLM_REPO.source_dir / "csrc/minimax_reduce_rms_kernel.cu"),
@@ -246,31 +253,28 @@ EXTRA_LINK_ARGS = [
     "-lmublasLt",
 ]
 
-# Detect MTGPU target architecture
-DEFAULT_MTGPU_TARGET = "mp_31"
-MTGPU_TARGET = os.environ.get("MTGPU_TARGET")
+# `arch` is the host CPU architecture in this file.
+from torchada import arch as musa_arch
 
-if MTGPU_TARGET:
-    print(f"Using MTGPU_TARGET from environment: {MTGPU_TARGET}")
-else:
-    MTGPU_TARGET = DEFAULT_MTGPU_TARGET
-
-if "MTGPU_TARGET" not in os.environ and torch.musa.is_available():
-    try:
-        device_props = torch.musa.get_device_properties(0)
-        MTGPU_TARGET = f"mp_{device_props.major}{device_props.minor}"
-    except Exception as e:
-        print(f"Warning: Failed to detect GPU properties: {e}")
-elif "MTGPU_TARGET" not in os.environ:
-    print(f"Warning: torch.musa not available. Using default target: {MTGPU_TARGET}")
-
-SUPPORTED_MTGPU_TARGETS = ["mp_22", "mp_31"]
-if MTGPU_TARGET not in SUPPORTED_MTGPU_TARGETS:
+# MTGPU_TARGET, then TORCH_MUSA_ARCH_LIST, then the visible devices, then mp_31.
+# No device check: a build may target an arch other than the build host's.
+MUSA_ARCHS = musa_arch.target_archs(env=("MTGPU_TARGET", "TORCH_MUSA_ARCH_LIST"))
+if len(MUSA_ARCHS) != 1:
     print(
-        f"Warning: Unsupported GPU architecture '{MTGPU_TARGET}'. "
-        f"Expected one of: {SUPPORTED_MTGPU_TARGETS}"
+        "vllm-musa builds for one MUSA arch per build; "
+        f"got {[a.name for a in MUSA_ARCHS]}"
     )
     sys.exit(1)
+MUSA_ARCH = MUSA_ARCHS[0]
+if MUSA_ARCH not in musa_arch.ARCHS:
+    print(
+        f"Unsupported GPU architecture '{MUSA_ARCH.name}'. "
+        f"Expected one of: {[a.name for a in musa_arch.ARCHS]}"
+    )
+    sys.exit(1)
+print(f"Building for MUSA arch {MUSA_ARCH.name}")
+# torch_musa's MUSAExtension takes --offload-arch from TORCH_MUSA_ARCH_LIST.
+os.environ["TORCH_MUSA_ARCH_LIST"] = musa_arch.torch_arch_list(MUSA_ARCHS)
 
 MCC_FLAGS = [
     "-DNDEBUG",
@@ -288,7 +292,7 @@ MCC_FLAGS = [
     "-DUSE_MUSA",
 ]
 
-if MTGPU_TARGET == "mp_31":
+if MUSA_ARCH.fp8:
     MCC_FLAGS.append("-DENABLE_FP8")
 
 COMPILE_ARGS = {
@@ -301,10 +305,8 @@ COMPILE_ARGS = {
 # paths compile out on MUSA), and link torch_cpu (the AOTI stable-ABI shims live
 # in libtorch_cpu.so). torchada's include_paths() auto-appends the stable_compat
 # include dir, and its import patches torch_musa's stable::Tensor accessors.
-from torchada.utils.cpp_extension import (
-    stable_compat_box_header as _ta_stable_box,
-    stable_compat_include_dir as _ta_stable_inc,
-)
+from torchada.utils.cpp_extension import stable_compat_box_header as _ta_stable_box
+from torchada.utils.cpp_extension import stable_compat_include_dir as _ta_stable_inc
 
 _STABLE_BOX_HEADER = _ta_stable_box()
 # Explicitly add torchada's stable_compat include dir (the include_paths()
@@ -362,6 +364,17 @@ EXT_MODULES = [
 
 class _CustomBuildExt(BuildExtension):
     """Custom build extension that clones third-party repositories before building."""
+
+    def build_extensions(self):
+        super().build_extensions()
+        # The source tree serves editable installs; build_lib is what a wheel packs,
+        # and build_py has already copied the package there.
+        package_dirs = {root / "vllm_musa"}
+        if self.build_lib and (Path(self.build_lib) / "vllm_musa").is_dir():
+            package_dirs.add(Path(self.build_lib) / "vllm_musa")
+        for package_dir in package_dirs:
+            path = write_build_info(package_dir, [a.capability for a in MUSA_ARCHS])
+            print(f"Recorded MUSA arch {MUSA_ARCH.name} in {path}")
 
     @staticmethod
     def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):

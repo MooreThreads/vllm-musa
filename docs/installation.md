@@ -77,6 +77,9 @@ export PIP_INDEX_URL="${PYPI_INDEX_URL}"
 pip install . --no-build-isolation -v
 ```
 
+In an existing environment, upgrade torchada to the `requirements/common.txt` pin
+first: `setup.py` imports `torchada.arch` at build time.
+
 For an editable install:
 
 ```bash
