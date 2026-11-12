@@ -965,6 +965,7 @@ def _moe_deepgemm_bf16_prefill_impl(
         get_mk_alignment_for_contiguous_layout,
         mk_alignment_scope,
     )
+
     from vllm_musa.jit_kernel.post_reorder import post_reorder_triton_kernel
     from vllm_musa.jit_kernel.tilelang.deep_gemm_contig_preprocess import (
         can_use_bf16_tilelang,
@@ -1454,7 +1455,14 @@ def _can_use_musa_fp8_block_moe_gemv(
     ):
         max_tokens = max(max_tokens, _NATIVE_FP8_BLOCK_MOE_GEMV_MAX_TOKENS)
     if hidden_states.dim() == 2 and _fp8_moe_mma_eligible(
-        hidden_states, w1, w2, w1_scale, w2_scale, topk_ids, block_shape, gemm1_clamp_limit
+        hidden_states,
+        w1,
+        w2,
+        w1_scale,
+        w2_scale,
+        topk_ids,
+        block_shape,
+        gemm1_clamp_limit,
     ):
         max_tokens = max(max_tokens, hidden_states.shape[0])
     if (
@@ -1499,9 +1507,7 @@ def _can_use_musa_fp8_block_moe_gemv(
     )
 
 
-_NATIVE_FP8_BLOCK_MOE_GEMV = (
-    os.environ.get("VLLM_MUSA_FP8_NATIVE_MOE_GEMV", "1") != "0"
-)
+_NATIVE_FP8_BLOCK_MOE_GEMV = os.environ.get("VLLM_MUSA_FP8_NATIVE_MOE_GEMV", "1") != "0"
 _NATIVE_FP8_BLOCK_MOE_GEMV_MAX_TOKENS = 8
 # The native path takes two more launches than the Triton GEMVs, which quantize
 # in-kernel; it wins from four tokens.
@@ -1534,8 +1540,6 @@ def _native_fp8_block_moe_gemv_supported(
     )
 
 
-
-
 def _fp8_moe_mma_eligible(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -1559,9 +1563,9 @@ def _fp8_moe_mma_eligible(
     from vllm_musa.kernels.fp8_moe_mma import MIN_TOKENS, fp8_moe_mma_supported
 
     routed_map = getattr(topk_ids, "musa_route_map", None) is not None
-    return (hidden_states.shape[0] >= MIN_TOKENS or routed_map) and fp8_moe_mma_supported(
-        hidden_states, w1, w2, w1_scale, w2_scale, topk_ids
-    )
+    return (
+        hidden_states.shape[0] >= MIN_TOKENS or routed_map
+    ) and fp8_moe_mma_supported(hidden_states, w1, w2, w1_scale, w2_scale, topk_ids)
 
 
 def _musa_fp8_block_moe_gemv(
@@ -1596,7 +1600,14 @@ def _musa_fp8_block_moe_gemv(
     expert_ids = topk_ids.reshape(-1).contiguous()
 
     if _fp8_moe_mma_eligible(
-        hidden_states, w1, w2, w1_scale, w2_scale, topk_ids, block_shape, gemm1_clamp_limit
+        hidden_states,
+        w1,
+        w2,
+        w1_scale,
+        w2_scale,
+        topk_ids,
+        block_shape,
+        gemm1_clamp_limit,
     ):
         from vllm_musa.kernels.fp8_moe_mma import fp8_moe_mma
 

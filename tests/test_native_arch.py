@@ -6,8 +6,12 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+
+# isort: off
 import torchada  # noqa: F401
 import torch
+
+# isort: on
 from torchada import arch as musa_arch
 
 from build_utils.build_info import write_build_info
@@ -89,9 +93,11 @@ def test_check_device_arch_skips_without_a_record(monkeypatch):
 
 def test_worker_checks_its_device_after_init_device(monkeypatch):
     # The plugin imports vllm_musa.v1 before vLLM imports the worker class.
+    # isort: off
     import vllm_musa.v1  # noqa: F401
     from vllm.v1.worker.gpu_worker import Worker
 
+    # isort: on
     from vllm_musa import worker as musa_worker
 
     calls = []

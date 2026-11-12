@@ -2,8 +2,12 @@
 """TileLang's on-disk kernel cache keys on str(target), which must carry the device arch."""
 
 import pytest
+
+# isort: off
 import torchada  # noqa: F401
 import torch
+
+# isort: on
 
 pytestmark = pytest.mark.skipif(
     not (hasattr(torch, "musa") and torch.musa.is_available()),
