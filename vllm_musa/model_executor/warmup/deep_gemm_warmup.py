@@ -4,7 +4,6 @@
 import torch
 from vllm.logger import init_logger
 
-
 logger = init_logger(__name__)
 
 _BF16_WARMUP_CACHE: set[tuple[torch.Size, torch.Size, int, int]] = set()
@@ -25,9 +24,7 @@ def _alignment_m() -> int:
     from vllm.utils.deep_gemm import get_mk_alignment_for_contiguous_layout
 
     alignment = get_mk_alignment_for_contiguous_layout()
-    return int(
-        alignment[0] if isinstance(alignment, (list, tuple)) else alignment
-    )
+    return int(alignment[0] if isinstance(alignment, (list, tuple)) else alignment)
 
 
 def _aligned_grouped_tokens(
@@ -169,6 +166,112 @@ def _warmup_paged_mqa_logits_metadata(model: torch.nn.Module) -> None:
         get_paged_mqa_logits_metadata_module(rows)
 
 
+def _vllm_config(model: torch.nn.Module):
+    """The vLLM config ``model`` was built with, or ``None``.
+
+    Warmup runs outside ``set_current_vllm_config()``, so fall back to the
+    config a ``support_torch_compile`` module keeps as ``vllm_config``.
+    """
+    try:
+        from vllm.config import get_current_vllm_config_or_none
+
+        config = get_current_vllm_config_or_none()
+        if config is None:
+            config = next(
+                (
+                    module.vllm_config
+                    for module in model.modules()
+                    if getattr(module, "vllm_config", None) is not None
+                ),
+                None,
+            )
+        return config
+    except Exception:
+        return None
+
+
+def _rotary_calls_replaced(vllm_config) -> bool:
+    """Whether the Qwen3 QK-RoPE-KV pre-split replaces every rotary call.
+
+    Read from the optimization contract, which also holds when the compiled
+    graph comes from the AOT cache. Where the rewrite does not match, the
+    profile run has already built the one hint its 128-wide envelope can pick.
+    """
+    try:
+        from vllm_musa.optimization_contract.policy import prefers_feature
+        from vllm_musa.optimization_contract.types import OptimizationFeature
+
+        return vllm_config is not None and prefers_feature(
+            vllm_config, OptimizationFeature.QWEN3_QK_ROPE_KV_PRESPLIT
+        )
+    except Exception:
+        return False
+
+
+def _rope_kernel_rotary_dims(model: torch.nn.Module) -> set[int | None]:
+    """Rotary widths a live call path hands the MUSA rotary-embedding kernel.
+
+    A ``MusaRotaryEmbedding`` contributes its width when CustomOp dispatches it
+    to ``forward_oot``, ``VLLM_MUSA_CUSTOM_OP_USE_NATIVE`` is unset and the
+    config does not prefer the Qwen3 QK-RoPE-KV pre-split. A
+    ``MusaVisionApplyRotaryEmb`` contributes its width unless
+    ``VLLM_MUSA_CUSTOM_OP_USE_NATIVE`` is set. Empty when no call path reaches
+    the kernel; ``None`` marks a width that is only known per call.
+    """
+    from vllm_musa.model_executor.layers.rotary_embedding.base import (
+        MusaRotaryEmbedding,
+    )
+    from vllm_musa.optimization_contract.rotary import MusaVisionApplyRotaryEmb
+    from vllm_musa.utils.environ import envs
+
+    use_native = envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get()
+    calls_replaced = _rotary_calls_replaced(_vllm_config(model))
+    dims: set[int | None] = set()
+    for module in model.modules():
+        if isinstance(module, MusaRotaryEmbedding):
+            # CustomOp dispatches forward_oot only while the op is enabled; that
+            # path reaches the kernel directly or through the Qwen2 RoPE+KV
+            # pre-split's fused op.
+            forward = getattr(module, "_forward_method", None)
+            dispatches_oot = (
+                getattr(forward, "__func__", None) is MusaRotaryEmbedding.forward_oot
+            )
+            if calls_replaced or use_native or not dispatches_oot:
+                continue
+            # The kernel takes the width from the cache, which partial-rotary
+            # models size to head_dim * partial_rotary_factor.
+            shape = getattr(getattr(module, "cos_sin_cache", None), "shape", None)
+            dims.add(int(shape[-1]) if shape else None)
+        elif isinstance(module, MusaVisionApplyRotaryEmb) and not use_native:
+            # The adapter concatenates cos and sin into the kernel's cache.
+            geometry = module.required_bf16_neox_shape
+            dims.add(2 * int(geometry[1]) if geometry is not None else None)
+    return dims
+
+
+def _warmup_rope_store_hints(model: torch.nn.Module) -> None:
+    """Build the rotary-embedding store-hint modules before graph capture.
+
+    The kernel picks its store hint from the runtime token count and each hint
+    is its own JIT module, so a hint first reached while serving or capturing
+    would be built there. Every hint the kernel can pick is loaded for each
+    width ``_rope_kernel_rotary_dims`` returns; a failure only logs a warning.
+    """
+    try:
+        from vllm_musa.jit_kernel.csrc.rope import prewarm_rope_modules
+
+        loaded: list[str] = []
+        for rot_dim in _rope_kernel_rotary_dims(model):
+            for name in prewarm_rope_modules(rot_dim):
+                if name not in loaded:
+                    loaded.append(name)
+    except Exception as exc:
+        logger.warning("MUSA rotary-embedding warmup skipped: %s", exc)
+        return
+    if loaded:
+        logger.info("Loaded MUSA rotary-embedding kernels: %s", ", ".join(loaded))
+
+
 _upstream_deep_gemm_warmup = (
     vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup
 )
@@ -178,6 +281,7 @@ def deep_gemm_warmup(model: torch.nn.Module, max_tokens: int, pbar=None):
     _upstream_deep_gemm_warmup(model, max_tokens)
     _warmup_bf16_grouped_moe(model, max_tokens)
     _warmup_paged_mqa_logits_metadata(model)
+    _warmup_rope_store_hints(model)
 
 
 vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup = deep_gemm_warmup
