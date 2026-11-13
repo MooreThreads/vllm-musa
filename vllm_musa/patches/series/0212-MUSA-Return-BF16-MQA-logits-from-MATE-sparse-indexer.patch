@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 13 Nov 2026 10:35:27 +0800
+Subject: [PATCH] [MUSA] Return BF16 MQA logits from MATE sparse indexers
+
+---
+ .../layers/sparse_attn_indexer.py             | 29 ++++++++++++++++---
+ 1 file changed, 25 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 4ff56d7c14..b010fb0235 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -547,6 +547,11 @@ def _musa_try_fill_decode_topk_from_materialized_logits(
+                 decode_metadata.schedule_metadata,
+                 materialized_width,
+                 False,
++                **(
++                    {"logits_dtype": _MUSA_INDEXER_LOGITS_DTYPE}
++                    if provider_name == "mate.deep_gemm"
++                    else {}
++                ),
+             )
+             if _select(logits):
+                 return True
+@@ -1023,7 +1028,9 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+         )
+         return True
+ 
+-    def _musa_fill_with_deep_gemm_provider(_musa_deep_gemm) -> bool:
++    def _musa_fill_with_deep_gemm_provider(
++        _musa_deep_gemm, *, logits_dtype: torch.dtype | None = None
++    ) -> bool:
+         get_num_mps = getattr(
+             _musa_deep_gemm,
+             "get_num_mps",
+@@ -1050,6 +1057,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+                 schedule_meta,
+                 total_seq_lens,
+                 False,
++                **({"logits_dtype": logits_dtype} if logits_dtype is not None else {}),
+             )
+             if not _musa_fill_chunk_from_logits(logits, row_start, row_end):
+                 return False
+@@ -1087,7 +1095,14 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+             else:
+                 import deep_gemm as _musa_deep_gemm
+ 
+-            if _musa_fill_with_deep_gemm_provider(_musa_deep_gemm):
++            if _musa_fill_with_deep_gemm_provider(
++                _musa_deep_gemm,
++                logits_dtype=(
++                    _MUSA_INDEXER_LOGITS_DTYPE
++                    if provider_name == "mate.deep_gemm"
++                    else None
++                ),
++            ):
+                 return _musa_finish_materialized_prefill()
+         except Exception as exc:
+             provider_errors.append(
+@@ -1413,7 +1428,8 @@ def _musa_gather_indexer_fp8_cache_quantized(
+     )
+ 
+ 
+-# Bounds the [rows, keys] FP32 logits of one prefill tile.
++# Bounds the [rows, keys] logits of one prefill tile.
++_MUSA_INDEXER_LOGITS_DTYPE = torch.bfloat16
+ _MUSA_INDEXER_MQA_LOGITS_TILE_BYTES = 256 << 20
+ 
+ 
+@@ -1459,7 +1475,11 @@ def _musa_try_fill_prefill_topk_from_fp8_mqa_logits(
+         return True
+     starts = chunk.cu_seqlen_ks[:rows].to(torch.int32).clamp(0, num_keys)
+     ends = chunk.cu_seqlen_ke[:rows].to(torch.int32).clamp(0, num_keys)
+-    tile_rows = max(1, _MUSA_INDEXER_MQA_LOGITS_TILE_BYTES // (num_keys * 4))
++    tile_rows = max(
++        1,
++        _MUSA_INDEXER_MQA_LOGITS_TILE_BYTES
++        // (num_keys * _MUSA_INDEXER_LOGITS_DTYPE.itemsize),
++    )
+     starts_at_zero = _musa_indexer_windows_start_at_zero(starts, topk, topk_backend)
+     for row_start in range(0, rows, tile_rows):
+         row_end = min(rows, row_start + tile_rows)
+@@ -1471,6 +1491,7 @@ def _musa_try_fill_prefill_topk_from_fp8_mqa_logits(
+             weights[row_start:row_end].contiguous(),
+             tile_starts,
+             tile_ends,
++            logits_dtype=_MUSA_INDEXER_LOGITS_DTYPE,
+         )
+         _musa_select_indexer_topk_windows(
+             logits,

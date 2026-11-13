@@ -10,12 +10,17 @@ the in-tree radix selector. Nonzero-start windows retain their native or
 reference top-k dispatch. Unsupported DeepSelect input layouts retain native
 top-k dispatch.
 
+Write paged Triton logits directly as BF16 for compatible DeepSelect inputs.
+Retain FP32 output for native selection and unsupported DeepSelect layouts.
 ---
+ .../layers/sparse_attn_indexer.py             | 115 +++++++++++++++++-
+ 1 file changed, 109 insertions(+), 6 deletions(-)
+
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb313d6c0b9 100644
+index 85e9b9a61c..4ff56d7c14 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
-@@ -39,6 +39,8 @@
+@@ -39,7 +39,9 @@ from vllm.model_executor.kernels.attention.dsa.candidate_blocks import (
  )
  from vllm.model_executor.layers.indexer_topk import (
      RADIX_TOPK_WORKSPACE_SIZE,
@@ -24,7 +29,8 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
 +    is_deep_select_supported,
  )
  from vllm.model_executor.layers.quantization.utils.quant_utils import (
-@@ -258,8 +260,17 @@
+     get_fp8_min_max,
+@@ -258,8 +260,17 @@ def _musa_select_indexer_topk(
      row_lens: torch.Tensor,
      topk_indices: torch.Tensor,
      topk: int,
@@ -42,7 +48,10 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
      if topk <= 512:
          # MUSA: the staged radix select returns the same set and order.
          _musa_custom_ops.deepseek_v4_sparse_indexer_topk_decode(
-@@ -272,7 +283,11 @@
+@@ -269,10 +280,14 @@ def _musa_select_indexer_topk(
+     _musa_custom_ops.sparse_indexer_topk_decode(logits, row_lens, topk_indices, topk)
+ 
+ 
 -def _musa_indexer_windows_start_at_zero(row_starts: torch.Tensor, topk: int) -> bool:
 +def _musa_indexer_windows_start_at_zero(
 +    row_starts: torch.Tensor,
@@ -56,7 +65,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
          and not _musa_sparse_indexer_is_current_stream_capturing()
          and not bool(row_starts.any())
      )
-@@ -285,10 +300,13 @@
+@@ -285,10 +300,13 @@ def _musa_select_indexer_topk_windows(
      topk_indices: torch.Tensor,
      topk: int,
      starts_at_zero: bool,
@@ -71,7 +80,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
          return
      _musa_custom_ops.sparse_indexer_topk(
          logits, row_starts, row_ends, topk_indices, topk
-@@ -303,6 +321,7 @@
+@@ -303,6 +321,7 @@ def _musa_try_fill_decode_topk_from_paged_logits(
      topk_indices_buffer: torch.Tensor,
      topk_tokens: int,
      head_dim: int,
@@ -79,7 +88,19 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
  ) -> bool:
      """Graph-safe FP8 decode top-k for any indexer cache block size."""
      if (
-@@ -363,6 +382,7 @@
+@@ -334,7 +353,10 @@ def _musa_try_fill_decode_topk_from_paged_logits(
+ 
+     block_size = kv_cache.shape[1]
+     width = block_table.shape[1] * block_size
+-    logits = torch.empty((rows, width), dtype=torch.float32, device=q_quant.device)
++    logits_dtype = torch.bfloat16 if topk_backend == "deep_select" else torch.float32
++    logits = torch.empty((rows, width), dtype=logits_dtype, device=q_quant.device)
++    if topk_backend == "deep_select" and not is_deep_select_supported(logits, topk):
++        logits = torch.empty((rows, width), dtype=torch.float32, device=q_quant.device)
+     block_n = 64
+     _musa_paged_mqa_logits_kernel[(rows, triton.cdiv(width, block_n))](
+         q_quant,
+@@ -363,6 +385,7 @@ def _musa_try_fill_decode_topk_from_paged_logits(
          seq_lens[:rows],
          topk_indices_buffer[:rows, :topk],
          topk,
@@ -87,7 +108,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
      )
      return True
  
-@@ -440,6 +460,7 @@
+@@ -440,6 +463,7 @@ def _musa_try_fill_decode_topk_from_materialized_logits(
      topk_tokens: int,
      head_dim: int,
      max_model_len: int,
@@ -95,7 +116,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
  ) -> bool:
      is_glm52 = (
          q_quant.ndim == 3
-@@ -503,6 +524,7 @@
+@@ -503,6 +527,7 @@ def _musa_try_fill_decode_topk_from_materialized_logits(
              seq_lens,
              topk_indices[:rows, :topk],
              topk,
@@ -103,7 +124,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
          )
          return True
  
-@@ -556,6 +578,7 @@
+@@ -556,6 +581,7 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
      head_dim: int,
      max_model_len: int,
      allow_materialized: bool = True,
@@ -111,14 +132,14 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
  ) -> bool:
      if allow_materialized and _musa_try_fill_decode_topk_from_materialized_logits(
          q_quant,
-@@ -566,6 +589,19 @@
+@@ -566,9 +592,22 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
          topk_tokens,
          head_dim,
          max_model_len,
 +        topk_backend,
      ):
          return True
-+
+ 
 +    if topk_backend == "deep_select":
 +        return _musa_try_fill_decode_topk_from_paged_logits(
 +            q_quant,
@@ -130,8 +151,11 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
 +            head_dim,
 +            topk_backend,
 +        )
- 
-@@ -629,6 +665,7 @@
++
+     if (
+         _musa_sparse_indexer_glm52_fused_enabled()
+         and head_dim == 128
+@@ -629,6 +668,7 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
              topk_indices_buffer,
              topk_tokens,
              head_dim,
@@ -139,7 +163,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
          )
  
      seq_lens = decode_metadata.seq_lens.reshape(-1)
-@@ -665,6 +702,7 @@
+@@ -665,6 +705,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
      topk_tokens: int,
      head_dim: int,
      allow_deepseek_v4: bool = False,
@@ -147,16 +171,18 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
  ) -> bool:
      is_glm52 = (
          q_quant.ndim == 3
-@@ -853,5 +891,7 @@
+@@ -852,7 +893,9 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+     )
      windows_start_at_zero = (
          is_glm52 or use_bounded_long_prefill
 -    ) and _musa_indexer_windows_start_at_zero(work_starts, topk)
 +    ) and _musa_indexer_windows_start_at_zero(
 +        work_starts, topk, topk_backend
 +    )
-
+ 
      def _musa_fill_chunk_from_logits(
-@@ -874,6 +914,7 @@
+         logits: torch.Tensor,
+@@ -874,6 +917,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
                  work_output[row_start:row_end, :topk],
                  topk,
                  windows_start_at_zero,
@@ -164,7 +190,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
              )
              return True
  
-@@ -885,6 +926,7 @@
+@@ -885,6 +929,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
                  work_output[row_start:row_end, :topk],
                  topk,
                  windows_start_at_zero,
@@ -172,7 +198,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
              )
              return True
  
-@@ -895,4 +937,18 @@
+@@ -895,6 +940,20 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
          )
          logits.masked_fill_(~valid_positions, float("-inf"))
  
@@ -191,7 +217,9 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
 +            return True
 +
          if materialized_direct_topk:
-@@ -1063,6 +1119,7 @@
+             direct_width = min(topk, total_seq_lens)
+             direct_abs = torch.topk(
+@@ -1063,6 +1122,7 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
      topk_tokens: int,
      head_dim: int,
      allow_deepseek_v4_materialized: bool = False,
@@ -199,7 +227,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
  ) -> bool:
      if (
          q_quant.ndim == 3
-@@ -1075,6 +1132,7 @@
+@@ -1075,6 +1135,7 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
              topk_indices,
              topk_tokens,
              head_dim,
@@ -207,7 +235,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
          )
      ):
          return True
-@@ -1134,7 +1192,13 @@
+@@ -1134,10 +1195,16 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
              topk_tokens,
              head_dim,
              allow_deepseek_v4=True,
@@ -215,13 +243,16 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
          )
      ):
          return True
-+
+ 
 +    if topk_backend == "deep_select" and _musa_indexer_windows_start_at_zero(
 +        chunk.cu_seqlen_ks, topk_tokens, topk_backend
 +    ):
 +        return False
- 
-@@ -1165,6 +1229,7 @@
++
+     if (
+         not _musa_sparse_indexer_native_decode_enabled()
+         or head_dim != 128
+@@ -1165,6 +1232,7 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
          topk,
          head_dim,
          allow_deepseek_v4_materialized,
@@ -229,7 +260,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
      ):
          return True
  
-@@ -1357,6 +1422,7 @@
+@@ -1357,6 +1425,7 @@ def _musa_try_fill_prefill_topk_from_fp8_mqa_logits(
      topk_indices: torch.Tensor,
      topk_tokens: int,
      head_dim: int,
@@ -237,7 +268,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
  ) -> bool:
      """Prefill top-k from FP8 MQA logits over the gathered FP8 keys.
  
-@@ -1393,7 +1459,7 @@
+@@ -1391,7 +1460,7 @@ def _musa_try_fill_prefill_topk_from_fp8_mqa_logits(
      starts = chunk.cu_seqlen_ks[:rows].to(torch.int32).clamp(0, num_keys)
      ends = chunk.cu_seqlen_ke[:rows].to(torch.int32).clamp(0, num_keys)
      tile_rows = max(1, _MUSA_INDEXER_MQA_LOGITS_TILE_BYTES // (num_keys * 4))
@@ -246,7 +277,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
      for row_start in range(0, rows, tile_rows):
          row_end = min(rows, row_start + tile_rows)
          tile_starts = starts[row_start:row_end].contiguous()
-@@ -1410,6 +1476,7 @@
+@@ -1410,6 +1479,7 @@ def _musa_try_fill_prefill_topk_from_fp8_mqa_logits(
              topk_indices[row_start:row_end, :topk],
              topk,
              starts_at_zero,
@@ -254,13 +285,15 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
          )
      return True
  
-@@ -1438,4 +1505,5 @@ def _musa_fill_topk_rows_from_indexer_logits(
+@@ -1438,6 +1508,7 @@ def _musa_fill_topk_rows_from_indexer_logits(
      cu_seqlen_ke: torch.Tensor,
      topk_indices: torch.Tensor,
      topk_tokens: int,
 +    topk_backend: str = "auto",
  ) -> None:
-@@ -1463,4 +1531,17 @@
+     """Top-k of each row's key window ``[ks, ke)``, as window-local indices.
+ 
+@@ -1463,6 +1534,19 @@ def _musa_fill_topk_rows_from_indexer_logits(
          lo = starts[row_start:row_end]
          hi = ends[row_start:row_end]
          logits.masked_fill_((positions < lo) | (positions >= hi), float("-inf"))
@@ -278,20 +311,17 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
 +            )
 +            continue
          top = torch.topk(logits, width, dim=-1).indices
-@@ -1515,9 +1596,10 @@
- def _musa_fill_decode_topk_from_indexer_cache_capture(
-     q_deq: torch.Tensor,
-     kv_cache: torch.Tensor,
-     weights: torch.Tensor,
-     decode_metadata,
+         in_window = slots < (hi - lo).clamp_min(0)
+         topk_indices[row_start:row_end, :width] = torch.where(
+@@ -1515,6 +1599,7 @@ def _musa_fill_decode_topk_from_indexer_cache_capture(
      topk_indices_buffer: torch.Tensor,
      topk_tokens: int,
      head_dim: int,
 +    topk_backend: str = "auto",
  ) -> None:
-@@ -1561,6 +1643,14 @@
-     logits = torch.where(
-         valid,
+     seq_lens = decode_metadata.seq_lens.reshape(-1).to(torch.long)
+     rows = min(q_deq.shape[0], seq_lens.numel(), topk_indices_buffer.shape[0])
+@@ -1561,6 +1646,14 @@ def _musa_fill_decode_topk_from_indexer_cache_capture(
          logits,
          torch.full((), float("-inf"), dtype=logits.dtype, device=logits.device),
      )
@@ -304,7 +334,9 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
 +        )
 +        return
      indices = torch.topk(logits, topk, dim=-1).indices.to(topk_indices_buffer.dtype)
-@@ -1583,6 +1673,7 @@
+     valid_counts = seq_lens[:rows].clamp(min=0, max=topk).unsqueeze(-1)
+     rank_offsets = torch.arange(topk, device=kv_cache.device, dtype=torch.long)
+@@ -1583,6 +1676,7 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
      max_model_len: int,
      topk_indices_buffer: torch.Tensor,
      use_fp4_cache: bool,
@@ -312,7 +344,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
  ) -> torch.Tensor:
      # Avoid logger calls in fallback forward paths; these functions may be
      # reached while TorchDynamo/CUDA Graph capture is active.
-@@ -1611,6 +1702,7 @@
+@@ -1611,6 +1705,7 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
              topk_tokens,
              head_dim,
              max_model_len,
@@ -320,7 +352,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
          ):
              raise RuntimeError(
                  "No graph-safe MUSA decode indexer top-k path for this indexer "
-@@ -1688,6 +1780,7 @@
+@@ -1688,6 +1783,7 @@ def _musa_fill_exact_sparse_indexer_indices(
      topk_indices_buffer: torch.Tensor,
      use_fp4_cache: bool,
      use_musa_materialized_prefill: bool = False,
@@ -328,7 +360,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
  ) -> torch.Tensor:
      if _musa_try_fill_all_sparse_indexer_indices(
          hidden_states,
-@@ -1709,6 +1802,7 @@
+@@ -1709,6 +1805,7 @@ def _musa_fill_exact_sparse_indexer_indices(
              max_model_len,
              topk_indices_buffer,
              use_fp4_cache,
@@ -336,7 +368,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
          )
  
      if use_fp4_cache or isinstance(q_quant, tuple):
-@@ -1744,6 +1838,7 @@
+@@ -1744,6 +1841,7 @@ def _musa_fill_exact_sparse_indexer_indices(
                  topk_tokens,
                  head_dim,
                  use_musa_materialized_prefill,
@@ -344,7 +376,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
              ):
                  continue
              sub_chunks = _musa_split_prefill_chunk_per_request(chunk)
-@@ -1758,6 +1853,7 @@
+@@ -1758,6 +1856,7 @@ def _musa_fill_exact_sparse_indexer_indices(
                  topk_indices_buffer[token_start:token_end, :topk_tokens],
                  topk_tokens,
                  head_dim,
@@ -352,13 +384,15 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
              ):
                  continue
              if q_deq is None:
-@@ -1778,4 +1874,5 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1778,6 +1877,7 @@ def _musa_fill_exact_sparse_indexer_indices(
                  chunk.cu_seqlen_ke,
                  topk_indices_buffer[token_start:token_end, :topk_tokens],
                  topk_tokens,
 +                topk_backend=topk_backend,
              )
-@@ -1790,6 +1887,7 @@
+ 
+     if metadata.num_decodes > 0 and metadata.decode is not None:
+@@ -1790,6 +1890,7 @@ def _musa_fill_exact_sparse_indexer_indices(
              topk_tokens,
              head_dim,
              max_model_len,
@@ -366,13 +400,15 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..ef6c7f47978ec4e8ffb0d082b99fedb3
          ):
              if q_deq is None:
                  q_deq = q_quant.to(torch.float32)
-@@ -1803,4 +1901,5 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1803,6 +1904,7 @@ def _musa_fill_exact_sparse_indexer_indices(
                  topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
                  topk_tokens,
                  head_dim,
 +                topk_backend=topk_backend,
              )
-@@ -2845,6 +2944,7 @@
+ 
+     return topk_indices_buffer
+@@ -2845,6 +2947,7 @@ class SparseAttnIndexer(CustomOp):
                      self.topk_indices_buffer,
                      self.use_fp4_cache,
                      self.use_musa_materialized_prefill,

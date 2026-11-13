@@ -8,11 +8,18 @@ Build only vllm._deepselect_C in the existing empty target mode. DeepSelect
 owns compiler selection and kernel compatibility; vLLM owns compilation,
 installation, and native torch.ops registration.
 ---
+ CMakeLists.txt                                | 16 ++++++++++
+ cmake/external_projects/deepselect.cmake      | 31 +------------------
+ .../external_projects/deepselect_source.cmake | 29 +++++++++++++++++
+ setup.py                                      |  4 ++-
+ 4 files changed, 49 insertions(+), 31 deletions(-)
+ create mode 100644 cmake/external_projects/deepselect_source.cmake
+
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a71d7e1e5ad3f754c221790d2169e89c0c13eb9..bcc5e8ebec41914880735c451ecc59b5f11cd712 100644
+index 3a71d7e1e5..bcc5e8ebec 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -11,4 +11,12 @@ cmake_minimum_required(VERSION 3.26)
+@@ -11,6 +11,14 @@ cmake_minimum_required(VERSION 3.26)
  # If you want to only build one target, make sure to install it manually:
  # cmake --build . --target _C
  # cmake --install . --component _C
@@ -25,6 +32,8 @@ index 3a71d7e1e5ad3f754c221790d2169e89c0c13eb9..bcc5e8ebec41914880735c451ecc59b5
 +endif()
 +
  project(vllm_extensions LANGUAGES CXX)
+ 
+ set(CMAKE_CXX_STANDARD 20)
 @@ -47,6 +55,9 @@ install(CODE "set(CMAKE_INSTALL_LOCAL_ONLY TRUE)" ALL_COMPONENTS)
  # first match will be selected.  These should be kept in sync with setup.py.
  #
@@ -48,7 +57,7 @@ index 3a71d7e1e5ad3f754c221790d2169e89c0c13eb9..bcc5e8ebec41914880735c451ecc59b5
  
  # Ensure the 'nvcc' command is in the PATH
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e6167a9008cc6a88922324a13a872bdc8..998e30c5b605ede8f7f44cd5117b79aa67db31a8 100644
+index e2a5592e61..998e30c5b6 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
 @@ -1,33 +1,4 @@
@@ -88,7 +97,7 @@ index e2a5592e6167a9008cc6a88922324a13a872bdc8..998e30c5b605ede8f7f44cd5117b79aa
  set(DEEPSELECT_SUPPORT_ARCHS)
 diff --git a/cmake/external_projects/deepselect_source.cmake b/cmake/external_projects/deepselect_source.cmake
 new file mode 100644
-index 0000000000000000000000000000000000000000..e2a9e3c8903a45f16d6e9a2c7e14462a0f732992
+index 0000000000..e2a9e3c890
 --- /dev/null
 +++ b/cmake/external_projects/deepselect_source.cmake
 @@ -0,0 +1,29 @@
@@ -122,7 +131,7 @@ index 0000000000000000000000000000000000000000..e2a9e3c8903a45f16d6e9a2c7e14462a
 +FetchContent_MakeAvailable(deepselect)
 +message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
 diff --git a/setup.py b/setup.py
-index 37bfc3e41bb2b1bc6ce821106e637c660ee358ea..43b7d21f882d3cbb9057d058495821c4bd130a23 100644
+index 37bfc3e41b..43b7d21f88 100644
 --- a/setup.py
 +++ b/setup.py
 @@ -1652,7 +1652,9 @@ for rust_extension_path in get_precompiled_rust_extension_paths():

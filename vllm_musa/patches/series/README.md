@@ -42,7 +42,7 @@ maintainable feature: custom all-reduce (`0037`), dedicated Mamba pools
 (`0078`), rejection-sampler scalarization (`0111`), and DeepSeek-V4 FP8 expert
 dtype/scale resolution (`0134`). Eight v0.32 native/compatibility adaptations
 follow (`0163`–`0170`), then 41 new or updated v0.32 features
-(`0171`–`0211`). The original cross-version
+(`0171`–`0212`). The original cross-version
 DeepSeek-V4/V4.1 aux-stream patch stays in the new group because its v0.28
 segment depends on later v0.32 attention changes; old `0110` remains in the
 legacy group. Old `0137` (Mooncake P/D dedicated Mamba pools) and `0192`
@@ -324,8 +324,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0209-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch` | MUSA DeepSelect | accept the native DeepSelect extension on MUSA |
 | `0210-MUSA-route-explicit-DeepSelect-through-DSV4-indexer.patch` | MUSA DeepSelect | route supported indexer windows to DeepSelect with legacy fallback |
 | `0211-MUSA-build-DeepSelect-through-vLLM-extension-target.patch` | MUSA DeepSelect | build DeepSelect through the vLLM extension target |
+| `0212-MUSA-Return-BF16-MQA-logits-from-MATE-sparse-indexer.patch` | MUSA sparse indexer | produce BF16 MATE logits with dtype-aware prefill tiling |
 
-Currently **211 patches** and **0 upstream entries** in `upstream/`.
+Currently **212 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and

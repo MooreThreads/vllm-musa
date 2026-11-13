@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import os
 import shlex
 import shutil
@@ -80,9 +81,7 @@ def test_series_patch_keeps_the_cuda_capability_check() -> None:
     assert "if not self._is_cuda and not self._is_musa:" in added
 
 
-def _deep_select_validation_helpers(
-    family: int, extension_available: bool, supported: bool
-) -> dict:
+def _deep_select_validation_helpers(family: int, extension_available: bool) -> dict:
     patch = SERIES / "0209-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
     source = "\n".join(
         line[1:]
@@ -102,14 +101,9 @@ def _deep_select_validation_helpers(
         calls.append("platform")
         return family // 10 == requested // 10
 
-    def supports_input(*args) -> bool:
-        calls.append("input")
-        return supported
-
     namespace = {
         "_HAS_DEEP_SELECT_C": extension_available,
         "current_platform": SimpleNamespace(is_device_capability_family=is_family),
-        "is_deep_select_supported": supports_input,
     }
     exec(compile(validation, str(patch), "exec"), namespace)
     namespace["calls"] = calls
@@ -117,26 +111,24 @@ def _deep_select_validation_helpers(
 
 
 @pytest.mark.parametrize(
-    ("platform", "family", "extension_available", "supported", "error"),
+    ("platform", "family", "extension_available", "error"),
     [
-        ("musa", 0, True, True, None),
-        ("cuda", 100, True, True, None),
-        ("cuda", 103, True, True, None),
-        ("cuda", 90, True, True, "SM100a/SM103a"),
-        ("cpu", 0, True, True, "CUDA or MUSA"),
-        ("rocm", 0, True, True, "CUDA or MUSA"),
-        ("musa", 0, False, True, "could not be imported"),
-        ("musa", 0, True, False, "inputs violate"),
+        ("musa", 0, True, None),
+        ("cuda", 100, True, None),
+        ("cuda", 103, True, None),
+        ("cuda", 90, True, "SM100a/SM103a"),
+        ("cpu", 0, True, "CUDA or MUSA"),
+        ("rocm", 0, True, "CUDA or MUSA"),
+        ("musa", 0, False, "could not be imported"),
     ],
 )
-def test_deep_select_validation_separates_platform_extension_and_input(
+def test_deep_select_validation_separates_platform_and_extension(
     platform: str,
     family: int,
     extension_available: bool,
-    supported: bool,
     error: str | None,
 ) -> None:
-    namespace = _deep_select_validation_helpers(family, extension_available, supported)
+    namespace = _deep_select_validation_helpers(family, extension_available)
     selector = SimpleNamespace(
         _is_cuda=platform == "cuda",
         _is_musa=platform == "musa",
@@ -149,9 +141,6 @@ def test_deep_select_validation_separates_platform_extension_and_input(
     else:
         assert len(failures) == 1 and error in failures[0]
     assert ("platform" in namespace["calls"]) == (platform == "cuda")
-    assert ("input" in namespace["calls"]) == (
-        error is None or error == "inputs violate"
-    )
 
 
 def test_series_patch_routes_supported_windows_to_explicit_backend() -> None:
@@ -170,12 +159,7 @@ def _indexer_selection_helpers(
         SERIES / "0192-MUSA-select-indexer-top-k-with-the-staged-radix-kern.patch"
     )
     source = _added_lines(staged_patch.read_text(encoding="utf-8").split("@@")[2])
-    for hunk in INDEXER_PATCH.read_text(encoding="utf-8").split("@@")[2::2]:
-        lines = hunk.splitlines()
-        before = "\n".join(line[1:] for line in lines if line.startswith((" ", "-")))
-        after = "\n".join(line[1:] for line in lines if line.startswith((" ", "+")))
-        if before and before in source:
-            source = source.replace(before, after, 1)
+    source = _apply_indexer_patch(source, INDEXER_PATCH)
     calls = []
 
     def record(name: str):
@@ -201,6 +185,130 @@ def _indexer_selection_helpers(
         namespace,
     )
     return namespace, calls
+
+
+def _apply_indexer_patch(source: str, patch: Path) -> str:
+    for hunk in patch.read_text(encoding="utf-8").split("@@")[2::2]:
+        lines = hunk.splitlines()[1:]
+        before = "\n".join(line[1:] for line in lines if line.startswith((" ", "-")))
+        after = "\n".join(line[1:] for line in lines if line.startswith((" ", "+")))
+        if before and before in source:
+            source = source.replace(before, after, 1)
+    return source
+
+
+class _IndexerTensorMetadata:
+    def __init__(self, shape: tuple[int, ...], dtype: str) -> None:
+        self.shape = shape
+        self.ndim = len(shape)
+        self.dtype = dtype
+        self.device = "musa"
+
+    def numel(self) -> int:
+        return math.prod(self.shape)
+
+    def stride(self, axis: int) -> int:
+        return math.prod(self.shape[axis + 1 :])
+
+    def reshape(self, *shape):
+        assert shape == (-1,)
+        return self
+
+    def __getitem__(self, key):
+        return self
+
+
+@pytest.mark.parametrize(
+    ("backend", "block_size", "supported", "dtypes", "selected"),
+    [
+        ("deep_select", 64, True, ["bfloat16"], "deep_select"),
+        ("deep_select", 128, True, ["bfloat16"], "deep_select"),
+        ("auto", 128, True, ["float32"], "staged"),
+        ("per_row", 64, True, ["float32"], "staged"),
+        ("deep_select", 128, False, ["bfloat16", "float32"], "staged"),
+        ("deep_select", 24, True, ["bfloat16", "float32"], "deep_select"),
+    ],
+)
+def test_paged_triton_writes_consumer_supported_logits_dtype(
+    backend: str,
+    block_size: int,
+    supported: bool,
+    dtypes: list[str],
+    selected: str,
+) -> None:
+    source_patch = next(SERIES.glob("0187-*.patch"))
+    source = _added_lines(source_patch.read_text(encoding="utf-8").split("@@")[2])
+    for patch in (next(SERIES.glob("0192-*.patch")), INDEXER_PATCH):
+        source = _apply_indexer_patch(source, patch)
+    function = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_musa_try_fill_decode_topk_from_paged_logits"
+    )
+    namespace, calls = _indexer_selection_helpers(capturing=True)
+    allocations = []
+    launches = []
+
+    def empty(shape, *, dtype, device):
+        tensor = _IndexerTensorMetadata(shape, dtype)
+        assert device == tensor.device
+        allocations.append(tensor)
+        return tensor
+
+    def supports(logits, topk):
+        itemsize = 2 if logits.dtype == "bfloat16" else 4
+        return supported and logits.stride(0) * itemsize % 32 == 0
+
+    class Kernel:
+        def __getitem__(self, grid):
+            def launch(*args, **kwargs):
+                launches.append((grid, args, kwargs))
+
+            return launch
+
+    namespace.update(
+        torch=SimpleNamespace(
+            float8_e4m3fn="float8_e4m3fn",
+            uint8="uint8",
+            float32="float32",
+            bfloat16="bfloat16",
+            empty=empty,
+        ),
+        triton=SimpleNamespace(cdiv=lambda value, tile: (value + tile - 1) // tile),
+        is_deep_select_supported=supports,
+        _musa_decode_block_table_for_token_rows=lambda table, rows: table,
+        _musa_paged_mqa_logits_kernel=Kernel(),
+    )
+    exec(
+        compile(
+            "from __future__ import annotations\n" + ast.unparse(function),
+            str(INDEXER_PATCH),
+            "exec",
+        ),
+        namespace,
+    )
+    tensor = _IndexerTensorMetadata
+    assert namespace[function.name](
+        tensor((2, 32, 128), "float8_e4m3fn"),
+        tensor((8, block_size, 132), "uint8"),
+        tensor((2, 32), "float32"),
+        SimpleNamespace(
+            seq_lens=tensor((2,), "int32"),
+            block_table=tensor((2, 3), "int32"),
+        ),
+        tensor((2, 512), "int32"),
+        512,
+        128,
+        backend,
+    )
+    assert [allocation.dtype for allocation in allocations] == dtypes
+    assert len(launches) == 1
+    assert launches[0][1][13] is allocations[-1]
+    assert launches[0][2]["BLOCK_SIZE"] == block_size
+    assert allocations[-1].shape == (2, 3 * block_size)
+    assert len(calls) == 1 and calls[0][0] == selected
+    assert calls[0][1][0] is allocations[-1]
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,7 @@
 #include <cstdint>
+#include <type_traits>
 
+#include <musa_bf16.h>
 #include <musa_fp16.h>
 #include <musa_runtime.h>
 #include <torch/all.h>
@@ -155,9 +157,9 @@ __device__ __forceinline__ void radix_find_bin(
   __syncthreads();
 }
 
-template <typename OutT>
+template <typename LogitT, typename OutT>
 __global__ void sparse_indexer_topk_radix_kernel(
-    const float *__restrict__ logits, int64_t logits_stride0,
+    const LogitT *__restrict__ logits, int64_t logits_stride0,
     int64_t logits_stride1, int64_t columns, const void *__restrict__ row_ends,
     int row_ends_kind, int64_t row_ends_stride, OutT *__restrict__ topk_indices,
     int64_t topk_stride0, int64_t topk_stride1, int64_t rows, int64_t topk) {
@@ -187,7 +189,7 @@ __global__ void sparse_indexer_topk_radix_kernel(
     return;
   }
 
-  const float *row_logits = logits + row * logits_stride0;
+  const LogitT *row_logits = logits + row * logits_stride0;
   const int group = tid / (kRadixThreads / kRadixHistGroups);
   for (int i = tid; i < kRadixHistGroups * kRadixBins; i += kRadixThreads) {
     hist[i / kRadixBins][i % kRadixBins] = 0;
@@ -232,8 +234,10 @@ __global__ void sparse_indexer_topk_radix_kernel(
   uint32_t prefix = 0U;
   uint32_t prefix_mask = 0U;
   uint32_t num_ties = 0U;
+  constexpr bool kBf16Logits = std::is_same_v<LogitT, __mt_bfloat16>;
+  constexpr int kLastRadixShift = kBf16Logits ? 16 : 0;
 #pragma unroll 1
-  for (int shift = 24; shift >= 0; shift -= 8) {
+  for (int shift = 24; shift >= kLastRadixShift; shift -= 8) {
     if (staged) {
       for (uint32_t i = tid; i < num_cand; i += kRadixThreads) {
         const uint32_t key = cand_keys[i];
@@ -258,7 +262,10 @@ __global__ void sparse_indexer_topk_radix_kernel(
     need -= selection.above;
     num_ties = selection.in_bin;
   }
-  const uint32_t threshold = prefix;
+  uint32_t threshold = prefix;
+  if constexpr (kBf16Logits) {
+    threshold |= (prefix & 0x80000000U) ? 0U : 0xFFFFU;
+  }
   const uint32_t ties_needed = need;
 
   if (ties_needed < num_ties) {
@@ -279,17 +286,45 @@ __global__ void sparse_indexer_topk_radix_kernel(
           s_cutoff = pos;
         }
       }
-    } else if (tid == 0) {
-      uint32_t remaining = ties_needed;
-      int64_t cutoff = -1;
-      for (int64_t pos = 0; pos < row_len && remaining > 0; ++pos) {
-        if (score_key(score_bits(row_logits[pos * logits_stride1])) ==
-            threshold) {
-          cutoff = pos;
-          --remaining;
+    } else {
+      const uint32_t lane = static_cast<uint32_t>(tid) & 31U;
+      const int warp = tid >> 5;
+      const int64_t begin = row_len * warp / kRadixWarps;
+      const int64_t end = row_len * (warp + 1) / kRadixWarps;
+      uint32_t count = 0;
+      for (int64_t pos = begin + lane; pos < end; pos += 32) {
+        count += score_key(score_bits(row_logits[pos * logits_stride1])) ==
+                 threshold;
+      }
+      const uint32_t inclusive = warp_inclusive_sum(lane, count);
+      if (lane == 31U) {
+        warp_sums[warp] = inclusive;
+      }
+      __syncthreads();
+      uint32_t before = 0;
+      for (int preceding = 0; preceding < warp; ++preceding) {
+        before += warp_sums[preceding];
+      }
+      if (before < ties_needed && ties_needed <= before + warp_sums[warp]) {
+        uint32_t remaining = ties_needed - before;
+        for (int64_t base = begin; base < end; base += 32) {
+          const int64_t pos = base + lane;
+          const bool tied =
+              pos < end &&
+              score_key(score_bits(row_logits[pos * logits_stride1])) ==
+                  threshold;
+          const uint32_t mask = __ballot_sync(0xFFFFFFFFU, tied);
+          const uint32_t in_tile = __popc(mask);
+          if (remaining <= in_tile) {
+            const uint32_t earlier = mask & ((1U << lane) - 1U);
+            if (tied && __popc(earlier) + 1U == remaining) {
+              s_cutoff = pos;
+            }
+            break;
+          }
+          remaining -= in_tile;
         }
       }
-      s_cutoff = cutoff;
     }
     __syncthreads();
   }
@@ -367,15 +402,15 @@ bool radix_topk_supported() {
   return supported;
 }
 
-template <typename OutT>
+template <typename LogitT, typename OutT>
 void launch_sparse_indexer_topk_radix(const torch::Tensor &logits,
                                       const torch::Tensor &seq_lens,
                                       torch::Tensor &topk_indices,
                                       int64_t topk, musaStream_t stream) {
   const dim3 grid(static_cast<unsigned int>(logits.size(0)));
   const dim3 block(kRadixThreads);
-  sparse_indexer_topk_radix_kernel<OutT><<<grid, block, 0, stream>>>(
-      static_cast<const float *>(logits.data_ptr()), logits.stride(0),
+  sparse_indexer_topk_radix_kernel<LogitT, OutT><<<grid, block, 0, stream>>>(
+      static_cast<const LogitT *>(logits.data_ptr()), logits.stride(0),
       logits.stride(1), logits.size(1), seq_lens.data_ptr(),
       index_kind(seq_lens, "seq_lens"), seq_lens.stride(0),
       static_cast<OutT *>(topk_indices.data_ptr()), topk_indices.stride(0),
@@ -391,8 +426,9 @@ void deepseek_v4_sparse_indexer_topk_decode(const torch::Tensor &logits,
   check_musa_tensor(logits, "logits");
   check_same_device(logits, seq_lens, "seq_lens");
   check_same_device(logits, topk_indices, "topk_indices");
-  TORCH_CHECK(logits.scalar_type() == torch::kFloat32,
-              "logits must be float32");
+  TORCH_CHECK(logits.scalar_type() == torch::kFloat32 ||
+                  logits.scalar_type() == torch::kBFloat16,
+              "logits must be float32 or bfloat16");
   TORCH_CHECK(logits.dim() == 2, "logits must be 2-D");
   TORCH_CHECK(seq_lens.dim() == 1 && seq_lens.numel() >= logits.size(0),
               "seq_lens must have at least one entry per logit row");
@@ -418,11 +454,21 @@ void deepseek_v4_sparse_indexer_topk_decode(const torch::Tensor &logits,
   const at::musa::OptionalMUSAGuard device_guard(device_of(logits));
   musaStream_t stream = at::musa::getCurrentMUSAStream();
   if (topk_indices.scalar_type() == torch::kInt32) {
-    launch_sparse_indexer_topk_radix<int32_t>(logits, seq_lens, topk_indices,
-                                              topk, stream);
+    if (logits.scalar_type() == torch::kBFloat16) {
+      launch_sparse_indexer_topk_radix<__mt_bfloat16, int32_t>(
+          logits, seq_lens, topk_indices, topk, stream);
+    } else {
+      launch_sparse_indexer_topk_radix<float, int32_t>(
+          logits, seq_lens, topk_indices, topk, stream);
+    }
   } else if (topk_indices.scalar_type() == torch::kInt64) {
-    launch_sparse_indexer_topk_radix<int64_t>(logits, seq_lens, topk_indices,
-                                              topk, stream);
+    if (logits.scalar_type() == torch::kBFloat16) {
+      launch_sparse_indexer_topk_radix<__mt_bfloat16, int64_t>(
+          logits, seq_lens, topk_indices, topk, stream);
+    } else {
+      launch_sparse_indexer_topk_radix<float, int64_t>(
+          logits, seq_lens, topk_indices, topk, stream);
+    }
   } else {
     TORCH_CHECK(false, "topk_indices must be int32 or int64");
   }

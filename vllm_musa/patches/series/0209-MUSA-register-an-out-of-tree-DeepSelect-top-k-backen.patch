@@ -13,12 +13,7 @@ diff --git a/vllm/model_executor/layers/indexer_topk.py b/vllm/model_executor/la
 index 02c4280ea0..d27afd3744 100644
 --- a/vllm/model_executor/layers/indexer_topk.py
 +++ b/vllm/model_executor/layers/indexer_topk.py
-@@ -148,19 +148,17 @@ class SparseIndexerTopk(torch.nn.Module):
-     def __init__(self, backend: str | None = None) -> None:
-         super().__init__()
-         if backend is None:
-             backend = (
-                 get_current_vllm_config().kernel_config.sparse_indexer_topk_backend
+@@ -153,9 +153,7 @@ class SparseIndexerTopk(torch.nn.Module):
              )
          self._backend = backend
          self._is_cuda = current_platform.is_cuda()
@@ -29,17 +24,7 @@ index 02c4280ea0..d27afd3744 100644
          self._has_flashinfer_topk = has_flashinfer()
          self._cooperative_capable = self._is_cuda and (
              current_platform.has_device_capability(90)
-             and not current_platform.is_device_capability_family(120)
-         )
-         self._is_rocm = current_platform.is_rocm()
-         self._aiter_enabled = False
-         self._aiter_capable = False
-@@ -185,19 +183,19 @@ class SparseIndexerTopk(torch.nn.Module):
-         elif self._backend == "persistent":
-             if not self._is_cuda:
-                 failures.append("requires a CUDA platform")
-             if topk_tokens not in (512, 1024, 2048):
-                 failures.append(
+@@ -190,9 +188,9 @@ class SparseIndexerTopk(torch.nn.Module):
                      f"topk_tokens must be in (512, 1024, 2048), got {topk_tokens}"
                  )
          elif self._backend == "deep_select":
@@ -52,8 +37,3 @@ index 02c4280ea0..d27afd3744 100644
                  failures.append("requires SM100a/SM103a (10.x device family)")
              elif not _HAS_DEEP_SELECT_C:
                  failures.append("vllm._deepselect_C could not be imported")
-             elif not is_deep_select_supported(logits, topk_tokens):
-                 failures.append(
-                     f"inputs violate DeepSelect's constraints: dtype={logits.dtype},"
-                     f" stride={logits.stride()}, topk={topk_tokens}"
-                 )
