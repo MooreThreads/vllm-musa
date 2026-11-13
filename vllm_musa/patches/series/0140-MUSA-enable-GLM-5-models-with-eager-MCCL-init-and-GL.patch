@@ -6,8 +6,8 @@ Subject: [PATCH] MUSA: enable GLM-5 models with eager MCCL init and GLM sparse
 
 ---
  vllm/distributed/parallel_state.py            | 20 ++++++++++++++++++-
- .../attention/backends/mla/flashmla_sparse.py |  3 +++
- 2 files changed, 22 insertions(+), 1 deletion(-)
+ .../attention/backends/mla/flashmla_sparse.py |  4 ++++
+ 2 files changed, 23 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/distributed/parallel_state.py b/vllm/distributed/parallel_state.py
 index fea0c4e3c7..f3513b6ecd 100644
@@ -48,7 +48,7 @@ index fea0c4e3c7..f3513b6ecd 100644
              tp_pp_cpu_group = torch.distributed.new_group(
                  backend="gloo", timeout=timeout
 diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
-index 24f6e8d40e..dc9bb41ff7 100644
+index 24f6e8d40e..615665e357 100644
 --- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
 +++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
 @@ -771,6 +771,9 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
@@ -61,3 +61,11 @@ index 24f6e8d40e..dc9bb41ff7 100644
          max_tokens = vllm_config.scheduler_config.max_num_batched_tokens
          q_concat_heads = num_heads
          if not is_quantized_kv_cache(kv_cache_dtype):
+@@ -1388,6 +1391,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+             self.softmax_scale,
+             topk_length=topk_length,
+             out=out,
++            **({"is_glm_dsa": self._is_glm_dsa} if current_platform.is_musa() else {}),
+         )
+ 
+         output = output[:, :actual_num_heads, :]

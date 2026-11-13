@@ -264,7 +264,7 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0137-MUSA-vllm.model_executor.layers.fused_moe.fused_moe.patch` | v0.28 0168 | vllm.model_executor.layers.fused_moe.fused_moe |
 | `0138-MUSA-vllm.v1.attention.ops.triton_unified_attention.patch` | v0.28 0169 | vllm.v1.attention.ops.triton_unified_attention |
 | `0139-MUSA-bound-DSV4-long-prefill-indexer-logits.patch` | v0.28 0170 | bound DSV4 long-prefill indexer logits |
-| `0140-MUSA-enable-GLM-5-models-with-eager-MCCL-init-and-GL.patch` | v0.28 0171 | enable GLM-5 models with eager MCCL init and GLM sparse dispatch |
+| `0140-MUSA-enable-GLM-5-models-with-eager-MCCL-init-and-GL.patch` | v0.28 0171 | enable GLM-5 models with eager MCCL init and GLM sparse dispatch, including MUSA-only `is_glm_dsa` metadata forwarding without phase metadata |
 | `0141-MUSA-rotate-V2-output-copy-streams.patch` | v0.28 0172 continued | rotate V2 output copy streams |
 | `0142-MUSA-skip-Prometheus-observe-for-connectors-without-.patch` | v0.28 0173 continued | skip Prometheus observe for connectors without metrics |
 | `0143-MUSA-perf-musa-extend-DSV4-score-DeepGEMM-to-decode-.patch` | v0.28 0174 continued | perf(musa): extend DSV4 score DeepGEMM to decode batches |
@@ -337,8 +337,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
 | `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
 | `0211-MUSA-keep-fused-MoE-even_Ks-loads-in-bounds.patch` | v0.32 new/updated | mask the fused MoE even_Ks A/B loads under the MUSA pipeliner |
+| `0212-MUSA-insert-sparse-indexer-K-cache-before-native-dis.patch` | v0.32 MUSA sparse indexer cache correctness | insert native indexer K cache before exact sparse dispatch; preserve external writes, PCP/MTP gathering and warmup handling. |
 
-Currently **211 patches** and **0 upstream entries** in `upstream/`.
+Currently **212 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and

@@ -13,7 +13,7 @@ SERIES = ROOT / "vllm_musa" / "patches" / "series"
 METADATA = ROOT / "vllm_musa" / "patches" / "metadata"
 
 #: Number of current top-level patch files; bump it with the series.
-SERIES_LENGTH = 211
+SERIES_LENGTH = 212
 spec = importlib.util.spec_from_file_location(
     "patch_metadata", ROOT / "tools" / "patch_metadata.py"
 )

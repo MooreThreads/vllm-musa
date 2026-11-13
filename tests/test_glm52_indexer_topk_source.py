@@ -3,6 +3,12 @@
 
 from pathlib import Path
 
+import ast
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -99,3 +105,106 @@ def test_sparse_mla_sanitizes_indices_before_kv_loads():
     assert "kv_indices[bi_i] = T.if_then_else(valid, index, 0)" in source
     assert "KV[b_i, kv_indices[bi_i], g_i, d_i]" in source
     assert "b_i, kv_indices[bi_i], g_i, D + d_i" in source
+
+
+@pytest.mark.parametrize("shard_decode", [False, True])
+@pytest.mark.parametrize(
+    "warmup,skip,pcp,slots,k_rows,fp4",
+    [
+        (True, False, False, 3, 8, False),
+        (True, False, False, 3, 8, True),
+        (False, True, False, 3, 8, False),
+        (False, False, False, 3, 8, False),
+        (False, False, False, 5, 8, False),
+        (False, False, False, 7, 8, False),
+        (False, False, True, 8, 4, False),
+        (False, False, True, 4, 4, False),
+        (False, True, False, 3, 8, True),
+        (False, False, False, 3, 8, True),
+    ],
+)
+def test_musa_native_inserts_cache_before_exact_shortcut(
+    warmup, skip, pcp, slots, k_rows, fp4, shard_decode
+):
+    """Exercise the real entry without importing GPU-dependent vLLM modules."""
+    tree = ast.parse(_read(
+        "third_party/vllm/vllm/model_executor/layers/sparse_attn_indexer.py"
+    ))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+               and n.name == "SparseAttnIndexer")
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef)
+                  and n.name == "forward_native")
+    for arg in method.args.args:
+        arg.annotation = None
+    method.returns = None
+    events = []
+    sliced_k = object()
+
+    class Key:
+        shape = (k_rows, 128)
+
+        def __getitem__(self, index):
+            assert index.start is None and index.step is None
+            expected = slots // 2 if pcp and slots > k_rows else slots
+            assert index.stop == expected
+            return sliced_k
+
+    metadata = SimpleNamespace(
+        slot_mapping=SimpleNamespace(shape=(slots,)), num_decode_tokens=2,
+        decode=None,
+    )
+    cache = object()
+    buffer = object()
+    gathered_k, gathered_slots = object(), object()
+    gather = Mock(return_value=(gathered_k, gathered_slots))
+
+    def insert(*args):
+        assert args == (gathered_k, cache, gathered_slots, 128, "ue8m0")
+        events.append("insert")
+
+    def exact(*args):
+        events.append("exact")
+        return buffer
+
+    platform = SimpleNamespace(**{
+        f"is_{name}": (lambda: False) for name in ("cuda", "xpu", "rocm", "cpu")
+    }, is_musa=lambda: True)
+    namespace = dict(
+        current_platform=platform,
+        get_forward_context=lambda: SimpleNamespace(
+            attn_metadata=None if warmup else {"resolved": metadata}
+        ),
+        _resolve_layer_name=lambda name: "resolved",
+        DeepseekV32IndexerMetadata=SimpleNamespace,
+        get_pcp_group=lambda: SimpleNamespace(world_size=2),
+        maybe_gather_indexer_k=gather,
+        ops=SimpleNamespace(indexer_k_quant_and_cache=insert),
+        _musa_fill_exact_sparse_indexer_indices=exact,
+    )
+    exec(compile(ast.Module(body=[method], type_ignores=[]), "<forward_native>",
+                 "exec"), namespace)
+    layer = SimpleNamespace(
+        use_musa_native_indexer=True, use_pcp=pcp,
+        pcp_shard_decode_requests=shard_decode, skip_k_cache_insert=skip,
+        scale_fmt="ue8m0", use_fp4_cache=fp4, quant_block_size=128,
+        k_cache=SimpleNamespace(prefix="encoded", kv_cache=cache),
+        topk_indices_buffer=buffer, topk_tokens=2048, head_dim=128,
+        max_model_len=8192, use_musa_materialized_prefill=False,
+    )
+    forward = namespace["forward_native"]
+    if fp4 and not skip and not warmup:
+        with pytest.raises(AssertionError, match="Unfused FP4 Insert"):
+            forward(layer, object(), object(), Key(), object())
+        assert events == []
+    else:
+        assert forward(layer, object(), object(), None if skip else Key(),
+                       object()) is buffer
+        assert events == ([] if warmup else ["exact"] if skip
+                          else ["insert", "exact"])
+    if not warmup and not skip:
+        gather.assert_called_once_with(
+            sliced_k, metadata.slot_mapping, 2, pcp,
+            pcp_shard_decode_requests=shard_decode,
+        )
+    else:
+        gather.assert_not_called()

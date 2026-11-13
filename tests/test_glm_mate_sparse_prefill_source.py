@@ -26,11 +26,98 @@ def test_glm_detection_checks_nested_hf_configs() -> None:
     assert "is_glm_dsa: bool" in source
 
 
+def _function(path, name):
+    return next(node for node in ast.parse(path.read_text()).body
+                if isinstance(node, ast.FunctionDef) and node.name == name)
+
+
 def test_mate_dispatch_precedes_generic_tilelang_dispatch() -> None:
-    source = SOURCE.read_text()
+    source = ast.unparse(_function(SOURCE, "_musa_backend_sparse_fwd"))
     mate = source.index("if _can_use_glm_mate_sparse_prefill(")
-    generic = source.index("elif _can_use_tilelang_sparse_prefill(", mate)
+    generic = source.index("if _can_use_tilelang_sparse_prefill(", mate)
     assert mate < generic
+    assert "_musa_flash_mla_sparse_fwd" in source
+
+
+def test_mate_provider_tuple_and_backend_aux_contract(monkeypatch) -> None:
+    import sys
+    from types import ModuleType, SimpleNamespace
+    from unittest.mock import Mock
+
+    # This is an offline dispatch contract, not a tensor/kernel accuracy test.
+    class Tensor:
+        dtype = "test-dtype"
+        device = "test-device"
+
+        def __init__(self, shape, values=None):
+            self.shape = shape
+            self.values = values
+            self.copy_ = Mock(side_effect=self._copy)
+
+        def _copy(self, other):
+            self.values = other.values
+            return self
+
+        def new_empty(self, size):
+            return Tensor((size,))
+
+    adapter = SOURCE.parents[2] / "ops/sparse_mla_mate.py"
+    node = _function(adapter, "sparse_mla_fwd_bf16")
+    output = Tensor((2, 3, 2), tuple(range(12)))
+    max_logits = object()
+    lse = object()
+    result = (output, max_logits, lse)
+    provider = Mock(return_value=result)
+    namespace = {"sparse_mla_prefill_fwd": provider}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(adapter), "exec"), namespace)
+    wrapper = namespace["sparse_mla_fwd_bf16"]
+    q, kv, indices, topk = (object() for _ in range(4))
+    assert wrapper(q, kv, indices, 0.5, d_v=2, topk_length=topk) is result
+    provider.assert_called_once_with(
+        q=q, kv=kv, indices=indices, sm_scale=0.5, d_v=2, topk_length=topk
+    )
+
+    module_name = "vllm_musa.v1.attention.ops.sparse_mla_mate"
+    module = ModuleType(module_name)
+    module.sparse_mla_fwd_bf16 = wrapper
+    monkeypatch.setitem(sys.modules, module_name, module)
+    node = _function(SOURCE, "_musa_backend_sparse_fwd")
+    namespace = {
+        "torch": SimpleNamespace(Tensor=Tensor),
+        "logger": SimpleNamespace(info_once=lambda *_: None),
+        "_can_use_glm_mate_sparse_prefill": lambda *_: True,
+    }
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), namespace)
+    backend = namespace["_musa_backend_sparse_fwd"]
+    for out in (None, Tensor(output.shape)):
+        actual, actual_max, actual_lse = backend(
+            q, kv, indices, 0.5, d_v=2, topk_length=topk, out=out, is_glm_dsa=True
+        )
+        assert actual is (output if out is None else out)
+        assert actual.values == output.values
+        if out is not None:
+            out.copy_.assert_called_once_with(output)
+        assert actual_max is max_logits
+        assert actual_lse is lse
+
+    namespace["_can_use_glm_mate_sparse_prefill"] = lambda *_: False
+    namespace["_can_use_tilelang_sparse_prefill"] = lambda *_: True
+    module_name = "vllm_musa.v1.attention.ops.sparse_mla_tilelang"
+    module = ModuleType(module_name)
+    module.sparse_mla_fwd_bf16 = Mock(return_value=output)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    for out in (None, Tensor(output.shape)):
+        actual, actual_max, actual_lse = backend(
+            output, kv, indices, 0.5, d_v=2, topk_length=topk, out=out
+        )
+        assert actual is (output if out is None else out)
+        assert actual.values == output.values
+        if out is not None:
+            out.copy_.assert_called_once_with(output)
+        assert actual_max is actual_lse
+        assert actual_max.shape == (0,)
+        assert actual_max.dtype == output.dtype
+        assert actual_max.device == output.device
 
 
 def test_musa_impl_caches_config_before_runtime_dispatch() -> None:
