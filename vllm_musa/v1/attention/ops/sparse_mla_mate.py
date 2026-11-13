@@ -21,4 +21,4 @@ def sparse_mla_fwd_bf16(q, kv, indices, sm_scale, d_v=512, topk_length=None):
         sm_scale=sm_scale,
         d_v=d_v,
         topk_length=topk_length,
-    )[0]
+    )
