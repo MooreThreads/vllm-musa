@@ -113,8 +113,23 @@ MUSA dispatch checks `is_deep_select_supported` before invoking DeepSelect.
 Unsupported input layouts use the existing native top-k dispatch without a
 copy or dtype conversion. BF16 logits can require this fallback even where
 the same FP32 element stride is supported, because alignment is measured in
-bytes. This routing does not change the logits producer's dtype; a BF16 MATE
-producer also requires BF16 support in the native fallback kernels.
+bytes. Both native indexer top-k kernels accept FP32 and BF16 logits directly,
+including nonzero-start windows and the DeepSelect alignment fallback. BF16
+radix selection uses two significant bytes and resolves cutoff ties in parallel;
+the FP32 radix precision and index ordering remain unchanged.
+
+MATE flat and paged MQA producers request `logits_dtype=torch.bfloat16` directly
+for prefill and decode. FP8 query/key arithmetic and FP32 accumulation remain
+unchanged. Prefill tiling uses the BF16 element size to preserve the logits
+memory budget. The optional `deep_gemm` providers retain their existing API and
+output dtype; only `mate.deep_gemm` receives the dtype argument. The installed
+MATE version must support that argument.
+
+The paged Triton decode producer writes BF16 logits directly when the explicit
+`deep_select` backend accepts the output layout. FP8 query/key arithmetic and
+FP32 accumulation remain unchanged. Unsupported BF16 layouts use an FP32
+output buffer before the kernel launches; other top-k backends retain FP32
+output. This adds no logits conversion kernel.
 
 For provenance, record the DeepSelect source commit, extension path and hash,
 vLLM-MUSA commit, vLLM commit, and the exact serving command with benchmark
