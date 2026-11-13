@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 12 Nov 2026 17:17:19 +0800
+Subject: [PATCH] MUSA: insert sparse indexer K cache before native dispatch
+
+Co-authored-by: OpenAI Codex <noreply@openai.com>
+---
+ .../layers/sparse_attn_indexer.py             | 29 +++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 85e9b9a61c..5c3dd2aedd 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -2832,6 +2832,35 @@ class SparseAttnIndexer(CustomOp):
+                 == "1"
+             )
+         ):
++            attn_metadata = get_forward_context().attn_metadata
++            if attn_metadata is None:
++                return self.topk_indices_buffer
++            assert isinstance(attn_metadata, dict)
++            metadata = attn_metadata[_resolve_layer_name(self.k_cache.prefix)]
++            assert isinstance(metadata, DeepseekV32IndexerMetadata)
++            if not self.skip_k_cache_insert:
++                assert k is not None
++                slot_mapping = metadata.slot_mapping
++                num_tokens = slot_mapping.shape[0]
++                # Preserve upstream PCP padding and replicated MTP semantics.
++                if self.use_pcp and num_tokens > k.shape[0]:
++                    num_tokens //= get_pcp_group().world_size
++                k, slot_mapping_for_cache = maybe_gather_indexer_k(
++                    k[:num_tokens],
++                    slot_mapping,
++                    metadata.num_decode_tokens,
++                    self.use_pcp,
++                    pcp_shard_decode_requests=self.pcp_shard_decode_requests,
++                )
++                assert self.scale_fmt is not None
++                assert not self.use_fp4_cache, "Unfused FP4 Insert is not supported yet"
++                ops.indexer_k_quant_and_cache(
++                    k,
++                    self.k_cache.kv_cache,
++                    slot_mapping_for_cache,
++                    self.quant_block_size,
++                    self.scale_fmt,
++                )
+             try:
+                 return _musa_fill_exact_sparse_indexer_indices(
+                     hidden_states,

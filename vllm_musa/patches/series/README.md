@@ -337,8 +337,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
 | `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
 | `0211-MUSA-keep-fused-MoE-even_Ks-loads-in-bounds.patch` | v0.32 new/updated | mask the fused MoE even_Ks A/B loads under the MUSA pipeliner |
+| `0212-MUSA-insert-sparse-indexer-K-cache-before-native-dis.patch` | v0.32 MUSA sparse indexer cache correctness | insert native indexer K cache before exact sparse dispatch; preserve external writes, PCP/MTP gathering and warmup handling. |
 
-Currently **211 patches** and **0 upstream entries** in `upstream/`.
+Currently **212 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
