@@ -44,13 +44,28 @@ def test_mate_provider_tuple_and_backend_aux_contract(monkeypatch) -> None:
     from types import ModuleType, SimpleNamespace
     from unittest.mock import Mock
 
-    import torch
+    # This is an offline dispatch contract, not a tensor/kernel accuracy test.
+    class Tensor:
+        dtype = "test-dtype"
+        device = "test-device"
+
+        def __init__(self, shape, values=None):
+            self.shape = shape
+            self.values = values
+            self.copy_ = Mock(side_effect=self._copy)
+
+        def _copy(self, other):
+            self.values = other.values
+            return self
+
+        def new_empty(self, size):
+            return Tensor((size,))
 
     adapter = SOURCE.parents[2] / "ops/sparse_mla_mate.py"
     node = _function(adapter, "sparse_mla_fwd_bf16")
-    output = torch.arange(12).reshape(2, 3, 2)
-    max_logits = torch.zeros(2, 3)
-    lse = torch.arange(6).reshape(2, 3)
+    output = Tensor((2, 3, 2), tuple(range(12)))
+    max_logits = object()
+    lse = object()
     result = (output, max_logits, lse)
     provider = Mock(return_value=result)
     namespace = {"sparse_mla_prefill_fwd": provider}
@@ -68,22 +83,22 @@ def test_mate_provider_tuple_and_backend_aux_contract(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, module_name, module)
     node = _function(SOURCE, "_musa_backend_sparse_fwd")
     namespace = {
-        "torch": torch,
+        "torch": SimpleNamespace(Tensor=Tensor),
         "logger": SimpleNamespace(info_once=lambda *_: None),
         "_can_use_glm_mate_sparse_prefill": lambda *_: True,
     }
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), namespace)
     backend = namespace["_musa_backend_sparse_fwd"]
-    for out in (None, torch.empty_like(output)):
+    for out in (None, Tensor(output.shape)):
         actual, actual_max, actual_lse = backend(
             q, kv, indices, 0.5, d_v=2, topk_length=topk, out=out, is_glm_dsa=True
         )
         assert actual is (output if out is None else out)
-        assert torch.equal(actual, output)
+        assert actual.values == output.values
+        if out is not None:
+            out.copy_.assert_called_once_with(output)
         assert actual_max is max_logits
         assert actual_lse is lse
-        assert actual_lse.ndim == 2
-        assert torch.equal(actual_lse[:, :2], lse[:, :2])
 
     namespace["_can_use_glm_mate_sparse_prefill"] = lambda *_: False
     namespace["_can_use_tilelang_sparse_prefill"] = lambda *_: True
@@ -91,12 +106,14 @@ def test_mate_provider_tuple_and_backend_aux_contract(monkeypatch) -> None:
     module = ModuleType(module_name)
     module.sparse_mla_fwd_bf16 = Mock(return_value=output)
     monkeypatch.setitem(sys.modules, module_name, module)
-    for out in (None, torch.empty_like(output)):
+    for out in (None, Tensor(output.shape)):
         actual, actual_max, actual_lse = backend(
             output, kv, indices, 0.5, d_v=2, topk_length=topk, out=out
         )
         assert actual is (output if out is None else out)
-        assert torch.equal(actual, output)
+        assert actual.values == output.values
+        if out is not None:
+            out.copy_.assert_called_once_with(output)
         assert actual_max is actual_lse
         assert actual_max.shape == (0,)
         assert actual_max.dtype == output.dtype
