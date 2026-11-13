@@ -130,16 +130,19 @@ def _musa_backend_sparse_fwd(
 
     if sparse_mla_fwd_bf16 is not None:
         # This monkeypatch is private to FlashMLASparseImpl._bf16_flash_mla_kernel,
-        # which consumes only the first return value. Keep the public op on the
+        # which consumes the output and LSE. Keep the public op on the
         # native flash_mla path so callers that need aux tensors keep that contract.
         result = sparse_mla_fwd_bf16(
             q, kv, indices, sm_scale, d_v=d_v, topk_length=topk_length
         )
+        if isinstance(result, tuple):
+            result, max_logits, lse = result
+        else:
+            max_logits = lse = q.new_empty(0)
         if out is not None:
             out.copy_(result)
             result = out
-        aux = q.new_empty(0)
-        return result, aux, aux
+        return result, max_logits, lse
 
     return _musa_flash_mla_sparse_fwd(
         q=q,
