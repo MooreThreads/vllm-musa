@@ -322,7 +322,6 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0195-MUSA-keep-DeepSeek-V4-aux-stream-overlap-in-FULL-dec.patch` | v0.32 new/updated | keep DeepSeek-V4 aux-stream overlap in FULL decode graphs |
 | `0196-MUSA-run-on-Python-3.10.patch` | v0.32 new/updated | run on Python 3.10 |
 | `0197-MUSA-keep-the-allocator-settings-while-loading-weigh.patch` | v0.32 new/updated | keep the allocator settings while loading weights |
-
 | `0198-MUSA-run-the-DiffusionGemma-read-tests-on-MUSA.patch` | v0.32 upstream update | run the DiffusionGemma read tests on MUSA |
 | `0199-MUSA-handle-expandable-segments-around-graph-capture.patch` | v0.32 upstream update | handle expandable segments around graph capture |
 | `0200-MUSA-route-Mamba2-SSD-to-FlashInfer.patch` | v0.32 new | route the Mamba2 SSD/`--mamba-backend flashinfer` prefill to MATE's `flashinfer.mamba` |
@@ -337,8 +336,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
 | `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
 | `0211-MUSA-keep-fused-MoE-even_Ks-loads-in-bounds.patch` | v0.32 new/updated | mask the fused MoE even_Ks A/B loads under the MUSA pipeliner |
+| `0212-MUSA-add-the-MATE-Mega-MoE-FP8-experts-backend.patch` | v0.32 new | add `--moe-backend mate_mega_moe`: block-FP8 MoE experts on MATE Mega MoE with the passthrough all2all |
 
-Currently **211 patches** and **0 upstream entries** in `upstream/`.
+Currently **212 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
