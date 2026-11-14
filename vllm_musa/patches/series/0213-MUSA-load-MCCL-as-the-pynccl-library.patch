@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 7 Nov 2026 09:00:00 +0800
+Subject: [PATCH] MUSA: load MCCL as the pynccl library
+
+Return libmccl.so.2 from find_nccl_library() on MUSA. torchada resolves
+the ncclXxx lookups to MCCL's mcclXxx exports, so PyNcclCommunicator
+comes up instead of disabling itself, and the collectives that require
+it run on MUSA: all_gatherv and reduce_scatterv for the default
+allgather_reducescatter all2all of data-parallel expert parallelism,
+and reduce_scatter.
+---
+ vllm/utils/nccl.py | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/utils/nccl.py b/vllm/utils/nccl.py
+index 1136661f6e..7b6d282566 100644
+--- a/vllm/utils/nccl.py
++++ b/vllm/utils/nccl.py
+@@ -32,8 +32,11 @@ def find_nccl_library() -> str:
+             so_file = "libnccl.so.2"
+         elif torch.version.hip is not None:
+             so_file = "librccl.so.1"
++        elif getattr(torch.version, "musa", None) is not None:
++            # MUSA: torchada resolves the ncclXxx lookups to MCCL's mcclXxx.
++            so_file = "libmccl.so.2"
+         else:
+-            raise ValueError("NCCL only supports CUDA and ROCm backends.")
++            raise ValueError("NCCL only supports CUDA, ROCm and MUSA backends.")
+         logger.debug_once("Found nccl from library %s", so_file)
+     return so_file
+ 
