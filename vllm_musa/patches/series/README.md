@@ -339,8 +339,10 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0212-MUSA-add-the-MATE-Mega-MoE-FP8-experts-backend.patch` | v0.32 new | add `--moe-backend mate_mega_moe`: block-FP8 MoE experts on MATE Mega MoE with the passthrough all2all |
 | `0213-MUSA-load-MCCL-as-the-pynccl-library.patch` | v0.32 new | load `libmccl.so.2` as the pynccl library, so `all_gatherv`/`reduce_scatterv` (DP + EP all2all) have a communicator |
 | `0214-MUSA-track-torch_musa-streams-in-current_stream.patch` | v0.32 new | make `current_stream()` follow `torch_musa.set_stream`, so pynccl collectives stay inside graphs captured on torch_musa's capture stream |
+| `0215-MUSA-avoid-MCCL-groups-in-DP-EP-all2all-collectives.patch` | v0.32 new | keep the DP + EP all2all collectives out of MCCL groups on MUSA (MCCL can hang on a group of small collectives): gather a batch as one all-gather of its rows packed as bytes, pad uneven `all_gatherv`/`reduce_scatterv` to one collective |
+| `0216-MUSA-validate-packed-collectives-and-release-Mega-Mo.patch` | v0.32 new | validate packed/padded collective row contracts, initialize padding, and destroy Mega MoE symmetric buffers before their process group |
 
-Currently **214 patches** and **0 upstream entries** in `upstream/`.
+Currently **216 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and

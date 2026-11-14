@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 14 Nov 2026 15:44:53 +0800
+Subject: [PATCH] MUSA: validate packed collectives and release Mega MoE
+ buffers
+
+---
+ .../device_communicators/cuda_communicator.py | 16 ++++++++++---
+ .../device_communicators/pynccl.py            | 24 ++++++++++++++-----
+ 2 files changed, 31 insertions(+), 9 deletions(-)
+
+diff --git a/vllm/distributed/device_communicators/cuda_communicator.py b/vllm/distributed/device_communicators/cuda_communicator.py
+index 2799932ccb..3eb4ebccb5 100644
+--- a/vllm/distributed/device_communicators/cuda_communicator.py
++++ b/vllm/distributed/device_communicators/cuda_communicator.py
+@@ -65,9 +65,11 @@ def _all_gather_packed(
+     inputs: list[torch.Tensor], gather, sizes: list[int] | None
+ ) -> list[torch.Tensor]:
+     """Gather tensors that share their row count with one collective."""
++    if not inputs:
++        raise ValueError("packed all-gather requires at least one tensor")
+     rows = inputs[0].shape[0]
+     if any(t.shape[0] != rows for t in inputs):
+-        return [gather(t, sizes) for t in inputs]
++        raise ValueError("packed all-gather tensors must share their row count")
+     return _unpack_rows(gather(_pack_rows(inputs), sizes), inputs)
+ 
+ 
+@@ -867,6 +869,14 @@ class CudaCommunicator(DeviceCommunicatorBase):
+             raise ValueError("No PyNCCL communicator found")
+ 
+     def destroy(self):
++        if current_platform.device_type == "musa":
++            import sys
++
++            mega_moe = sys.modules.get(
++                "vllm_musa.model_executor.layers.fused_moe.mate_mega_moe"
++            )
++            if mega_moe is not None:
++                mega_moe.destroy_mate_mega_moe_buffers(self.device_group)
+         if self.pynccl_comm is not None:
+             self.pynccl_comm.destroy()
+             self.pynccl_comm = None
+@@ -1007,8 +1017,8 @@ class CudaCommunicator(DeviceCommunicatorBase):
+             return _all_gather_single(input_, sizes)
+ 
+         if current_platform.device_type == "musa":
+-            # MUSA: MCCL can hang on a group of small all-gathers, and one
+-            # collective costs less than one per tensor.
++            # XXX (MUSA): MCCL 2.30.4 can hang on grouped mixed-size gathers.
++            # Keep one packed collective until that grouped path is fixed.
+             return _all_gather_packed(input_, _all_gather_single, sizes)
+         output_list = []
+         pynccl_comm.group_start()
+diff --git a/vllm/distributed/device_communicators/pynccl.py b/vllm/distributed/device_communicators/pynccl.py
+index 81581b0397..41a1a952f4 100644
+--- a/vllm/distributed/device_communicators/pynccl.py
++++ b/vllm/distributed/device_communicators/pynccl.py
+@@ -342,8 +342,8 @@ class PyNcclCommunicator:
+             stream = current_stream()
+         assert output_tensor.shape[0] == sum(sizes)
+         if current_platform.device_type == "musa":
+-            # MUSA: MCCL can hang on a group of small broadcasts, so gather
+-            # the rows padded to the largest size in one all_gather.
++            # XXX (MUSA): MCCL 2.30.4 can hang on grouped mixed-size broadcasts.
++            # Pad to one gather until that grouped path is fixed.
+             self._all_gatherv_padded(output_tensor, input_tensor, sizes, stream)
+             return
+         split_offset = 0
+@@ -410,8 +410,8 @@ class PyNcclCommunicator:
+         if stream is None:
+             stream = current_stream()
+         if current_platform.device_type == "musa":
+-            # MUSA: see all_gatherv; reduce the rows padded to the largest
+-            # size in one reduce_scatter.
++            # XXX (MUSA): Avoid MCCL 2.30.4's grouped mixed-size reductions.
++            # Pad to one reduce-scatter until that grouped path is fixed.
+             self._reduce_scatterv_padded(
+                 output_tensor, input_tensor, sizes, op, stream
+             )
+@@ -441,12 +441,18 @@ class PyNcclCommunicator:
+         sizes: list[int],
+         stream,
+     ) -> None:
++        if len(sizes) != self.world_size or any(size < 0 for size in sizes):
++            raise ValueError("all_gatherv needs one nonnegative size per rank")
++        if input_tensor.shape[0] != sizes[self.rank]:
++            raise ValueError("all_gatherv local row count differs from sizes[rank]")
++        if output_tensor.shape[0] != sum(sizes):
++            raise ValueError("all_gatherv output row count differs from sum(sizes)")
+         max_size = max(sizes)
+         if max_size == 0:
+             return
+         rows = input_tensor.shape[1:]
+         with torch.cuda.stream(stream):
+-            padded = input_tensor.new_empty((max_size, *rows))
++            padded = input_tensor.new_zeros((max_size, *rows))
+             padded[: input_tensor.shape[0]].copy_(input_tensor)
+             gathered = input_tensor.new_empty((max_size * self.world_size, *rows))
+             self.all_gather(gathered, padded, stream=stream)
+@@ -466,12 +472,18 @@ class PyNcclCommunicator:
+         op: ReduceOp,
+         stream,
+     ) -> None:
++        if len(sizes) != self.world_size or any(size < 0 for size in sizes):
++            raise ValueError("reduce_scatterv needs one nonnegative size per rank")
++        if input_tensor.shape[0] != sum(sizes):
++            raise ValueError("reduce_scatterv input row count differs from sum(sizes)")
++        if output_tensor.shape[0] != sizes[self.rank]:
++            raise ValueError("reduce_scatterv local row count differs from sizes[rank]")
+         max_size = max(sizes)
+         if max_size == 0:
+             return
+         rows = input_tensor.shape[1:]
+         with torch.cuda.stream(stream):
+-            padded = input_tensor.new_empty((max_size * self.world_size, *rows))
++            padded = input_tensor.new_zeros((max_size * self.world_size, *rows))
+             offset = 0
+             for rank, size in enumerate(sizes):
+                 start = rank * max_size

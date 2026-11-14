@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 7 Nov 2026 11:00:00 +0800
+Subject: [PATCH] MUSA: avoid MCCL groups in DP-EP all2all collectives
+
+MCCL can hang when one group holds collectives of small tensors, which
+the data-parallel MoE all2all issues: the dispatch gathers several
+tensors in one group, and all_gatherv/reduce_scatterv for uneven
+per-rank sizes group one broadcast or reduce per rank. On MUSA, gather
+a batch as one all-gather of the tensors' rows packed as bytes, and
+serve uneven sizes with one all_gather or reduce_scatter over rows
+padded to the largest size.
+---
+ .../device_communicators/cuda_communicator.py | 43 +++++++++++++
+ .../device_communicators/pynccl.py            | 62 +++++++++++++++++++
+ 2 files changed, 105 insertions(+)
+
+diff --git a/vllm/distributed/device_communicators/cuda_communicator.py b/vllm/distributed/device_communicators/cuda_communicator.py
+index 4c6cb64bdf..2799932ccb 100644
+--- a/vllm/distributed/device_communicators/cuda_communicator.py
++++ b/vllm/distributed/device_communicators/cuda_communicator.py
+@@ -32,6 +32,45 @@ logger = init_logger(__name__)
+ NCCL_DIRECT_SYMM_RS_OUTPUT_MIN_VERSION = 22902
+ 
+ 
++def _row_bytes(tensor: torch.Tensor) -> int:
++    return tensor.shape[1:].numel() * tensor.element_size()
++
++
++def _pack_rows(tensors: list[torch.Tensor]) -> torch.Tensor:
++    """Concatenate the rows of every tensor, as bytes, into one matrix."""
++    rows = tensors[0].shape[0]
++    return torch.cat(
++        [
++            t.contiguous().view(torch.uint8).reshape(rows, _row_bytes(t))
++            for t in tensors
++        ],
++        dim=1,
++    )
++
++
++def _unpack_rows(
++    packed: torch.Tensor, like: list[torch.Tensor]
++) -> list[torch.Tensor]:
++    """Split a packed matrix back into tensors typed and shaped like ``like``."""
++    out, offset = [], 0
++    for t in like:
++        width = _row_bytes(t)
++        piece = packed[:, offset : offset + width].contiguous()
++        out.append(piece.view(t.dtype).reshape(packed.shape[0], *t.shape[1:]))
++        offset += width
++    return out
++
++
++def _all_gather_packed(
++    inputs: list[torch.Tensor], gather, sizes: list[int] | None
++) -> list[torch.Tensor]:
++    """Gather tensors that share their row count with one collective."""
++    rows = inputs[0].shape[0]
++    if any(t.shape[0] != rows for t in inputs):
++        return [gather(t, sizes) for t in inputs]
++    return _unpack_rows(gather(_pack_rows(inputs), sizes), inputs)
++
++
+ class CudaCommunicator(DeviceCommunicatorBase):
+     def __init__(
+         self,
+@@ -967,6 +1006,10 @@ class CudaCommunicator(DeviceCommunicatorBase):
+         if isinstance(input_, torch.Tensor):
+             return _all_gather_single(input_, sizes)
+ 
++        if current_platform.device_type == "musa":
++            # MUSA: MCCL can hang on a group of small all-gathers, and one
++            # collective costs less than one per tensor.
++            return _all_gather_packed(input_, _all_gather_single, sizes)
+         output_list = []
+         pynccl_comm.group_start()
+         for inp in input_:
+diff --git a/vllm/distributed/device_communicators/pynccl.py b/vllm/distributed/device_communicators/pynccl.py
+index 76eeb2291f..81581b0397 100644
+--- a/vllm/distributed/device_communicators/pynccl.py
++++ b/vllm/distributed/device_communicators/pynccl.py
+@@ -23,6 +23,7 @@ from vllm.distributed.device_communicators.pynccl_wrapper import (
+ )
+ from vllm.distributed.utils import StatelessProcessGroup
+ from vllm.logger import init_logger
++from vllm.platforms import current_platform
+ from vllm.utils.torch_utils import current_stream
+ 
+ logger = init_logger(__name__)
+@@ -340,6 +341,11 @@ class PyNcclCommunicator:
+         if stream is None:
+             stream = current_stream()
+         assert output_tensor.shape[0] == sum(sizes)
++        if current_platform.device_type == "musa":
++            # MUSA: MCCL can hang on a group of small broadcasts, so gather
++            # the rows padded to the largest size in one all_gather.
++            self._all_gatherv_padded(output_tensor, input_tensor, sizes, stream)
++            return
+         split_offset = 0
+         self.nccl.ncclGroupStart()
+         for root, split_size in enumerate(sizes):
+@@ -403,6 +409,13 @@ class PyNcclCommunicator:
+         )
+         if stream is None:
+             stream = current_stream()
++        if current_platform.device_type == "musa":
++            # MUSA: see all_gatherv; reduce the rows padded to the largest
++            # size in one reduce_scatter.
++            self._reduce_scatterv_padded(
++                output_tensor, input_tensor, sizes, op, stream
++            )
++            return
+ 
+         split_offset = 0
+         self.nccl.ncclGroupStart()
+@@ -421,6 +434,55 @@ class PyNcclCommunicator:
+             split_offset += split_size
+         self.nccl.ncclGroupEnd()
+ 
++    def _all_gatherv_padded(
++        self,
++        output_tensor: torch.Tensor,
++        input_tensor: torch.Tensor,
++        sizes: list[int],
++        stream,
++    ) -> None:
++        max_size = max(sizes)
++        if max_size == 0:
++            return
++        rows = input_tensor.shape[1:]
++        with torch.cuda.stream(stream):
++            padded = input_tensor.new_empty((max_size, *rows))
++            padded[: input_tensor.shape[0]].copy_(input_tensor)
++            gathered = input_tensor.new_empty((max_size * self.world_size, *rows))
++            self.all_gather(gathered, padded, stream=stream)
++            offset = 0
++            for rank, size in enumerate(sizes):
++                start = rank * max_size
++                output_tensor[offset : offset + size].copy_(
++                    gathered[start : start + size]
++                )
++                offset += size
++
++    def _reduce_scatterv_padded(
++        self,
++        output_tensor: torch.Tensor,
++        input_tensor: torch.Tensor,
++        sizes: list[int],
++        op: ReduceOp,
++        stream,
++    ) -> None:
++        max_size = max(sizes)
++        if max_size == 0:
++            return
++        rows = input_tensor.shape[1:]
++        with torch.cuda.stream(stream):
++            padded = input_tensor.new_empty((max_size * self.world_size, *rows))
++            offset = 0
++            for rank, size in enumerate(sizes):
++                start = rank * max_size
++                padded[start : start + size].copy_(
++                    input_tensor[offset : offset + size]
++                )
++                offset += size
++            reduced = input_tensor.new_empty((max_size, *rows))
++            self.reduce_scatter(reduced, padded, op=op, stream=stream)
++            output_tensor.copy_(reduced[: output_tensor.shape[0]])
++
+     def reduce(
+         self,
+         output_tensor: torch.Tensor,
