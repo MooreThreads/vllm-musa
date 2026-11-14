@@ -337,8 +337,10 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
 | `0211-MUSA-keep-fused-MoE-even_Ks-loads-in-bounds.patch` | v0.32 new/updated | mask the fused MoE even_Ks A/B loads under the MUSA pipeliner |
 | `0212-MUSA-add-the-MATE-Mega-MoE-FP8-experts-backend.patch` | v0.32 new | add `--moe-backend mate_mega_moe`: block-FP8 MoE experts on MATE Mega MoE with the passthrough all2all |
+| `0213-MUSA-load-MCCL-as-the-pynccl-library.patch` | v0.32 new | load `libmccl.so.2` as the pynccl library, so `all_gatherv`/`reduce_scatterv` (DP + EP all2all) have a communicator |
+| `0214-MUSA-track-torch_musa-streams-in-current_stream.patch` | v0.32 new | make `current_stream()` follow `torch_musa.set_stream`, so pynccl collectives stay inside graphs captured on torch_musa's capture stream |
 
-Currently **212 patches** and **0 upstream entries** in `upstream/`.
+Currently **214 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and

@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 7 Nov 2026 09:30:00 +0800
+Subject: [PATCH] MUSA: track torch_musa streams in current_stream
+
+torch_musa's stream contexts and graphs switch streams through
+torch_musa.set_stream, which bypasses the patched torch.cuda.set_stream.
+current_stream() therefore kept returning the stream it first saw, and
+work issued on it, such as pynccl collectives, escaped the graph captured
+on torch_musa's capture stream. Wrap torch_musa.set_stream the same way
+on MUSA so current_stream() follows every switch.
+---
+ vllm/utils/torch_utils.py | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
+index 6d80de8194..2ee759ce3d 100644
+--- a/vllm/utils/torch_utils.py
++++ b/vllm/utils/torch_utils.py
+@@ -810,6 +810,24 @@ def _patched_set_stream(stream: torch.cuda.Stream) -> None:
+ torch.cuda.set_stream = _patched_set_stream
+ 
+ 
++def _track_musa_set_stream() -> None:
++    # MUSA: torch_musa's stream contexts and graphs switch streams through
++    # torch_musa.set_stream, which bypasses the patched torch.cuda.set_stream.
++    import torch_musa
++
++    if getattr(torch_musa.set_stream, "_vllm_tracks_stream", False):
++        return
++    musa_set_stream = torch_musa.set_stream
++
++    def set_stream(stream: torch.cuda.Stream) -> None:
++        _current_stream_tls.value = stream
++        musa_set_stream(stream)
++
++    set_stream._vllm_tracks_stream = True  # type: ignore[attr-defined]
++    torch_musa.set_stream = set_stream
++    torch.cuda.set_stream = set_stream
++
++
+ class _StreamPlaceholder:
+     def __init__(self):
+         self.synchronize = lambda: None
+@@ -848,6 +866,8 @@ def current_stream() -> torch.cuda.Stream:
+         else:
+             current_stream = current_platform.current_stream
+             if current_stream is not None:
++                if current_platform.device_type == "musa":
++                    _track_musa_set_stream()
+                 _current_stream_tls.value = current_stream()
+             else:
+                 raise ValueError(
