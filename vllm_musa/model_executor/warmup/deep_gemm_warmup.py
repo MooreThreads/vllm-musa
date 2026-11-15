@@ -282,6 +282,11 @@ def deep_gemm_warmup(model: torch.nn.Module, max_tokens: int, pbar=None):
     _warmup_bf16_grouped_moe(model, max_tokens)
     _warmup_paged_mqa_logits_metadata(model)
     _warmup_rope_store_hints(model)
+    from vllm_musa.model_executor.warmup.flash_attn_warmup import (
+        warmup_flash_attention,
+    )
+
+    warmup_flash_attention(model, max_tokens, config=_vllm_config(model))
 
 
 vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup = deep_gemm_warmup

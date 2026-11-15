@@ -299,6 +299,14 @@ def warmup(monkeypatch, rope):
         envs=types.SimpleNamespace(VLLM_MUSA_CUSTOM_OP_USE_NATIVE=native_flag),
     )
     monkeypatch.setitem(sys.modules, "vllm_musa.jit_kernel.csrc.rope", rope.module)
+    fa3 = []
+    _stub(
+        monkeypatch,
+        "vllm_musa.model_executor.warmup.flash_attn_warmup",
+        warmup_flash_attention=lambda model, tokens, *, config=None: fa3.append(
+            (tokens, config)
+        ),
+    )
     module = _load(WARMUP_SOURCE, "_deep_gemm_warmup_under_test")
 
     def built(model) -> list[str]:
@@ -306,7 +314,7 @@ def warmup(monkeypatch, rope):
         return [name for name, _ in rope.loads]
 
     return types.SimpleNamespace(
-        module=module, state=state, upstream=upstream, rope=rope, built=built
+        module=module, state=state, upstream=upstream, rope=rope, built=built, fa3=fa3
     )
 
 
@@ -439,6 +447,18 @@ def test_unimportable_rope_kernel_only_warns(warmup, monkeypatch, caplog) -> Non
     assert [record.levelno for record in caplog.records] == [logging.WARNING]
 
 
+def test_deep_gemm_warmup_passes_retained_config_to_fa3(warmup, monkeypatch):
+    monkeypatch.setattr(warmup.module, "_warmup_bf16_grouped_moe", lambda *a: None)
+    monkeypatch.setattr(
+        warmup.module, "_warmup_paged_mqa_logits_metadata", lambda *a: None
+    )
+    monkeypatch.setattr(warmup.module, "_warmup_rope_store_hints", lambda *a: None)
+    config = _config()
+    model = _FakeModel(_FakeBackbone(config))
+    warmup.module.deep_gemm_warmup(model, 4096)
+    assert warmup.fa3 == [(4096, config)]
+
+
 def test_deep_gemm_warmup_runs_the_rope_prewarm(warmup, monkeypatch) -> None:
     monkeypatch.setattr(warmup.module, "_warmup_bf16_grouped_moe", lambda *a: None)
     monkeypatch.setattr(
@@ -448,4 +468,5 @@ def test_deep_gemm_warmup_runs_the_rope_prewarm(warmup, monkeypatch) -> None:
     warmup.module.deep_gemm_warmup(_FakeModel(_FakeRope(64)), 8192)
 
     assert warmup.upstream == [8192]
+    assert warmup.fa3 == [(8192, None)]
     assert [name for name, _ in warmup.rope.loads] == _names("stwb", "stcg")
