@@ -59,6 +59,24 @@ decode/prefill entry points provided by `0.2.8.post1`; an image containing
 MATE `0.2.7` is not sufficient. Building on an older image does not update
 its runtime dependencies unless they are installed explicitly.
 
+For the measured BF16 paged-FA3 geometry (head dimension 128, GQA ratio 8,
+page size 64, no DCP/local window/sinks), startup loads the reachable forward,
+metadata and combine variants before serving. This avoids request-time lazy
+compilation when mixed batches first encounter a new query tile or split
+count. It does not change attention numerics or increase the KV cache.
+
+A fresh compilation cache can add several minutes to startup; the observed
+four-rank cold startup exceeded the upstream 600-second engine-ready timeout.
+Allow that one-time startup explicitly when launching the service:
+
+```bash
+export VLLM_ENGINE_READY_TIMEOUT_S=1800
+```
+
+Keep the normal request/SLA timeouts unchanged. Reuse the candidate's compiled
+MATE cache only within a compatible device/compiler/dependency fingerprint;
+a startup timeout is not evidence of KV-cache exhaustion.
+
 The supported configuration is deliberately narrow:
 
 - Single-node EP, at most eight ranks, linear expert placement, and BF16

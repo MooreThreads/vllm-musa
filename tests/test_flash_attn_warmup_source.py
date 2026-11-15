@@ -77,6 +77,32 @@ def test_query_representatives_cover_every_runtime_dispatch(warmup):
         assert len(points) <= 22
 
 
+def combine_config(tile_n, num_split):
+    tile_m = 16 if tile_n % 64 == 0 else 32
+    max_splits = next(
+        bucket for bucket in (16, 32, 64, 128, 256) if num_split <= bucket
+    )
+    return tile_m, max_splits
+
+
+def test_combine_covers_sparse_and_regular_split_shapes(warmup):
+    configs = warmup._fa3_combine_configs(combine_config)
+    assert len(configs) == len({signature(config) for config in configs}) == 28
+    for metadata in (False, True):
+        variants = {
+            (config["tile_m"], config["tile_n"], config["max_splits"])
+            for config in configs
+            if config["has_metadata"] == metadata
+        }
+        for splits in (16, 32, 64, 128, 256):
+            assert (16, 64, splits) in variants
+            assert (16, 32, splits) in variants
+        for splits in (32, 64, 128, 256):
+            assert (8, 32, splits) in variants
+    assert all(config["has_cu_seqlens_q"] for config in configs)
+    assert not any(config["has_seqused_q"] for config in configs)
+
+
 def test_loads_real_dispatch_modules_without_tensor_launches(warmup):
     calls = []
     forward = ModuleType("fake_fwd")
@@ -88,10 +114,15 @@ def test_loads_real_dispatch_modules_without_tensor_launches(warmup):
     metadata._fmha_metadata_module = lambda config: calls.append(
         ("metadata", signature(config))
     )
-    warmup._load_fa3_modules(32, 4, 128, 4096, 64, forward, metadata)
-    assert len(calls) <= 16
-    assert len(calls) == len(set(calls))
-    assert {row[0] for row in calls} == {"forward", "metadata"}
+    combine = ModuleType("fake_combine")
+    combine._get_fwd_combine_kernel_config = combine_config
+    combine._fmha_fwd_combine_module = lambda config: calls.append(
+        ("combine", signature(config))
+    )
+    counts = warmup._load_fa3_modules(32, 4, 128, 4096, 64, forward, metadata, combine)
+    assert len(calls) <= 44
+    assert len(calls) == len(set(calls)) == sum(counts)
+    assert {row[0] for row in calls} == {"forward", "metadata", "combine"}
 
 
 def impl(**overrides):
@@ -150,7 +181,7 @@ def test_retained_config_works_outside_global_context(warmup, monkeypatch):
 
     def loaded(*args):
         calls.append(args)
-        return 9, 6
+        return 9, 6, 28
 
     monkeypatch.setattr(warmup, "_load_fa3_modules", loaded)
     warmup.warmup_flash_attention(model, 4096, config=context)
@@ -181,7 +212,7 @@ def test_failed_build_does_not_poison_success_cache(warmup, monkeypatch):
 
     def loaded(*args):
         calls.append(args)
-        return 9, 6
+        return 9, 6, 28
 
     monkeypatch.setattr(warmup, "_load_fa3_modules", loaded)
     warmup.warmup_flash_attention(model, 4096)

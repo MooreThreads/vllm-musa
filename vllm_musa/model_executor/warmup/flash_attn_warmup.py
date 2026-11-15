@@ -113,6 +113,29 @@ def _fa3_warmup_configs(
     return list(forward.values()), metadata
 
 
+def _fa3_combine_configs(dispatch) -> list[dict]:
+    configs = {}
+    for split_bucket in (16, 32, 64, 128, 256):
+        tile_m, max_splits = dispatch(64, split_bucket)
+        # MATE narrows tile_n for low-CTA workloads and rounds split capacity.
+        tiles = [(tile_m, 64, max_splits), (16, 32, max_splits)]
+        if max_splits >= 32:
+            tiles.append((8, 32, max_splits))
+        for metadata in (False, True):
+            for combine_m, combine_n, splits in tiles:
+                config = {
+                    "has_cu_seqlens_q": True,
+                    "has_seqused_q": False,
+                    "has_metadata": metadata,
+                    "element": "mutlass::bfloat16_t",
+                    "tile_m": combine_m,
+                    "tile_n": combine_n,
+                    "max_splits": splits,
+                }
+                configs[tuple(sorted(config.items()))] = config
+    return list(configs.values())
+
+
 def _load_fa3_modules(
     heads: int,
     kv_heads: int,
@@ -121,13 +144,16 @@ def _load_fa3_modules(
     max_seqs: int,
     forward_module=None,
     metadata_module=None,
-) -> tuple[int, int]:
+    combine_module=None,
+) -> tuple[int, int, int]:
     if forward_module is None:
         forward_module = importlib.import_module("mate.jit.attention.fmha.fmha_fwd")
     if metadata_module is None:
         metadata_module = importlib.import_module(
             "mate.jit.attention.fmha.fmha_get_metadata"
         )
+    if combine_module is None:
+        combine_module = importlib.import_module("mate.jit.attention.fmha.fmha_combine")
     forward, metadata = _fa3_warmup_configs(
         forward_module._get_fwd_kernel_config,
         heads,
@@ -140,7 +166,10 @@ def _load_fa3_modules(
         metadata_module._fmha_metadata_module(config)
     for config in forward:
         forward_module._fmha_fwd_module(config)
-    return len(forward), len(metadata)
+    combine = _fa3_combine_configs(combine_module._get_fwd_combine_kernel_config)
+    for config in combine:
+        combine_module._fmha_fwd_combine_module(config)
+    return len(forward), len(metadata), len(combine)
 
 
 def _model_fa3_geometries(model) -> set[tuple[int, int, int]]:
@@ -211,12 +240,13 @@ def warmup_flash_attention(model, max_tokens: int, *, config=None) -> None:
             max_tokens,
             max_seqs,
         )
-        forward_count, metadata_count = _load_fa3_modules(
+        forward_count, metadata_count, combine_count = _load_fa3_modules(
             *geometry, max_tokens, max_seqs
         )
         _WARMED.add(key)
         logger.info(
-            "Loaded MUSA paged BF16 FA3 variants: forward=%d metadata=%d",
+            "Loaded MUSA paged BF16 FA3 variants: forward=%d metadata=%d combine=%d",
             forward_count,
             metadata_count,
+            combine_count,
         )
