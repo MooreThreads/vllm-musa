@@ -24,6 +24,11 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 from build_utils.build_info import write_build_info  # noqa: E402
 from build_utils.ccache import configure_compiler_cache  # noqa: E402
+from build_utils.git_proxy import (  # noqa: E402
+    PROXY_ENV,
+    candidate_commands,
+    resolve_proxy,
+)
 
 third_party = Path("third_party")
 arch = platform.machine().lower()
@@ -377,14 +382,13 @@ class _CustomBuildExt(BuildExtension):
             print(f"Recorded MUSA arch {MUSA_ARCH.name} in {path}")
 
     @staticmethod
-    def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):
-        attempts = int(os.environ.get("VLLM_MUSA_GIT_RETRY_ATTEMPTS", "8"))
-        delay_s = int(os.environ.get("VLLM_MUSA_GIT_RETRY_DELAY_S", "10"))
+    def _retry_git_call(cmd, cwd, cleanup_path, attempts, delay_s, timeout_s=None):
+        """Run one git command variant, retrying transient failures."""
         for attempt in range(1, attempts + 1):
             try:
-                subprocess.check_call(cmd, cwd=cwd)
+                subprocess.check_call(cmd, cwd=cwd, timeout=timeout_s)
                 return
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 if cleanup_path is not None:
                     shutil.rmtree(cleanup_path, ignore_errors=True)
                 if attempt == attempts:
@@ -396,6 +400,39 @@ class _CustomBuildExt(BuildExtension):
                     flush=True,
                 )
                 time.sleep(sleep_s)
+
+    @staticmethod
+    def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):
+        """Run a network git command, through the GitHub mirror when enabled.
+
+        The mirror is tried first and a direct connection last, so a mirror that
+        fails costs time instead of breaking the build. Set
+        ``VLLM_MUSA_GIT_PROXY=0`` to skip the mirror, and
+        ``VLLM_MUSA_GIT_PROXY_TIMEOUT_S`` to stop waiting on a mirror that hangs
+        (the mirror is only bounded by that timeout, never the direct clone).
+        """
+        attempts = max(1, int(os.environ.get("VLLM_MUSA_GIT_RETRY_ATTEMPTS") or "8"))
+        delay_s = max(0, int(os.environ.get("VLLM_MUSA_GIT_RETRY_DELAY_S") or "10"))
+        timeout_s = float(os.environ.get("VLLM_MUSA_GIT_PROXY_TIMEOUT_S") or "0")
+        timeout_s = timeout_s if timeout_s > 0 else None
+        candidates = candidate_commands(cmd)
+        for candidate in candidates[:-1]:
+            # The mirror gets a short leash: a dead mirror must not spend the
+            # whole retry budget before the direct fallback runs.
+            try:
+                _CustomBuildExt._retry_git_call(
+                    candidate, cwd, cleanup_path, min(attempts, 2), delay_s, timeout_s
+                )
+                return
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                print(
+                    f"Git command failed through {resolve_proxy()}; retrying "
+                    f"directly (set {PROXY_ENV}=0 to skip the mirror).",
+                    flush=True,
+                )
+        _CustomBuildExt._retry_git_call(
+            candidates[-1], cwd, cleanup_path, attempts, delay_s
+        )
 
     @staticmethod
     def _clone_and_checkout(repo_path, repo_url, git_tag, git_shallow):
@@ -513,7 +550,9 @@ class _CustomBuildExt(BuildExtension):
         if os.environ.get("SKIP_THIRD_PARTY", "0") == "1":
             print("Skipping third-party repositories cloning (SKIP_THIRD_PARTY=1)")
         else:
-            print("Cloning third-party repositories...")
+            proxy = resolve_proxy()
+            via = f" through {proxy}" if proxy else ""
+            print(f"Cloning third-party repositories{via}...")
             self._clone_and_checkout(
                 _VLLM_REPO.source_dir,
                 _VLLM_REPO.git_repository,

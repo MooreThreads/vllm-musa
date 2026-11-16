@@ -62,6 +62,42 @@ pip install -e . --no-build-isolation -v
 ccache --show-stats
 ```
 
+## Third-party source clones
+
+`setup.py` clones the pinned upstream vLLM and FlashInfer revisions from
+github.com before it builds the MUSA extensions. On networks where github.com is
+slow or unreachable, those clones go through a GitHub mirror instead:
+
+| Variable | Purpose |
+|---|---|
+| `VLLM_MUSA_GIT_PROXY` | Mirror serving the github.com clones (default: `https://gh-proxy.com/`) |
+| `VLLM_MUSA_GIT_PROXY_TIMEOUT_S` | Seconds to wait on one mirrored clone attempt (default: `0`, no limit) |
+
+The default mirror is used unless the variable says otherwise:
+
+```bash
+# default: clone through https://gh-proxy.com/
+pip install . --no-build-isolation -v
+
+# clone github.com directly
+VLLM_MUSA_GIT_PROXY=0 pip install . --no-build-isolation -v
+
+# use a different mirror
+VLLM_MUSA_GIT_PROXY=https://ghproxy.net/ pip install . --no-build-isolation -v
+```
+
+The value must be a prefix that serves the full repository URL, that is
+`<mirror>https://github.com/<owner>/<repo>.git`. `0`, `false`, `off`, `no`,
+`none`, `disabled`, and an empty value disable it. The rewrite is passed to git
+for the duration of one command, so the clone keeps the canonical github.com
+remote and no persistent git configuration is written.
+
+A mirror that fails is abandoned after two attempts and the clone retries
+github.com directly, so an outage costs time rather than failing the build. A
+mirror that hangs instead of failing is only bounded by
+`VLLM_MUSA_GIT_PROXY_TIMEOUT_S`; set it when the mirror stalls. The timeout
+bounds mirrored attempts only, never the direct clone or any other build step.
+
 ## Scheduler and graph settings
 
 Model pages in [the cookbook](cookbook/README.md) pin the scheduler, memory,
