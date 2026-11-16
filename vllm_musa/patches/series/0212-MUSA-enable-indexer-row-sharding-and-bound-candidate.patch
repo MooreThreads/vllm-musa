@@ -1,0 +1,175 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 13 Nov 2026 11:20:16 +0800
+Subject: [PATCH] [MUSA] enable indexer row sharding and bound candidate
+
+---
+ .../kernels/attention/dsa/candidate_blocks.py | 23 ++++++++++++++++++--
+ .../layers/sparse_attn_indexer.py             | 19 +++++++++++++++++
+ vllm/v1/attention/backends/mla/indexer.py     | 20 ++++++++++++++---
+ 3 files changed, 56 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/kernels/attention/dsa/candidate_blocks.py b/vllm/model_executor/kernels/attention/dsa/candidate_blocks.py
+index b9cdc923b14ab58dbbcfa7a9a94fe3320ff4a745..0037d811aa3aa850532775f352cdf90281dc6645 100644
+--- a/vllm/model_executor/kernels/attention/dsa/candidate_blocks.py
++++ b/vllm/model_executor/kernels/attention/dsa/candidate_blocks.py
+@@ -3,9 +3,14 @@
+ 
+ import torch
+ 
++from vllm.platforms import current_platform
+ from vllm.triton_utils import tl, triton
+ 
+ 
++def _is_musa_platform() -> bool:
++    return current_platform.is_out_of_tree() and current_platform.is_musa()
++
++
+ @triton.jit
+ def _max_with_nan(a, b):
+     return tl.maximum(a, b, propagate_nan=tl.PropagateNan.ALL)
+@@ -152,13 +157,27 @@ def select_candidate_blocks(
+     Row bounds are in packed column space; absent starts mean zero.
+     Decode rows share bounds in groups of ``row_repeat``. Output is -1 padded.
+     """
+-    assert logits.is_cuda
++    assert logits.is_cuda or _is_musa_platform()
+     rows, width = logits.shape
+     if not rows:
+         return
+     if not width:
+         out.fill_(-1)
+         return
++    if (
++        _is_musa_platform()
++        and logits.dtype == torch.float32
++        and logits.stride(1) == 1
++        and topk_blocks <= 2048
++    ):
++        from vllm_musa.kernels.sparse_mqa import (
++            select_candidate_blocks as select_musa_candidate_blocks,
++        )
++
++        select_musa_candidate_blocks(
++            logits, row_ks, row_ke, block_size, out, row_repeat
++        )
++        return
+     nblocks = triton.cdiv(width, block_size)
+     scores = logits.new_empty((rows, nblocks))
+     _block_scores_kernel[(rows, triton.cdiv(nblocks, 128))](
+@@ -198,7 +217,7 @@ def apply_candidate_mask(
+     row_repeat: int = 1,
+ ) -> None:
+     """Mask packed logits outside causal bounds and request-local candidates."""
+-    assert logits.is_cuda
++    assert logits.is_cuda or _is_musa_platform()
+     rows, width = logits.shape
+     if not rows or not width:
+         return
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..6693701f8585538bc066991ed64d98c3c5fa5c15 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -1719,6 +1719,7 @@ def _musa_fill_exact_sparse_indexer_indices(
+ 
+     attn_metadata = get_forward_context().attn_metadata
+     if not isinstance(attn_metadata, dict):
++        _reserve_row_shard_exchange_transient(topk_indices_buffer, hidden_states.device)
+         return topk_indices_buffer
+ 
+     metadata = attn_metadata.get(_resolve_layer_name(k_cache_prefix))
+@@ -1730,9 +1731,24 @@ def _musa_fill_exact_sparse_indexer_indices(
+     weights_fp32 = None
+ 
+     if metadata.num_prefills > 0 and metadata.prefill is not None:
++        row_shard = PrefillRowShard.from_metadata(
++            metadata.prefill, metadata.num_decode_tokens
++        )
+         chunks = list(metadata.prefill.chunks)
+         while chunks:
+             chunk = chunks.pop(0)
++            if row_shard is not None:
++                narrowed = row_shard.narrow(chunk)
++                if narrowed is None:
++                    continue
++                start, end, row_starts, row_ends = narrowed
++                chunk = dataclasses.replace(
++                    chunk,
++                    token_start=start,
++                    token_end=end,
++                    cu_seqlen_ks=row_starts,
++                    cu_seqlen_ke=row_ends,
++                )
+             token_start = int(chunk.token_start)
+             token_end = int(chunk.token_end)
+             if _musa_try_fill_prefill_topk_from_indexer_cache_native(
+@@ -1780,6 +1796,9 @@ def _musa_fill_exact_sparse_indexer_indices(
+                 topk_tokens,
+             )
+ 
++        if row_shard is not None:
++            row_shard.exchange_topk(topk_indices_buffer, topk_tokens)
++
+     if metadata.num_decodes > 0 and metadata.decode is not None:
+         if not _musa_try_fill_decode_topk_from_indexer_cache_native(
+             q_quant[: metadata.num_decode_tokens],
+diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
+index 0909d292c14f3b245c4d84d8aeaceacea72f9e32..c588db6f023f1b4640db13b1ed6017f4e22372d3 100644
+--- a/vllm/v1/attention/backends/mla/indexer.py
++++ b/vllm/v1/attention/backends/mla/indexer.py
+@@ -1,5 +1,6 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++import os
+ from dataclasses import dataclass
+ from typing import Any
+ 
+@@ -56,6 +57,10 @@ logger = init_logger(__name__)
+ DSA_INDEXER_KV_DTYPES = ("fp8", "mxfp4")
+ 
+ 
++def _is_musa_platform() -> bool:
++    return current_platform.is_out_of_tree() and current_platform.is_musa()
++
++
+ def dsa_indexer_uses_fp4(vllm_config: VllmConfig) -> bool:
+     """Whether the DeepSeek sparse indexer should use the MXFP4 K cache."""
+     kv_dtype = vllm_config.attention_config.resolve_indexer_kv_dtype("fp8")
+@@ -251,7 +256,14 @@ def tp_prefill_row_sharding_supported(
+     """Whether replicated prefill rows may be sharded across TP ranks."""
+     cudagraph_mode = vllm_config.compilation_config.cudagraph_mode or CUDAGraphMode.NONE
+     return (
+-        current_platform.is_cuda()
++        (
++            current_platform.is_cuda()
++            or _is_musa_platform()
++        )
++        and (
++            not _is_musa_platform()
++            or os.getenv("VLLM_MUSA_INDEXER_PREFILL_ROW_SHARDING", "1") != "0"
++        )
+         and dcp_world_size == 1
+         and not use_pcp
+         and tp_size > 1
+@@ -938,7 +950,7 @@ def _supports_varlen_paged_mqa_logits() -> bool:
+ 
+ 
+ def _supports_flattened_device_query_lens() -> bool:
+-    if current_platform.is_musa():
++    if _is_musa_platform():
+         # MUSA: the decode kernels read the per-token rows built from device
+         # metadata, so the flattened path accepts device-decided query lengths.
+         return True
+@@ -1748,10 +1760,10 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+             # can fall back safely.
+             schedule_metadata = (
+                 None
+-                if current_platform.is_musa()
++                if _is_musa_platform()
+                 else self.scheduler_metadata_buffer
+             )
+-            if current_platform.is_musa():
++            if _is_musa_platform():
+                 try:
+                     from mate import deep_gemm as musa_deep_gemm
+ 
