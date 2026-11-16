@@ -20,6 +20,7 @@ MUSA_APT_SOURCE="${MUSA_APT_SOURCE:-https://dl.mthreads.com/repo/repository/ubun
 INSTALL_MUSA_STACK="${INSTALL_MUSA_STACK:-auto}"
 MUSA_RUNTIME_VERSION="${MUSA_RUNTIME_VERSION:-5.2}"
 MCCL_VERSION="${MCCL_VERSION:-2.4.0}"
+MTSHMEM_VERSION="${MTSHMEM_VERSION:-3.2.5.1}"
 
 # Python package indexes. MUSA/MT wheels (torch, torch_musa, mate, ...) resolve
 # from the internal Moore Threads index only; ordinary third-party wheels resolve
@@ -71,6 +72,7 @@ docker build \
     --build-arg INSTALL_MUSA_STACK="${INSTALL_MUSA_STACK}" \
     --build-arg MUSA_RUNTIME_VERSION="${MUSA_RUNTIME_VERSION}" \
     --build-arg MCCL_VERSION="${MCCL_VERSION}" \
+    --build-arg MTSHMEM_VERSION="${MTSHMEM_VERSION}" \
     --build-arg MOONCAKE_VERSION="${MOONCAKE_VERSION}" \
     --build-arg BUILD_VLLM_RS="${BUILD_VLLM_RS}" \
     --build-arg VLLM_MUSA_COMMIT="${VLLM_MUSA_COMMIT}" \

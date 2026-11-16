@@ -139,6 +139,10 @@ ARG MUSA_RUNTIME_VERSION=5.2
 ARG MCCL_VERSION=2.4.0
 # mthreads-mtml lacks a runtime-suffixed package, so pin it by version.
 ARG MUSA_MTML_VERSION=2.4.1
+# mtshmem ships the NVSHMEM bootstrap and transport plugins (uid, ibrc, ibgda)
+# that DeepEP dlopens by name from /usr/local/mtshmem/lib. Pinned by version for
+# the same reason as mthreads-mtml.
+ARG MTSHMEM_VERSION=3.2.5.1
 
 ENV MUSA_HOME=/usr/local/musa
 ENV PATH=/usr/local/mtshmem/bin:${MUSA_HOME}/bin:${MUSA_HOME}/mudnn/bin:${PATH}
@@ -227,6 +231,7 @@ RUN printf 'deb [trusted=true] %s jammy main\n' "${MUSA_APT_SOURCE}" \
         "libmudnn3-dev||libmudnn3-dev-musa-${runtime_suffix},libmudnn3-musa-${runtime_major}-dev" \
         "libmthreads-mtml|${MUSA_MTML_VERSION}|libmthreads-mtml" \
         "mccl-s5000|${MCCL_VERSION}|mccl-s5000" \
+        "mtshmem|${MTSHMEM_VERSION}|mtshmem" \
     ) && \
     musa_specs=() && \
     for musa_def in "${musa_pkg_defs[@]}"; do \
