@@ -136,6 +136,18 @@ def test_current_context_cutoff(computed, expected):
     assert dispatch.use_candidate_indexer(computed, 32768) is expected
 
 
+@pytest.mark.parametrize("prompt_tokens", [4096, 8192, 16384])
+@pytest.mark.parametrize("threshold", [32768, 100000000])
+def test_short_requests_are_negative_controls_for_both_audit_policies(
+    prompt_tokens, threshold
+):
+    for computed in range(0, prompt_tokens, 8192):
+        scheduled = min(8192, prompt_tokens - computed)
+        assert not dispatch.use_candidate_indexer([computed], threshold, [scheduled])
+    for computed in range(prompt_tokens, prompt_tokens + 1024):
+        assert not dispatch.use_candidate_indexer([computed], threshold, [1])
+
+
 @pytest.mark.parametrize(
     ("computed", "scheduled", "expected"),
     [

@@ -65,6 +65,7 @@ def _topk(
 def _store_candidate_blocks_kernel(
     scores,
     columns,
+    counts,
     output,
     stride_score,
     stride_column,
@@ -75,13 +76,18 @@ def _store_candidate_blocks_kernel(
     TILE: tl.constexpr,
 ):
     row = tl.program_id(0)
-    slots = tl.program_id(1) * TILE + tl.arange(0, TILE)
+    slots = tl.arange(0, TILE)
     column = tl.load(columns + row * stride_column + slots, slots < TOPK, other=-1)
     valid = (slots < TOPK) & (column >= 0) & (column < WIDTH)
     value = tl.load(scores + row * stride_score + column, valid, other=-float("inf"))
+    selected = tl.where(valid & (value != -float("inf")), column, 2147483647).to(
+        tl.int32
+    )
+    if tl.load(counts + row) > TOPK:
+        selected = tl.sort(selected)
     tl.store(
         output + row * stride_output_row + slots * stride_output_col,
-        tl.where(valid & (value != -float("inf")), column, -1),
+        tl.where(selected != 2147483647, selected, -1),
         slots < TOPK,
     )
 
@@ -94,7 +100,7 @@ def select_candidate_blocks(
     output: torch.Tensor,
     row_repeat: int = 1,
 ) -> None:
-    """Select only causally visible blocks, keeping the newest block pinned."""
+    """Publish visible blocks in token order, keeping the newest block pinned."""
     rows, width = logits.shape
     num_blocks = triton.cdiv(width, block_size)
     scores = torch.empty((rows, num_blocks), device=logits.device, dtype=torch.float32)
@@ -117,16 +123,17 @@ def select_candidate_blocks(
     )
     columns = torch.empty(output.shape, device=output.device, dtype=output.dtype)
     _topk(scores, counts, columns, output.shape[1])
-    _store_candidate_blocks_kernel[(rows, triton.cdiv(output.shape[1], 256))](
+    _store_candidate_blocks_kernel[(rows,)](
         scores,
         columns,
+        counts,
         output,
         scores.stride(0),
         columns.stride(0),
         *output.stride(),
         num_blocks,
         output.shape[1],
-        256,
+        triton.next_power_of_2(output.shape[1]),
     )
 
 
@@ -296,17 +303,23 @@ def _remap_candidate_topk_kernel(
     CANDIDATE_BLOCK: tl.constexpr,
     TOPK: tl.constexpr,
     TILE: tl.constexpr,
+    SPARSE: tl.constexpr = True,
 ):
     row = tl.program_id(0)
     slots = tl.arange(0, TILE)
     column = tl.load(columns + row * stride_column + slots, slots < TOPK, other=-1)
     valid = (slots < TOPK) & (column >= 0) & (column < WIDTH)
-    block = tl.load(
-        candidates + row * NUM_CANDIDATES + column // CANDIDATE_BLOCK,
-        valid,
-        other=-1,
-    )
-    token = tl.where(block >= 0, block * CANDIDATE_BLOCK + column % CANDIDATE_BLOCK, -1)
+    if SPARSE:
+        block = tl.load(
+            candidates + row * NUM_CANDIDATES + column // CANDIDATE_BLOCK,
+            valid,
+            other=-1,
+        )
+        token = tl.where(
+            block >= 0, block * CANDIDATE_BLOCK + column % CANDIDATE_BLOCK, -1
+        )
+    else:
+        token = column
     score = tl.load(logits + row * WIDTH + column, valid, other=-float("inf"))
     valid = valid & (token >= 0) & (score != -float("inf"))
     count = tl.sum(valid.to(tl.int32), 0)
@@ -339,7 +352,7 @@ def _score_and_select_rows(
     output: torch.Tensor,
     dense_width: int,
     candidate_write: bool,
-    candidates_unique: bool = False,
+    candidates_sorted_unique: bool = False,
     request_repeat: int = 1,
     request_row_offset: int = 0,
     candidates_identity_when_full: bool = False,
@@ -365,7 +378,7 @@ def _score_and_select_rows(
         return
     blocks = (
         torch.empty((rows, candidates.shape[1]), device=query.device, dtype=torch.int32)
-        if sparse and not candidates_unique
+        if sparse and not candidates_sorted_unique
         else None
     )
     ends = (
@@ -374,7 +387,7 @@ def _score_and_select_rows(
         else lengths
     )
     if sparse:
-        if candidates_unique:
+        if candidates_sorted_unique:
             blocks = candidates.contiguous()
         else:
             _compact_candidate_blocks_kernel[(rows,)](
@@ -416,7 +429,7 @@ def _score_and_select_rows(
         candidate_block_size,
         candidates.shape[1],
         sparse,
-        candidates_unique,
+        candidates_sorted_unique,
         64,
         candidates_identity_when_full,
     )
@@ -424,7 +437,7 @@ def _score_and_select_rows(
         select_candidate_blocks(logits, None, lengths, candidate_block_size, candidates)
     elif not sparse:
         apply_candidate_mask(logits, None, lengths, candidates, candidate_block_size)
-    if not sparse:
+    if candidate_write:
         _topk(logits, lengths, output, output.shape[1])
         return
     columns = torch.empty_like(output)
@@ -441,6 +454,7 @@ def _score_and_select_rows(
         candidate_block_size,
         output.shape[1],
         triton.next_power_of_2(output.shape[1]),
+        sparse,
     )
 
 
@@ -456,7 +470,7 @@ def _score_and_select(
     output: torch.Tensor,
     dense_width: int,
     candidate_write: bool,
-    candidates_unique: bool = False,
+    candidates_sorted_unique: bool = False,
     request_repeat: int = 1,
     candidates_identity_when_full: bool = False,
 ) -> None:
@@ -483,7 +497,7 @@ def _score_and_select(
             output[start:stop],
             dense_width,
             candidate_write,
-            candidates_unique,
+            candidates_sorted_unique,
             request_repeat,
             start,
             candidates_identity_when_full,
@@ -559,7 +573,7 @@ def try_candidate_indexer(
                     chunk.block_table.shape[1] * cache.shape[1],
                 ),
                 candidate_write,
-                candidates_unique=True,
+                candidates_sorted_unique=True,
             )
     if metadata.num_decodes > 0 and metadata.decode is not None:
         rows = metadata.num_decode_tokens
@@ -577,7 +591,7 @@ def try_candidate_indexer(
             output[:rows],
             min(max_model_len, decode.block_table.shape[1] * cache.shape[1]),
             candidate_write,
-            candidates_unique=True,
+            candidates_sorted_unique=True,
             request_repeat=repeat,
             candidates_identity_when_full=True,
         )

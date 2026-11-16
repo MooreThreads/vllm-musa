@@ -1,16 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Fri, 13 Nov 2026 11:20:16 +0800
-Subject: [PATCH] [MUSA] enable indexer row sharding and bound candidate
+Subject: [PATCH] enable indexer row sharding and bound candidate
 
 ---
- .../kernels/attention/dsa/candidate_blocks.py | 23 ++++++++++++++++++--
- .../layers/sparse_attn_indexer.py             | 19 +++++++++++++++++
- vllm/v1/attention/backends/mla/indexer.py     | 20 ++++++++++++++---
+ .../kernels/attention/dsa/candidate_blocks.py | 23 +++++++++++++++++--
+ .../layers/sparse_attn_indexer.py             | 19 +++++++++++++++
+ vllm/v1/attention/backends/mla/indexer.py     | 20 ++++++++++++----
  3 files changed, 56 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/model_executor/kernels/attention/dsa/candidate_blocks.py b/vllm/model_executor/kernels/attention/dsa/candidate_blocks.py
-index b9cdc923b14ab58dbbcfa7a9a94fe3320ff4a745..0037d811aa3aa850532775f352cdf90281dc6645 100644
+index b9cdc923b1..0037d811aa 100644
 --- a/vllm/model_executor/kernels/attention/dsa/candidate_blocks.py
 +++ b/vllm/model_executor/kernels/attention/dsa/candidate_blocks.py
 @@ -3,9 +3,14 @@
@@ -67,7 +67,7 @@ index b9cdc923b14ab58dbbcfa7a9a94fe3320ff4a745..0037d811aa3aa850532775f352cdf902
      if not rows or not width:
          return
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..6693701f8585538bc066991ed64d98c3c5fa5c15 100644
+index 85e9b9a61c..6693701f85 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -1719,6 +1719,7 @@ def _musa_fill_exact_sparse_indexer_indices(
@@ -114,7 +114,7 @@ index 85e9b9a61c7b9b021805867da1e1cfc9f572dcb2..6693701f8585538bc066991ed64d98c3
          if not _musa_try_fill_decode_topk_from_indexer_cache_native(
              q_quant[: metadata.num_decode_tokens],
 diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
-index 0909d292c14f3b245c4d84d8aeaceacea72f9e32..c588db6f023f1b4640db13b1ed6017f4e22372d3 100644
+index 0909d292c1..c588db6f02 100644
 --- a/vllm/v1/attention/backends/mla/indexer.py
 +++ b/vllm/v1/attention/backends/mla/indexer.py
 @@ -1,5 +1,6 @@

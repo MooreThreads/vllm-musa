@@ -1,12 +1,17 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Fri, 13 Nov 2026 11:20:17 +0800
-Subject: [PATCH] [MUSA] score only DSV4.1 candidate keys
+Subject: [PATCH] score only DSV4.1 candidate keys
 
 ---
+ vllm/forward_context.py                       |  1 +
+ .../layers/sparse_attn_indexer.py             | 47 ++++++++++++++++++-
+ vllm/v1/worker/gpu/cudagraph_utils.py         | 21 ++++++++-
+ vllm/v1/worker/gpu/model_runner.py            | 17 +++++++
+ 4 files changed, 84 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/forward_context.py b/vllm/forward_context.py
-index 9ddc8e9255ed04efa86f7f861a24208ae4a14a88..23339ae5eb80dea83644a655747fde85381fc52c 100644
+index 9ddc8e9255..23339ae5eb 100644
 --- a/vllm/forward_context.py
 +++ b/vllm/forward_context.py
 @@ -55,6 +55,7 @@ class BatchDescriptor:
@@ -18,7 +23,7 @@ index 9ddc8e9255ed04efa86f7f861a24208ae4a14a88..23339ae5eb80dea83644a655747fde85
  
  def _compute_sp_num_tokens(
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 6693701f8585538bc066991ed64d98c3c5fa5c15..2092efce8aee2ae9dbc9ba11e5d9c8b84c82b45e 100644
+index 6693701f85..2092efce8a 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -2331,6 +2331,40 @@ def sparse_attn_indexer(
@@ -83,7 +88,7 @@ index 6693701f8585538bc066991ed64d98c3c5fa5c15..2092efce8aee2ae9dbc9ba11e5d9c8b8
          elif current_platform.is_rocm():
              if self.use_pcp and self.dcp_world_size > 1:
 diff --git a/vllm/v1/worker/gpu/cudagraph_utils.py b/vllm/v1/worker/gpu/cudagraph_utils.py
-index 1a9e29fb53ba7790d4fbfad35340f32bc623f5fe..14e27fbea8da0c97de25336255481f09503c603c 100644
+index 1a9e29fb53..14e27fbea8 100644
 --- a/vllm/v1/worker/gpu/cudagraph_utils.py
 +++ b/vllm/v1/worker/gpu/cudagraph_utils.py
 @@ -78,6 +78,7 @@ class BatchExecutionDescriptor:
@@ -140,7 +145,7 @@ index 1a9e29fb53ba7790d4fbfad35340f32bc623f5fe..14e27fbea8da0c97de25336255481f09
                  with set_forward_context(
                      attn_metadata,
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index dca14718a9b0fdb41c802116cec7e3f8b74b11ab..1be63a7ce1dd6b52b28fbad6691fb5adfa1b6227 100644
+index dca14718a9..1be63a7ce1 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -1848,6 +1848,22 @@ class GPUModelRunner(LoRAModelRunnerMixin):

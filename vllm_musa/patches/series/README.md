@@ -337,8 +337,8 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
 | `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
 | `0211-MUSA-keep-fused-MoE-even_Ks-loads-in-bounds.patch` | v0.32 new/updated | mask the fused MoE even_Ks A/B loads under the MUSA pipeliner |
-| `0212-MUSA-enable-indexer-row-sharding-and-bound-candidate.patch` | v0.32 new/updated | reuse total-row TP sharding on MUSA and bound candidate block scoring/top-k by visible row lengths |
-| `0213-MUSA-score-only-DSV4.1-candidate-keys.patch` | v0.32 new/updated | route FP8 two-level indexers through paged candidate-only MQA scoring; specialize V2 graphs at a configurable 32768-token context cutoff |
+| `0212-enable-indexer-row-sharding-and-bound-candidate.patch` | v0.32 new/updated | reuse total-row TP sharding on MUSA and bound candidate block scoring/top-k by visible row lengths |
+| `0213-score-only-DSV4.1-candidate-keys.patch` | v0.32 new/updated | route FP8 two-level indexers through paged candidate-only MQA scoring; specialize V2 graphs at a configurable 32768-token context cutoff |
 
 For non-speculative DSV4.1 on Model Runner V2 (DP1, no microbatching),
 `VLLM_MUSA_CANDIDATE_MIN_CONTEXT` defaults to `32768` tokens. All-short batches
