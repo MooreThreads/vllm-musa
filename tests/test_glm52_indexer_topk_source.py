@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Source-level coverage for the GLM-5.2 native indexer top-k path."""
 
-from pathlib import Path
-
 import ast
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -127,13 +126,19 @@ def test_musa_native_inserts_cache_before_exact_shortcut(
     warmup, skip, pcp, slots, k_rows, fp4, shard_decode
 ):
     """Exercise the real entry without importing GPU-dependent vLLM modules."""
-    tree = ast.parse(_read(
-        "third_party/vllm/vllm/model_executor/layers/sparse_attn_indexer.py"
-    ))
-    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef)
-               and n.name == "SparseAttnIndexer")
-    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef)
-                  and n.name == "forward_native")
+    tree = ast.parse(
+        _read("third_party/vllm/vllm/model_executor/layers/sparse_attn_indexer.py")
+    )
+    cls = next(
+        n
+        for n in tree.body
+        if isinstance(n, ast.ClassDef) and n.name == "SparseAttnIndexer"
+    )
+    method = next(
+        n
+        for n in cls.body
+        if isinstance(n, ast.FunctionDef) and n.name == "forward_native"
+    )
     for arg in method.args.args:
         arg.annotation = None
     method.returns = None
@@ -150,7 +155,8 @@ def test_musa_native_inserts_cache_before_exact_shortcut(
             return sliced_k
 
     metadata = SimpleNamespace(
-        slot_mapping=SimpleNamespace(shape=(slots,)), num_decode_tokens=2,
+        slot_mapping=SimpleNamespace(shape=(slots,)),
+        num_decode_tokens=2,
         decode=None,
     )
     cache = object()
@@ -166,9 +172,10 @@ def test_musa_native_inserts_cache_before_exact_shortcut(
         events.append("exact")
         return buffer
 
-    platform = SimpleNamespace(**{
-        f"is_{name}": (lambda: False) for name in ("cuda", "xpu", "rocm", "cpu")
-    }, is_musa=lambda: True)
+    platform = SimpleNamespace(
+        **{f"is_{name}": (lambda: False) for name in ("cuda", "xpu", "rocm", "cpu")},
+        is_musa=lambda: True,
+    )
     namespace = dict(
         current_platform=platform,
         get_forward_context=lambda: SimpleNamespace(
@@ -181,15 +188,24 @@ def test_musa_native_inserts_cache_before_exact_shortcut(
         ops=SimpleNamespace(indexer_k_quant_and_cache=insert),
         _musa_fill_exact_sparse_indexer_indices=exact,
     )
-    exec(compile(ast.Module(body=[method], type_ignores=[]), "<forward_native>",
-                 "exec"), namespace)
+    exec(
+        compile(ast.Module(body=[method], type_ignores=[]), "<forward_native>", "exec"),
+        namespace,
+    )
     layer = SimpleNamespace(
-        use_musa_native_indexer=True, use_pcp=pcp,
-        pcp_shard_decode_requests=shard_decode, skip_k_cache_insert=skip,
-        scale_fmt="ue8m0", use_fp4_cache=fp4, quant_block_size=128,
+        use_musa_native_indexer=True,
+        use_pcp=pcp,
+        pcp_shard_decode_requests=shard_decode,
+        skip_k_cache_insert=skip,
+        scale_fmt="ue8m0",
+        use_fp4_cache=fp4,
+        quant_block_size=128,
         k_cache=SimpleNamespace(prefix="encoded", kv_cache=cache),
-        topk_indices_buffer=buffer, topk_tokens=2048, head_dim=128,
-        max_model_len=8192, use_musa_materialized_prefill=False,
+        topk_indices_buffer=buffer,
+        topk_tokens=2048,
+        head_dim=128,
+        max_model_len=8192,
+        use_musa_materialized_prefill=False,
     )
     forward = namespace["forward_native"]
     if fp4 and not skip and not warmup:
@@ -197,13 +213,17 @@ def test_musa_native_inserts_cache_before_exact_shortcut(
             forward(layer, object(), object(), Key(), object())
         assert events == []
     else:
-        assert forward(layer, object(), object(), None if skip else Key(),
-                       object()) is buffer
-        assert events == ([] if warmup else ["exact"] if skip
-                          else ["insert", "exact"])
+        assert (
+            forward(layer, object(), object(), None if skip else Key(), object())
+            is buffer
+        )
+        assert events == ([] if warmup else ["exact"] if skip else ["insert", "exact"])
     if not warmup and not skip:
         gather.assert_called_once_with(
-            sliced_k, metadata.slot_mapping, 2, pcp,
+            sliced_k,
+            metadata.slot_mapping,
+            2,
+            pcp,
             pcp_shard_decode_requests=shard_decode,
         )
     else:

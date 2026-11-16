@@ -27,8 +27,11 @@ def test_glm_detection_checks_nested_hf_configs() -> None:
 
 
 def _function(path, name):
-    return next(node for node in ast.parse(path.read_text()).body
-                if isinstance(node, ast.FunctionDef) and node.name == name)
+    return next(
+        node
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
 
 
 def test_mate_dispatch_precedes_generic_tilelang_dispatch() -> None:
@@ -69,7 +72,10 @@ def test_mate_provider_tuple_and_backend_aux_contract(monkeypatch) -> None:
     result = (output, max_logits, lse)
     provider = Mock(return_value=result)
     namespace = {"sparse_mla_prefill_fwd": provider}
-    exec(compile(ast.Module(body=[node], type_ignores=[]), str(adapter), "exec"), namespace)
+    exec(
+        compile(ast.Module(body=[node], type_ignores=[]), str(adapter), "exec"),
+        namespace,
+    )
     wrapper = namespace["sparse_mla_fwd_bf16"]
     q, kv, indices, topk = (object() for _ in range(4))
     assert wrapper(q, kv, indices, 0.5, d_v=2, topk_length=topk) is result
@@ -87,7 +93,10 @@ def test_mate_provider_tuple_and_backend_aux_contract(monkeypatch) -> None:
         "logger": SimpleNamespace(info_once=lambda *_: None),
         "_can_use_glm_mate_sparse_prefill": lambda *_: True,
     }
-    exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), namespace)
+    exec(
+        compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"),
+        namespace,
+    )
     backend = namespace["_musa_backend_sparse_fwd"]
     for out in (None, Tensor(output.shape)):
         actual, actual_max, actual_lse = backend(
