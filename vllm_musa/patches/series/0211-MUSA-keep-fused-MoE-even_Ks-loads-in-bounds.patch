@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 4 Nov 2026 12:00:00 +0000
+Subject: [PATCH] MUSA: keep fused MoE even_Ks loads in bounds
+
+With num_stages > 1 the MUSA Triton pipeliner issues the next K block's loads
+without a predicate, so the unmasked even_Ks A and B loads read up to
+(num_stages - 1) * BLOCK_SIZE_K elements past the end of the last expert's
+weight and fault when that lands on an unmapped page.
+
+Mask those loads with the scalar K-iteration bound, which is true inside the
+loop and false for the prefetches past it. Single-stage configs keep the
+unmasked loads.
+---
+ .../layers/fused_moe/fused_moe.py              | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index e0aef0ad89..11b8f582e3 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -367,6 +367,8 @@ def fused_moe_kernel(
+     even_Ks: tl.constexpr,
+     # Tensor-descriptor path for the A gather and B load in the K-loop.
+     USE_TD: tl.constexpr = False,
++    # Bound even_Ks loads by the K iteration (pipelined configs only).
++    MASK_K_ITER: tl.constexpr = False,
+ ):
+     """Implements the fused computation for a Mixture of Experts (MOE) using
+     token and expert matrices.
+@@ -541,7 +543,11 @@ def fused_moe_kernel(
+             a = a_desc.gather(gather_idx, k * BLOCK_SIZE_K)
+             b = b_desc.load([pid_n * BLOCK_SIZE_N, k * BLOCK_SIZE_K]).T
+         elif SWAP_AB:
+-            if even_Ks:
++            if even_Ks and MASK_K_ITER:
++                k_in = k * BLOCK_SIZE_K < K
++                a = tl.load(a_ptrs, mask=token_mask[None, :] & k_in, other=0.0)
++                b = tl.load(b_ptrs, mask=k_in, other=0.0)
++            elif even_Ks:
+                 a = tl.load(a_ptrs, mask=token_mask[None, :], other=0.0)
+                 b = tl.load(b_ptrs)
+             else:
+@@ -552,7 +558,11 @@ def fused_moe_kernel(
+                 a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+                 b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+         else:
+-            if even_Ks:
++            if even_Ks and MASK_K_ITER:
++                k_in = k * BLOCK_SIZE_K < K
++                a = tl.load(a_ptrs, mask=token_mask[:, None] & k_in, other=0.0)
++                b = tl.load(b_ptrs, mask=k_in, other=0.0)
++            elif even_Ks:
+                 a = tl.load(a_ptrs, mask=token_mask[:, None], other=0.0)
+                 b = tl.load(b_ptrs)
+             else:
+@@ -891,6 +901,9 @@ def invoke_fused_moe_triton_kernel(
+     if block_shape is not None:
+         BLOCK_SIZE_K = min(BLOCK_SIZE_K, min(block_shape[0], block_shape[1]))
+     even_Ks = B.size(2) % BLOCK_SIZE_K == 0
++    # MUSA: the software pipeliner prefetches past the last K block without a
++    # predicate, so unmasked even_Ks loads would read past the last expert.
++    mask_k_iter = even_Ks and config.get("num_stages", 2) > 1
+     if use_td and A.size(1) % BLOCK_SIZE_K != 0:
+         # TD gather/load feeding tl.dot with a non-block-aligned K
+         # miscompiles (~74% of output elements wrong) on real HW;
+@@ -954,6 +967,7 @@ def invoke_fused_moe_triton_kernel(
+         BLOCK_SIZE_K=BLOCK_SIZE_K,
+         SWAP_AB=SWAP_AB,
+         USE_TD=use_td,
++        MASK_K_ITER=mask_k_iter,
+         **config,
+     )
+ 

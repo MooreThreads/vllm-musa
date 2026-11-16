@@ -215,3 +215,5 @@ __marimo__/
 third_party/*
 !third_party/PINS
 vllm/
+# Written by setup.py when the native extensions are built.
+vllm_musa/_build_info.py

@@ -13,6 +13,7 @@ from .types import (
 
 _DEEPSEEK_V41_ARCHITECTURES = ("DeepseekV41ForCausalLM",)
 _DEEPSEEK_V41_QUANTIZATION = frozenset({"fp8", "deepseek_v4_fp8"})
+_DEEPSEEK_V41_W4AFP8_QUANTIZATION = "w4afp8"
 
 
 def _claims(model: ModelSignature) -> bool:
@@ -33,10 +34,9 @@ def _has_complete_identity(model: ModelSignature) -> bool:
     )
 
 
-def _matches_flash_fp8_shape(model: ModelSignature) -> bool:
+def _matches_flash_shape(model: ModelSignature) -> bool:
     return (
         model.dtype == "bfloat16"
-        and model.quantization in _DEEPSEEK_V41_QUANTIZATION
         and model.hidden_size == 5120
         and model.num_hidden_layers == 40
         and model.num_attention_heads == 64
@@ -47,7 +47,6 @@ def _matches_flash_fp8_shape(model: ModelSignature) -> bool:
         and model.num_experts_per_tok == 6
         and model.num_shared_experts == 1
         and model.moe_intermediate_size == 2304
-        and model.expert_dtype == "fp8"
         and model.hidden_act == "silu"
         and model.swiglu_limit == 10.0
         and model.quant_block_shape == (32, 32)
@@ -55,6 +54,22 @@ def _matches_flash_fp8_shape(model: ModelSignature) -> bool:
         and model.uses_mla is True
         and model.index_topk == 512
         and model.is_hybrid is False
+    )
+
+
+def _matches_flash_fp8_shape(model: ModelSignature) -> bool:
+    return (
+        _matches_flash_shape(model)
+        and model.quantization in _DEEPSEEK_V41_QUANTIZATION
+        and model.expert_dtype == "fp8"
+    )
+
+
+def _matches_w4afp8_shape(model: ModelSignature) -> bool:
+    return (
+        _matches_flash_shape(model)
+        and model.quantization == _DEEPSEEK_V41_W4AFP8_QUANTIZATION
+        and model.expert_dtype in ("int4", "fp4")
     )
 
 
@@ -73,6 +88,15 @@ def _matches_tp8(execution: ExecutionSignature) -> bool:
     )
 
 
+def _matches_w4afp8_overlap_execution(execution: ExecutionSignature) -> bool:
+    return (
+        _matches_tp8(execution)
+        and execution.enable_expert_parallel
+        and not execution.enable_eplb
+        and not execution.enable_dbo
+    )
+
+
 def resolve_deepseek_v41_contract(
     model: ModelSignature,
     execution: ExecutionSignature,
@@ -84,14 +108,22 @@ def resolve_deepseek_v41_contract(
     supported: set[OptimizationFeature] = set()
     preferred: set[OptimizationFeature] = set()
     flash_fp8 = _has_complete_identity(model) and _matches_flash_fp8_shape(model)
+    w4afp8 = _has_complete_identity(model) and _matches_w4afp8_shape(model)
 
     if flash_fp8:
-        # The folded shared expert rides the small-M FP8 MoE kernel of the
-        # 32x32-block TP8 expert shard. DSpark drafts build their MoE layers
-        # with the target model config, so they resolve this same contract.
+        # The folded shared expert rides the small-M FP8 MoE kernel after the
+        # native expert block is refined to the 32x32 TP8 shard shape. DSpark
+        # drafts build their MoE layers with the target model config, so they
+        # resolve this same contract.
         supported.add(OptimizationFeature.DEEPSEEK_V41_SHARED_EXPERT_FOLD)
         if _matches_tp8(execution):
             preferred.add(OptimizationFeature.DEEPSEEK_V41_SHARED_EXPERT_FOLD)
+
+    if w4afp8:
+        feature = OptimizationFeature.DEEPSEEK_V41_W4AFP8_SHARED_EXPERT_OVERLAP
+        supported.add(feature)
+        if _matches_w4afp8_overlap_execution(execution):
+            preferred.add(feature)
 
     if flash_fp8 and _matches_tp8(execution):
         profile = (

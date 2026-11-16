@@ -9,18 +9,37 @@ from collections import Counter
 from pathlib import Path
 from typing import NamedTuple
 
-DISPOSITIONS = frozenset({
-    "superseded", "folded", "upstream", "absent", "canceled",
-    "unresolved", "performance_opportunity",
-})
-CHECKS = frozenset({
-    "series", "replay", "round_trip", "verify", "source_contract",
-    "native_build", "musa_runtime", "model_runtime", "mooncake_runtime",
-})
+DISPOSITIONS = frozenset(
+    {
+        "superseded",
+        "folded",
+        "upstream",
+        "absent",
+        "canceled",
+        "unresolved",
+        "performance_opportunity",
+    }
+)
+CHECKS = frozenset(
+    {
+        "series",
+        "replay",
+        "round_trip",
+        "verify",
+        "source_contract",
+        "native_build",
+        "musa_runtime",
+        "model_runtime",
+        "mooncake_runtime",
+    }
+)
 _NUMBER = re.compile(r"[0-9]{4}\Z")
 _ENTRY = re.compile(r"([0-9]{4})-.*\.patch\Z")
 _OLD_ROW = re.compile(r"^\| `([0-9]{4})` \|", re.MULTILINE)
-_LINEAGE_FIELDS = frozenset({"legacy_id", "disposition", "owners", "rationale", "validation_required"})
+_CURRENT_ROW = re.compile(r"^\| `([0-9]{4}-[^`]+\.patch)` \|", re.MULTILINE)
+_LINEAGE_FIELDS = frozenset(
+    {"legacy_id", "disposition", "owners", "rationale", "validation_required"}
+)
 _GROUP_FIELDS = frozenset({"id", "purpose", "patches", "depends_on", "required_checks"})
 
 
@@ -42,7 +61,11 @@ def _load(path: Path, errors: list[str]) -> dict:
     except (OSError, UnicodeError, ValueError) as exc:
         errors.append(f"invalid JSON or unreadable metadata: {path}: {exc}")
         return {}
-    if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
+    if (
+        not isinstance(data, dict)
+        or type(data.get("schema_version")) is not int
+        or data["schema_version"] != 1
+    ):
         errors.append(f"{path}: expected schema_version 1")
         return {}
     return data
@@ -50,7 +73,9 @@ def _load(path: Path, errors: list[str]) -> dict:
 
 def _records(data: dict, field: str, path: Path, errors: list[str]) -> list[dict]:
     records = data.get(field)
-    if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
+    if not isinstance(records, list) or not all(
+        isinstance(item, dict) for item in records
+    ):
         errors.append(f"{path}: {field} must be a list of objects")
         return []
     return records
@@ -80,11 +105,34 @@ def validate(series: Path, metadata: Path) -> Result:
     try:
         readme = (series / "README.md").read_text(encoding="utf-8")
         legacy_rows = _OLD_ROW.findall(readme)
+        current_rows = _CURRENT_ROW.findall(readme)
     except (OSError, UnicodeError) as exc:
         errors.append(f"series README missing/unreadable: {exc}")
         legacy_rows = []
+        current_rows = []
     if len(legacy_rows) != len(set(legacy_rows)):
         errors.append("series README: duplicate legacy omission row")
+    if len(current_rows) != len(set(current_rows)):
+        errors.append("series README: duplicate current patch row")
+    current_patch_names = {path.name for path in paths}
+    missing_current_rows = sorted(current_patch_names - set(current_rows))
+    extra_current_rows = sorted(set(current_rows) - current_patch_names)
+    if missing_current_rows:
+        errors.append(
+            "missing current patch rows from README: "
+            + ", ".join(
+                name.encode("unicode_escape").decode("ascii")
+                for name in missing_current_rows
+            )
+        )
+    if extra_current_rows:
+        errors.append(
+            "unknown current patch rows in README: "
+            + ", ".join(
+                name.encode("unicode_escape").decode("ascii")
+                for name in extra_current_rows
+            )
+        )
 
     lineage_path = metadata / "legacy-lineage.json"
     groups_path = metadata / "patch-groups.json"
@@ -156,18 +204,28 @@ def validate(series: Path, metadata: Path) -> Result:
         dependencies = _list(group, "depends_on", location, errors)
         if len(dependencies) != len(set(map(str, dependencies))):
             errors.append(f"{location}: duplicate dependency")
-    group_starts = [group["patches"][0] for group in groups
-                    if isinstance(group.get("patches"), list) and group["patches"]
-                    and isinstance(group["patches"][0], str)]
+    group_starts = [
+        group["patches"][0]
+        for group in groups
+        if isinstance(group.get("patches"), list)
+        and group["patches"]
+        and isinstance(group["patches"][0], str)
+    ]
     if group_starts != sorted(group_starts):
         errors.append("patch-groups: group order must follow first owned patch")
     for ident, count in Counter(ids).items():
         if count > 1:
             errors.append(f"duplicate group id {ident!r}")
     for group in groups:
-        for dependency in group.get("depends_on", []) if isinstance(group.get("depends_on"), list) else []:
+        for dependency in (
+            group.get("depends_on", [])
+            if isinstance(group.get("depends_on"), list)
+            else []
+        ):
             if dependency not in ids or dependency == group.get("id"):
-                errors.append(f"{group.get('id')}: unknown dependency or self-dependency {dependency!r}")
+                errors.append(
+                    f"{group.get('id')}: unknown dependency or self-dependency {dependency!r}"
+                )
     remaining = {
         group["id"]: set(group["depends_on"])
         for group in groups
@@ -176,8 +234,11 @@ def validate(series: Path, metadata: Path) -> Result:
         and all(isinstance(dep, str) and dep in ids for dep in group["depends_on"])
     }
     while remaining:
-        ready = {ident for ident, dependencies in remaining.items()
-                 if not dependencies.intersection(remaining)}
+        ready = {
+            ident
+            for ident, dependencies in remaining.items()
+            if not dependencies.intersection(remaining)
+        }
         if not ready:
             errors.append("patch-groups: dependency cycle")
             break

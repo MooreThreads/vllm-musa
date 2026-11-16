@@ -276,6 +276,11 @@ def _execution_signature(
         batch_invariant_enabled=batch_invariant_enabled,
         speculative_method=_normalize_name(getattr(speculative_config, "method", None)),
         async_scheduling=bool(getattr(scheduler_config, "async_scheduling", False)),
+        enable_expert_parallel=bool(
+            getattr(parallel_config, "enable_expert_parallel", False)
+        ),
+        enable_eplb=bool(getattr(parallel_config, "enable_eplb", False)),
+        enable_dbo=bool(getattr(parallel_config, "enable_dbo", False)),
     )
 
 

@@ -16,6 +16,9 @@ htmlcov
 third_party/vllm
 third_party/flashinfer
 
+# Written by setup.py for the build that produced it; the image build writes its own.
+vllm_musa/_build_info.py
+
 # Local/editor artifacts.
 .claude
 .humanize

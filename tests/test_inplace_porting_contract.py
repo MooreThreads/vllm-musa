@@ -14,7 +14,7 @@ SUPPORTED_MUSA_STACKS = {
             "torchaudio==2.9.1+musa5.2.0",
             "deep_ep==1.1.0+musa5.2.0torch2.9.1.post1s5000",
         ),
-        "torchada": "torchada==0.1.77",
+        "torchada": "torchada==0.1.111",
     },
     "torch==2.11.0.post2+musa5.2.0": {
         "private": (
@@ -23,7 +23,7 @@ SUPPORTED_MUSA_STACKS = {
             "torchaudio==2.11.0.post2+musa5.2.0",
             "deep_ep==1.1.0+musa5.2.0torch2.11.0.post2",
         ),
-        "torchada": "torchada==0.1.105",
+        "torchada": "torchada==0.1.111",
     },
 }
 
@@ -59,11 +59,11 @@ def test_supported_musa_stack_contract_cases_are_explicit():
     }
     assert (
         SUPPORTED_MUSA_STACKS["torch==2.9.1.post1+musa5.2.0"]["torchada"]
-        == "torchada==0.1.77"
+        == "torchada==0.1.111"
     )
     assert (
         SUPPORTED_MUSA_STACKS["torch==2.11.0.post2+musa5.2.0"]["torchada"]
-        == "torchada==0.1.105"
+        == "torchada==0.1.111"
     )
     assert (
         "torchvision==0.24.1.post1+musa5.2.0"
@@ -84,7 +84,7 @@ def test_torchada_floor_is_consistent():
     assert expected["torchada"] in common_requirements
     for readme_name in ("README.md", "README_CN.md"):
         readme = (ROOT / readme_name).read_text()
-        assert "torchada 0.1.105" in readme
+        assert "torchada 0.1.111" in readme
 
 
 def _dockerfile_run_commands(dockerfile: str) -> list[str]:
@@ -249,6 +249,16 @@ def test_musa_image_stage_and_optional_component_contract():
     assert "MTGPU_TARGET=mp_31" in deps_stage
     assert "TORCH_MUSA_ARCH_LIST=31" in deps_stage
     assert "MATE_MUSA_ARCH_LIST=3.1" in deps_stage
+
+    installed_stage = dockerfile.split("FROM vllm_musa_deps AS vllm_musa_installed", 1)[
+        1
+    ].split("FROM vllm_musa_installed AS vllm_rs_build", 1)[0]
+    installed_runs = _dockerfile_run_commands(installed_stage)
+    arch_check = installed_runs.index("RUN python docker/check_musa_arch_env.py")
+    native_build = next(
+        i for i, run in enumerate(installed_runs) if "-e . --no-build-isolation" in run
+    )
+    assert arch_check < native_build
 
     mooncake_stage = dockerfile.split("FROM vllm_musa_installed AS mooncake", 1)[
         1
@@ -431,7 +441,9 @@ def test_setup_finds_local_build_helpers_before_importing_them():
 def test_setup_activates_torchada_without_installing_dependencies():
     setup = (ROOT / "setup.py").read_text()
     assert "ensure_torchada_installed" not in setup
-    assert setup.index("import torchada") < setup.index("import torch\n")
+    torch_import = re.search(r"^import torch\b", setup, re.M)
+    assert torch_import is not None
+    assert setup.index("import torchada") < torch_import.start()
     assert setup.index("import torchada") < setup.index(
         "from torch.utils.cpp_extension import"
     )

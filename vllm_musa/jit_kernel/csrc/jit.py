@@ -10,6 +10,7 @@ from typing import Sequence
 
 import tvm_ffi
 import tvm_ffi.cpp.extension as tvm_ffi_ext
+from torchada import arch as musa_arch
 from tvm_ffi.libinfo import find_dlpack_include_path, find_include_path, find_libtvm_ffi
 from tvm_ffi.utils import FileLock
 
@@ -17,6 +18,8 @@ _CSRC_DIR = Path(__file__).resolve().parent
 _CACHE_DIR = Path(
     os.getenv("VLLM_MUSA_JIT_CACHE_DIR", Path.home() / ".cache" / "vllm_musa_jit")
 )
+# The first non-empty variable decides the target archs.
+_ARCH_ENV = ("VLLM_MUSA_ARCH_LIST", "MATE_MUSA_ARCH_LIST")
 
 
 def _parse_env_flags(name: str) -> list[str]:
@@ -38,31 +41,6 @@ def _mcc() -> str:
     return os.environ.get("VLLM_MUSA_MCC", str(_musa_home() / "bin" / "mcc"))
 
 
-def _normalize_musa_arch(arch: str) -> str:
-    arch = arch.strip().lower().replace("mp", "").replace("_", "").replace(".", "")
-    if not arch.isdigit():
-        raise ValueError(f"Invalid MUSA arch value: {arch!r}")
-    return f"mp_{arch}"
-
-
-def _musa_arch_flags() -> list[str]:
-    arch_list = os.environ.get("VLLM_MUSA_ARCH_LIST") or os.environ.get(
-        "MATE_MUSA_ARCH_LIST"
-    )
-    if arch_list:
-        return [
-            f"--offload-arch={_normalize_musa_arch(arch)}" for arch in arch_list.split()
-        ]
-    try:
-        import torch_musa
-
-        props = torch_musa.get_device_properties(torch_musa.current_device())
-        arch = f"{int(props.major)}{int(props.minor)}"
-        return [f"--offload-arch={_normalize_musa_arch(arch)}"]
-    except Exception:
-        return ["--offload-arch=mp_31"]
-
-
 def _escape(path: Path) -> str:
     return path.resolve().as_posix().replace(":", "$:")
 
@@ -81,7 +59,9 @@ def _object_path(build_dir: Path, source: Path) -> Path:
 
 def _ninja_content(
     name: str,
+    build_dir: Path,
     sources: Sequence[Path],
+    arch_flags: Sequence[str],
     extra_cflags: Sequence[str],
     extra_musa_cflags: Sequence[str],
     extra_ldflags: Sequence[str],
@@ -104,7 +84,7 @@ def _ninja_content(
         "-fPIC",
         "-O3",
         "-ffast-math",
-        *_musa_arch_flags(),
+        *arch_flags,
         *extra_musa_cflags,
         *_parse_env_flags("VLLM_MUSA_EXTRA_MUSAFLAGS"),
         *include_flags,
@@ -121,7 +101,6 @@ def _ninja_content(
         *_parse_env_flags("VLLM_MUSA_EXTRA_LDFLAGS"),
     ]
 
-    build_dir = _CACHE_DIR / name
     lines = [
         "ninja_required_version = 1.3",
         f"cxx = {os.environ.get('CXX', 'c++')}",
@@ -168,11 +147,15 @@ def load_musa_jit(
     extra_musa_cflags: tuple[str, ...] = (),
     extra_ldflags: tuple[str, ...] = (),
 ):
+    # Raises on a malformed arch variable, or when MUSA is initialized and a
+    # visible device's arch is not among the targets.
+    archs = musa_arch.target_archs(env=_ARCH_ENV, check_device=True)
+    build_root = _CACHE_DIR / musa_arch.cache_tag(archs)
     resolved_sources = tuple((_CSRC_DIR / source).resolve() for source in sources)
-    build_dir = _CACHE_DIR / name
+    build_dir = build_root / name
     ninja_path = build_dir / "build.ninja"
     so_path = build_dir / f"{name}.so"
-    lock_path = _CACHE_DIR / "tmp" / f"{name}.lock"
+    lock_path = build_root / "tmp" / f"{name}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(lock_path)):
         build_dir.mkdir(parents=True, exist_ok=True)
@@ -180,7 +163,9 @@ def load_musa_jit(
             ninja_path,
             _ninja_content(
                 name,
+                build_dir,
                 resolved_sources,
+                musa_arch.arch_flags(archs),
                 extra_cflags,
                 extra_musa_cflags,
                 extra_ldflags,

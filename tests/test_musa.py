@@ -616,6 +616,80 @@ class TestMUSAPlatformBase:
         ):
             assert MUSAPlatformBase.supports_fp8() is False
 
+    @pytest.mark.parametrize(
+        "capability",
+        [(3, 2), (4, 0), (2, 2), None, (0, 0)],
+        ids=["3.2", "4.0", "2.2", "probe-none", "mtml-probe-failure"],
+    )
+    def test_supports_fp8_only_on_table_fp8_archs(self, capability):
+        """FP8 is an exact match on the torchada table's FP8 rows; the rest fail closed."""
+        from vllm.platforms.interface import DeviceCapability
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        value = None if capability is None else DeviceCapability(*capability)
+        with patch.object(
+            MUSAPlatformBase, "get_device_capability", return_value=value
+        ):
+            assert MUSAPlatformBase.supports_fp8() is False
+
+    @pytest.mark.parametrize("capability", [(3, 1), (0, 0)])
+    def test_supports_fp8_matches_3_1_threshold_on_s5000_and_probe_failure(
+        self, capability
+    ):
+        """On S5000 and on a failed MTML probe the answer is the 3.1 threshold's."""
+        from vllm.platforms.interface import DeviceCapability
+
+        from vllm_musa.platform import MUSAPlatformBase
+
+        with patch.object(
+            MUSAPlatformBase,
+            "get_device_capability",
+            return_value=DeviceCapability(*capability),
+        ) as get_capability:
+            assert MUSAPlatformBase.supports_fp8() is (
+                MUSAPlatformBase.has_device_capability((3, 1))
+            )
+        # functools.cache keys a positional device id apart from the keyword.
+        assert get_capability.call_args_list
+        for call in get_capability.call_args_list:
+            assert call.args == ()
+            assert call.kwargs == {"device_id": 0}
+
+    @pytest.mark.parametrize(
+        ("capability", "fp8"),
+        [((3, 1), True), ((0, 0), False), ((3, 2), False)],
+    )
+    def test_moe_quant_scheme_follows_supports_fp8(self, capability, fp8):
+        """The Triton MoE FP8 schemes are offered exactly when supports_fp8() is."""
+        from vllm.platforms.interface import DeviceCapability
+
+        from vllm_musa.model_executor.layers.fused_moe import fused_moe
+        from vllm_musa.platform import MUSAPlatformBase
+
+        platform = MUSAPlatformBase()
+        fp8_schemes = [
+            (fused_moe.kFp8Static128BlockSym, fused_moe.kFp8Dynamic128Sym),
+            (fused_moe.kFp8StaticChannelSym, fused_moe.kFp8DynamicTokenSym),
+            (fused_moe.kFp8StaticTensorSym, fused_moe.kFp8DynamicTokenSym),
+            (fused_moe.kFp8StaticTensorSym, fused_moe.kFp8StaticTensorSym),
+            (fused_moe.kFp8StaticTensorSym, fused_moe.kFp8DynamicTensorSym),
+        ]
+        with (
+            patch.object(fused_moe, "current_platform", platform),
+            patch.object(
+                MUSAPlatformBase,
+                "get_device_capability",
+                return_value=DeviceCapability(*capability),
+            ),
+        ):
+            assert platform.supports_fp8() is fp8
+            assert fused_moe._supports_quant_scheme(None, None) is True
+            for weight_key, activation_key in fp8_schemes:
+                assert (
+                    fused_moe._supports_quant_scheme(weight_key, activation_key) is fp8
+                )
+
     def test_support_hybrid_kv_cache(self):
         """Test that support_hybrid_kv_cache returns True."""
         from vllm_musa.platform import MUSAPlatformBase
@@ -915,6 +989,51 @@ class TestMtmlMUSAPlatform:
         assert results == [True] * 60 + [False]
         assert mock_pymtml.nvmlInit.call_count == 1
         assert mock_pymtml.nvmlShutdown.call_count == 1
+
+    @pytest.mark.parametrize(
+        ("capability", "expected"),
+        [((3, 1), True), ((0, 0), False)],
+        ids=["s5000", "mtml-probe-failure"],
+    )
+    def test_supports_fp8_reads_mtml_capability(
+        self, mock_pymtml, capability, expected
+    ):
+        if "vllm_musa.platform" in sys.modules:
+            del sys.modules["vllm_musa.platform"]
+
+        from vllm_musa.platform import MtmlMUSAPlatform
+
+        MtmlMUSAPlatform.get_device_capability.cache_clear()
+        mock_pymtml.nvmlDeviceGetCudaComputeCapability.return_value = capability
+
+        assert MtmlMUSAPlatform.supports_fp8() is expected
+        assert MtmlMUSAPlatform.has_device_capability((3, 1)) is expected
+
+    def test_supports_fp8_is_false_when_mtml_raises_runtime_error(self, mock_pymtml):
+        if "vllm_musa.platform" in sys.modules:
+            del sys.modules["vllm_musa.platform"]
+
+        from vllm_musa.platform import MtmlMUSAPlatform
+
+        MtmlMUSAPlatform.get_device_capability.cache_clear()
+        mock_pymtml.nvmlInit.side_effect = RuntimeError("MTML unavailable")
+
+        assert MtmlMUSAPlatform.supports_fp8() is False
+        assert MtmlMUSAPlatform.has_device_capability((3, 1)) is False
+
+    def test_supports_fp8_propagates_other_mtml_errors(self, mock_pymtml):
+        if "vllm_musa.platform" in sys.modules:
+            del sys.modules["vllm_musa.platform"]
+
+        from vllm_musa.platform import MtmlMUSAPlatform
+
+        MtmlMUSAPlatform.get_device_capability.cache_clear()
+        mock_pymtml.nvmlInit.side_effect = ValueError("unexpected MTML failure")
+
+        with pytest.raises(ValueError, match="unexpected MTML failure"):
+            MtmlMUSAPlatform.supports_fp8()
+        with pytest.raises(ValueError, match="unexpected MTML failure"):
+            MtmlMUSAPlatform.has_device_capability((3, 1))
 
     def test_mtml_availability_probe_balances_context(self, mock_pymtml):
         if "vllm_musa.platform" in sys.modules:

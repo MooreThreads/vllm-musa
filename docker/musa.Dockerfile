@@ -289,6 +289,9 @@ ARG PYPI_INDEX_URL
 ENV PIP_INDEX_URL=${PYPI_INDEX_URL}
 
 COPY . /vllm-workspace
+# Before the native build: the arch variables above must name one arch from
+# torchada's table, each spelled for its reader.
+RUN python docker/check_musa_arch_env.py
 RUN python -m pip install \
         -e . --no-build-isolation -v && \
     python -m pip install numpy==1.26

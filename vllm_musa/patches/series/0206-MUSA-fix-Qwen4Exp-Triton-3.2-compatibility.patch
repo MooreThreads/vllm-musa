@@ -1,0 +1,258 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 3 Nov 2026 12:40:00 +0800
+Subject: [PATCH] MUSA: fix Qwen4Exp Triton 3.2 compatibility
+
+Three Triton 3.2 differences break the Qwen4Exp kernels on MUSA:
+
+- the PLE lookup kernel annotates its byte pointers with tl.pointer_type,
+  which the 3.2 signature parser mangles into "u8>" and rejects with
+  KeyError, so cast in the body instead;
+- Triton 3.2 has no tl.gather, and it compiles both arms of a
+  "constexpr and tensor" condition, so the QSA metadata kernel needs a
+  serial gather helper plus a nested constexpr guard for a null work
+  pointer;
+- max() inside a jit body resolves to tl.maximum, which drops the
+  constexpr type tl.arange needs for the indexer block size.
+
+The indexer also dispatched to vLLM's CUDA-only persistent_topk, so this
+selects blocks with torch.topk until the MUSA radix-select kernel lands.
+---
+ .../qwen4_exp/common/ngram_embedding.py       |   7 +-
+ vllm/models/qwen4_exp/common/qsa_cache.py     | 136 +++++++++++-------
+ .../qwen4_exp/nvidia/ops/qsa_indexer.py       |  24 +++-
+ 3 files changed, 108 insertions(+), 59 deletions(-)
+
+diff --git a/vllm/models/qwen4_exp/common/ngram_embedding.py b/vllm/models/qwen4_exp/common/ngram_embedding.py
+index 85a382c5ec..cdd3c40e08 100644
+--- a/vllm/models/qwen4_exp/common/ngram_embedding.py
++++ b/vllm/models/qwen4_exp/common/ngram_embedding.py
+@@ -376,9 +376,9 @@ class Qwen4ExpPLEDeviceEmbedding(Qwen4ExpPLEEmbedding):
+ 
+ @triton.jit
+ def _lookup_ple_embedding_from_pinned_kernel(
+-    weight_ptr: tl.pointer_type(tl.uint8),  # type: ignore[valid-type]
++    weight_ptr,
+     ids_ptr,
+-    output_ptr: tl.pointer_type(tl.uint8),  # type: ignore[valid-type]
++    output_ptr,
+     row_bytes,
+     tp_vocab_start,
+     tp_vocab_end,
+@@ -388,7 +388,10 @@ def _lookup_ple_embedding_from_pinned_kernel(
+ 
+     Byte pointers keep the storage dtype out of the kernel signature, so
+     dtypes Triton cannot lower on the GPU (FP8 E4M3FN before SM89) still work.
++    MUSA: Triton 3.2 cannot parse pointer annotations, so cast in the body.
+     """
++    weight_ptr = weight_ptr.to(tl.pointer_type(tl.uint8))
++    output_ptr = output_ptr.to(tl.pointer_type(tl.uint8))
+     row_id = tl.program_id(0).to(tl.int64)
+     global_idx = tl.load(ids_ptr + row_id)
+     in_range = (global_idx >= tp_vocab_start) & (global_idx < tp_vocab_end)
+diff --git a/vllm/models/qwen4_exp/common/qsa_cache.py b/vllm/models/qwen4_exp/common/qsa_cache.py
+index f960dea071..b214e1dd52 100644
+--- a/vllm/models/qwen4_exp/common/qsa_cache.py
++++ b/vllm/models/qwen4_exp/common/qsa_cache.py
+@@ -189,6 +189,25 @@ def compressed_qsa_slot_mapping(
+     return slots
+ 
+ 
++if hasattr(tl, "gather"):
++
++    @triton.jit
++    def _gather_1d(src, index, BLOCK_SRC: tl.constexpr):
++        return tl.gather(src, index, 0)
++
++else:
++
++    @triton.jit
++    def _gather_1d(src, index, BLOCK_SRC: tl.constexpr):
++        """Gather from a 1-D register vector without ``tl.gather``."""
++        src_idx = tl.arange(0, BLOCK_SRC)
++        out = tl.zeros_like(index)
++        for i in tl.range(0, BLOCK_SRC):
++            value = tl.sum(tl.where(src_idx == i, src, 0), axis=0)
++            out = tl.where(index == i, value, out)
++        return out
++
++
+ @cache
+ def _metadata_launch_pdl() -> bool:
+     return current_platform.is_arch_support_pdl()
+@@ -326,64 +345,71 @@ def _build_qsa_metadata_kernel(
+         )
+     work_tile_start = pid * WORK_BLOCK_SIZE
+     has_work_tile = work_tile_start < max_num_work
+-    if k_work_metadata_ptr is not None and has_work_tile:
+-        # Every work CTA builds the request prefix in registers. Recomputing this
+-        # small vector lets CTAs write disjoint work tiles without a grid barrier.
+-        requests = tl.arange(0, REQUEST_SCAN_SIZE)
+-        valid_request = requests < num_reqs
+-        request_query_start = tl.load(
+-            query_start_loc_ptr + requests, mask=valid_request, other=0
+-        )
+-        request_query_end = tl.load(
+-            query_start_loc_ptr + requests + 1, mask=valid_request, other=0
+-        )
+-        request_seq_len = tl.load(seq_lens_ptr + requests, mask=valid_request, other=0)
+-        request_query_len = request_query_end - request_query_start
+-        chunk_start = request_seq_len - request_query_len
+-        num_groups = request_seq_len // compress_ratio - chunk_start // compress_ratio
+-        # Nonempty requests need one item even without a completed compression
+-        # group because work item zero also commits the current raw-K suffix.
+-        work_counts = tl.where(request_query_len > 0, tl.maximum(num_groups, 1), 0)
+-        work_ends = tl.cumsum(tl.where(valid_request, work_counts, 0), axis=0)
+-        total_work = tl.sum(tl.where(valid_request, work_counts, 0), axis=0)
+-        work_offsets = tl.arange(0, WORK_BLOCK_SIZE)
+-        work = work_tile_start + work_offsets
+-        in_bounds = work < max_num_work
+-        active = in_bounds & (work < total_work)
+-        request = tl.zeros((WORK_BLOCK_SIZE,), dtype=tl.int32)
+-        # Request zero starts at zero for every active work item. Descending
+-        # steps find the last request starting at or before this item.
+-        for step_idx in tl.range(0, work_search_steps):
+-            step = 1 << (work_search_steps - step_idx - 1)
+-            candidate = request + step
+-            valid_candidate = candidate < num_reqs
+-            candidate_start = tl.gather(work_ends, candidate - 1, 0)
+-            advance = active & valid_candidate & (candidate_start <= work)
+-            request = tl.where(advance, candidate, request)
+-
+-        if launch_pdl:
+-            # Let the dependent grid start launch setup while these CTAs finish
+-            # stores; its gdc_wait still orders access to the completed metadata.
+-            tl.extra.cuda.gdc_launch_dependents()
+-
+-        owner_work_start = tl.gather(work_ends, tl.maximum(request - 1, 0), 0)
+-        owner_work_start = tl.where(request == 0, 0, owner_work_start)
+-        work_in_request = work - owner_work_start
+-        tl.store(
+-            k_work_metadata_ptr + work * 2,
+-            tl.where(active, request, -1),
+-            mask=in_bounds,
+-        )
+-        tl.store(
+-            k_work_metadata_ptr + work * 2 + 1,
+-            tl.where(active, work_in_request, -1),
+-            mask=in_bounds,
+-        )
++    if k_work_metadata_ptr is not None:
++        if has_work_tile:
++            # Every work CTA builds the request prefix in registers. Recomputing this
++            # small vector lets CTAs write disjoint work tiles without a grid barrier.
++            requests = tl.arange(0, REQUEST_SCAN_SIZE)
++            valid_request = requests < num_reqs
++            request_query_start = tl.load(
++                query_start_loc_ptr + requests, mask=valid_request, other=0
++            )
++            request_query_end = tl.load(
++                query_start_loc_ptr + requests + 1, mask=valid_request, other=0
++            )
++            request_seq_len = tl.load(seq_lens_ptr + requests, mask=valid_request, other=0)
++            request_query_len = request_query_end - request_query_start
++            chunk_start = request_seq_len - request_query_len
++            num_groups = request_seq_len // compress_ratio - chunk_start // compress_ratio
++            # Nonempty requests need one item even without a completed compression
++            # group because work item zero also commits the current raw-K suffix.
++            work_counts = tl.where(request_query_len > 0, tl.maximum(num_groups, 1), 0)
++            work_ends = tl.cumsum(tl.where(valid_request, work_counts, 0), axis=0)
++            total_work = tl.sum(tl.where(valid_request, work_counts, 0), axis=0)
++            work_offsets = tl.arange(0, WORK_BLOCK_SIZE)
++            work = work_tile_start + work_offsets
++            in_bounds = work < max_num_work
++            active = in_bounds & (work < total_work)
++            request = tl.zeros((WORK_BLOCK_SIZE,), dtype=tl.int32)
++            # Request zero starts at zero for every active work item. Descending
++            # steps find the last request starting at or before this item.
++            for step_idx in tl.range(0, work_search_steps):
++                step = 1 << (work_search_steps - step_idx - 1)
++                candidate = request + step
++                valid_candidate = candidate < num_reqs
++                candidate_start = _gather_1d(
++                    work_ends, candidate - 1, BLOCK_SRC=REQUEST_SCAN_SIZE
++                )
++                advance = active & valid_candidate & (candidate_start <= work)
++                request = tl.where(advance, candidate, request)
++
++            if launch_pdl:
++                # Let the dependent grid start launch setup while these CTAs finish
++                # stores; its gdc_wait still orders access to the completed metadata.
++                tl.extra.cuda.gdc_launch_dependents()
++
++            owner_work_start = _gather_1d(
++                work_ends, tl.maximum(request - 1, 0), BLOCK_SRC=REQUEST_SCAN_SIZE
++            )
++            owner_work_start = tl.where(request == 0, 0, owner_work_start)
++            work_in_request = work - owner_work_start
++            tl.store(
++                k_work_metadata_ptr + work * 2,
++                tl.where(active, request, -1),
++                mask=in_bounds,
++            )
++            tl.store(
++                k_work_metadata_ptr + work * 2 + 1,
++                tl.where(active, work_in_request, -1),
++                mask=in_bounds,
++            )
+ 
+-    else:
+-        if launch_pdl:
++        elif launch_pdl:
+             # A dependent grid launches only after every CTA has signaled.
+             tl.extra.cuda.gdc_launch_dependents()
++    elif launch_pdl:
++            # A dependent grid launches only after every CTA has signaled.
++        tl.extra.cuda.gdc_launch_dependents()
+ 
+ 
+ def build_qsa_metadata_triton(
+diff --git a/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py b/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
+index 9b28ed6dca..c3967b58b8 100644
+--- a/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
++++ b/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
+@@ -41,7 +41,9 @@ def _qsa_mqa_paged_uniform_kernel(
+     DECODE_QUERY_LEN_PADDED: tl.constexpr = triton.next_power_of_2(DECODE_QUERY_LEN)
+     NUM_HEADS_PADDED: tl.constexpr = triton.next_power_of_2(NUM_HEADS)
+     # tl.dot requires a reduction dimension of at least 16.
+-    BLOCK_D: tl.constexpr = max(16, triton.next_power_of_2(HEAD_DIM))
++    BLOCK_D: tl.constexpr = (
++        16 if HEAD_DIM < 16 else triton.next_power_of_2(HEAD_DIM)
++    )
+     request = tl.program_id(0)
+     tile_start = tl.program_id(1) * TILES_PER_PROG
+     query_offsets = tl.arange(0, DECODE_QUERY_LEN_PADDED)
+@@ -135,7 +137,9 @@ def _qsa_mqa_paged_prefill_kernel(
+     num_columns = page_table_width * PAGE_SIZE
+     NUM_HEADS_PADDED: tl.constexpr = triton.next_power_of_2(NUM_HEADS)
+     # tl.dot requires a reduction dimension of at least 16.
+-    BLOCK_D: tl.constexpr = max(16, triton.next_power_of_2(HEAD_DIM))
++    BLOCK_D: tl.constexpr = (
++        16 if HEAD_DIM < 16 else triton.next_power_of_2(HEAD_DIM)
++    )
+     request = tl.program_id(0)
+     query_base = tl.load(query_start_loc_ptr)
+     query_end = query_offset + num_rows
+@@ -483,6 +487,22 @@ def _topk(
+ ) -> None:
+     # similar dispatch logic as DeepSeek indexer
+     block_topk = token_topk // compress_ratio
++    if current_platform.is_musa():
++        # Correctness fallback until the MUSA radix-select kernel is ported.
++        block_indices.fill_(-1)
++        if logits.shape[0] == 0 or logits.shape[1] == 0:
++            return
++        columns = logits.shape[1]
++        visible = visible_blocks.clamp(min=0, max=columns)
++        column_ids = torch.arange(columns, device=logits.device).unsqueeze(0)
++        scores = torch.nan_to_num(logits, nan=-float("inf"))
++        scores = scores.masked_fill(column_ids >= visible.unsqueeze(1), -float("inf"))
++        k = min(block_topk, columns)
++        values, selected = torch.topk(scores, k, dim=1, sorted=True)
++        selected = selected.masked_fill(~torch.isfinite(values), -1)
++        block_indices[:, :k].copy_(selected.to(dtype=block_indices.dtype))
++        return
++
+     use_cooperative_topk = (
+         logits.shape[0] <= 64
+         and logits.stride(0) % 4 == 0

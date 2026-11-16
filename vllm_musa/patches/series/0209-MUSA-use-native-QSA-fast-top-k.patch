@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 4 Nov 2026 08:07:49 +0000
+Subject: [PATCH] MUSA: use native QSA fast top-k
+
+Add the MUSA radix-select QSA top-k kernel from the 0.28 branch and route
+the production 512/2048 block widths through it. The kernel reads only the
+visible prefix of each logits row, so unwritten tail values never affect the
+selection. Keep the bounded torch.topk fallback for other widths and empty
+batches.
+
+Load the JIT module during Qwen4Exp kernel warmup, before graph capture, so
+the first captured _topk call does not run Python/JIT work on the capture
+stream. The existing 1 MiB workspace supplies the per-row starts in place.
+---
+ vllm/model_executor/warmup/kernel_warmup.py   |  2 ++
+ .../warmup/qwen4_exp_qsa_warmup.py            | 15 ++++++++++++++
+ .../qwen4_exp/nvidia/ops/qsa_indexer.py       | 20 ++++++++++++++++++-
+ 3 files changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
+index 8aebdffdeb..976470b38f 100644
+--- a/vllm/model_executor/warmup/kernel_warmup.py
++++ b/vllm/model_executor/warmup/kernel_warmup.py
+@@ -194,6 +194,8 @@ def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
+     # Run next so input-prep kernels JIT against pristine runner state.
+     if worker.vllm_config.kernel_config.enable_jit_warmup:
+         kimi_k3_triton_warmup(worker)
++        if current_platform.is_musa():
++            qwen4_exp_qsa_triton_warmup(worker)
+         sparse_mla_warmup = globals().get("sparse_mla_triton_warmup")
+         if sparse_mla_warmup is not None:
+             sparse_mla_warmup(worker)
+diff --git a/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py b/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
+index 2065b38338..ed45cd0155 100644
+--- a/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
++++ b/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
+@@ -19,6 +19,8 @@ logger = init_logger(__name__)
+ def qwen4_exp_qsa_triton_warmup(worker: "Worker") -> None:
+     """Warm every reachable QSA specialization: indexer decode-query-length
+     profiles plus the sparse attention split-K/merge configs."""
++    from vllm.platforms import current_platform
++
+     qsa_module = sys.modules.get("vllm.models.qwen4_exp.nvidia.indexer_qsa")
+     attn_module = sys.modules.get("vllm.models.qwen4_exp.nvidia.qsa")
+     if qsa_module is None or attn_module is None:
+@@ -33,6 +35,19 @@ def qwen4_exp_qsa_triton_warmup(worker: "Worker") -> None:
+     if indexer is None or owner is None:
+         return
+ 
++    if current_platform.is_musa():
++        # Build/load the MUSA radix-select top-k module before graph capture.
++        # Loading it lazily from _topk during capture would invoke Python/JIT
++        # work on the capturing stream and fail with an illegal synchronize.
++        # Only a model that actually carries QSA layers reaches this point.
++        # The Triton warmups below stay shared: MUSA decode still falls back to
++        # them whenever the TileLang kernels cannot take a shape.
++        from vllm_musa.jit_kernel.csrc.qsa_topk import qsa_fast_topk_available
++
++        if not qsa_fast_topk_available():
++            raise RuntimeError("MUSA QSA fast top-k kernel is unavailable")
++        logger.info("Loaded MUSA Qwen4Exp QSA fast top-k kernel.")
++
+     runner = worker.model_runner
+ 
+     def block_table_for(prefix: str) -> torch.Tensor:
+diff --git a/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py b/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
+index c3967b58b8..6aa1f0de7c 100644
+--- a/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
++++ b/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
+@@ -488,7 +488,25 @@ def _topk(
+     # similar dispatch logic as DeepSeek indexer
+     block_topk = token_topk // compress_ratio
+     if current_platform.is_musa():
+-        # Correctness fallback until the MUSA radix-select kernel is ported.
++        # Use the MUSA port of SGLang's radix-select kernel. The workspace is
++        # already allocated by the model runner, so deriving row starts here
++        # does not allocate during CUDA/MUSA graph capture.
++        if block_topk in (512, 2048) and logits.shape[0] > 0:
++            row_starts = topk_workspace[: logits.shape[0] * 4].view(torch.int32)
++            row_starts.zero_()
++            from vllm_musa.jit_kernel.csrc.qsa_topk import qsa_fast_topk
++
++            qsa_fast_topk(
++                logits,
++                visible_blocks,
++                block_indices,
++                block_topk,
++                row_starts,
++            )
++            return
++
++        # Keep a bounded correctness fallback for unsupported widths/empty
++        # batches; the production Qwen3.8 config uses block_topk=512/2048.
+         block_indices.fill_(-1)
+         if logits.shape[0] == 0 or logits.shape[1] == 0:
+             return

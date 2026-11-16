@@ -47,6 +47,8 @@ jobs:
           python -m pytest -q tests/test_deepseek_v4_sparse_indexer_topk.py -k 'test_radix_topk_lives or test_series_routes'
           python -m pytest -q tests/test_dsv41_adaptive_verification.py -k 'test_series_'
           python -m pytest -q tests/test_dsv4_moe_shared_fold.py -k test_biased_dsv4_gates
+      - name: Check v1 worker import order
+        run: python -m pytest -q tests/test_v1_worker_import_order.py
       - name: Prepare pristine upstream checkout
         shell: bash
         run: |

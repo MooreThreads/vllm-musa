@@ -12,40 +12,72 @@ row's result depends on neither M nor the tile height.
 
 from __future__ import annotations
 
+import functools
 import os
 
 import torch
+from vllm.platforms import current_platform
 from vllm.triton_utils import tl, triton
+
+from vllm_musa import tuning
 
 _FP8_MAX = 448.0
 _QUANT_EPS = 1e-10
 BLOCK_M = 16
 
-# (SPLIT, BLOCK_N, num_warps, UNROLL, MIN_ROWS, MAX_ROWS, TILE_M) measured on MTT
-# S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections, keyed by (N, K). The
-# reduction is a second launch, so below MIN_ROWS the single-kernel GEMV wins; past
-# MAX_ROWS the BF16 GEMM of fp8_block_bf16 or the block GEMM does. TILE_M rows per
-# program where that pads no more rows than BLOCK_M-row tiles. MAX_ROWS holds while
-# a CUDA graph is captured (decode); eager steps, prefill included, use
-# _EAGER_MAX_ROWS, past which the block GEMM runs up to fp8_block_bf16.MIN_ROWS.
-_CONFIGS = {
-    (1792, 5120): (16, 64, 4, 2, 2, 59, 32),
-    (576, 5120): (16, 64, 4, 2, 4, 64, 16),
-    (1024, 4096): (16, 64, 4, 2, 3, 191, 16),
-    (4096, 1280): (8, 64, 4, 1, 4, 59, 32),
-    (5120, 1024): (8, 64, 4, 2, 4, 48, 16),
-    (5120, 15360): (8, 64, 4, 2, 2, 64, 16),
-    (25600, 768): (2, 64, 4, 1, 2, 32, 16),
-}
-_EAGER_MAX_ROWS = {
-    (1792, 5120): 192,
-    (576, 5120): 320,
-    (1024, 4096): 320,
-    (4096, 1280): 96,
-    (5120, 1024): 48,
-    (5120, 15360): 96,
-    (25600, 768): 32,
-}
+# Measured rows live in vllm_musa/tuning/fp8_block_splitk.json, keyed by (N, K) and
+# optionally by multiprocessor count; a config is (SPLIT, BLOCK_N, num_warps, UNROLL,
+# MIN_ROWS, MAX_ROWS, TILE_M). The reduction is a second launch, so below MIN_ROWS the
+# single-kernel GEMV wins; past MAX_ROWS the BF16 GEMM of fp8_block_bf16 or the block
+# GEMM does. TILE_M rows per program where that pads no more rows than BLOCK_M-row
+# tiles. MAX_ROWS holds while a CUDA graph is captured (decode); eager steps, prefill
+# included, use the eager limit, past which the block GEMM runs up to
+# fp8_block_bf16.MIN_ROWS.
+_ENTRY_KEYS = frozenset(
+    "n k split block_n num_warps unroll tile_m min_rows max_rows".split()
+)
+_MODES = frozenset({"capture", "eager"})
+
+
+def _from_table(entries: list[dict]) -> dict:
+    """``(N, K, multiprocessor count or None) -> (config, eager max rows)``."""
+    rows = {}
+    for index, entry in enumerate(entries):
+        where = f"fp8_block_splitk.json entry {index}"
+        if set(entry) - {"multiprocessor_count"} != _ENTRY_KEYS:
+            raise ValueError(
+                f"{where}: keys must be {sorted(_ENTRY_KEYS)}, "
+                "optionally with multiprocessor_count"
+            )
+        max_rows = entry["max_rows"]
+        if not isinstance(max_rows, dict) or set(max_rows) != _MODES:
+            raise ValueError(f"{where}: max_rows must have exactly {sorted(_MODES)}")
+        values = [v for key, v in entry.items() if key != "max_rows"]
+        if any(isinstance(v, dict) for v in values + list(max_rows.values())):
+            raise ValueError(f"{where}: values other than max_rows must be integers")
+        if entry["min_rows"] > min(max_rows.values()):
+            raise ValueError(f"{where}: min_rows exceeds max_rows")
+        key = (entry["n"], entry["k"], entry.get("multiprocessor_count"))
+        if key in rows:
+            raise ValueError(f"{where}: repeats {key}")
+        config = (
+            entry["split"],
+            entry["block_n"],
+            entry["num_warps"],
+            entry["unroll"],
+            entry["min_rows"],
+            max_rows["capture"],
+            entry["tile_m"],
+        )
+        rows[key] = (config, max_rows["eager"])
+    return rows
+
+
+_ROWS = _from_table(tuning.load("fp8_block_splitk"))
+# The default rows serve every multiprocessor count without rows of its own.
+_CONFIGS = {(n, k): row[0] for (n, k, mp), row in _ROWS.items() if mp is None}
+_EAGER_MAX_ROWS = {(n, k): row[1] for (n, k, mp), row in _ROWS.items() if mp is None}
+_BINNED_SHAPES = frozenset((n, k) for n, k, mp in _ROWS if mp is not None)
 _ENABLED = os.environ.get("VLLM_MUSA_FP8_SPLITK_MM", "1") != "0"
 
 
@@ -132,19 +164,34 @@ def _fp8_block_splitk_reduce_kernel(
     tl.store(c_ptr + rows * stride_cm + cols, acc.to(c_ptr.dtype.element_ty), mask=mask)
 
 
+@functools.cache
+def _multiprocessor_count(device_index: int | None) -> int:
+    return current_platform.num_compute_units(device_index)
+
+
+def _rows(weight: torch.Tensor) -> tuple[tuple | None, int | None]:
+    """The (config, eager max rows) for ``weight`` on its device's multiprocessor count."""
+    shape = tuple(weight.shape)
+    if shape in _BINNED_SHAPES:
+        mp = _multiprocessor_count(weight.device.index)
+        binned = _ROWS.get((*shape, mp))
+        if binned is not None:
+            return binned
+    return _CONFIGS.get(shape), _EAGER_MAX_ROWS.get(shape)
+
+
 def fp8_block_splitk_config(
     weight: torch.Tensor, weight_scale: torch.Tensor, rows: int
 ) -> tuple[int, int, int, int, int, int, int] | None:
     """Measured config for ``rows`` activation rows, or None when the GEMM does not apply."""
     if not _ENABLED or weight.dim() != 2:
         return None
-    shape = tuple(weight.shape)
-    config = _CONFIGS.get(shape)
+    config, eager_max_rows = _rows(weight)
     if config is None:
         return None
     max_rows = config[5]
     if not torch.cuda.is_current_stream_capturing():
-        max_rows = _EAGER_MAX_ROWS[shape]
+        max_rows = eager_max_rows
     if not config[4] <= rows <= max_rows:
         return None
     n, k = weight.shape

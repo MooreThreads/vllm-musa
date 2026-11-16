@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 3 Nov 2026 12:20:00 +0800
+Subject: [PATCH] MUSA: pin QSA sparse attention to four warps
+
+The 0.32 config table selects a single-warp split-k for 25-32 programs.
+On MUSA that reduction leaves the attention output unnormalized, so every
+prompt longer than 24 tokens produced garbage logits. Restore the 0.28
+override that always runs four warps.
+---
+ vllm/models/qwen4_exp/nvidia/ops/qsa.py | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/vllm/models/qwen4_exp/nvidia/ops/qsa.py b/vllm/models/qwen4_exp/nvidia/ops/qsa.py
+index 401048e02c..00d303af6f 100644
+--- a/vllm/models/qwen4_exp/nvidia/ops/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/ops/qsa.py
+@@ -588,6 +588,10 @@ def _select_config(
+     num_tiles = triton.cdiv(num_columns, BLOCK_N)
+     # Never more splits than tiles, never empty.
+     num_splits = min(target_splits, num_tiles)
++    if current_platform.is_musa():
++        # Single-warp split-k reductions yield unnormalized attention outputs
++        # on MUSA; keep four warps as in the 0.28 enablement.
++        num_warps = 4
+     return BLOCK_N, num_warps, num_tiles, num_splits
+ 
+ 
