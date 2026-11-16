@@ -1,8 +1,8 @@
 # ruff: noqa: I001
 
 import pytest
-import torchada  # noqa: F401
 import torch
+import torchada  # noqa: F401
 
 import vllm_musa._custom_ops  # noqa: F401
 from vllm_musa._custom_ops import top_k_mask_logits
@@ -73,6 +73,7 @@ def test_nan_and_negative_infinity_are_safe() -> None:
 @requires_musa
 def test_mask_matches_probability_domain_mask_under_gumbel() -> None:
     from vllm.v1.worker.gpu.sample.gumbel import gumbel_sample
+
     from vllm_musa._custom_ops import top_k_mask_logits_radix
 
     rows = 64
@@ -91,12 +92,24 @@ def test_mask_matches_probability_domain_mask_under_gumbel() -> None:
     for seed in range(10):
         seeds = torch.full((rows,), seed, dtype=torch.int64, device="musa")
         a = gumbel_sample(
-            native, mapping, temperature, seeds, pos,
-            apply_temperature=False, is_drafting=False, use_fp64=False,
+            native,
+            mapping,
+            temperature,
+            seeds,
+            pos,
+            apply_temperature=False,
+            is_drafting=False,
+            use_fp64=False,
         )
         b = gumbel_sample(
-            hybrid, mapping, temperature, seeds, pos,
-            apply_temperature=False, is_drafting=False, use_fp64=False,
+            hybrid,
+            mapping,
+            temperature,
+            seeds,
+            pos,
+            apply_temperature=False,
+            is_drafting=False,
+            use_fp64=False,
         )
         identical += int((a == b).sum())
     assert identical == 10 * rows
@@ -123,7 +136,9 @@ def test_per_row_top_k_tensor_matches_per_row_topk() -> None:
     logits = (torch.randn((rows, VOCAB), device="musa", dtype=torch.float32) * 2).to(
         torch.bfloat16
     )
-    k_row = torch.tensor([20, 40, 50, 100, 1024, 1] * 3, device="musa", dtype=torch.int32)[:rows]
+    k_row = torch.tensor(
+        [20, 40, 50, 100, 1024, 1] * 3, device="musa", dtype=torch.int32
+    )[:rows]
 
     actual = top_k_mask_logits(logits.clone(), k_row)
     assert actual is not None

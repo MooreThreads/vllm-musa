@@ -300,7 +300,7 @@ def _apply_top_k_top_p(
             # cheaper than torch.topk on MUSA. The logits-domain kernel skips
             # the softmax pass but needs enough rows to fill the device, so
             # small batches stay on the probability-domain specialization.
-            if logits.shape[0] > _QWEN_NATIVE_LOGITS_MASK_MIN_ROWS:
+            if logits.shape[0] >= _QWEN_NATIVE_LOGITS_MASK_MIN_ROWS:
                 native_masked = _ops.top_k_mask_logits(logits, k)
                 if native_masked is not None:
                     return native_masked

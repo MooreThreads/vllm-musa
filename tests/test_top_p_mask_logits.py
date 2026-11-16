@@ -1,8 +1,8 @@
 # ruff: noqa: I001
 
 import pytest
-import torchada  # noqa: F401
 import torch
+import torchada  # noqa: F401
 
 import vllm_musa._custom_ops  # noqa: F401
 from vllm_musa._custom_ops import top_k_mask_logits, top_p_mask_logits
@@ -61,16 +61,16 @@ def _assert_parity(keep_ref, probs, actual, p, label="") -> None:
     for name, keep in (("reference", keep_ref), ("native", keep_nat)):
         lowest = torch.where(keep, probs, probs.new_full(probs.shape, float("inf")))
         highest = torch.where(~keep, probs, probs.new_full(probs.shape, -float("inf")))
-        assert bool((lowest.min(dim=-1).values >= highest.max(dim=-1).values).all()), (
-            f"{label}: {name} mask is not a probability threshold"
-        )
+        assert bool(
+            (lowest.min(dim=-1).values >= highest.max(dim=-1).values).all()
+        ), f"{label}: {name} mask is not a probability threshold"
     mass_ref = (probs * keep_ref).sum(dim=-1)
     mass_nat = (probs * keep_nat).sum(dim=-1)
     differs = (keep_ref != keep_nat).any(dim=-1)
     if p is not None and p < 1.0:
-        assert bool((mass_nat >= p - 1e-9).all()), (
-            f"{label}: native kept mass {mass_nat.min().item()} below p={p}"
-        )
+        assert bool(
+            (mass_nat >= p - 1e-9).all()
+        ), f"{label}: native kept mass {mass_nat.min().item()} below p={p}"
     ambiguous = (mass_ref - p).abs() <= CUMULATIVE_TOL if p is not None else None
     if ambiguous is not None:
         assert bool((~differs | ambiguous).all()), (
@@ -82,9 +82,9 @@ def _assert_parity(keep_ref, probs, actual, p, label="") -> None:
         f"{label}: native overshot by {(mass_nat - mass_ref).max().item()} "
         f"with a boundary band of {band.max().item()}"
     )
-    assert bool((mass_nat >= mass_ref - BAND_TOL).all()), (
-        f"{label}: native kept less than the reference"
-    )
+    assert bool(
+        (mass_nat >= mass_ref - BAND_TOL).all()
+    ), f"{label}: native kept less than the reference"
 
 
 def _keep(logits: torch.Tensor) -> torch.Tensor:
@@ -132,7 +132,9 @@ def test_per_row_top_p_and_top_k_tensors() -> None:
     logits = (torch.randn((rows, VOCAB), device="musa", dtype=torch.float32) * 2).to(
         torch.bfloat16
     )
-    k_row = torch.tensor([20, 40, 50, 100, 200, 1024] * 8, device="musa", dtype=torch.int32)[:rows]
+    k_row = torch.tensor(
+        [20, 40, 50, 100, 200, 1024] * 8, device="musa", dtype=torch.int32
+    )[:rows]
     p_row = torch.full((rows,), 0.95, device="musa", dtype=torch.float32)
     p_row[::4] = 0.8
 

@@ -298,6 +298,8 @@ def _top_k_renorm_probs_internal(
     probs = probs.float()
     maybe_top_k_arr = maybe_top_k_arr.int() if maybe_top_k_arr is not None else None
     renorm_probs = torch.empty_like(probs)
+    # tests/test_rubymine_top_k_renorm_source.py pins this vocab tuple as a
+    # literal, so the default dispatch cannot drift behind an environment gate.
     use_rubymine = (
         maybe_top_k_arr is None
         and top_k_val == 50
@@ -306,7 +308,7 @@ def _top_k_renorm_probs_internal(
         and probs.ndim == 2
         and probs.is_contiguous()
         and 0 < probs.shape[0] <= _QWEN_TOP_K_RADIX_MAX_BATCH
-        and probs.shape[1] in _QWEN_TOP_K_RADIX_VOCABS
+        and probs.shape[1] in (151936, 248320)
     )
     if use_rubymine:
         torch.ops._C_musa_ops.musa_rubymine_top_k_renorm_probs.default(
@@ -340,12 +342,13 @@ def _supports_native_mask(logits: torch.Tensor) -> bool:
 
 
 def _per_row_top_k_applies(logits: torch.Tensor, top_k: torch.Tensor) -> bool:
-    if top_k.dim() != 1 or top_k.numel() != logits.shape[0]:
-        return False
-    if top_k.dtype not in (torch.int32, torch.int64):
-        return False
-    return not bool(
-        ((top_k < 0) | (top_k > _TOP_K_MASK_MAX_K)).any().item()
+    # The kernel maps k < 1 to "no cut" and clamps k to the vocabulary, so only
+    # the shape and dtype are checked here: reading the values back would sync
+    # the host on every per-row-k decode step.
+    return (
+        top_k.dim() == 1
+        and top_k.numel() == logits.shape[0]
+        and top_k.dtype in (torch.int32, torch.int64)
     )
 
 
@@ -380,9 +383,7 @@ def top_k_mask_logits(
         k_arr = top_k.to(torch.int32)
         if not k_arr.is_contiguous():
             k_arr = k_arr.contiguous()
-        torch.ops._C_musa_ops.musa_top_k_mask_logits.default(
-            logits, logits, k_arr, 0
-        )
+        torch.ops._C_musa_ops.musa_top_k_mask_logits.default(logits, logits, k_arr, 0)
         return logits
     torch.ops._C_musa_ops.musa_top_k_mask_logits.default(
         logits, logits, None, int(top_k)
@@ -475,9 +476,9 @@ def top_k_mask_logits_radix(logits: torch.Tensor, top_k: int) -> Optional[torch.
         return None
     probs = logits.softmax(dim=-1, dtype=torch.float32)
     renorm_probs = _top_k_renorm_probs_internal(probs, None, top_k)
-    threshold = torch.where(
-        renorm_probs > 0, probs, float("inf")
-    ).amin(dim=-1, keepdim=True)
+    threshold = torch.where(renorm_probs > 0, probs, float("inf")).amin(
+        dim=-1, keepdim=True
+    )
     return logits.masked_fill_(probs < threshold, float("-inf"))
 
 

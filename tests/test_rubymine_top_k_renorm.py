@@ -2,8 +2,8 @@
 
 import numpy as np
 import pytest
-import torchada  # noqa: F401
 import torch
+import torchada  # noqa: F401
 
 import vllm_musa._custom_ops  # noqa: F401
 from vllm_musa.v1.sample.topk_topp_sampler import _is_uniform_top_k_50
