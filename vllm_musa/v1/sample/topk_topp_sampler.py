@@ -32,6 +32,15 @@ _SAMPLING_EPS = 1e-5
 _MUSA_QWEN_SAMPLER_VOCAB_SIZES = frozenset((151936, 152064, 248320))
 # Keep chunked-prefill and first-token response draining on the original path.
 _QWEN_LEGACY_UNFILTERED_GUMBEL_MIN_ROWS = 16
+# Below this batch size the probability-domain radix mask is still cheaper than
+# the logits-domain kernel; the crossover measured on MTT S5000 at
+# vocab=248320 is 32 rows (0.67 vs 0.97 ms) and 128 rows (1.74 vs 1.31 ms).
+_QWEN_NATIVE_LOGITS_MASK_MIN_ROWS = 64
+# A top-p-only row cannot cache survivors, so each radix level rescans the whole
+# vocabulary. That is a win from 128 rows (1.52x, 1.68x at 256) and a loss at or
+# below 64 rows (0.98x at 64, 0.32x at 16), where one block per row leaves the
+# device idle and the sort path hides better in the launch.
+_QWEN_NATIVE_TOPP_ONLY_MIN_ROWS = 128
 _QWEN_LEGACY_UNFILTERED_GUMBEL_MIN_OFFSET = 64
 _MUSA_QWEN_SHARDED_MIN_BATCH = 32
 
@@ -287,8 +296,27 @@ def _apply_top_k_top_p(
         if k <= 0 or k >= logits.shape[1]:
             return logits
         if p is None:
+            # Radix selection resolves the k-th largest value several times
+            # cheaper than torch.topk on MUSA. The logits-domain kernel skips
+            # the softmax pass but needs enough rows to fill the device, so
+            # small batches stay on the probability-domain specialization.
+            if logits.shape[0] >= _QWEN_NATIVE_LOGITS_MASK_MIN_ROWS:
+                native_masked = _ops.top_k_mask_logits(logits, k)
+                if native_masked is not None:
+                    return native_masked
+            radix_masked = _ops.top_k_mask_logits_radix(logits, k)
+            if radix_masked is not None:
+                return radix_masked
             threshold = logits.topk(k, dim=1).values[:, -1:]
             return logits.masked_fill_(logits < threshold, -float("inf"))
+        # The fused native mask resolves both cuts by radix selection, so the
+        # top-k slice never goes through topk/softmax/cumsum/scatter. It already
+        # wins at a single row (1.5x, 2.8x at 16, 10.4x at 64, 15.1x at 256 on
+        # S5000 at vocab=248320), because the fused cut caches the k survivors
+        # and never sorts the vocabulary.
+        native_p = _ops.top_p_mask_logits(logits, p, top_k=k)
+        if native_p is not None:
+            return native_p
         return _apply_top_k_top_p_musa_uniform_k_prefilter(logits, k, p)
 
     if current_platform.is_musa():
@@ -296,9 +324,19 @@ def _apply_top_k_top_p(
             if p is None and logits.shape[1] >= 65536:
                 max_top_k = int(k.to(torch.long).max().item())
                 if 0 < max_top_k <= 1024:
+                    native_k = _ops.top_k_mask_logits(logits, k)
+                    if native_k is not None:
+                        return native_k
                     return vllm_topk_topp_sampler.apply_top_k_only(logits, k)
             elif logits.shape[1] >= 65536:
+                native_p = _ops.top_p_mask_logits(logits, p, top_k=k)
+                if native_p is not None:
+                    return native_p
                 return _apply_top_k_top_p_musa_topk_prefilter(logits, k, p)
+        elif p is not None and logits.shape[0] >= _QWEN_NATIVE_TOPP_ONLY_MIN_ROWS:
+            native_p = _ops.top_p_mask_logits(logits, p, top_k=None)
+            if native_p is not None:
+                return native_p
 
     if (
         vllm_topk_topp_sampler.HAS_TRITON

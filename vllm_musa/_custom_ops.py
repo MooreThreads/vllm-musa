@@ -6,6 +6,12 @@ import torch
 
 _QWEN_MIN_P_VOCABS = (151936, 248320)
 _QWEN_MIN_P_MAX_BATCH = 64
+_QWEN_TOP_K_RADIX_K = 50
+_QWEN_TOP_K_RADIX_MAX_BATCH = 256
+_QWEN_TOP_K_RADIX_VOCABS = (151936, 248320)
+_TOP_K_MASK_MAX_ROWS = 4096
+_TOP_K_MASK_MAX_K = 1024
+_TOP_K_MASK_VOCABS = (151936, 152064, 248320)
 
 try:
     import vllm_musa._C  # noqa: F401
@@ -292,6 +298,8 @@ def _top_k_renorm_probs_internal(
     probs = probs.float()
     maybe_top_k_arr = maybe_top_k_arr.int() if maybe_top_k_arr is not None else None
     renorm_probs = torch.empty_like(probs)
+    # tests/test_rubymine_top_k_renorm_source.py pins this vocab tuple as a
+    # literal, so the default dispatch cannot drift behind an environment gate.
     use_rubymine = (
         maybe_top_k_arr is None
         and top_k_val == 50
@@ -299,7 +307,7 @@ def _top_k_renorm_probs_internal(
         and _is_validated_musa_device(probs.device)
         and probs.ndim == 2
         and probs.is_contiguous()
-        and 0 < probs.shape[0] <= 64
+        and 0 < probs.shape[0] <= _QWEN_TOP_K_RADIX_MAX_BATCH
         and probs.shape[1] in (151936, 248320)
     )
     if use_rubymine:
@@ -318,6 +326,160 @@ def top_k_renorm_probs(
     top_k: Union[torch.Tensor, int],
 ) -> torch.Tensor:
     return _top_k_renorm_probs_internal(probs, *_to_tensor_scalar_tuple(top_k))
+
+
+def _supports_native_mask(logits: torch.Tensor) -> bool:
+    return (
+        logits.device.type == "musa"
+        and _is_validated_musa_device(logits.device)
+        and logits.ndim == 2
+        and logits.is_contiguous()
+        and logits.dtype in (torch.bfloat16, torch.float32)
+        and 0 < logits.shape[0] <= _TOP_K_MASK_MAX_ROWS
+        and logits.shape[1] in _TOP_K_MASK_VOCABS
+        and (logits.shape[1] % 4) == 0
+    )
+
+
+def _per_row_top_k_applies(logits: torch.Tensor, top_k: torch.Tensor) -> bool:
+    # The kernel maps k < 1 to "no cut" and clamps k to the vocabulary, so only
+    # the shape and dtype are checked here: reading the values back would sync
+    # the host on every per-row-k decode step.
+    return (
+        top_k.dim() == 1
+        and top_k.numel() == logits.shape[0]
+        and top_k.dtype in (torch.int32, torch.int64)
+    )
+
+
+def _can_use_native_top_k_mask(
+    logits: torch.Tensor, top_k: Union[int, torch.Tensor]
+) -> bool:
+    """Whether the native logits-domain radix top-k mask applies."""
+    if not _supports_native_mask(logits):
+        return False
+    if isinstance(top_k, torch.Tensor):
+        return _per_row_top_k_applies(logits, top_k)
+    return (
+        isinstance(top_k, int)
+        and 1 <= top_k <= _TOP_K_MASK_MAX_K
+        and top_k < logits.shape[1]
+    )
+
+
+def top_k_mask_logits(
+    logits: torch.Tensor, top_k: Union[int, torch.Tensor]
+) -> Optional[torch.Tensor]:
+    """Mask ``logits`` to its top-k values in place, without a softmax pass.
+
+    ``top_k`` may be a scalar or a per-row int tensor, so mixed k recipes in one
+    batch stay on the radix kernel.  A per-row 0 means "no top-k" for that row.
+    Returns ``None`` when the native kernel does not apply so callers can fall
+    back.  Values tied with the k-th largest stay eligible.
+    """
+    if not _can_use_native_top_k_mask(logits, top_k):
+        return None
+    if isinstance(top_k, torch.Tensor):
+        k_arr = top_k.to(torch.int32)
+        if not k_arr.is_contiguous():
+            k_arr = k_arr.contiguous()
+        torch.ops._C_musa_ops.musa_top_k_mask_logits.default(logits, logits, k_arr, 0)
+        return logits
+    torch.ops._C_musa_ops.musa_top_k_mask_logits.default(
+        logits, logits, None, int(top_k)
+    )
+    return logits
+
+
+def _can_use_native_top_p_mask(
+    logits: torch.Tensor,
+    top_p: Union[float, torch.Tensor],
+    top_k: Optional[Union[int, torch.Tensor]],
+) -> bool:
+    """Whether the fused native logits-domain top-k/top-p mask applies."""
+    if not _supports_native_mask(logits):
+        return False
+    if isinstance(top_p, torch.Tensor):
+        if top_p.dim() != 1 or top_p.numel() != logits.shape[0]:
+            return False
+        if top_p.dtype != torch.float32:
+            return False
+    elif isinstance(top_p, (int, float)):
+        if not 0.0 < float(top_p) <= 1.0:
+            return False
+    else:
+        return False
+    if top_k is None:
+        return True
+    if isinstance(top_k, torch.Tensor):
+        return _per_row_top_k_applies(logits, top_k)
+    return isinstance(top_k, int) and 0 <= top_k <= _TOP_K_MASK_MAX_K
+
+
+def top_p_mask_logits(
+    logits: torch.Tensor,
+    top_p: Union[float, torch.Tensor],
+    top_k: Optional[Union[int, torch.Tensor]] = None,
+) -> Optional[torch.Tensor]:
+    """Apply top-k then top-p to ``logits`` in place without sorting a row.
+
+    The kernel resolves the k-th largest key by counting radix, then the top-p
+    cut by radix selection over ``exp(value - max)`` mass, so neither a softmax
+    tensor nor a vocabulary sort is materialized.  Values tied with either
+    boundary stay eligible as a group.  Returns ``None`` when unsupported.
+    """
+    if not _can_use_native_top_p_mask(logits, top_p, top_k):
+        return None
+    k_arr = None
+    k_val = 0
+    if isinstance(top_k, torch.Tensor):
+        k_arr = top_k.to(torch.int32)
+        if not k_arr.is_contiguous():
+            k_arr = k_arr.contiguous()
+    elif isinstance(top_k, int) and top_k > 0:
+        k_val = int(top_k)
+    p_arr = None
+    p_val = 1.0
+    if isinstance(top_p, torch.Tensor):
+        p_arr = top_p if top_p.is_contiguous() else top_p.contiguous()
+    else:
+        p_val = float(top_p)
+    torch.ops._C_musa_ops.musa_top_p_mask_logits.default(
+        logits, logits, k_arr, k_val, p_arr, p_val
+    )
+    return logits
+
+
+def _can_mask_logits_with_radix_top_k(logits: torch.Tensor, top_k: int) -> bool:
+    """Whether the radix top-k renorm kernel can define the logits mask."""
+    return (
+        top_k == _QWEN_TOP_K_RADIX_K
+        and logits.device.type == "musa"
+        and _is_validated_musa_device(logits.device)
+        and logits.ndim == 2
+        and logits.is_contiguous()
+        and 0 < logits.shape[0] <= _QWEN_TOP_K_RADIX_MAX_BATCH
+        and logits.shape[1] in _QWEN_TOP_K_RADIX_VOCABS
+    )
+
+
+def top_k_mask_logits_radix(logits: torch.Tensor, top_k: int) -> Optional[torch.Tensor]:
+    """Mask ``logits`` to its uniform top-k set without ``torch.topk``.
+
+    The radix renormalization resolves the k-th largest probability, so the same
+    threshold is recovered without a sort.  Values tied with the k-th largest
+    stay eligible, matching ``apply_top_k_pytorch``.  The mask is applied in
+    place, like ``masked_fill_`` in the pytorch fallback.  Returns ``None`` when
+    the radix specialization does not apply, so callers can fall back.
+    """
+    if not _can_mask_logits_with_radix_top_k(logits, top_k):
+        return None
+    probs = logits.softmax(dim=-1, dtype=torch.float32)
+    renorm_probs = _top_k_renorm_probs_internal(probs, None, top_k)
+    threshold = torch.where(renorm_probs > 0, probs, float("inf")).amin(
+        dim=-1, keepdim=True
+    )
+    return logits.masked_fill_(probs < threshold, float("-inf"))
 
 
 def _top_p_renorm_probs_internal(

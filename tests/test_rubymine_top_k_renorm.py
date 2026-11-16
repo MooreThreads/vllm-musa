@@ -2,8 +2,8 @@
 
 import numpy as np
 import pytest
-import torchada  # noqa: F401
 import torch
+import torchada  # noqa: F401
 
 import vllm_musa._custom_ops  # noqa: F401
 from vllm_musa.v1.sample.topk_topp_sampler import _is_uniform_top_k_50
@@ -60,13 +60,43 @@ def _assert_native_parity(probs: torch.Tensor) -> None:
 
 
 @requires_musa
-@pytest.mark.parametrize("rows", [1, 4, 16, 64])
+@pytest.mark.parametrize("rows", [1, 4, 16, 64, 128, 256])
 def test_qwen_vocab_native_parity(rows: int) -> None:
     torch.manual_seed(1234 + rows)
     probs = torch.softmax(
         torch.randn((rows, 151936), device="musa", dtype=torch.float32), dim=-1
     )
     _assert_native_parity(probs)
+
+
+@requires_musa
+@pytest.mark.parametrize("rows", [16, 64, 128, 256])
+def test_radix_top_k_mask_matches_topk(rows: int) -> None:
+    from vllm_musa._custom_ops import top_k_mask_logits_radix
+
+    torch.manual_seed(9000 + rows)
+    logits = (torch.randn((rows, 248320), device="musa", dtype=torch.float32) * 2).to(
+        torch.bfloat16
+    )
+    reference = logits.clone()
+    threshold = reference.topk(50, dim=-1).values[:, -1:]
+    expected_masked = reference < threshold
+
+    actual = top_k_mask_logits_radix(logits, 50)
+    assert actual is not None
+    torch.musa.synchronize()
+
+    assert torch.equal(torch.isinf(actual), expected_masked)
+    assert torch.equal(actual[~expected_masked], reference[~expected_masked])
+
+
+@requires_musa
+def test_radix_top_k_mask_declines_unsupported_rows() -> None:
+    from vllm_musa._custom_ops import top_k_mask_logits_radix
+
+    logits = torch.zeros((300, 248320), device="musa", dtype=torch.bfloat16)
+    assert top_k_mask_logits_radix(logits, 50) is None
+    assert top_k_mask_logits_radix(logits[:4].contiguous(), 49) is None
 
 
 @requires_musa

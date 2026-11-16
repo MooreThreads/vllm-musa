@@ -85,6 +85,19 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.impl("musa_rubymine_top_k_renorm_probs", torch::kMUSA,
                 &musa_rubymine_top_k_renorm_probs);
 
+  musa_ops.def(
+      "musa_top_k_mask_logits(Tensor logits, Tensor! output, "
+      "Tensor? maybe_top_k_arr, int top_k_val) -> ()");
+  musa_ops.impl("musa_top_k_mask_logits", torch::kMUSA,
+                &musa_top_k_mask_logits);
+
+  musa_ops.def(
+      "musa_top_p_mask_logits(Tensor logits, Tensor! output, "
+      "Tensor? maybe_top_k_arr, int top_k_val, Tensor? maybe_top_p_arr, "
+      "float top_p_val) -> ()");
+  musa_ops.impl("musa_top_p_mask_logits", torch::kMUSA,
+                &musa_top_p_mask_logits);
+
   musa_ops.def("top_p_renorm_probs(Tensor probs, Tensor! renorm_probs, Tensor? maybe_top_p_arr, float top_p_val) -> ()");
   musa_ops.impl("top_p_renorm_probs", torch::kMUSA, &top_p_renorm_probs);
 
