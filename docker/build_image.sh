@@ -25,7 +25,7 @@ MTSHMEM_VERSION="${MTSHMEM_VERSION:-3.2.5.1}"
 # Python package indexes. MUSA/MT wheels (torch, torch_musa, mate, ...) resolve
 # from the internal Moore Threads index only; ordinary third-party wheels resolve
 # from public PyPI. See docker/musa.Dockerfile for why the two are not merged.
-PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple}"
+PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
 PIP_BOOTSTRAP_INDEX_URL="${PIP_BOOTSTRAP_INDEX_URL:-${PYPI_INDEX_URL}}"
 MUSA_PIP_INDEX_URL="${MUSA_PIP_INDEX_URL:-https://dl.mthreads.com/repo/api/pypi/pypi/simple}"
 

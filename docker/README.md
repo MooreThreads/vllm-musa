@@ -147,7 +147,7 @@ docker run --rm --entrypoint /bin/bash vllm-musa:test \
 | `MUSA_RUNTIME_VERSION` | `5.2` | MUSA runtime line as `major.minor`; derives apt package names (e.g. `musa-toolkit-5-2`). |
 | `MCCL_VERSION` | `2.4.0` | MCCL (collective communication library) version. |
 | `MTSHMEM_VERSION` | `3.2.5.1` | mtshmem version: ships the NVSHMEM bootstrap and transport plugins (uid, ibrc, ibgda) that DeepEP dlopens from `/usr/local/mtshmem/lib`. |
-| `PYPI_INDEX_URL` | `https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple` | Public index for ordinary third-party wheels **and** the vendored vLLM's dependencies. |
+| `PYPI_INDEX_URL` | `https://mirrors.aliyun.com/pypi/simple` | Public index for ordinary third-party wheels **and** the vendored vLLM's dependencies. |
 | `MUSA_PIP_INDEX_URL` | `https://dl.mthreads.com/repo/api/pypi/pypi/simple` | Moore Threads index for the MUSA/MT wheels. |
 | `VLLM_MUSA_GIT_PROXY` | `https://gh-proxy.org/` | Mirror for the vLLM/FlashInfer fetch that `setup.py` performs while building the image. Empty keeps the default; `0` fetches from github.com directly. |
 | `MOONCAKE_VERSION` | `0.3.14` | Exact `mooncake-transfer-engine-musa` version installed from `PYPI_INDEX_URL`. The wheel provides both the Transfer Engine and the Store bindings. |
