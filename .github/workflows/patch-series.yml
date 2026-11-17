@@ -9,6 +9,7 @@ on:
       - 'tools/patch_metadata.py'
       - 'vllm_musa/patches/**'
       - 'vllm_musa/kernels/sparse_mqa*.py'
+      - 'vllm_musa/optimization_contract/policy.py'
       - 'csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu'
       - 'tests/**'
   push:
@@ -22,6 +23,7 @@ on:
       - 'tools/patch_metadata.py'
       - 'vllm_musa/patches/**'
       - 'vllm_musa/kernels/sparse_mqa*.py'
+      - 'vllm_musa/optimization_contract/policy.py'
       - 'csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu'
       - 'tests/**'
 

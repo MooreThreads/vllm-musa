@@ -540,6 +540,16 @@ def test_sparse_scoring_only_reduces_a_larger_dense_window(
             "candidates", _tensor((4, 16, 1), "int32"), id="candidate_rank_three"
         ),
         pytest.param(
+            "candidates",
+            _tensor((4, 16), "int32", strides=(32, 2)),
+            id="candidate_inner_stride",
+        ),
+        pytest.param(
+            "candidates",
+            _tensor((4, 16), "int32", strides=(32, 1)),
+            id="candidate_row_stride",
+        ),
+        pytest.param(
             "candidates", _tensor((3, 16), "int32"), id="candidate_fewer_rows"
         ),
         pytest.param(

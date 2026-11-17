@@ -529,6 +529,8 @@ def try_candidate_indexer(
         or output.stride(1) != 1
         or candidates.ndim != 2
         or candidates.dtype not in (torch.int32, torch.int64)
+        or candidates.stride(1) != 1
+        or candidates.stride(0) != candidates.shape[1]
         or candidates.shape[0] < query.shape[0]
         or candidates.shape[1] == 0
         or candidates.shape[1] > 2048
