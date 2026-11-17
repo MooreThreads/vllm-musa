@@ -99,7 +99,10 @@ default: it works, but every request pays the extra redirect.
 
 A mirror that fails is abandoned after half of `VLLM_MUSA_GIT_RETRY_ATTEMPTS`
 (four attempts by default) and the fetch then retries github.com directly, so a
-flaky link costs time rather than failing the build. A mirrored attempt also carries git's low-speed guard: when the transfer
+flaky link costs time rather than failing the build. An attempt that fails after
+the whole stall window without receiving anything is not retried: an unreachable
+host answers nothing on the second try either, so the next candidate runs
+instead. A mirrored attempt also carries git's low-speed guard: when the transfer
 makes no progress for `VLLM_MUSA_GIT_PROXY_STALL_S` seconds the attempt fails and
 the direct fetch runs, while a steady slow transfer is left alone — a total
 timeout cannot tell those apart. The direct fetch keeps no guard, like any plain

@@ -28,6 +28,7 @@ from build_utils.git_proxy import (  # noqa: E402
     PROXY_ENV,
     candidate_commands,
     resolve_proxy,
+    resolve_stall_s,
 )
 
 third_party = Path("third_party")
@@ -367,6 +368,11 @@ EXT_MODULES = [
 class _CustomBuildExt(BuildExtension):
     """Custom build extension that clones third-party repositories before building."""
 
+    # A failed attempt that ran this long and received nothing did not fail
+    # transiently: the host never answered, and another attempt would wait out
+    # the same connect timeout, so the next candidate runs instead.
+    _SLOW_CONNECT_FAIL_S = 120
+
     def build_extensions(self):
         super().build_extensions()
         # The source tree serves editable installs; build_lib is what a wheel packs,
@@ -379,14 +385,35 @@ class _CustomBuildExt(BuildExtension):
             print(f"Recorded MUSA arch {MUSA_ARCH.name} in {path}")
 
     @staticmethod
-    def _retry_git_call(cmd, cwd, attempts, delay_s):
+    def _git_dir_bytes(cwd):
+        """Bytes held by the checkout's git directory, 0 without one."""
+        total = 0
+        for dirpath, _dirnames, filenames in os.walk(Path(cwd or ".") / ".git"):
+            for name in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                except OSError:
+                    continue
+        return total
+
+    @staticmethod
+    def _retry_git_call(cmd, cwd, attempts, delay_s, slow_fail_s=None):
         """Run one git command variant, retrying transient failures."""
+        if slow_fail_s is None:
+            slow_fail_s = _CustomBuildExt._SLOW_CONNECT_FAIL_S
         for attempt in range(1, attempts + 1):
+            started = time.monotonic()
+            received = _CustomBuildExt._git_dir_bytes(cwd)
             try:
                 subprocess.check_call(cmd, cwd=cwd)
                 return
             except subprocess.CalledProcessError:
                 if attempt == attempts:
+                    raise
+                if (
+                    time.monotonic() - started >= slow_fail_s
+                    and _CustomBuildExt._git_dir_bytes(cwd) == received
+                ):
                     raise
                 sleep_s = delay_s * attempt
                 print(
@@ -415,15 +442,22 @@ class _CustomBuildExt(BuildExtension):
         accepts the connection and then stops transferring fails the attempt
         instead of hanging the build; the direct attempt keeps no guard, like any
         plain ``git fetch``. The mirror gets half of the retry budget, because a
-        link that drops one connection often serves the next one.
+        link that drops one connection often serves the next one. An attempt that
+        fails after the whole stall window without receiving anything is not
+        retried: an unreachable host answers nothing the second time either.
         """
         attempts = max(1, int(os.environ.get("VLLM_MUSA_GIT_RETRY_ATTEMPTS") or "8"))
         delay_s = max(0, int(os.environ.get("VLLM_MUSA_GIT_RETRY_DELAY_S") or "10"))
-        candidates = candidate_commands(cmd)
+        stall_s = resolve_stall_s()
+        candidates = candidate_commands(cmd, stall_s=str(stall_s))
         for candidate in candidates[:-1]:
             try:
                 _CustomBuildExt._retry_git_call(
-                    candidate, cwd, _CustomBuildExt._mirror_attempts(attempts), delay_s
+                    candidate,
+                    cwd,
+                    _CustomBuildExt._mirror_attempts(attempts),
+                    delay_s,
+                    slow_fail_s=stall_s or _CustomBuildExt._SLOW_CONNECT_FAIL_S,
                 )
                 return
             except subprocess.CalledProcessError:

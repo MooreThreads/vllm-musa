@@ -220,6 +220,16 @@ case " $* " in
 esac
 case "${mode}" in
   ok) exit 0 ;;
+  stalled)
+    sleep "${FAKE_GIT_SLEEP:-2}"
+    exit 128
+    ;;
+  stalled-with-progress)
+    mkdir -p .git/objects/tmp
+    head -c 64 /dev/zero > .git/objects/tmp/blob
+    sleep "${FAKE_GIT_SLEEP:-2}"
+    exit 128
+    ;;
   *) exit 128 ;;
 esac
 """
@@ -243,6 +253,7 @@ def _build_ext_class():
         "BuildExtension": object,
         "candidate_commands": candidate_commands,
         "resolve_proxy": resolve_proxy,
+        "resolve_stall_s": resolve_stall_s,
         "PROXY_ENV": PROXY_ENV,
     }
     exec(compile(module, "setup.py", "exec"), namespace)
@@ -311,6 +322,38 @@ def test_disabled_mirror_fetches_directly_once(tmp_path, monkeypatch):
     calls = _calls(log)
     assert len(calls) == 1, calls
     assert "-c url." not in calls[0]
+
+
+def test_a_received_nothing_attempt_is_not_retried(tmp_path, monkeypatch):
+    """An unreachable host answers nothing the second time either."""
+    monkeypatch.delenv(PROXY_ENV, raising=False)
+    log = _fake_git(tmp_path, monkeypatch, mirror="stalled")
+    monkeypatch.setenv(STALL_ENV, "1")
+    (tmp_path / ".git").mkdir()
+    _build_ext_class()._git_check_call_with_retries(
+        ["git", "fetch", "--depth", "1", "origin", "abc123"], cwd=tmp_path
+    )
+    calls = _calls(log)
+    # One stalled mirror attempt, then the direct fetch: no second mirror try.
+    assert len(calls) == 2, calls
+    assert calls[0].startswith("-c url."), calls
+    assert not calls[1].startswith("-c url."), calls
+
+
+def test_an_attempt_that_received_data_is_retried(tmp_path, monkeypatch):
+    """A transfer that broke mid-flight is worth another attempt."""
+    monkeypatch.delenv(PROXY_ENV, raising=False)
+    log = _fake_git(tmp_path, monkeypatch, mirror="stalled-with-progress")
+    monkeypatch.setenv(STALL_ENV, "1")
+    (tmp_path / ".git").mkdir()
+    _build_ext_class()._git_check_call_with_retries(
+        ["git", "fetch", "--depth", "1", "origin", "abc123"], cwd=tmp_path
+    )
+    calls = _calls(log)
+    assert len(calls) == 3, calls
+    assert calls[0].startswith("-c url."), calls
+    assert calls[1].startswith("-c url."), calls
+    assert not calls[2].startswith("-c url."), calls
 
 
 def test_exhausted_attempts_raise_the_git_error(tmp_path, monkeypatch):
