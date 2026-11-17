@@ -8,22 +8,25 @@ Build only vllm._deepselect_C in the existing empty target mode. DeepSelect
 owns compiler selection and kernel compatibility; vLLM owns compilation,
 installation, and native torch.ops registration.
 ---
- CMakeLists.txt                                | 16 ++++++++++
+ CMakeLists.txt                                | 19 ++++++++++++
  cmake/external_projects/deepselect.cmake      | 31 +------------------
  .../external_projects/deepselect_source.cmake | 29 +++++++++++++++++
- setup.py                                      |  4 ++-
- 4 files changed, 49 insertions(+), 31 deletions(-)
+ setup.py                                      |  4 +++
+ 4 files changed, 53 insertions(+), 30 deletions(-)
  create mode 100644 cmake/external_projects/deepselect_source.cmake
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a71d7e1e5..bcc5e8ebec 100644
+index 3a71d7e1e5..79b3685536 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -11,6 +11,14 @@ cmake_minimum_required(VERSION 3.26)
+@@ -11,6 +11,17 @@ cmake_minimum_required(VERSION 3.26)
  # If you want to only build one target, make sure to install it manually:
  # cmake --build . --target _C
  # cmake --install . --component _C
-+if(VLLM_TARGET_DEVICE STREQUAL "empty")
++if(DEFINED ENV{DEEPSELECT_SRC_DIR})
++  set(DEEPSELECT_SRC_DIR "$ENV{DEEPSELECT_SRC_DIR}")
++endif()
++if(VLLM_TARGET_DEVICE STREQUAL "empty" AND DEEPSELECT_SRC_DIR)
 +  include(cmake/external_projects/deepselect_source.cmake)
 +  if(NOT EXISTS "${deepselect_SOURCE_DIR}/cmake/vllm_musa_toolchain.cmake")
 +    message(FATAL_ERROR "DeepSelect build integration missing; set DEEPSELECT_SRC_DIR to the updated MUSA checkout")
@@ -34,21 +37,21 @@ index 3a71d7e1e5..bcc5e8ebec 100644
  project(vllm_extensions LANGUAGES CXX)
  
  set(CMAKE_CXX_STANDARD 20)
-@@ -47,6 +55,9 @@ install(CODE "set(CMAKE_INSTALL_LOCAL_ONLY TRUE)" ALL_COMPONENTS)
+@@ -47,6 +58,9 @@ install(CODE "set(CMAKE_INSTALL_LOCAL_ONLY TRUE)" ALL_COMPONENTS)
  # first match will be selected.  These should be kept in sync with setup.py.
  #
  set(PYTHON_SUPPORTED_VERSIONS "3.11" "3.12" "3.13" "3.14")
-+if(VLLM_TARGET_DEVICE STREQUAL "empty")
++if(VLLM_TARGET_DEVICE STREQUAL "empty" AND DEEPSELECT_SRC_DIR)
 +  list(APPEND PYTHON_SUPPORTED_VERSIONS "3.10")
 +endif()
  
  # Supported AMD GPU architectures.
  set(HIP_SUPPORTED_ARCHS "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1250;gfx1030;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201")
-@@ -95,6 +106,11 @@ endif()
+@@ -95,6 +109,11 @@ endif()
  #
  # Update cmake's `CMAKE_PREFIX_PATH` with torch location.
  #
-+if(VLLM_TARGET_DEVICE STREQUAL "empty")
++if(VLLM_TARGET_DEVICE STREQUAL "empty" AND DEEPSELECT_SRC_DIR)
 +  include("${deepselect_SOURCE_DIR}/cmake/vllm_musa.cmake")
 +  return()
 +endif()
@@ -131,17 +134,17 @@ index 0000000000..e2a9e3c890
 +FetchContent_MakeAvailable(deepselect)
 +message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
 diff --git a/setup.py b/setup.py
-index 37bfc3e41b..43b7d21f88 100644
+index 37bfc3e41b..84f3f273c3 100644
 --- a/setup.py
 +++ b/setup.py
-@@ -1652,7 +1652,9 @@ for rust_extension_path in get_precompiled_rust_extension_paths():
-     add_vllm_package_data(rust_extension_path.name)
+@@ -1653,6 +1653,10 @@ for rust_extension_path in get_precompiled_rust_extension_paths():
  
  if _no_device():
--    ext_modules = []
-+    deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
-+    deepselect_extension.py_limited_api = False
-+    ext_modules = [deepselect_extension]
+     ext_modules = []
++    if os.environ.get("DEEPSELECT_SRC_DIR"):
++        deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
++        deepselect_extension.py_limited_api = False
++        ext_modules = [deepselect_extension]
  
  if not ext_modules:
      cmdclass = {}
