@@ -286,7 +286,11 @@ FROM vllm_musa_deps AS vllm_musa_installed
 # runtime dependency install and the numpy re-pin below through the same public
 # index as the deps stage. PYPI_INDEX_URL comes from docker/build_image.sh.
 ARG PYPI_INDEX_URL
+# The vendored vLLM/FlashInfer fetch goes through a GitHub mirror by default.
+# An empty value keeps that default; pass 0 to fetch from github.com directly.
+ARG VLLM_MUSA_GIT_PROXY
 ENV PIP_INDEX_URL=${PYPI_INDEX_URL}
+ENV VLLM_MUSA_GIT_PROXY=${VLLM_MUSA_GIT_PROXY}
 
 COPY . /vllm-workspace
 # Before the native build: the arch variables above must name one arch from

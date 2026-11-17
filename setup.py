@@ -123,11 +123,10 @@ def develop_dynamic_library(package_name, source_dir="./", target_override=None)
 class _RepoInfo:
     """Configuration for a third-party git repository."""
 
-    def __init__(self, name, git_repository, git_tag, git_shallow=False):
+    def __init__(self, name, git_repository, git_tag):
         self.name = name
         self.git_repository = git_repository
         self.git_tag = git_tag
-        self.git_shallow = git_shallow
         self.source_dir = third_party / name
 
 
@@ -135,14 +134,12 @@ _VLLM_REPO = _RepoInfo(
     name="vllm",
     git_repository="https://github.com/vllm-project/vllm.git",
     git_tag=_PINS.get("VLLM_COMMIT", _PINS["VLLM_TAG"]),
-    git_shallow=False,
 )
 
 _FLASHINFER_REPO = _RepoInfo(
     name="flashinfer",
     git_repository="https://github.com/flashinfer-ai/flashinfer.git",
     git_tag=_PINS["FLASHINFER_COMMIT"],
-    git_shallow=False,
 )
 
 INCLUDE_DIRS = [
@@ -382,15 +379,13 @@ class _CustomBuildExt(BuildExtension):
             print(f"Recorded MUSA arch {MUSA_ARCH.name} in {path}")
 
     @staticmethod
-    def _retry_git_call(cmd, cwd, cleanup_path, attempts, delay_s, timeout_s=None):
+    def _retry_git_call(cmd, cwd, attempts, delay_s):
         """Run one git command variant, retrying transient failures."""
         for attempt in range(1, attempts + 1):
             try:
-                subprocess.check_call(cmd, cwd=cwd, timeout=timeout_s)
+                subprocess.check_call(cmd, cwd=cwd)
                 return
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                if cleanup_path is not None:
-                    shutil.rmtree(cleanup_path, ignore_errors=True)
+            except subprocess.CalledProcessError:
                 if attempt == attempts:
                     raise
                 sleep_s = delay_s * attempt
@@ -402,56 +397,73 @@ class _CustomBuildExt(BuildExtension):
                 time.sleep(sleep_s)
 
     @staticmethod
-    def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):
+    def _git_check_call_with_retries(cmd, cwd=None):
         """Run a network git command, through the GitHub mirror when enabled.
 
         The mirror is tried first and a direct connection last, so a mirror that
         fails costs time instead of breaking the build. Set
-        ``VLLM_MUSA_GIT_PROXY=0`` to skip the mirror, and
-        ``VLLM_MUSA_GIT_PROXY_TIMEOUT_S`` to stop waiting on a mirror that hangs
-        (the mirror is only bounded by that timeout, never the direct clone).
+        ``VLLM_MUSA_GIT_PROXY=0`` to skip the mirror. A mirrored attempt carries
+        git's low-speed guard (``VLLM_MUSA_GIT_PROXY_STALL_S``), so a mirror that
+        accepts the connection and then stops transferring fails the attempt
+        instead of hanging the build; the direct attempt keeps no guard, like any
+        plain ``git fetch``.
         """
         attempts = max(1, int(os.environ.get("VLLM_MUSA_GIT_RETRY_ATTEMPTS") or "8"))
         delay_s = max(0, int(os.environ.get("VLLM_MUSA_GIT_RETRY_DELAY_S") or "10"))
-        timeout_s = float(os.environ.get("VLLM_MUSA_GIT_PROXY_TIMEOUT_S") or "0")
-        timeout_s = timeout_s if timeout_s > 0 else None
         candidates = candidate_commands(cmd)
         for candidate in candidates[:-1]:
             # The mirror gets a short leash: a dead mirror must not spend the
             # whole retry budget before the direct fallback runs.
             try:
                 _CustomBuildExt._retry_git_call(
-                    candidate, cwd, cleanup_path, min(attempts, 2), delay_s, timeout_s
+                    candidate, cwd, min(attempts, 2), delay_s
                 )
                 return
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            except subprocess.CalledProcessError:
                 print(
                     f"Git command failed through {resolve_proxy()}; retrying "
                     f"directly (set {PROXY_ENV}=0 to skip the mirror).",
                     flush=True,
                 )
-        _CustomBuildExt._retry_git_call(
-            candidates[-1], cwd, cleanup_path, attempts, delay_s
-        )
+        _CustomBuildExt._retry_git_call(candidates[-1], cwd, attempts, delay_s)
 
     @staticmethod
-    def _clone_and_checkout(repo_path, repo_url, git_tag, git_shallow):
-        """Clone a git repository and checkout a specific tag/commit."""
+    def _clone_and_checkout(repo_path, repo_url, git_tag):
+        """Materialize a repository at exactly ``git_tag``, without its history.
+
+        Both pins are immutable commits, so fetching that one commit is all the
+        build needs. A full clone transfers the whole history -- several times
+        the size of the commit being built -- and that transfer is what stalls or
+        dies first on a slow link.
+        """
         repo_path.parent.mkdir(exist_ok=True)
-        if not repo_path.exists():
-            clone_cmd = ["git", "clone"]
-            if git_shallow:
-                clone_cmd += ["--depth", "1"]
-            clone_cmd += [repo_url, str(repo_path)]
-            _CustomBuildExt._git_check_call_with_retries(
-                clone_cmd, cleanup_path=repo_path
+        if not (repo_path / ".git").exists():
+            if repo_path.exists():
+                # git init in a populated directory would make every file
+                # untracked, and the `git clean -fdx` below would delete them.
+                raise RuntimeError(
+                    f"{repo_path} exists but is not a git checkout: remove it, or "
+                    "stage the pinned tree and build with SKIP_THIRD_PARTY=1"
+                )
+            repo_path.mkdir()
+            subprocess.check_call(["git", "init", "-q", str(repo_path)])
+            subprocess.check_call(
+                ["git", "remote", "add", "origin", repo_url], cwd=repo_path
             )
-            subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
-        else:
+        # Skip the network entirely when the pin is already in the object store.
+        if subprocess.call(
+            ["git", "cat-file", "-e", f"{git_tag}^{{commit}}"],
+            cwd=repo_path,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ):
             _CustomBuildExt._git_check_call_with_retries(
-                ["git", "fetch", "--all"], cwd=repo_path
+                ["git", "fetch", "--depth", "1", "origin", git_tag],
+                cwd=repo_path,
             )
-            subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
+        subprocess.check_call(
+            ["git", "checkout", "-f", "--detach", git_tag], cwd=repo_path
+        )
         subprocess.check_call(["git", "reset", "--hard", git_tag], cwd=repo_path)
         subprocess.check_call(["git", "clean", "-fdx"], cwd=repo_path)
 
@@ -552,18 +564,16 @@ class _CustomBuildExt(BuildExtension):
         else:
             proxy = resolve_proxy()
             via = f" through {proxy}" if proxy else ""
-            print(f"Cloning third-party repositories{via}...")
+            print(f"Fetching pinned third-party sources{via}...")
             self._clone_and_checkout(
                 _VLLM_REPO.source_dir,
                 _VLLM_REPO.git_repository,
                 _VLLM_REPO.git_tag,
-                _VLLM_REPO.git_shallow,
             )
             self._clone_and_checkout(
                 _FLASHINFER_REPO.source_dir,
                 _FLASHINFER_REPO.git_repository,
                 _FLASHINFER_REPO.git_tag,
-                _FLASHINFER_REPO.git_shallow,
             )
             print("Third-party repositories ready.")
 

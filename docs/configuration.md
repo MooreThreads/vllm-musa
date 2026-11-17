@@ -64,22 +64,23 @@ ccache --show-stats
 
 ## Third-party source clones
 
-`setup.py` clones the pinned upstream vLLM and FlashInfer revisions from
-github.com before it builds the MUSA extensions. On networks where github.com is
-slow or unreachable, those clones go through a GitHub mirror instead:
+`setup.py` materializes the pinned upstream vLLM and FlashInfer revisions from
+github.com before it builds the MUSA extensions. It fetches only the pinned
+commit (`git fetch --depth 1`), not the repository history, and routes that
+fetch through a GitHub mirror:
 
 | Variable | Purpose |
 |---|---|
-| `VLLM_MUSA_GIT_PROXY` | Mirror serving the github.com clones (default: `https://gh-proxy.com/`) |
-| `VLLM_MUSA_GIT_PROXY_TIMEOUT_S` | Seconds to wait on one mirrored clone attempt (default: `0`, no limit) |
+| `VLLM_MUSA_GIT_PROXY` | Mirror serving the github.com fetch (default: `https://gh-proxy.org/`) |
+| `VLLM_MUSA_GIT_PROXY_STALL_S` | Fail a mirrored attempt after this many seconds without transfer progress (default: `60`; `0` disables the guard) |
 
 The default mirror is used unless the variable says otherwise:
 
 ```bash
-# default: clone through https://gh-proxy.com/
+# default: fetch through https://gh-proxy.org/
 pip install . --no-build-isolation -v
 
-# clone github.com directly
+# fetch from github.com directly
 VLLM_MUSA_GIT_PROXY=0 pip install . --no-build-isolation -v
 
 # use a different mirror
@@ -88,15 +89,22 @@ VLLM_MUSA_GIT_PROXY=https://ghproxy.net/ pip install . --no-build-isolation -v
 
 The value must be a prefix that serves the full repository URL, that is
 `<mirror>https://github.com/<owner>/<repo>.git`. `0`, `false`, `off`, `no`,
-`none`, `disabled`, and an empty value disable it. The rewrite is passed to git
-for the duration of one command, so the clone keeps the canonical github.com
-remote and no persistent git configuration is written.
+`none`, and `disabled` disable it; an unset or empty value keeps the default. The
+rewrite is passed to git for the duration of one command, so the materialized
+tree keeps the canonical github.com remote and no persistent git configuration
+is written.
 
-A mirror that fails is abandoned after two attempts and the clone retries
-github.com directly, so an outage costs time rather than failing the build. A
-mirror that hangs instead of failing is only bounded by
-`VLLM_MUSA_GIT_PROXY_TIMEOUT_S`; set it when the mirror stalls. The timeout
-bounds mirrored attempts only, never the direct clone or any other build step.
+A mirror that fails is abandoned after up to two attempts and the fetch then
+retries github.com directly, so an outage costs time rather than failing the
+build. A mirrored attempt also carries git's low-speed guard: when the transfer
+makes no progress for `VLLM_MUSA_GIT_PROXY_STALL_S` seconds the attempt fails and
+the direct fetch runs, while a steady slow transfer is left alone — a total
+timeout cannot tell those apart. The direct fetch keeps no guard, like any plain
+`git fetch`.
+
+Because only the pinned commit is transferred, the build no longer downloads the
+upstream history. That transfer, not the mirror, is the dominant cost of a
+source install on a restricted network.
 
 ## Scheduler and graph settings
 
