@@ -20,7 +20,7 @@ PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/
 MUSA_PIP_INDEX_URL="${MUSA_PIP_INDEX_URL:-https://dl.mthreads.com/repo/api/pypi/pypi/simple}"
 
 # GitHub mirror for the vendored vLLM/FlashInfer fetch performed by setup.py.
-# Leave empty for setup.py's default (https://gh-proxy.com/), or set 0 to fetch
+# Leave empty for setup.py's default (https://gh-proxy.org/), or set 0 to fetch
 # from github.com directly.
 VLLM_MUSA_GIT_PROXY="${VLLM_MUSA_GIT_PROXY:-}"
 

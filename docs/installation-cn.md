@@ -72,7 +72,7 @@ pip install . --no-build-isolation -v
 在已有环境中，请先将 torchada 升级到 `requirements/common.txt` 固定的版本：`setup.py` 在构建时导入 `torchada.arch`。
 
 构建时会从 github.com 获取固定版本的上游 vLLM 和 FlashInfer 提交（不含历史），
-默认经由 `https://gh-proxy.com/` 代理。设置 `VLLM_MUSA_GIT_PROXY=0` 可直连
+默认经由 `https://gh-proxy.org/` 代理。设置 `VLLM_MUSA_GIT_PROXY=0` 可直连
 github.com，也可以将其设为其他镜像前缀，详见
 [配置参考（英文）](configuration.md#third-party-source-clones)。
 

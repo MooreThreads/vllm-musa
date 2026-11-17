@@ -81,7 +81,7 @@ In an existing environment, upgrade torchada to the `requirements/common.txt` pi
 first: `setup.py` imports `torchada.arch` at build time.
 
 The install fetches the pinned upstream vLLM and FlashInfer commits (without
-their history) from github.com, through `https://gh-proxy.com/` by default. Set
+their history) from github.com, through `https://gh-proxy.org/` by default. Set
 `VLLM_MUSA_GIT_PROXY=0` to fetch github.com directly, or set it to another
 mirror base URL; see
 [Configuration](configuration.md#third-party-source-clones).

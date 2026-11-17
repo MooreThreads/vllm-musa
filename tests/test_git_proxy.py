@@ -31,7 +31,7 @@ REWRITE = f"url.{DEFAULT_PROXY}{GITHUB_BASE}.insteadOf={GITHUB_BASE}"
 
 def test_unset_uses_the_default_mirror(monkeypatch):
     monkeypatch.delenv(PROXY_ENV, raising=False)
-    assert resolve_proxy() == DEFAULT_PROXY == "https://gh-proxy.com/"
+    assert resolve_proxy() == DEFAULT_PROXY == "https://gh-proxy.org/"
 
 
 @pytest.mark.parametrize("value", ["", "  ", "1", "true", "ON", "yes", "default"])
@@ -299,7 +299,7 @@ def test_fetch_goes_through_the_mirror_when_it_works(tmp_path, monkeypatch):
     )
     calls = _calls(log)
     assert len(calls) == 1, calls
-    assert calls[0].startswith("-c url.https://gh-proxy.com/"), calls
+    assert calls[0].startswith(f"-c url.{DEFAULT_PROXY}"), calls
 
 
 def test_mirror_failure_falls_back_to_a_direct_fetch(tmp_path, monkeypatch):

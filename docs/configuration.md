@@ -71,7 +71,7 @@ fetch through a GitHub mirror:
 
 | Variable | Purpose |
 |---|---|
-| `VLLM_MUSA_GIT_PROXY` | Mirror serving the github.com fetch (default: `https://gh-proxy.com/`) |
+| `VLLM_MUSA_GIT_PROXY` | Mirror serving the github.com fetch (default: `https://gh-proxy.org/`) |
 | `VLLM_MUSA_GIT_PROXY_STALL_S` | Fail a mirrored attempt after this many seconds without transfer progress (default: `60`; `0` disables the guard) |
 | `VLLM_MUSA_GIT_RETRY_ATTEMPTS` | Attempts per candidate (default: `8`); the mirror gets half of them |
 | `VLLM_MUSA_GIT_RETRY_DELAY_S` | Base retry delay (default: `10`), multiplied by the attempt number |
@@ -79,7 +79,7 @@ fetch through a GitHub mirror:
 The default mirror is used unless the variable says otherwise:
 
 ```bash
-# default: fetch through https://gh-proxy.com/
+# default: fetch through https://gh-proxy.org/
 pip install . --no-build-isolation -v
 
 # fetch from github.com directly
@@ -94,8 +94,10 @@ The value must be a prefix that serves the full repository URL, that is
 `none`, and `disabled` disable it; an unset or empty value keeps the default. The
 rewrite is passed to git for the duration of one command, so the materialized
 tree keeps the canonical github.com remote and no persistent git configuration
-is written. `https://gh-proxy.org/` is the same service behind a 301 to the
-default: it works, but every request pays the extra redirect.
+is written. `https://gh-proxy.com/` is the second entry point of the same
+service: the git endpoints are answered directly by both hosts, so the choice is
+about which one the local network reaches, not about a redirect on every
+request.
 
 A mirror that fails is abandoned after half of `VLLM_MUSA_GIT_RETRY_ATTEMPTS`
 (four attempts by default) and the fetch then retries github.com directly, so a
