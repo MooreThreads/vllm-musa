@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 17 Nov 2026 14:10:00 +0800
+Subject: [PATCH] MUSA: pad the QSA BLOCK_M=8 wmma tile to 16
+
+MUSA Triton lowers a BLOCK_M == 8 dot to mthreads_wmma, whose slice-layout
+offset emission is unimplemented (assert in emitOffsetForSliceLayout). QSA
+sparse attention therefore aborts at compile time whenever group_size is
+5-8, e.g. six query heads over one KV head.
+
+Pad only that tile to 16 so the dots take the mthreads_sqmma path instead.
+Group sizes 1, 2 and 4 keep their current tiles, and 9-16 were already 16,
+so no other deployment changes. Padded rows stay masked and are never
+written, so accuracy is unaffected.
+
+Verified on MTT S5000 (torch 2.11.0.post2+musa5.2.0, triton 3.2.0):
+group_size 6 now runs with max_abs 1.07e-2 against an fp32 reference and no
+element above atol 0.02; 1/2/4/5/7/8 all pass, and 1/2/4 keep byte-identical
+TTGIR and bit-identical output.
+---
+ vllm/models/qwen4_exp/nvidia/ops/qsa.py | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/vllm/models/qwen4_exp/nvidia/ops/qsa.py b/vllm/models/qwen4_exp/nvidia/ops/qsa.py
+index 00d303af6f..7cd87e6937 100644
+--- a/vllm/models/qwen4_exp/nvidia/ops/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/ops/qsa.py
+@@ -673,6 +673,12 @@ def qsa_sparse_paged_attention(
+ 
+     group_size = q.shape[1] // k_cache.shape[2]
+     block_m = triton.next_power_of_2(group_size)
++    # MUSA Triton lowers BLOCK_M == 8 to mthreads_wmma, whose slice-layout
++    # offset emission is unimplemented (assert in emitOffsetForSliceLayout).
++    # Pad only that tile to 16 so the dots take the mthreads_sqmma path;
++    # padded rows stay masked, so results are unchanged.
++    if block_m == 8:
++        block_m = 16
+     selection_width = logical_indices.shape[1] - 1  # trailing column is the count
+     block_n, partial_warps, num_tiles, num_splits = _select_config(
+         q.shape[0], k_cache.shape[2], use_prefill_config, selection_width, is_fp8
+@@ -778,6 +784,12 @@ def warmup_qsa_sparse_paged_attention(
+     num_kv_heads = key_cache.shape[2]
+     group_size = num_query_heads // num_kv_heads
+     block_m = triton.next_power_of_2(group_size)
++    # MUSA Triton lowers BLOCK_M == 8 to mthreads_wmma, whose slice-layout
++    # offset emission is unimplemented (assert in emitOffsetForSliceLayout).
++    # Pad only that tile to 16 so the dots take the mthreads_sqmma path;
++    # padded rows stay masked, so results are unchanged.
++    if block_m == 8:
++        block_m = 16
+ 
+     # Every config the dispatch can pick for this group size.
+     profiles = {

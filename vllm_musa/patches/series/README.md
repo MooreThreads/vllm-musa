@@ -64,7 +64,8 @@ their v0.32 behavior still requires separate review. The historical observations
 below describe the earlier baseline, not a measured failure of these follow-ups.
 The DeepSeek-V4.1 W4AFP8 adaptation and overlap follow-ups are carried as
 `0203`–`0204` after this baseline, and the Qwen4Exp QSA migration as
-`0205`–`0211`. Hardware validation remains required.
+`0205`–`0210`, with the QSA `block_m` tile fix as `0212`.
+Hardware validation remains required.
 
 A patch may update several files when they form one atomic feature. The grouped
 entries are intentionally multi-file: `0037` contains
@@ -337,8 +338,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
 | `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
 | `0211-MUSA-keep-fused-MoE-even_Ks-loads-in-bounds.patch` | v0.32 new/updated | mask the fused MoE even_Ks A/B loads under the MUSA pipeliner |
+| `0212-MUSA-pad-the-QSA-BLOCK_M-8-wmma-tile-to-16.patch` | v0.32 new/updated | pad the QSA `block_m == 8` tile to 16 so group sizes 5-8 leave the unimplemented MUSA `mthreads_wmma` layout, while 1/2/4 keep their current tiles |
 
-Currently **211 patches** and **0 upstream entries** in `upstream/`.
+Currently **212 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
