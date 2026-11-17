@@ -5,16 +5,17 @@
 ``setup.py`` materializes the pinned upstream vLLM and FlashInfer revisions from
 github.com before it builds the MUSA extensions. On networks where github.com is
 slow or unreachable, that fetch dominates a source install. Mirror prefixes such
-as https://gh-proxy.org/ serve the same repository under
+as https://gh-proxy.com/ serve the same repository under
 ``<proxy>https://github.com/<owner>/<repo>.git``.
 
 The mirror is selected with ``VLLM_MUSA_GIT_PROXY``:
 
 * unset, empty, ``1``, ``true``, ``on``, ``yes`` or ``default`` -- use
-  :data:`DEFAULT_PROXY` (gh-proxy.org);
+  :data:`DEFAULT_PROXY` (gh-proxy.com);
 * ``0``, ``false``, ``off``, ``no``, ``none`` or ``disabled`` -- fetch from
   github.com directly;
 * anything else -- the mirror base URL to use instead, for example
+  ``https://gh-proxy.org/``, which redirects to the default, or
   ``https://ghproxy.net/``.
 
 Mirrored attempts also carry git's low-speed guard
@@ -34,7 +35,7 @@ import os
 from collections.abc import Sequence
 
 GITHUB_BASE = "https://github.com/"
-DEFAULT_PROXY = "https://gh-proxy.org/"
+DEFAULT_PROXY = "https://gh-proxy.com/"
 PROXY_ENV = "VLLM_MUSA_GIT_PROXY"
 STALL_ENV = "VLLM_MUSA_GIT_PROXY_STALL_S"
 DEFAULT_STALL_S = 60
