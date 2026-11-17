@@ -13,11 +13,11 @@ top-k dispatch.
 Write paged Triton logits directly as BF16 for compatible DeepSelect inputs.
 Retain FP32 output for native selection and unsupported DeepSelect layouts.
 ---
- .../layers/sparse_attn_indexer.py             | 115 +++++++++++++++++-
- 1 file changed, 109 insertions(+), 6 deletions(-)
+ .../layers/sparse_attn_indexer.py             | 116 +++++++++++++++++-
+ 1 file changed, 110 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 2092efce8a..ab59c15238 100644
+index 2092efce8a..9533f8ba0f 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -39,7 +39,9 @@ from vllm.model_executor.kernels.attention.dsa.candidate_blocks import (
@@ -321,22 +321,23 @@ index 2092efce8a..ab59c15238 100644
  ) -> None:
      seq_lens = decode_metadata.seq_lens.reshape(-1).to(torch.long)
      rows = min(q_deq.shape[0], seq_lens.numel(), topk_indices_buffer.shape[0])
-@@ -1561,6 +1646,14 @@ def _musa_fill_decode_topk_from_indexer_cache_capture(
+@@ -1561,6 +1646,15 @@ def _musa_fill_decode_topk_from_indexer_cache_capture(
          logits,
          torch.full((), float("-inf"), dtype=logits.dtype, device=logits.device),
      )
 +    if topk_backend == "deep_select":
-+        deep_select_topk(
++        _musa_select_indexer_topk(
 +            logits,
++            seq_lens[:rows].to(torch.int32),
++            topk_indices_buffer[:rows, :topk],
 +            topk,
-+            end=seq_lens[:rows].to(torch.int32),
-+            output_idx=topk_indices_buffer[:rows, :topk],
++            topk_backend,
 +        )
 +        return
      indices = torch.topk(logits, topk, dim=-1).indices.to(topk_indices_buffer.dtype)
      valid_counts = seq_lens[:rows].clamp(min=0, max=topk).unsqueeze(-1)
      rank_offsets = torch.arange(topk, device=kv_cache.device, dtype=torch.long)
-@@ -1583,6 +1676,7 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+@@ -1583,6 +1677,7 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
      max_model_len: int,
      topk_indices_buffer: torch.Tensor,
      use_fp4_cache: bool,
@@ -344,7 +345,7 @@ index 2092efce8a..ab59c15238 100644
  ) -> torch.Tensor:
      # Avoid logger calls in fallback forward paths; these functions may be
      # reached while TorchDynamo/CUDA Graph capture is active.
-@@ -1611,6 +1705,7 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+@@ -1611,6 +1706,7 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
              topk_tokens,
              head_dim,
              max_model_len,
@@ -352,7 +353,7 @@ index 2092efce8a..ab59c15238 100644
          ):
              raise RuntimeError(
                  "No graph-safe MUSA decode indexer top-k path for this indexer "
-@@ -1688,6 +1783,7 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1688,6 +1784,7 @@ def _musa_fill_exact_sparse_indexer_indices(
      topk_indices_buffer: torch.Tensor,
      use_fp4_cache: bool,
      use_musa_materialized_prefill: bool = False,
@@ -360,7 +361,7 @@ index 2092efce8a..ab59c15238 100644
  ) -> torch.Tensor:
      if _musa_try_fill_all_sparse_indexer_indices(
          hidden_states,
-@@ -1709,6 +1805,7 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1709,6 +1806,7 @@ def _musa_fill_exact_sparse_indexer_indices(
              max_model_len,
              topk_indices_buffer,
              use_fp4_cache,
@@ -368,7 +369,7 @@ index 2092efce8a..ab59c15238 100644
          )
  
      if use_fp4_cache or isinstance(q_quant, tuple):
-@@ -1760,6 +1857,7 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1760,6 +1858,7 @@ def _musa_fill_exact_sparse_indexer_indices(
                  topk_tokens,
                  head_dim,
                  use_musa_materialized_prefill,
@@ -376,7 +377,7 @@ index 2092efce8a..ab59c15238 100644
              ):
                  continue
              sub_chunks = _musa_split_prefill_chunk_per_request(chunk)
-@@ -1774,6 +1872,7 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1774,6 +1873,7 @@ def _musa_fill_exact_sparse_indexer_indices(
                  topk_indices_buffer[token_start:token_end, :topk_tokens],
                  topk_tokens,
                  head_dim,
@@ -384,7 +385,7 @@ index 2092efce8a..ab59c15238 100644
              ):
                  continue
              if q_deq is None:
-@@ -1794,6 +1893,7 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1794,6 +1894,7 @@ def _musa_fill_exact_sparse_indexer_indices(
                  chunk.cu_seqlen_ke,
                  topk_indices_buffer[token_start:token_end, :topk_tokens],
                  topk_tokens,
@@ -392,7 +393,7 @@ index 2092efce8a..ab59c15238 100644
              )
  
          if row_shard is not None:
-@@ -1809,6 +1909,7 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1809,6 +1910,7 @@ def _musa_fill_exact_sparse_indexer_indices(
              topk_tokens,
              head_dim,
              max_model_len,
@@ -400,7 +401,7 @@ index 2092efce8a..ab59c15238 100644
          ):
              if q_deq is None:
                  q_deq = q_quant.to(torch.float32)
-@@ -1822,6 +1923,7 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1822,6 +1924,7 @@ def _musa_fill_exact_sparse_indexer_indices(
                  topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
                  topk_tokens,
                  head_dim,
@@ -408,7 +409,7 @@ index 2092efce8a..ab59c15238 100644
              )
  
      return topk_indices_buffer
-@@ -2909,6 +3011,7 @@ class SparseAttnIndexer(CustomOp):
+@@ -2909,6 +3012,7 @@ class SparseAttnIndexer(CustomOp):
                      self.topk_indices_buffer,
                      self.use_fp4_cache,
                      self.use_musa_materialized_prefill,

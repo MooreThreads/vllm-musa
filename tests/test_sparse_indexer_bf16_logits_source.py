@@ -1,8 +1,88 @@
+import ast
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _indexer_source(filename: str) -> ast.Module:
+    source = ROOT / "third_party/vllm/vllm/model_executor/layers" / filename
+    if not source.is_file():
+        pytest.skip("requires the patched third_party/vllm source tree")
+    return ast.parse(source.read_text())
+
+
+@pytest.mark.parametrize("platform", ["musa", "cuda", "rocm", "cpu"])
+def test_topk_initialization_does_not_require_musa_api_on_in_tree_platforms(
+    platform: str,
+) -> None:
+    tree = _indexer_source("indexer_topk.py")
+    selector = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SparseIndexerTopk"
+    )
+    initializer = next(
+        node
+        for node in selector.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    assignment = next(
+        node
+        for node in initializer.body
+        if isinstance(node, ast.Assign)
+        and any(getattr(target, "attr", None) == "_is_musa" for target in node.targets)
+    )
+    is_musa = platform == "musa"
+    current_platform = SimpleNamespace(is_out_of_tree=lambda: is_musa)
+    if is_musa:
+        current_platform.is_musa = lambda: True
+    result = eval(
+        compile(ast.Expression(assignment.value), "indexer_topk.py", "eval"),
+        {"current_platform": current_platform},
+    )
+    assert result is is_musa
+
+
+def test_decode_reference_logits_keep_the_deepselect_layout_fallback() -> None:
+    function = next(
+        node
+        for node in _indexer_source("sparse_attn_indexer.py").body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_musa_fill_decode_topk_from_indexer_cache_capture"
+    )
+    branch = next(
+        node
+        for node in function.body
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "topk_backend == 'deep_select'"
+    )
+    selector = Mock()
+    lengths = Mock()
+    lengths.__getitem__ = Mock(return_value=lengths)
+    lengths.to.return_value = lengths
+    output = Mock()
+    output.__getitem__ = Mock(return_value=output)
+    logits = object()
+    namespace = {
+        "torch": SimpleNamespace(int32="int32"),
+        "logits": logits,
+        "seq_lens": lengths,
+        "topk_indices_buffer": output,
+        "rows": 2,
+        "topk": 512,
+        "topk_backend": "deep_select",
+        "_musa_select_indexer_topk": selector,
+        "deep_select_topk": Mock(side_effect=AssertionError("unguarded DeepSelect")),
+    }
+    body = [node for node in branch.body if not isinstance(node, ast.Return)]
+    exec(
+        compile(ast.Module(body=body, type_ignores=[]), "indexer.py", "exec"), namespace
+    )
+    selector.assert_called_once_with(logits, lengths, output, 512, "deep_select")
 
 
 @pytest.mark.parametrize(
