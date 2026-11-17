@@ -73,6 +73,8 @@ fetch through a GitHub mirror:
 |---|---|
 | `VLLM_MUSA_GIT_PROXY` | Mirror serving the github.com fetch (default: `https://gh-proxy.com/`) |
 | `VLLM_MUSA_GIT_PROXY_STALL_S` | Fail a mirrored attempt after this many seconds without transfer progress (default: `60`; `0` disables the guard) |
+| `VLLM_MUSA_GIT_RETRY_ATTEMPTS` | Attempts per candidate (default: `8`); the mirror gets half of them |
+| `VLLM_MUSA_GIT_RETRY_DELAY_S` | Base retry delay (default: `10`), multiplied by the attempt number |
 
 The default mirror is used unless the variable says otherwise:
 
@@ -95,9 +97,9 @@ tree keeps the canonical github.com remote and no persistent git configuration
 is written. `https://gh-proxy.org/` is the same service behind a 301 to the
 default: it works, but every request pays the extra redirect.
 
-A mirror that fails is abandoned after up to two attempts and the fetch then
-retries github.com directly, so an outage costs time rather than failing the
-build. A mirrored attempt also carries git's low-speed guard: when the transfer
+A mirror that fails is abandoned after half of `VLLM_MUSA_GIT_RETRY_ATTEMPTS`
+(four attempts by default) and the fetch then retries github.com directly, so a
+flaky link costs time rather than failing the build. A mirrored attempt also carries git's low-speed guard: when the transfer
 makes no progress for `VLLM_MUSA_GIT_PROXY_STALL_S` seconds the attempt fails and
 the direct fetch runs, while a steady slow transfer is left alone — a total
 timeout cannot tell those apart. The direct fetch keeps no guard, like any plain
