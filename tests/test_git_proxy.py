@@ -267,6 +267,15 @@ def _calls(log):
     return log.read_text(encoding="utf-8").splitlines()
 
 
+def test_the_mirror_gets_half_of_the_retry_budget():
+    build_ext = _build_ext_class()
+    # Flaky links need more than one retry; a dead mirror must not own the budget.
+    assert build_ext._mirror_attempts(8) == 4
+    assert build_ext._mirror_attempts(20) == 10
+    assert build_ext._mirror_attempts(2) == 2
+    assert build_ext._mirror_attempts(1) == 2
+
+
 def test_fetch_goes_through_the_mirror_when_it_works(tmp_path, monkeypatch):
     monkeypatch.delenv(PROXY_ENV, raising=False)
     log = _fake_git(tmp_path, monkeypatch)

@@ -397,6 +397,14 @@ class _CustomBuildExt(BuildExtension):
                 time.sleep(sleep_s)
 
     @staticmethod
+    def _mirror_attempts(attempts):
+        """Attempts the mirror gets before the direct fallback runs."""
+        # Enough to ride out a flaky link (a handshake that fails now may work on
+        # the next try), but not the whole budget: a mirror that is really down
+        # must not delay the direct fetch for the entire retry schedule.
+        return max(2, attempts // 2)
+
+    @staticmethod
     def _git_check_call_with_retries(cmd, cwd=None):
         """Run a network git command, through the GitHub mirror when enabled.
 
@@ -406,17 +414,16 @@ class _CustomBuildExt(BuildExtension):
         git's low-speed guard (``VLLM_MUSA_GIT_PROXY_STALL_S``), so a mirror that
         accepts the connection and then stops transferring fails the attempt
         instead of hanging the build; the direct attempt keeps no guard, like any
-        plain ``git fetch``.
+        plain ``git fetch``. The mirror gets half of the retry budget, because a
+        link that drops one connection often serves the next one.
         """
         attempts = max(1, int(os.environ.get("VLLM_MUSA_GIT_RETRY_ATTEMPTS") or "8"))
         delay_s = max(0, int(os.environ.get("VLLM_MUSA_GIT_RETRY_DELAY_S") or "10"))
         candidates = candidate_commands(cmd)
         for candidate in candidates[:-1]:
-            # The mirror gets a short leash: a dead mirror must not spend the
-            # whole retry budget before the direct fallback runs.
             try:
                 _CustomBuildExt._retry_git_call(
-                    candidate, cwd, min(attempts, 2), delay_s
+                    candidate, cwd, _CustomBuildExt._mirror_attempts(attempts), delay_s
                 )
                 return
             except subprocess.CalledProcessError:
