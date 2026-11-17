@@ -75,6 +75,7 @@ def _store_candidate_blocks_kernel(
     TOPK: tl.constexpr,
     TILE: tl.constexpr,
 ):
+    """Preserve native short-row order and sort truncated selections."""
     row = tl.program_id(0)
     slots = tl.arange(0, TILE)
     column = tl.load(columns + row * stride_column + slots, slots < TOPK, other=-1)

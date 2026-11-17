@@ -44,6 +44,15 @@ def test_series_routes_small_topk_to_the_staged_radix_op() -> None:
     assert dispatch.index("return") < dispatch.index(fallback)
 
 
+def test_radix_topk_short_rows_preserve_token_order() -> None:
+    source = (ROOT / DSV4_TOPK).read_text()
+    short_row = source.split("if (row_len <= topk) {", 1)[1].split("}", 1)[0]
+    assert "fill_all_indices(" in short_row
+    assert "return;" in short_row
+    fill = source.split("void fill_all_indices(", 1)[1].split("\n}", 1)[0]
+    assert "rank < row_len ? rank : -1" in fill
+
+
 def _scores(torch, kind: str, rows: int, width: int, gen):
     if kind == "normal":
         return torch.randn(rows, width, generator=gen, device="musa")
@@ -71,6 +80,8 @@ def _selected_sets(out, seq_lens, topk: int) -> list[list[int]]:
         n = min(int(seq_lens[row]), topk)
         values = out[row, :topk].cpu().tolist()
         assert all(v == -1 for v in values[n:]), "padding must be -1"
+        if int(seq_lens[row]) <= topk:
+            assert values[:n] == list(range(n)), "short rows must stay in token order"
         sets.append(sorted(values[:n]))
     return sets
 
