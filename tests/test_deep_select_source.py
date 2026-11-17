@@ -77,7 +77,8 @@ def test_series_patch_keeps_the_cuda_capability_check() -> None:
         "self._is_cuda and not current_platform.is_device_capability_family(100)"
         in added
     )
-    assert "self._is_musa = current_platform.is_musa()" in added
+    assert "self._is_musa = (" in added
+    assert "current_platform.is_out_of_tree() and current_platform.is_musa()" in added
     assert "if not self._is_cuda and not self._is_musa:" in added
 
 
@@ -409,6 +410,7 @@ def test_plugin_does_not_register_deep_select() -> None:
 
 
 def test_microbenchmark_uses_vllm_extension_without_standalone_package() -> None:
+    assert not (ROOT / "tools/bench_indexer_topk_arms.py").exists()
     source = (ROOT / "benchmarks/benchmark_deepselect_topk.py").read_text()
     assert "import vllm._deepselect_C as deepselect_extension" in source
     assert "vllm_musa.deep_select" not in source
