@@ -75,6 +75,10 @@ def test_stall_guard_can_be_disabled(monkeypatch, value):
 def test_stall_window_is_configurable(monkeypatch):
     monkeypatch.setenv(STALL_ENV, "5")
     assert "http.lowSpeedTime=5" in mirror_config_args()
+    # A numeric knob: 1 is one second, not the on/off word.
+    monkeypatch.setenv(STALL_ENV, "1")
+    assert resolve_stall_s() == 1
+    assert "http.lowSpeedTime=1" in mirror_config_args()
 
 
 def test_empty_stall_window_keeps_the_default(monkeypatch):

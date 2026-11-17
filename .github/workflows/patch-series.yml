@@ -39,7 +39,7 @@ jobs:
         run: python -m pip install 'pytest>=8,<9'
       - name: Test metadata, manifest, and lineage
         run: |
-          python -m pytest -q tests/test_patch_metadata.py tests/test_musa_sync.py tests/test_musa_sync_upstream.py tests/test_manifest.py tests/test_manifest_completeness.py tests/test_ordered_series_lineage.py
+          python -m pytest -q tests/test_patch_metadata.py tests/test_musa_sync.py tests/test_musa_sync_upstream.py tests/test_manifest.py tests/test_manifest_completeness.py tests/test_ordered_series_lineage.py tests/test_git_proxy.py
           python tools/musa_sync.py report --metadata
           python tools/musa_sync.py check-series
       - name: Check patch contracts in runtime test modules

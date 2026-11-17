@@ -42,6 +42,8 @@ DEFAULT_STALL_S = 60
 
 _DISABLED_VALUES = {"0", "false", "off", "no", "none", "disabled"}
 _ENABLED_VALUES = {"1", "true", "on", "yes", "default"}
+# The stall window is a number, so `1` is one second here, not "on".
+_STALL_DEFAULT_VALUES = {"true", "on", "yes", "default"}
 
 
 def resolve_proxy(value: str | None = None) -> str:
@@ -69,7 +71,7 @@ def resolve_stall_s(value: str | None = None) -> int:
     if value is None:
         value = os.environ.get(STALL_ENV)
     value = (value or "").strip().lower()
-    if not value or value in _ENABLED_VALUES:
+    if not value or value in _STALL_DEFAULT_VALUES:
         return DEFAULT_STALL_S
     if value in _DISABLED_VALUES:
         return 0
