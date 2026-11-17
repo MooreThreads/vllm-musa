@@ -6,8 +6,8 @@ Subject: [PATCH] enable indexer row sharding and bound candidate
 ---
  .../kernels/attention/dsa/candidate_blocks.py | 23 +++++++++++++++++--
  .../layers/sparse_attn_indexer.py             | 19 +++++++++++++++
- vllm/v1/attention/backends/mla/indexer.py     | 20 ++++++++++++----
- 3 files changed, 56 insertions(+), 6 deletions(-)
+ vllm/v1/attention/backends/mla/indexer.py     | 12 ++++++----
+ 3 files changed, 48 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/model_executor/kernels/attention/dsa/candidate_blocks.py b/vllm/model_executor/kernels/attention/dsa/candidate_blocks.py
 index b9cdc923b1..0037d811aa 100644
@@ -114,17 +114,10 @@ index 85e9b9a61c..6693701f85 100644
          if not _musa_try_fill_decode_topk_from_indexer_cache_native(
              q_quant[: metadata.num_decode_tokens],
 diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
-index 0909d292c1..c588db6f02 100644
+index 0909d292c1..c0d2237219 100644
 --- a/vllm/v1/attention/backends/mla/indexer.py
 +++ b/vllm/v1/attention/backends/mla/indexer.py
-@@ -1,5 +1,6 @@
- # SPDX-License-Identifier: Apache-2.0
- # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-+import os
- from dataclasses import dataclass
- from typing import Any
- 
-@@ -56,6 +57,10 @@ logger = init_logger(__name__)
+@@ -56,6 +56,10 @@ logger = init_logger(__name__)
  DSA_INDEXER_KV_DTYPES = ("fp8", "mxfp4")
  
  
@@ -135,23 +128,16 @@ index 0909d292c1..c588db6f02 100644
  def dsa_indexer_uses_fp4(vllm_config: VllmConfig) -> bool:
      """Whether the DeepSeek sparse indexer should use the MXFP4 K cache."""
      kv_dtype = vllm_config.attention_config.resolve_indexer_kv_dtype("fp8")
-@@ -251,7 +256,14 @@ def tp_prefill_row_sharding_supported(
+@@ -251,7 +255,7 @@ def tp_prefill_row_sharding_supported(
      """Whether replicated prefill rows may be sharded across TP ranks."""
      cudagraph_mode = vllm_config.compilation_config.cudagraph_mode or CUDAGraphMode.NONE
      return (
 -        current_platform.is_cuda()
-+        (
-+            current_platform.is_cuda()
-+            or _is_musa_platform()
-+        )
-+        and (
-+            not _is_musa_platform()
-+            or os.getenv("VLLM_MUSA_INDEXER_PREFILL_ROW_SHARDING", "1") != "0"
-+        )
++        (current_platform.is_cuda() or _is_musa_platform())
          and dcp_world_size == 1
          and not use_pcp
          and tp_size > 1
-@@ -938,7 +950,7 @@ def _supports_varlen_paged_mqa_logits() -> bool:
+@@ -938,7 +942,7 @@ def _supports_varlen_paged_mqa_logits() -> bool:
  
  
  def _supports_flattened_device_query_lens() -> bool:
@@ -160,7 +146,7 @@ index 0909d292c1..c588db6f02 100644
          # MUSA: the decode kernels read the per-token rows built from device
          # metadata, so the flattened path accepts device-decided query lengths.
          return True
-@@ -1748,10 +1760,10 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+@@ -1748,10 +1752,10 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
              # can fall back safely.
              schedule_metadata = (
                  None

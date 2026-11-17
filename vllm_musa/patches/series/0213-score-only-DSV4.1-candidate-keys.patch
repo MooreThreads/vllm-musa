@@ -88,7 +88,7 @@ index 6693701f85..2092efce8a 100644
          elif current_platform.is_rocm():
              if self.use_pcp and self.dcp_world_size > 1:
 diff --git a/vllm/v1/worker/gpu/cudagraph_utils.py b/vllm/v1/worker/gpu/cudagraph_utils.py
-index 1a9e29fb53..14e27fbea8 100644
+index 1a9e29fb53..421c57dbed 100644
 --- a/vllm/v1/worker/gpu/cudagraph_utils.py
 +++ b/vllm/v1/worker/gpu/cudagraph_utils.py
 @@ -78,6 +78,7 @@ class BatchExecutionDescriptor:
@@ -105,12 +105,12 @@ index 1a9e29fb53..14e27fbea8 100644
          self.varlen_decode = varlen_decode
 +        self.sparse_indexer_context_threshold = 0
 +        if current_platform.is_out_of_tree() and current_platform.is_musa():
-+            from vllm_musa.kernels.sparse_mqa_dispatch import (
-+                candidate_context_threshold,
++            from vllm_musa.optimization_contract.policy import (
++                deepseek_v41_indexer_context_threshold,
 +            )
 +
-+            self.sparse_indexer_context_threshold = candidate_context_threshold(
-+                vllm_config
++            self.sparse_indexer_context_threshold = (
++                deepseek_v41_indexer_context_threshold(vllm_config)
 +            )
          # DBO supports FULL CUDA graphs only.
          self.ubatch_runner = ubatch_runner

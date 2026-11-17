@@ -1,30 +1,11 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from vllm.config import VllmConfig
     from vllm.v1.worker.gpu.cudagraph_utils import BatchExecutionDescriptor
-
-
-def candidate_context_threshold(vllm_config: VllmConfig) -> int:
-    config = vllm_config.model_config.hf_text_config
-    if (
-        getattr(config, "model_type", None) != "deepseek_v41"
-        or getattr(config, "candidate_topk_blocks", 0) <= 0
-        or vllm_config.speculative_config is not None
-        or not vllm_config.use_v2_model_runner
-        or vllm_config.parallel_config.use_ubatching
-        or vllm_config.parallel_config.data_parallel_size != 1
-    ):
-        return 0
-    threshold = int(os.getenv("VLLM_MUSA_CANDIDATE_MIN_CONTEXT", "32768"))
-    if threshold < 0:
-        raise ValueError("VLLM_MUSA_CANDIDATE_MIN_CONTEXT must be nonnegative")
-    return threshold
 
 
 def use_candidate_indexer(
@@ -32,7 +13,7 @@ def use_candidate_indexer(
     threshold: int,
     scheduled_tokens: Sequence[int] | None = None,
 ) -> bool:
-    """Retain candidate filtering whenever a batch contains a long request."""
+    """Select long batches; zero retains routing without context specialization."""
     if threshold == 0:
         return True
     if scheduled_tokens is None:

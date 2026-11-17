@@ -25,6 +25,23 @@ dispatch = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(dispatch)
 
 
+def _load_contract_threshold():
+    path = ROOT / "vllm_musa/optimization_contract/policy.py"
+    function = next(
+        node
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "deepseek_v41_indexer_context_threshold"
+    )
+    namespace = {"Any": object}
+    tree = ast.Module(body=[function], type_ignores=[])
+    exec(compile(tree, str(path), "exec"), namespace)
+    return namespace[function.name]
+
+
+deepseek_v41_indexer_context_threshold = _load_contract_threshold()
+
+
 class _GraphMode(Enum):
     NONE = 0
     PIECEWISE = 1
@@ -137,15 +154,12 @@ def test_current_context_cutoff(computed, expected):
 
 
 @pytest.mark.parametrize("prompt_tokens", [4096, 8192, 16384])
-@pytest.mark.parametrize("threshold", [32768, 100000000])
-def test_short_requests_are_negative_controls_for_both_audit_policies(
-    prompt_tokens, threshold
-):
+def test_short_requests_use_the_original_indexer(prompt_tokens):
     for computed in range(0, prompt_tokens, 8192):
         scheduled = min(8192, prompt_tokens - computed)
-        assert not dispatch.use_candidate_indexer([computed], threshold, [scheduled])
+        assert not dispatch.use_candidate_indexer([computed], 32768, [scheduled])
     for computed in range(prompt_tokens, prompt_tokens + 1024):
-        assert not dispatch.use_candidate_indexer([computed], threshold, [1])
+        assert not dispatch.use_candidate_indexer([computed], 32768, [1])
 
 
 @pytest.mark.parametrize(
@@ -172,9 +186,7 @@ def test_mismatched_host_lengths_fail_before_graph_selection():
         dispatch.use_candidate_indexer([0], 32768, [1, 1])
 
 
-@pytest.mark.parametrize("threshold", [0, 8192, 32768, 65536])
-def test_configurable_cutoff(monkeypatch, threshold):
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_MIN_CONTEXT", str(threshold))
+def test_contract_context_cutoff():
     config = SimpleNamespace(
         model_config=SimpleNamespace(
             hf_text_config=SimpleNamespace(
@@ -185,10 +197,10 @@ def test_configurable_cutoff(monkeypatch, threshold):
         use_v2_model_runner=True,
         parallel_config=SimpleNamespace(use_ubatching=False, data_parallel_size=1),
     )
-    assert dispatch.candidate_context_threshold(config) == threshold
+    assert deepseek_v41_indexer_context_threshold(config) == 32768
 
 
-def test_default_cutoff_and_invalid_value(monkeypatch):
+def test_other_models_retain_unspecialized_routing():
     config = SimpleNamespace(
         model_config=SimpleNamespace(
             hf_text_config=SimpleNamespace(
@@ -199,13 +211,8 @@ def test_default_cutoff_and_invalid_value(monkeypatch):
         use_v2_model_runner=True,
         parallel_config=SimpleNamespace(use_ubatching=False, data_parallel_size=1),
     )
-    monkeypatch.delenv("VLLM_MUSA_CANDIDATE_MIN_CONTEXT", raising=False)
-    assert dispatch.candidate_context_threshold(config) == 32768
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_MIN_CONTEXT", "-1")
-    with pytest.raises(ValueError, match="nonnegative"):
-        dispatch.candidate_context_threshold(config)
     config.model_config.hf_text_config.model_type = "deepseek_v4"
-    assert dispatch.candidate_context_threshold(config) == 0
+    assert deepseek_v41_indexer_context_threshold(config) == 0
 
 
 @pytest.mark.parametrize(
@@ -227,7 +234,9 @@ def test_threshold_does_not_specialize_other_execution_paths(unsupported):
     )
     if unsupported == "no_candidates":
         config.model_config.hf_text_config.candidate_topk_blocks = 0
-    assert dispatch.candidate_context_threshold(config) == 0
+    threshold = deepseek_v41_indexer_context_threshold(config)
+    assert threshold == 0
+    assert dispatch.use_candidate_indexer([4095], threshold)
 
 
 @pytest.mark.parametrize("enabled", [False, True])

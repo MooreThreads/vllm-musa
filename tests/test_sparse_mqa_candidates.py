@@ -249,11 +249,8 @@ def scoring_calls(monkeypatch):
     )
 
 
-@pytest.mark.parametrize(("sparse_enabled", "dense_width"), [("0", 256), ("1", 64)])
-def test_dense_masked_consumer_filters_native_topk_output(
-    scoring_calls, monkeypatch, sparse_enabled, dense_width
-):
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", sparse_enabled)
+@pytest.mark.parametrize("dense_width", [64, 104])
+def test_dense_masked_consumer_filters_native_topk_output(scoring_calls, dense_width):
     scoring_calls.inputs["dense_width"] = dense_width
     scoring_calls.namespace["_score_and_select_rows"](**scoring_calls.inputs)
     scoring_calls.mask.assert_called_once()
@@ -267,10 +264,7 @@ def test_dense_masked_consumer_filters_native_topk_output(
 
 
 @pytest.mark.parametrize("sorted_unique", [False, True])
-def test_only_sorted_unique_candidates_skip_compaction(
-    scoring_calls, monkeypatch, sorted_unique
-):
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1")
+def test_only_sorted_unique_candidates_skip_compaction(scoring_calls, sorted_unique):
     scoring_calls.namespace["_score_and_select_rows"](
         **scoring_calls.inputs, candidates_sorted_unique=sorted_unique
     )
@@ -444,12 +438,11 @@ def test_fake_tensor_preserves_view_layout_and_metadata_values() -> None:
 @pytest.mark.parametrize("implicit_requests", [False, True])
 @pytest.mark.parametrize("identity_when_full", [False, True])
 def test_scoring_tiles_preserve_decode_request_row_offset(
-    monkeypatch, candidate_write, implicit_requests, identity_when_full
+    candidate_write, implicit_requests, identity_when_full
 ) -> None:
     namespace = _host_functions()
     launch = Mock()
     namespace["_score_and_select_rows"] = launch
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1")
     dense_width = 262144
     width = dense_width if candidate_write else 2048 * 8
     tile_rows = (256 << 20) // (width * 4)
@@ -746,11 +739,23 @@ def _paged_inputs(torch, block_size: int):
     return keys, scales, query, weights, table, cache.to("musa")
 
 
+def _pad_candidates_to_dense_window(torch, candidates, block_size, width):
+    columns = max(candidates.shape[1], (width + block_size - 1) // block_size)
+    padded = torch.full(
+        (candidates.shape[0], columns),
+        -1,
+        dtype=candidates.dtype,
+        device=candidates.device,
+    )
+    padded[:, : candidates.shape[1]].copy_(candidates)
+    return padded
+
+
 @pytest.mark.parametrize("cache_block", [64, 128])
 @pytest.mark.parametrize("candidate_block", [8, 16])
 @pytest.mark.parametrize("candidates_sorted_unique", [False, True])
 def test_sparse_mqa_matches_fp32_scores_and_dense_mask(
-    musa, monkeypatch, cache_block, candidate_block, candidates_sorted_unique
+    musa, cache_block, candidate_block, candidates_sorted_unique
 ):
     torch, module = musa
     keys, scales, query_cpu, weights_cpu, table_cpu, cache = _paged_inputs(
@@ -784,7 +789,6 @@ def test_sparse_mqa_matches_fp32_scores_and_dense_mask(
         candidates,
         candidate_block,
     )
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1")
     module._score_and_select(
         *args,
         sparse,
@@ -792,8 +796,21 @@ def test_sparse_mqa_matches_fp32_scores_and_dense_mask(
         False,
         candidates_sorted_unique=candidates_sorted_unique,
     )
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "0")
-    module._score_and_select(*args, dense, cache_block * 4, False)
+    module._score_and_select(
+        query,
+        cache,
+        weights,
+        table,
+        requests,
+        lengths,
+        _pad_candidates_to_dense_window(
+            torch, candidates, candidate_block, cache_block * 4
+        ),
+        candidate_block,
+        dense,
+        cache_block * 4,
+        False,
+    )
     actual = sparse.cpu().tolist()
     dense_rows = dense.cpu().tolist()
     for row, length in enumerate(lengths_cpu.tolist()):
@@ -884,7 +901,7 @@ def test_candidate_selection_respects_packed_bounds_and_pins_newest(musa, row_re
 @pytest.mark.parametrize("candidates_sorted_unique", [False, True])
 @pytest.mark.parametrize("implicit_requests", [False, True])
 def test_candidate_decode_graph_replays_updated_device_lengths(
-    musa, monkeypatch, candidates_sorted_unique, implicit_requests
+    musa, candidates_sorted_unique, implicit_requests
 ):
     torch, module = musa
     _, _, query, weights, table, cache = _paged_inputs(torch, 64)
@@ -897,7 +914,6 @@ def test_candidate_decode_graph_replays_updated_device_lengths(
         device="musa",
     )
     output = torch.empty((4, 16), dtype=torch.int32, device="musa")
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1")
     args = (
         query,
         cache,
@@ -936,7 +952,7 @@ def test_candidate_decode_graph_replays_updated_device_lengths(
 @pytest.mark.parametrize("row_offset", [0, 1, 3])
 @pytest.mark.parametrize("candidate_write", [False, True])
 def test_decode_request_mapping_matches_explicit_rows(
-    musa, monkeypatch, request_repeat, row_offset, candidate_write
+    musa, request_repeat, row_offset, candidate_write
 ):
     torch, module = musa
     _, _, query, weights, table, cache = _paged_inputs(torch, 64)
@@ -952,7 +968,6 @@ def test_decode_request_mapping_matches_explicit_rows(
     requests = torch.arange(4, dtype=torch.int32, device="musa") // request_repeat
     expected = torch.empty((4 - row_offset, 16), dtype=torch.int32, device="musa")
     actual = torch.empty_like(expected)
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1")
     args = query[row_offset:], cache, weights[row_offset:], table
     tail = lengths[row_offset:], candidates[row_offset:], 8
     module._score_and_select_rows(
@@ -1143,7 +1158,6 @@ def test_sorted_unique_candidates_do_not_sort(musa, monkeypatch):
     expected = torch.empty((4, 16), dtype=torch.int32, device="musa")
     actual = torch.empty_like(expected)
     args = query, cache, weights, table, requests, lengths, candidates, 8
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1")
     module._score_and_select(*args, expected, 256, False)
     monkeypatch.setattr(module, "_compact_candidate_blocks_kernel", None)
     module._score_and_select(*args, actual, 256, False, candidates_sorted_unique=True)
@@ -1154,7 +1168,7 @@ def test_sorted_unique_candidates_do_not_sort(musa, monkeypatch):
         assert selected[count:] == [-1] * (len(selected) - count)
 
 
-def test_producer_and_consumers_replay_across_full_coverage_boundary(musa, monkeypatch):
+def test_producer_and_consumers_replay_across_full_coverage_boundary(musa):
     torch, module = musa
     _, _, query, weights, table, cache = _paged_inputs(torch, 64)
     query, weights, table = query.to("musa"), weights.to("musa"), table.to("musa")
@@ -1163,7 +1177,6 @@ def test_producer_and_consumers_replay_across_full_coverage_boundary(musa, monke
     source_logits = torch.arange(256, device="musa", dtype=torch.float32).repeat(4, 1)
     candidates = torch.empty((4, 4), dtype=torch.int32, device="musa")
     output = torch.empty((4, 16), dtype=torch.int32, device="musa")
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1")
 
     def run():
         module.select_candidate_blocks(source_logits, None, lengths, 8, candidates)
@@ -1225,10 +1238,10 @@ def _assert_tied_candidate_selection(
 
 @pytest.mark.parametrize("dtype_name", ["int32", "int64"])
 @pytest.mark.parametrize("topk", [4, 16, 512])
-@pytest.mark.parametrize("sparse_enabled", ["0", "1"])
+@pytest.mark.parametrize("candidate_capacity", [4, 32])
 @pytest.mark.parametrize("dense_width", [32, 256])
 def test_masked_topk_pads_empty_partial_and_insufficient_rows(
-    musa, monkeypatch, dtype_name, topk, sparse_enabled, dense_width
+    musa, dtype_name, topk, candidate_capacity, dense_width
 ):
     torch, module = musa
     _, _, query, weights, table, cache = _paged_inputs(torch, 64)
@@ -1236,12 +1249,14 @@ def test_masked_topk_pads_empty_partial_and_insufficient_rows(
     weights = torch.zeros_like(weights, device="musa")
     host_lengths = [79, 1, 0, 29]
     host_candidates = [[0, -1, -1, -1], [-1] * 4, [7, -1, -1, -1], [3, -1, -1, -1]]
+    host_candidates = [
+        row + [-1] * (candidate_capacity - len(row)) for row in host_candidates
+    ]
     lengths = torch.tensor(host_lengths, dtype=torch.int32, device="musa")
     candidates = torch.tensor(host_candidates, dtype=torch.int32, device="musa")
     dtype = getattr(torch, dtype_name)
     storage = torch.full((4, topk + 8), -99, dtype=dtype, device="musa")
     output = storage[:, :topk]
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", sparse_enabled)
     module._score_and_select(
         query,
         cache,
@@ -1263,15 +1278,14 @@ def test_masked_topk_pads_empty_partial_and_insufficient_rows(
 
 
 @pytest.mark.parametrize("dtype_name", ["int32", "int64"])
-def test_dense_masked_topk_graph_replay_updates_padding(musa, monkeypatch, dtype_name):
+def test_dense_masked_topk_graph_replay_updates_padding(musa, dtype_name):
     torch, module = musa
     _, _, query, weights, table, cache = _paged_inputs(torch, 64)
     query, table = query.to("musa"), table.to("musa")
     weights = torch.zeros_like(weights, device="musa")
     lengths = torch.tensor([79, 1, 0, 29], dtype=torch.int32, device="musa")
-    candidates = torch.tensor([[0, -1, -1, -1]] * 4, dtype=torch.int32, device="musa")
+    candidates = torch.tensor([[0] + [-1] * 31] * 4, dtype=torch.int32, device="musa")
     output = torch.empty((4, 16), dtype=getattr(torch, dtype_name), device="musa")
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "0")
 
     def run():
         module._score_and_select(
@@ -1298,7 +1312,7 @@ def test_dense_masked_topk_graph_replay_updates_padding(musa, monkeypatch, dtype
         ([0, 1, 17, 129], [[0], [0], [2], [15]]),
         ([79, 29, 1, 0], [[0, 3], [3], [-1], [7]]),
     ):
-        padded = [row + [-1] * (4 - len(row)) for row in updated_candidates]
+        padded = [row + [-1] * (32 - len(row)) for row in updated_candidates]
         lengths.copy_(torch.tensor(updated_lengths, dtype=torch.int32))
         candidates.copy_(torch.tensor(padded, dtype=torch.int32))
         graph.replay()
@@ -1326,9 +1340,8 @@ def test_producer_canonical_order_preserves_tied_consumer_topk(
     candidates = storage[:, ::2]
     sparse = torch.empty((4, 4), dtype=getattr(torch, dtype_name), device="musa")
     dense = torch.empty_like(sparse)
-    monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1")
 
-    def consume(output):
+    def consume(output, candidate_rows):
         module._score_and_select(
             query,
             cache,
@@ -1336,7 +1349,7 @@ def test_producer_canonical_order_preserves_tied_consumer_topk(
             table,
             None,
             lengths,
-            candidates,
+            candidate_rows,
             block_size,
             output,
             width,
@@ -1366,17 +1379,17 @@ def test_producer_canonical_order_preserves_tied_consumer_topk(
 
     def run():
         module.select_candidate_blocks(source, None, lengths, block_size, candidates)
-        consume(sparse)
+        consume(sparse, candidates)
 
     def check(low_block):
         assert candidates.cpu().tolist() == [[low_block, 256]] * 4
         assert (storage[:, 1::2].cpu() == -99).all()
         first = low_block * block_size
         assert sparse.cpu().tolist() == [list(range(first, first + 4))] * 4
-        monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "0")
-        consume(dense)
+        consume(
+            dense, _pad_candidates_to_dense_window(torch, candidates, block_size, width)
+        )
         assert torch.equal(sparse.cpu(), dense.cpu())
-        monkeypatch.setenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1")
 
     run()
     check(1)

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 import torch
 from vllm.triton_utils import tl, triton
 
@@ -366,11 +364,7 @@ def _score_and_select_rows(
     if rows == 0:
         return
     width = _sparse_width(candidates.shape[1], candidate_block_size, dense_width)
-    sparse = (
-        not candidate_write
-        and width > 0
-        and os.getenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1") != "0"
-    )
+    sparse = not candidate_write and width > 0
     width = width if sparse else dense_width
     if width == 0:
         output.fill_(-1)
@@ -476,13 +470,7 @@ def _score_and_select(
     candidates_identity_when_full: bool = False,
 ) -> None:
     sparse_width = _sparse_width(candidates.shape[1], candidate_block_size, dense_width)
-    width = (
-        sparse_width
-        if not candidate_write
-        and sparse_width > 0
-        and os.getenv("VLLM_MUSA_CANDIDATE_SPARSE_MQA", "1") != "0"
-        else dense_width
-    )
+    width = sparse_width if not candidate_write and sparse_width > 0 else dense_width
     tile_rows = max(1, (256 << 20) // max(width * 4, 1))
     for start in range(0, query.shape[0], tile_rows):
         stop = min(start + tile_rows, query.shape[0])
