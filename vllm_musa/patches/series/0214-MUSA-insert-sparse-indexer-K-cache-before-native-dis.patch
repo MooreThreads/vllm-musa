@@ -9,10 +9,10 @@ Co-authored-by: OpenAI Codex <noreply@openai.com>
  1 file changed, 29 insertions(+)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 85e9b9a61c..5c3dd2aedd 100644
+index 2092efce8a..a1b9da3883 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
-@@ -2832,6 +2832,35 @@ class SparseAttnIndexer(CustomOp):
+@@ -2896,6 +2896,35 @@ class SparseAttnIndexer(CustomOp):
                  == "1"
              )
          ):
