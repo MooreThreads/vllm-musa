@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 6 Nov 2026 16:00:00 +0800
+Subject: [PATCH] MUSA: add the MATE Mega MoE FP8 experts backend
+
+Register mate_mega_moe as a block-FP8 MoE backend for intranode
+expert-parallel deployments. MATE runs dispatch, both expert GEMMs and
+combine in persistent kernels over a symmetric buffer, so the backend
+binds the passthrough all2all, keeps the loaded weight layout, and lets
+the experts repack the weights once the kernel is built.
+---
+ vllm/config/kernel.py                              |  9 +++++++--
+ vllm/model_executor/layers/fused_moe/oracle/fp8.py | 10 ++++++++++
+ vllm/model_executor/layers/quantization/fp8.py     |  4 ++++
+ 3 files changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/config/kernel.py b/vllm/config/kernel.py
+index 6e2d906fa3..643d6464b3 100644
+--- a/vllm/config/kernel.py
++++ b/vllm/config/kernel.py
+@@ -139,6 +139,7 @@ MoEBackend = Literal[
+     "triton_unfused",
+     "aiter",
+     "aiter_mega_moe",
++    "mate_mega_moe",
+     "aiter_triton_mxfp4_bf16",
+     "flydsl",
+     "hpc",
+@@ -156,6 +157,10 @@ FLASHINFER_MOE_EP_BACKENDS = frozenset(
+         FLASHINFER_MOE_EP_DEEP_GEMM,
+     }
+ )
++
++# MUSA: MATE Mega MoE dispatches, computes and combines in its own kernels.
++MATE_MEGA_MOE = "mate_mega_moe"
++SELF_DISPATCHING_MOE_BACKENDS = FLASHINFER_MOE_EP_BACKENDS | {MATE_MEGA_MOE}
+ # Those backends dispatch and combine themselves, so the framework must not
+ # run a separate all2all around them.
+ PASSTHROUGH_ALL2ALL_BACKEND: Final = "passthrough"
+@@ -204,7 +209,7 @@ def bind_passthrough_all2all_backend(
+     ``set_platform_defaults`` calls idempotent.
+     """
+     a2a = parallel_config.all2all_backend
+-    if moe_backend in FLASHINFER_MOE_EP_BACKENDS:
++    if moe_backend in SELF_DISPATCHING_MOE_BACKENDS:
+         if a2a == PASSTHROUGH_ALL2ALL_BACKEND:
+             return
+         if a2a != "allgather_reducescatter":
+@@ -223,7 +228,7 @@ def bind_passthrough_all2all_backend(
+     elif a2a == PASSTHROUGH_ALL2ALL_BACKEND:
+         raise ValueError(
+             f"all2all_backend={a2a!r} is only valid with a moe_backend that "
+-            f"dispatches and combines itself ({sorted(FLASHINFER_MOE_EP_BACKENDS)}),"
++            f"dispatches and combines itself ({sorted(SELF_DISPATCHING_MOE_BACKENDS)}),"
+             f" got moe_backend={moe_backend!r}."
+         )
+ 
+diff --git a/vllm/model_executor/layers/fused_moe/oracle/fp8.py b/vllm/model_executor/layers/fused_moe/oracle/fp8.py
+index 446825c590..5adc6cb866 100644
+--- a/vllm/model_executor/layers/fused_moe/oracle/fp8.py
++++ b/vllm/model_executor/layers/fused_moe/oracle/fp8.py
+@@ -63,6 +63,7 @@ class Fp8MoeBackend(Enum):
+     CPU = "CPU"
+     CPU_W8A8 = "CPU_W8A8"
+     HPC = "HPC"
++    MATE_MEGA_MOE = "MATE_MEGA_MOE"
+     # Dequantize-to-BF16 emulation for MXFP8 on devices without a native
+     # MXFP8 MoE kernel (e.g. ROCm). Weights pass through unchanged here.
+     EMULATION = "EMULATION"
+@@ -260,6 +261,12 @@ def backend_to_kernel_cls(
+ 
+         return [HPCExperts]
+ 
++    elif backend == Fp8MoeBackend.MATE_MEGA_MOE:
++        from vllm_musa.model_executor.layers.fused_moe.mate_mega_moe import (
++            MateMegaMoEExperts,
++        )
++
++        return [MateMegaMoEExperts]
+     else:
+         raise ValueError(f"Unknown FP8 MoE backend: {backend.value}")
+ 
+@@ -276,6 +283,7 @@ def map_fp8_backend(runner_backend: MoEBackend) -> Fp8MoeBackend:
+         "humming": Fp8MoeBackend.HUMMING,
+         "aiter": Fp8MoeBackend.AITER,
+         "hpc": Fp8MoeBackend.HPC,
++        "mate_mega_moe": Fp8MoeBackend.MATE_MEGA_MOE,
+     }
+     if backend := mapping.get(runner_backend):
+         return backend
+@@ -698,6 +706,8 @@ def convert_to_fp8_moe_kernel_format(
+             Fp8MoeBackend.BATCHED_VLLM_CUTLASS,
+             Fp8MoeBackend.XPU,
+             Fp8MoeBackend.HPC,
++            # MUSA: MATE Mega MoE repacks the weights when its experts load.
++            Fp8MoeBackend.MATE_MEGA_MOE,
+             # EMULATION dequantizes weights at runtime; NATIVE_MXFP8 consumes
+             # the MXFP8 weights as-is — neither needs a load-time layout change.
+             Fp8MoeBackend.EMULATION,
+diff --git a/vllm/model_executor/layers/quantization/fp8.py b/vllm/model_executor/layers/quantization/fp8.py
+index 784cdb52fc..758d91ea91 100644
+--- a/vllm/model_executor/layers/quantization/fp8.py
++++ b/vllm/model_executor/layers/quantization/fp8.py
+@@ -25,6 +25,7 @@ from vllm.model_executor.layers.fused_moe import (
+ from vllm.model_executor.layers.fused_moe.config import FusedMoEQuantConfig
+ from vllm.model_executor.layers.fused_moe.moe_output import UnfinalizedMoEOutput
+ from vllm.model_executor.layers.fused_moe.oracle.fp8 import (
++    Fp8MoeBackend,
+     convert_to_fp8_moe_kernel_format,
+     make_fp8_moe_kernel,
+     make_fp8_moe_quant_config,
+@@ -689,6 +690,9 @@ class Fp8MoEMethod(FusedMoEMethodBase):
+         replace_parameter(layer, f"w2_{self.weight_scale_name}", w2_scale)
+ 
+         self._init_moe_kernel(layer)
++        if self.fp8_backend == Fp8MoeBackend.MATE_MEGA_MOE:
++            # MUSA: the Mega MoE experts repack the weights they consume.
++            self.moe_kernel.fused_experts.process_weights_after_loading(layer)
+ 
+     def _init_moe_kernel(self, layer: RoutedExperts) -> None:
+         """Build the MoE kernel from the layer's current (converted) weights."""

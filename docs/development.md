@@ -73,6 +73,13 @@ is applied to live Python objects at import time. See
 [vllm_musa/patches/README.md](../vllm_musa/patches/README.md) for ordering and
 details.
 
+## Distributed runtime diagnostics
+
+The [MCCL grouped-collective reproducer](mccl-group-hang.md) isolates the
+small-message group hang from vLLM and documents the MUSA-only workaround.
+Run it only on leased GPUs; each failing case has a bounded timeout and a
+byte-exact ungrouped control.
+
 ## Issue reports
 
 Open a [GitHub issue](https://github.com/MooreThreads/vllm-musa/issues) with the
