@@ -2,6 +2,7 @@
 """Source-level coverage for the GLM-5.2 native indexer top-k path."""
 
 import ast
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -132,9 +133,12 @@ def test_musa_native_inserts_cache_before_exact_shortcut(
         "vllm_musa.kernels.sparse_mqa_dispatch",
         SimpleNamespace(candidate_path_enabled=lambda: False),
     )
-    tree = ast.parse(
-        _read("third_party/vllm/vllm/model_executor/layers/sparse_attn_indexer.py")
+    source_path = (
+        ROOT / "third_party/vllm/vllm/model_executor/layers/sparse_attn_indexer.py"
     )
+    if not source_path.is_file():
+        pytest.skip("requires the applied third_party/vllm tree")
+    tree = ast.parse(source_path.read_text())
     cls = next(
         n
         for n in tree.body
@@ -184,6 +188,7 @@ def test_musa_native_inserts_cache_before_exact_shortcut(
         is_out_of_tree=lambda: True,
     )
     namespace = dict(
+        os=os,
         current_platform=platform,
         get_forward_context=lambda: SimpleNamespace(
             attn_metadata=None if warmup else {"resolved": metadata}
