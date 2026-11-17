@@ -15,8 +15,10 @@ remain unchanged.
 vLLM-MUSA does not maintain a separate DeepSelect pin, download, or extension.
 
 The official repository is a placeholder until the adapted MUSA source is
-published. Set `DEEPSELECT_SRC_DIR` to the updated MUSA checkout for current
-builds; deployment-specific repository/revision changes belong only in vLLM's
+published. MUSA DeepSelect builds require an explicit, nonempty
+`DEEPSELECT_SRC_DIR` pointing to the updated MUSA checkout. Without it,
+vLLM's `empty` target builds no extensions and does not fetch DeepSelect.
+Deployment-specific repository/revision changes belong only in vLLM's
 existing `FetchContent` declaration. The explicit source directory takes
 precedence over dependency downloads and is not reset or updated by the build.
 Use a task-local writable source copy for remote builds, not a shared NFS
@@ -44,8 +46,9 @@ The source checkout must also contain `csrc/musa_kernels/topk_bf16.mu`; a Python
 wheel alone is not sufficient for the build. vLLM-MUSA applies its source patch
 series, then installs vLLM with its pre-existing `VLLM_TARGET_DEVICE=empty`
 mode. It does not introduce a MUSA build target, Torch-based platform detection,
-or GPU-architecture forwarding. In this mode, vLLM builds only `_deepselect_C`;
-the plugin still builds its other MUSA extensions through their existing path.
+or GPU-architecture forwarding. When `DEEPSELECT_SRC_DIR` is set, vLLM builds
+only `_deepselect_C`; the plugin still builds its other MUSA extensions through
+their existing path.
 vLLM fetches DeepSelect before CMake selects a compiler. DeepSelect's own
 toolchain entry selects MCC; its target entry supplies the PyTorch ABI,
 torch_musa includes/libraries, and kernel compile flags. vLLM's existing

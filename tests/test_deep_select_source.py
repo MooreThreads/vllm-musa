@@ -440,7 +440,7 @@ def test_build_provides_vllm_extension_from_deepselect_source() -> None:
     assert 'CMakeExtension(name="vllm._deepselect_C")' in build
     assert "deepselect_extension.py_limited_api = False" in build
     assert 'include("${deepselect_SOURCE_DIR}/cmake/vllm_musa.cmake")' in build
-    assert 'if(VLLM_TARGET_DEVICE STREQUAL "empty")' in build
+    assert 'if(VLLM_TARGET_DEVICE STREQUAL "empty" AND DEEPSELECT_SRC_DIR)' in build
     assert (
         'include("${deepselect_SOURCE_DIR}/cmake/vllm_musa_toolchain.cmake")' in build
     )
@@ -595,14 +595,18 @@ def test_vllm_build_does_not_add_musa_platform_or_compiler_detection() -> None:
 
 @pytest.mark.parametrize("target", [None, "mp_31", "mp_22"])
 @pytest.mark.parametrize("empty", [False, True])
-def test_vllm_empty_mode_builds_only_deepselect_without_architecture_gating(
+@pytest.mark.parametrize("source_dir", [None, "", "/updated-musa-checkout"])
+def test_vllm_empty_mode_builds_deepselect_only_with_a_source_override(
     target: str | None,
     empty: bool,
+    source_dir: str | None,
 ) -> None:
     setup_patch = BUILD_PATCH.read_text().split("diff --git a/setup.py", 1)[1]
-    source = "if _no_device():\n" + _added_lines(setup_patch)
+    source = "if _no_device():\n    ext_modules = []\n" + _added_lines(setup_patch)
     extensions = [SimpleNamespace(name="existing")]
     environment = {} if target is None else {"MTGPU_TARGET": target}
+    if source_dir is not None:
+        environment["DEEPSELECT_SRC_DIR"] = source_dir
     namespace = {
         "_no_device": lambda: empty,
         "os": SimpleNamespace(environ=environment),
@@ -611,16 +615,19 @@ def test_vllm_empty_mode_builds_only_deepselect_without_architecture_gating(
     }
     exec(compile(source, str(BUILD_PATCH), "exec"), namespace)
     result = namespace["ext_modules"]
-    if empty:
+    if empty and source_dir:
         assert [extension.name for extension in result] == ["vllm._deepselect_C"]
         assert result[0].py_limited_api is False
+    elif empty:
+        assert result == []
     else:
         assert result is extensions
 
 
 @pytest.mark.parametrize("missing_toolchain", [False, True])
+@pytest.mark.parametrize("source_override", ["unset", "empty", "env", "cmake"])
 def test_deepselect_selects_compiler_before_vllm_project(
-    tmp_path: Path, missing_toolchain: bool
+    tmp_path: Path, missing_toolchain: bool, source_override: str
 ) -> None:
     patch = BUILD_PATCH.read_text()
     root_patch = patch.split("diff --git a/CMakeLists.txt", 1)[1]
@@ -636,7 +643,8 @@ def test_deepselect_selects_compiler_before_vllm_project(
     (backend / "CMakeLists.txt").write_text(
         'message(FATAL_ERROR "DeepSelect must not configure before vLLM")\n'
     )
-    if not missing_toolchain:
+    enabled = source_override in ("env", "cmake")
+    if enabled and not missing_toolchain:
         shutil.copy2(
             _deepselect_source("cmake/vllm_musa_toolchain.cmake"),
             backend / "cmake/vllm_musa_toolchain.cmake",
@@ -654,24 +662,33 @@ def test_deepselect_selects_compiler_before_vllm_project(
         + "\nproject(deepselect_toolchain LANGUAGES CXX)\n"
         + 'file(WRITE "${CMAKE_BINARY_DIR}/compiler" "${CMAKE_CXX_COMPILER}")\n'
     )
+    command = [
+        "cmake",
+        "-S",
+        str(tmp_path),
+        "-B",
+        str(tmp_path / "build"),
+        "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
+    ]
+    environment = {**os.environ, "MUSA_HOME": str(compiler.parent.parent)}
+    environment.pop("DEEPSELECT_SRC_DIR", None)
+    if source_override in ("env", "empty"):
+        environment["DEEPSELECT_SRC_DIR"] = str(backend) if enabled else ""
+        command.append("-DDEEPSELECT_SRC_DIR=/must-not-download")
+    elif source_override == "cmake":
+        command.append(f"-DDEEPSELECT_SRC_DIR={backend}")
     result = subprocess.run(
-        [
-            "cmake",
-            "-S",
-            str(tmp_path),
-            "-B",
-            str(tmp_path / "build"),
-            "-DDEEPSELECT_SRC_DIR=/must-not-download",
-        ],
-        env={
-            **os.environ,
-            "DEEPSELECT_SRC_DIR": str(backend),
-            "MUSA_HOME": str(compiler.parent.parent),
-        },
+        command,
+        env=environment,
         capture_output=True,
         text=True,
     )
-    if missing_toolchain:
+    if not enabled:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "DeepSelect is available" not in result.stdout
+        assert not (tmp_path / "build/_deps").exists()
+        assert (tmp_path / "build/compiler").read_text() != str(compiler)
+    elif missing_toolchain:
         assert result.returncode != 0
         assert "DeepSelect build integration missing" in result.stderr
     else:
