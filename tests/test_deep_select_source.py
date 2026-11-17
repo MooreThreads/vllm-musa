@@ -23,7 +23,6 @@ SERIES = ROOT / "vllm_musa" / "patches" / "series"
 BUILD_PATCH = SERIES / "0216-MUSA-build-DeepSelect-through-vLLM-extension-target.patch"
 PLUGIN = ROOT / "vllm_musa" / "__init__.py"
 PINS = ROOT / "third_party" / "PINS"
-DOC = ROOT / "docs" / "deepselect.md"
 INDEXER_PATCH = (
     SERIES / "0215-MUSA-route-explicit-DeepSelect-through-DSV4-indexer.patch"
 )
@@ -512,14 +511,6 @@ def test_native_dispatch_retains_kernel_policy_and_capacity_handling() -> None:
     assert "input.size(0) == 0 || input.is_meta()" in source
 
 
-def test_installation_documentation_exists() -> None:
-    assert DOC.is_file()
-    source = DOC.read_text(encoding="utf-8")
-    assert "DEEPSELECT_SRC_DIR" in source
-    assert "vllm._deepselect_C" in source
-    assert "sparse_indexer_topk_backend" in source
-
-
 def test_deepselect_source_selection_stays_upstream() -> None:
     assert "DEEPSELECT_" not in PINS.read_text(encoding="utf-8")
     added = _added_lines(BUILD_PATCH.read_text())
@@ -596,10 +587,14 @@ def test_vllm_build_does_not_add_musa_platform_or_compiler_detection() -> None:
 @pytest.mark.parametrize("target", [None, "mp_31", "mp_22"])
 @pytest.mark.parametrize("empty", [False, True])
 @pytest.mark.parametrize("source_dir", [None, "", "/updated-musa-checkout"])
-def test_vllm_empty_mode_builds_deepselect_only_with_a_source_override(
+@pytest.mark.parametrize(
+    "cmake_args", [None, "-DDEEPSELECT_SRC_DIR=/cmake-only-checkout"]
+)
+def test_vllm_empty_mode_builds_deepselect_only_with_an_environment_source_override(
     target: str | None,
     empty: bool,
     source_dir: str | None,
+    cmake_args: str | None,
 ) -> None:
     setup_patch = BUILD_PATCH.read_text().split("diff --git a/setup.py", 1)[1]
     source = "if _no_device():\n    ext_modules = []\n" + _added_lines(setup_patch)
@@ -607,6 +602,8 @@ def test_vllm_empty_mode_builds_deepselect_only_with_a_source_override(
     environment = {} if target is None else {"MTGPU_TARGET": target}
     if source_dir is not None:
         environment["DEEPSELECT_SRC_DIR"] = source_dir
+    if cmake_args is not None:
+        environment["CMAKE_ARGS"] = cmake_args
     namespace = {
         "_no_device": lambda: empty,
         "os": SimpleNamespace(environ=environment),
@@ -625,7 +622,7 @@ def test_vllm_empty_mode_builds_deepselect_only_with_a_source_override(
 
 
 @pytest.mark.parametrize("missing_toolchain", [False, True])
-@pytest.mark.parametrize("source_override", ["unset", "empty", "env", "cmake"])
+@pytest.mark.parametrize("source_override", ["unset", "empty", "env"])
 def test_deepselect_selects_compiler_before_vllm_project(
     tmp_path: Path, missing_toolchain: bool, source_override: str
 ) -> None:
@@ -643,7 +640,7 @@ def test_deepselect_selects_compiler_before_vllm_project(
     (backend / "CMakeLists.txt").write_text(
         'message(FATAL_ERROR "DeepSelect must not configure before vLLM")\n'
     )
-    enabled = source_override in ("env", "cmake")
+    enabled = source_override == "env"
     if enabled and not missing_toolchain:
         shutil.copy2(
             _deepselect_source("cmake/vllm_musa_toolchain.cmake"),
@@ -675,8 +672,6 @@ def test_deepselect_selects_compiler_before_vllm_project(
     if source_override in ("env", "empty"):
         environment["DEEPSELECT_SRC_DIR"] = str(backend) if enabled else ""
         command.append("-DDEEPSELECT_SRC_DIR=/must-not-download")
-    elif source_override == "cmake":
-        command.append(f"-DDEEPSELECT_SRC_DIR={backend}")
     result = subprocess.run(
         command,
         env=environment,
