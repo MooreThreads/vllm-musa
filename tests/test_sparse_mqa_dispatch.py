@@ -270,6 +270,7 @@ def test_short_context_uses_original_indexer_without_candidate_work(
         type_ignores=[],
     )
     original = Mock(return_value="original")
+    metadata = SimpleNamespace()
     namespace = dict(
         current_platform=SimpleNamespace(
             is_musa=lambda: True,
@@ -280,6 +281,9 @@ def test_short_context_uses_original_indexer_without_candidate_work(
             is_cpu=lambda: False,
         ),
         _musa_fill_exact_sparse_indexer_indices=original,
+        get_forward_context=lambda: SimpleNamespace(attn_metadata={"layer": metadata}),
+        _resolve_layer_name=lambda name: name,
+        DeepseekV32IndexerMetadata=SimpleNamespace,
     )
     exec(compile(ast.fix_missing_locations(tree), str(filename), "exec"), namespace)
     indexer = SimpleNamespace(
@@ -287,6 +291,7 @@ def test_short_context_uses_original_indexer_without_candidate_work(
         candidate_write=candidate_write,
         forward_cuda=Mock(return_value="candidate"),
         use_musa_native_indexer=True,
+        skip_k_cache_insert=True,
         k_cache=SimpleNamespace(prefix="layer", kv_cache=object()),
         topk_tokens=512,
         head_dim=128,

@@ -2,6 +2,7 @@
 """Source-level coverage for the GLM-5.2 native indexer top-k path."""
 
 import ast
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -123,9 +124,14 @@ def test_sparse_mla_sanitizes_indices_before_kv_loads():
     ],
 )
 def test_musa_native_inserts_cache_before_exact_shortcut(
-    warmup, skip, pcp, slots, k_rows, fp4, shard_decode
+    warmup, skip, pcp, slots, k_rows, fp4, shard_decode, monkeypatch
 ):
     """Exercise the real entry without importing GPU-dependent vLLM modules."""
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm_musa.kernels.sparse_mqa_dispatch",
+        SimpleNamespace(candidate_path_enabled=lambda: False),
+    )
     tree = ast.parse(
         _read("third_party/vllm/vllm/model_executor/layers/sparse_attn_indexer.py")
     )
@@ -175,6 +181,7 @@ def test_musa_native_inserts_cache_before_exact_shortcut(
     platform = SimpleNamespace(
         **{f"is_{name}": (lambda: False) for name in ("cuda", "xpu", "rocm", "cpu")},
         is_musa=lambda: True,
+        is_out_of_tree=lambda: True,
     )
     namespace = dict(
         current_platform=platform,
@@ -194,6 +201,7 @@ def test_musa_native_inserts_cache_before_exact_shortcut(
     )
     layer = SimpleNamespace(
         use_musa_native_indexer=True,
+        candidate_blocks=None,
         use_pcp=pcp,
         pcp_shard_decode_requests=shard_decode,
         skip_k_cache_insert=skip,
