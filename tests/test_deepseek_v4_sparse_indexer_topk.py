@@ -15,7 +15,6 @@ SERIES_PATCH = next(
         "*-MUSA-select-indexer-top-k-with-the-staged-radix-kern.patch"
     )
 )
-TOPK = 512
 
 
 def test_radix_topk_lives_in_its_own_dsv4_kernel_file() -> None:
@@ -45,6 +44,15 @@ def test_series_routes_small_topk_to_the_staged_radix_op() -> None:
     assert dispatch.index("return") < dispatch.index(fallback)
 
 
+def test_radix_topk_short_rows_preserve_token_order() -> None:
+    source = (ROOT / DSV4_TOPK).read_text()
+    short_row = source.split("if (row_len <= topk) {", 1)[1].split("}", 1)[0]
+    assert "fill_all_indices(" in short_row
+    assert "return;" in short_row
+    fill = source.split("void fill_all_indices(", 1)[1].split("\n}", 1)[0]
+    assert "rank < row_len ? rank : -1" in fill
+
+
 def _scores(torch, kind: str, rows: int, width: int, gen):
     if kind == "normal":
         return torch.randn(rows, width, generator=gen, device="musa")
@@ -72,6 +80,8 @@ def _selected_sets(out, seq_lens, topk: int) -> list[list[int]]:
         n = min(int(seq_lens[row]), topk)
         values = out[row, :topk].cpu().tolist()
         assert all(v == -1 for v in values[n:]), "padding must be -1"
+        if int(seq_lens[row]) <= topk:
+            assert values[:n] == list(range(n)), "short rows must stay in token order"
         sets.append(sorted(values[:n]))
     return sets
 
@@ -89,10 +99,13 @@ def _reference_sets(torch, scores, seq_lens, topk: int) -> list[list[int]]:
 
 
 @pytest.mark.parametrize("index_dtype", ["int32", "int64"])
+@pytest.mark.parametrize("topk", [512, 2048])
 @pytest.mark.parametrize(
     "kind", ["normal", "relu_sum", "ties", "constant", "narrow", "neg_zero"]
 )
-def test_dsv4_topk_matches_the_shared_kernel(kind: str, index_dtype: str) -> None:
+def test_dsv4_topk_matches_the_shared_kernel(
+    kind: str, index_dtype: str, topk: int
+) -> None:
     torch = pytest.importorskip("torch")
     if not (hasattr(torch, "musa") and torch.musa.is_available()):
         pytest.skip("MUSA-only test")
@@ -103,19 +116,23 @@ def test_dsv4_topk_matches_the_shared_kernel(kind: str, index_dtype: str) -> Non
     for rows, width, lens in (
         (25, 8192, lambda r: 8000 - r % 5),
         (5, 32768, lambda r: 32000 - r),
-        (7, 8192, lambda r: (100, 511, 512, 513, 600, 4097, 8192)[r]),
+        (
+            7,
+            8192,
+            lambda row: (0, 1, topk - 1, topk, topk + 1, 4097, 8192)[row],
+        ),
     ):
         scores = _scores(torch, kind, rows, width, gen)
         seq_lens = torch.tensor(
             [lens(r) for r in range(rows)], dtype=torch.int32, device="musa"
         )
-        shared = torch.full((rows, TOPK), -7, dtype=dtype, device="musa")
-        dsv4 = torch.full((rows, TOPK), -7, dtype=dtype, device="musa")
-        musa_ops.sparse_indexer_topk_decode(scores, seq_lens, shared, TOPK)
-        musa_ops.deepseek_v4_sparse_indexer_topk_decode(scores, seq_lens, dsv4, TOPK)
+        shared = torch.full((rows, topk), -7, dtype=dtype, device="musa")
+        dsv4 = torch.full((rows, topk), -7, dtype=dtype, device="musa")
+        musa_ops.sparse_indexer_topk_decode(scores, seq_lens, shared, topk)
+        musa_ops.deepseek_v4_sparse_indexer_topk_decode(scores, seq_lens, dsv4, topk)
 
-        assert _selected_sets(dsv4, seq_lens, TOPK) == _reference_sets(
-            torch, scores, seq_lens, TOPK
+        assert _selected_sets(dsv4, seq_lens, topk) == _reference_sets(
+            torch, scores, seq_lens, topk
         )
         if kind in ("normal", "relu_sum", "constant", "narrow"):
             # Without signed zeros the output matches the shared kernel bit for bit.

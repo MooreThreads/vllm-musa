@@ -337,8 +337,21 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
 | `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
 | `0211-MUSA-keep-fused-MoE-even_Ks-loads-in-bounds.patch` | v0.32 new/updated | mask the fused MoE even_Ks A/B loads under the MUSA pipeliner |
+| `0212-enable-indexer-row-sharding-and-bound-candidate.patch` | v0.32 new/updated | reuse total-row TP sharding on MUSA and bound candidate block scoring/top-k by visible row lengths |
+| `0213-score-only-DSV4.1-candidate-keys.patch` | v0.32 new/updated | route FP8 two-level indexers through paged candidate-only MQA scoring; specialize V2 graphs at the contract's fixed 32768-token context cutoff |
 
-Currently **211 patches** and **0 upstream entries** in `upstream/`.
+For non-speculative DSV4.1 on Model Runner V2 (DP1, no microbatching),
+the optimization contract fixes the context cutoff at `32768` tokens. All-short batches
+use the original indexer; a batch containing a query row at or above the cutoff
+retains candidate filtering. Chunked prefill checks the last scheduled query row.
+Both graph variants are captured separately. Other execution configurations
+do not use context-based graph specialization and retain candidate routing
+subject to the existing candidate-buffer and kernel eligibility checks.
+Candidate-only scoring is selected whenever its width is smaller than the dense
+window, and eligible prefill query rows are sharded across TP ranks. These
+decisions do not require environment-variable overrides.
+
+Currently **213 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and

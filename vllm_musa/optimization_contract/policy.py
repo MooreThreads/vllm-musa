@@ -91,6 +91,21 @@ def deepseek_v4_prefill_score_deepgemm_enabled() -> bool:
     return _DEEPSEEK_V4_PREFILL_SCORE_DEEPGEMM
 
 
+def deepseek_v41_indexer_context_threshold(vllm_config: Any) -> int:
+    """Return the V2 cutoff, or zero to retain unspecialized candidate routing."""
+    config = vllm_config.model_config.hf_text_config
+    if (
+        getattr(config, "model_type", None) != "deepseek_v41"
+        or getattr(config, "candidate_topk_blocks", 0) <= 0
+        or vllm_config.speculative_config is not None
+        or not vllm_config.use_v2_model_runner
+        or vllm_config.parallel_config.use_ubatching
+        or vllm_config.parallel_config.data_parallel_size != 1
+    ):
+        return 0
+    return 32768
+
+
 def prefers_feature(vllm_config: Any, feature: OptimizationFeature) -> bool:
     """Return whether a config's frozen contract prefers ``feature``."""
     return resolve_optimization_contract(vllm_config).prefers(feature)
@@ -200,8 +215,7 @@ def deepseek_v4_mtp_car_graph_staging_plan(
 def deepseek_v4_mtp_async_prefill_queue_fence_enabled(vllm_config: Any) -> bool:
     """Return whether this execution contract needs the async queue fence."""
     return prefers_feature(
-        vllm_config,
-        OptimizationFeature.DEEPSEEK_V4_TP8_MTP_ASYNC_PREFILL_QUEUE_FENCE
+        vllm_config, OptimizationFeature.DEEPSEEK_V4_TP8_MTP_ASYNC_PREFILL_QUEUE_FENCE
     )
 
 

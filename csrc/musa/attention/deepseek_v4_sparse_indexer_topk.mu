@@ -12,7 +12,7 @@
 
 namespace {
 
-constexpr int64_t kMaxTopK = 512;
+constexpr int64_t kMaxTopK = 2048;
 // Block width of the shared sparse_indexer_topk_kernel; the radix select emits
 // its per-thread output order.
 constexpr int kThreads = 256;
@@ -401,7 +401,7 @@ void deepseek_v4_sparse_indexer_topk_decode(const torch::Tensor &logits,
               "topk_indices must have at least one output row per logit row");
   TORCH_CHECK(topk >= 0 && topk <= topk_indices.size(1),
               "topk must fit topk_indices width");
-  TORCH_CHECK(topk <= kMaxTopK, "topk > 512 is not supported");
+  TORCH_CHECK(topk <= kMaxTopK, "topk > 2048 is not supported");
   TORCH_CHECK(logits.stride(1) == 1,
               "logits last dimension must be contiguous");
   TORCH_CHECK(topk_indices.stride(1) == 1,
