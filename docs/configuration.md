@@ -62,6 +62,58 @@ pip install -e . --no-build-isolation -v
 ccache --show-stats
 ```
 
+## Third-party source clones
+
+`setup.py` materializes the pinned upstream vLLM and FlashInfer revisions from
+github.com before it builds the MUSA extensions. It fetches only the pinned
+commit (`git fetch --depth 1`), not the repository history, and routes that
+fetch through a GitHub mirror:
+
+| Variable | Purpose |
+|---|---|
+| `VLLM_MUSA_GIT_PROXY` | Mirror serving the github.com fetch (default: `https://gh-proxy.org/`) |
+| `VLLM_MUSA_GIT_PROXY_STALL_S` | Fail a mirrored attempt after this many seconds without transfer progress (default: `60`; `0` disables the guard) |
+| `VLLM_MUSA_GIT_RETRY_ATTEMPTS` | Attempts per candidate (default: `8`); the mirror gets half of them |
+| `VLLM_MUSA_GIT_RETRY_DELAY_S` | Base retry delay (default: `10`), multiplied by the attempt number |
+
+The default mirror is used unless the variable says otherwise:
+
+```bash
+# default: fetch through https://gh-proxy.org/
+pip install . --no-build-isolation -v
+
+# fetch from github.com directly
+VLLM_MUSA_GIT_PROXY=0 pip install . --no-build-isolation -v
+
+# use a different mirror
+VLLM_MUSA_GIT_PROXY=https://ghproxy.net/ pip install . --no-build-isolation -v
+```
+
+The value must be a prefix that serves the full repository URL, that is
+`<mirror>https://github.com/<owner>/<repo>.git`. `0`, `false`, `off`, `no`,
+`none`, and `disabled` disable it; an unset or empty value keeps the default. The
+rewrite is passed to git for the duration of one command, so the materialized
+tree keeps the canonical github.com remote and no persistent git configuration
+is written. `https://gh-proxy.com/` is the second entry point of the same
+service: the git endpoints are answered directly by both hosts, so the choice is
+about which one the local network reaches, not about a redirect on every
+request.
+
+A mirror that fails is abandoned after half of `VLLM_MUSA_GIT_RETRY_ATTEMPTS`
+(four attempts by default) and the fetch then retries github.com directly, so a
+flaky link costs time rather than failing the build. An attempt that fails after
+the whole stall window without receiving anything is not retried: an unreachable
+host answers nothing on the second try either, so the next candidate runs
+instead. A mirrored attempt also carries git's low-speed guard: when the transfer
+makes no progress for `VLLM_MUSA_GIT_PROXY_STALL_S` seconds the attempt fails and
+the direct fetch runs, while a steady slow transfer is left alone — a total
+timeout cannot tell those apart. The direct fetch keeps no guard, like any plain
+`git fetch`.
+
+Because only the pinned commit is transferred, the build no longer downloads the
+upstream history. That transfer, not the mirror, is the dominant cost of a
+source install on a restricted network.
+
 ## Scheduler and graph settings
 
 Model pages in [the cookbook](cookbook/README.md) pin the scheduler, memory,

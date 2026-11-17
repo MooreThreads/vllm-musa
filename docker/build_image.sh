@@ -19,6 +19,11 @@ MCCL_VERSION="${MCCL_VERSION:-2.4.0}"
 PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple}"
 MUSA_PIP_INDEX_URL="${MUSA_PIP_INDEX_URL:-https://dl.mthreads.com/repo/api/pypi/pypi/simple}"
 
+# GitHub mirror for the vendored vLLM/FlashInfer fetch performed by setup.py.
+# Leave empty for setup.py's default (https://gh-proxy.org/), or set 0 to fetch
+# from github.com directly.
+VLLM_MUSA_GIT_PROXY="${VLLM_MUSA_GIT_PROXY:-}"
+
 PYTORCH_RELEASE="$(
     awk -F'==' '/^torch==/ {gsub(/\.\*/, "", $2); print $2; exit}' \
         requirements/musa_private.txt
@@ -48,6 +53,7 @@ docker build \
     --build-arg PYTHON_VERSION="${PYTHON_VERSION}" \
     --build-arg MUSA_APT_SOURCE="${MUSA_APT_SOURCE}" \
     --build-arg PYPI_INDEX_URL="${PYPI_INDEX_URL}" \
+    --build-arg VLLM_MUSA_GIT_PROXY="${VLLM_MUSA_GIT_PROXY}" \
     --build-arg MUSA_PIP_INDEX_URL="${MUSA_PIP_INDEX_URL}" \
     --build-arg INSTALL_MUSA_STACK="${INSTALL_MUSA_STACK}" \
     --build-arg MUSA_RUNTIME_VERSION="${MUSA_RUNTIME_VERSION}" \
