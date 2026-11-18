@@ -155,6 +155,7 @@ def test_sparse_prefill_topk_handles_windows(logits_dtype, index_dtype) -> None:
         pytest.skip("MUSA-only test")
     from vllm_musa import _custom_ops as musa_ops
 
+    topk = 512
     scores = torch.randn(6, 8224, device="musa").to(getattr(torch, logits_dtype))[
         :, :8192
     ]
@@ -162,11 +163,11 @@ def test_sparse_prefill_topk_handles_windows(logits_dtype, index_dtype) -> None:
     ends = torch.tensor(
         [0, 524, 813, 8192, 8192, 529], dtype=torch.int32, device="musa"
     )
-    output = torch.full((6, TOPK), -7, dtype=getattr(torch, index_dtype), device="musa")
-    musa_ops.sparse_indexer_topk(scores, starts, ends, output, TOPK)
+    output = torch.full((6, topk), -7, dtype=getattr(torch, index_dtype), device="musa")
+    musa_ops.sparse_indexer_topk(scores, starts, ends, output, topk)
     for row in range(6):
         start, end = int(starts[row]), int(ends[row])
-        count = min(TOPK, end - start)
+        count = min(topk, end - start)
         expected = torch.argsort(-scores[row, start:end].float().cpu(), stable=True)[
             :count
         ]
@@ -285,15 +286,16 @@ def test_sparse_topk_cudagraph_replays_both_input_dtypes(logits_dtype, width) ->
 
     scores = torch.randn(32, width, device="musa").to(getattr(torch, logits_dtype))
     lengths = torch.full((32,), width, dtype=torch.int32, device="musa")
-    output = torch.empty((32, TOPK), dtype=torch.int32, device="musa")
-    musa_ops.deepseek_v4_sparse_indexer_topk_decode(scores, lengths, output, TOPK)
+    topk = 512
+    output = torch.empty((32, topk), dtype=torch.int32, device="musa")
+    musa_ops.deepseek_v4_sparse_indexer_topk_decode(scores, lengths, output, topk)
     torch.musa.synchronize()
     graph = torch.musa.MUSAGraph()
     with torch.musa.graph(graph):
-        musa_ops.deepseek_v4_sparse_indexer_topk_decode(scores, lengths, output, TOPK)
+        musa_ops.deepseek_v4_sparse_indexer_topk_decode(scores, lengths, output, topk)
     scores.copy_(torch.randn_like(scores))
     graph.replay()
     torch.musa.synchronize()
-    assert _selected_sets(output, lengths, TOPK) == _reference_sets(
-        torch, scores, lengths, TOPK
+    assert _selected_sets(output, lengths, topk) == _reference_sets(
+        torch, scores, lengths, topk
     )

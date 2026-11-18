@@ -8,7 +8,7 @@ Subject: [PATCH] Return BF16 MQA logits from MATE sparse indexers
  1 file changed, 25 insertions(+), 4 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 9533f8ba0f..df42cddd40 100644
+index 31d11c6a1e..5eb787a84a 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -547,6 +547,11 @@ def _musa_try_fill_decode_topk_from_materialized_logits(

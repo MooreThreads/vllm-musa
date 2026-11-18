@@ -14,12 +14,11 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-import torchada
 import torch
-
+import torchada
+import vllm._deepselect_C as deepselect_extension
 from mate.testing.utils import bench_gpu_time_with_musa_event, bench_kineto
 
-import vllm._deepselect_C as deepselect_extension
 import vllm_musa
 from vllm_musa import _custom_ops
 
@@ -100,7 +99,11 @@ def profile_kernels(
 def run_case(batch: int, width: int, args: argparse.Namespace, profile: bool) -> dict:
     generator = torch.Generator(device="musa").manual_seed(20261029 + batch + width)
     logits = torch.randn(
-        batch, width, dtype=torch.float32, device="musa", generator=generator
+        batch,
+        width,
+        dtype=getattr(torch, args.dtype),
+        device="musa",
+        generator=generator,
     )
     lengths = torch.full((batch,), width, dtype=torch.int32, device="musa")
     if args.lengths == "ragged":
@@ -135,7 +138,7 @@ def run_case(batch: int, width: int, args: argparse.Namespace, profile: bool) ->
         )
 
     runners = {"vllm_radix": radix, "deepselect": deepselect}
-    torch_values = torch.empty(batch, args.topk, dtype=torch.float32, device="musa")
+    torch_values = torch.empty(batch, args.topk, dtype=logits.dtype, device="musa")
     torch_indices = torch.empty(batch, args.topk, dtype=torch.int64, device="musa")
     oracle_input = logits
     if args.lengths == "ragged":
@@ -184,7 +187,9 @@ def run_case(batch: int, width: int, args: argparse.Namespace, profile: bool) ->
     kernel_seconds = {}
     kernel_names = {
         "vllm_radix": "sparse_indexer_topk_radix_kernel",
-        "deepselect": "topk_fp32_kernel",
+        "deepselect": (
+            "topk_bf16_kernel" if args.dtype == "bfloat16" else "topk_fp32_kernel"
+        ),
     }
     kernel_order = list(kernel_names)
     if batch % 2 == 0:
@@ -226,7 +231,7 @@ def run_case(batch: int, width: int, args: argparse.Namespace, profile: bool) ->
         "batch": batch,
         "width": width,
         "topk": args.topk,
-        "dtype": "float32",
+        "dtype": args.dtype,
         "index_dtype": "int32",
         "lengths": args.lengths,
         "correctness": "PASS",
@@ -242,7 +247,7 @@ def run_case(batch: int, width: int, args: argparse.Namespace, profile: bool) ->
     return result
 
 
-def provenance() -> dict:
+def provenance(dtype: str) -> dict:
     sources = [
         Path(__file__),
         Path(vllm_musa.__file__).parent.parent
@@ -255,6 +260,7 @@ def provenance() -> dict:
         "device": torch.musa.get_device_name(0),
         "torch": torch.__version__,
         "musa": torch.version.musa,
+        "dtype": dtype,
         "packages": {
             name: importlib.metadata.version(name)
             for name in ("vllm", "vllm-musa", "torchada", "mate")
@@ -267,7 +273,7 @@ def provenance() -> dict:
         "timing": "mate MUSA events, round-interleaved, 8000 MiB flush before every timed call",
         "flush_bytes": 8000 * 1024 * 1024,
         "kernel_timing": "mate bench_kineto: 2N-1 active calls, 8000000000-byte flush per call",
-        "bandwidth": "logical FP32 input bytes plus int32 output bytes; not measured DRAM traffic",
+        "bandwidth": "logical input bytes plus int32 output bytes; not measured DRAM traffic",
         "torch_reference": "extra values/int64 output; reference only, not the production baseline",
     }
 
@@ -280,6 +286,7 @@ def main() -> None:
     parser.add_argument("--batches", type=int, nargs="+")
     parser.add_argument("--widths", type=int, nargs="+")
     parser.add_argument("--topk", type=int, choices=range(8, 513, 8), default=512)
+    parser.add_argument("--dtype", choices=("float32", "bfloat16"), default="float32")
     parser.add_argument("--lengths", choices=("full", "ragged"), default="full")
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--iters", type=int, default=30)
@@ -306,18 +313,24 @@ def main() -> None:
             shapes.extend(
                 (batch, width) for batch in README_BATCHES for width in README_WIDTHS
             )
-    if any(batch <= 0 or width < args.topk or width % 8 for batch, width in shapes):
-        parser.error("Positive batches and FP32-aligned widths >= topk are required")
+    alignment = 32 // getattr(torch, args.dtype).itemsize
+    if any(
+        batch <= 0 or width < args.topk or width % alignment for batch, width in shapes
+    ):
+        parser.error(
+            "Positive batches, widths >= topk and 32-byte aligned input rows are required"
+        )
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     vllm_musa.register_custom_ops()
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    report = {"provenance": provenance(), "results": []}
+    report = {"provenance": provenance(args.dtype), "results": []}
     for shape_index, (batch, width) in enumerate(shapes):
         result = run_case(batch, width, args, profile=shape_index == 0)
         report["results"].append(result)
         args.output.write_text(json.dumps(report, indent=2) + "\n")
         LOGGER.info(
-            "B=%d N=%d radix=%.3fus deepselect=%.3fus speedup=%.3fx correctness=PASS",
+            "dtype=%s B=%d N=%d radix=%.3fus deepselect=%.3fus speedup=%.3fx correctness=PASS",
+            args.dtype,
             batch,
             width,
             result["metrics"]["vllm_radix"]["median_us"],
