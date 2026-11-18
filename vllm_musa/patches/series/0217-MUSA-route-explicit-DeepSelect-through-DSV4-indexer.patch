@@ -17,7 +17,7 @@ Retain FP32 output for native selection and unsupported DeepSelect layouts.
  1 file changed, 110 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 2092efce8a..9533f8ba0f 100644
+index a1b9da3883..31d11c6a1e 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -39,7 +39,9 @@ from vllm.model_executor.kernels.attention.dsa.candidate_blocks import (
@@ -409,7 +409,7 @@ index 2092efce8a..9533f8ba0f 100644
              )
  
      return topk_indices_buffer
-@@ -2909,6 +3012,7 @@ class SparseAttnIndexer(CustomOp):
+@@ -2938,6 +3041,7 @@ class SparseAttnIndexer(CustomOp):
                      self.topk_indices_buffer,
                      self.use_fp4_cache,
                      self.use_musa_materialized_prefill,

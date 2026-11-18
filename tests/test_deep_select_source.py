@@ -20,11 +20,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
-BUILD_PATCH = SERIES / "0216-MUSA-build-DeepSelect-through-vLLM-extension-target.patch"
+BUILD_PATCH = SERIES / "0218-MUSA-build-DeepSelect-through-vLLM-extension-target.patch"
 PLUGIN = ROOT / "vllm_musa" / "__init__.py"
 PINS = ROOT / "third_party" / "PINS"
 INDEXER_PATCH = (
-    SERIES / "0215-MUSA-route-explicit-DeepSelect-through-DSV4-indexer.patch"
+    SERIES / "0217-MUSA-route-explicit-DeepSelect-through-DSV4-indexer.patch"
 )
 
 
@@ -58,7 +58,7 @@ def _bindings_source() -> str:
 
 def test_series_patch_retains_native_extension_import_detection() -> None:
     source = (
-        SERIES / "0214-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
+        SERIES / "0216-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
     ).read_text(encoding="utf-8")
     assert "elif not _HAS_DEEP_SELECT_C:" in source
     assert "vllm._deepselect_C could not be imported" in source
@@ -82,7 +82,7 @@ def test_series_patch_keeps_the_cuda_capability_check() -> None:
 
 
 def _deep_select_validation_helpers(family: int, extension_available: bool) -> dict:
-    patch = SERIES / "0214-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
+    patch = SERIES / "0216-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
     source = "\n".join(
         line[1:]
         for line in patch.read_text(encoding="utf-8").splitlines()
@@ -743,7 +743,7 @@ def test_musa_cmake_target_configuration(
     bindings = kernel.parent.parent / "musa_api.cpp"
     bindings.write_text("int binding_marker;")
     integration = _deepselect_source("cmake/vllm_musa.cmake")
-    project = f'''cmake_minimum_required(VERSION 3.18)
+    project = f"""cmake_minimum_required(VERSION 3.18)
 project(deepselect_configuration LANGUAGES CXX)
 set(deepselect_SOURCE_DIR "{tmp_path}/DeepSelect")
 function(run_python output)
@@ -769,7 +769,7 @@ function(define_extension_target name)
   target_compile_options(${{name}} PRIVATE ${{ARG_COMPILE_FLAGS}})
 endfunction()
 include("{integration}")
-'''
+"""
     (tmp_path / "CMakeLists.txt").write_text(project)
     result = subprocess.run(
         [
