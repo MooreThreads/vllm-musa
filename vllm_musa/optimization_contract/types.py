@@ -47,6 +47,7 @@ class OptimizationFeature(str, Enum):
     )
     DEEPSEEK_V4_MTP_CAR_GRAPH_STAGING_ARENA = "deepseek_v4.mtp_car_graph_staging_arena"
     DEEPSEEK_V41_SHARED_EXPERT_FOLD = "deepseek_v4.1.shared_expert_fold"
+    DEEPSEEK_V41_DENSE_FP8_BLOCK128 = "deepseek_v4.1.dense_fp8_block128"
     DEEPSEEK_V41_W4AFP8_SHARED_EXPERT_OVERLAP = (
         "deepseek_v4.1.w4afp8_shared_expert_overlap"
     )

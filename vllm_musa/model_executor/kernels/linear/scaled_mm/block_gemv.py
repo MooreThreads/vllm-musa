@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 
 import torch
+from vllm.config import get_current_vllm_config
+from vllm.logger import init_logger
 from vllm.model_executor.kernels.linear import FP8ScaledMMLinearLayerConfig
 from vllm.model_executor.kernels.linear.scaled_mm.triton import (
     TritonFp8BlockScaledMMKernel,
@@ -11,6 +13,7 @@ from vllm.model_executor.kernels.linear.scaled_mm.triton import (
 from vllm.model_executor.layers.quantization.utils.fp8_utils import (
     _upcast_e8m0_to_fp32,
 )
+from vllm.model_executor.layers.quantization.utils.quant_utils import GroupShape
 from vllm.model_executor.utils import replace_parameter
 from vllm.platforms import current_platform
 
@@ -28,7 +31,15 @@ from vllm_musa.kernels.fp8_block_gemv import (
     fp8_block_gemv_quant_supported,
     fp8_block_gemv_supported,
 )
+from vllm_musa.kernels.fp8_block_requant import (
+    fp8_block128_bf16_linear,
+    fp8_block128_prequantized_linear,
+    requantize_fp8_block32_to_block128,
+)
 from vllm_musa.kernels.fp8_block_splitk import fp8_block_splitk_config
+from vllm_musa.optimization_contract import OptimizationFeature, prefers_feature
+
+logger = init_logger(__name__)
 
 # The GEMV re-reads the weight per row (or per few rows); past a few rows the
 # block GEMM wins. Crossovers measured on MTT S5000 for the DeepSeek-V4.1 TP8
@@ -115,6 +126,27 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
         ).contiguous()
         if fp32_scale is not scale:
             replace_parameter(layer, params.block_scale_attr, fp32_scale)
+        config = get_current_vllm_config()
+        if (
+            prefers_feature(config, OptimizationFeature.DEEPSEEK_V41_DENSE_FP8_BLOCK128)
+            and tuple(layer.weight_block_size) == (32, 32)
+            and not getattr(layer, "is_bmm", False)
+            and ".shared_experts." not in getattr(layer, "prefix", "")
+            and params.weight.ndim == 2
+            and params.weight.shape[0] % 64 == 0
+        ):
+            weight128, scales128 = requantize_fp8_block32_to_block128(
+                params.weight, fp32_scale
+            )
+            replace_parameter(layer, params.WEIGHT, weight128)
+            replace_parameter(layer, params.block_scale_attr, scales128)
+            layer.weight_block_size = [128, 128]
+            self.weight_group_shape = GroupShape(128, 128)
+            self._musa_block128 = True
+            logger.info_once(
+                "Converted DSV4.1 dense weights to one block128 FP8 "
+                "representation; all M use MATE muDNN W8A8."
+            )
 
     def apply_weights(
         self,
@@ -123,9 +155,17 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
         bias: torch.Tensor | None = None,
         **kwargs,
     ) -> torch.Tensor:
-        group_size = self.config.activation_quant_key.scale.group_shape.col
         rows = x.numel() // x.shape[-1] if x.dim() > 0 else 0
         params = self._get_layer_params(layer)
+        if getattr(self, "_musa_block128", False):
+            output = fp8_block128_bf16_linear(
+                x.reshape(rows, x.shape[-1]),
+                params.weight,
+                params.block_scale,
+                self.config.out_dtype,
+            ).view(*x.shape[:-1], params.weight.shape[0])
+            return output + bias if bias is not None else output
+        group_size = self.config.activation_quant_key.scale.group_shape.col
         if (
             _small_m_path(params.weight, params.block_scale, rows)
             and x.dtype in (torch.bfloat16, torch.float16)
@@ -236,6 +276,9 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
         As: torch.Tensor,
         Bs: torch.Tensor,
     ) -> torch.Tensor:
+        if A.dim() == 2 and getattr(self, "_musa_block128", False):
+            logger.info_once("DSV4.1 prequantized linear uses FP8 group128 muDNN.")
+            return fp8_block128_prequantized_linear(A, As, B, Bs, self.config.out_dtype)
         if (
             A.dim() == 2
             and _small_m_path(B, Bs, A.shape[0])

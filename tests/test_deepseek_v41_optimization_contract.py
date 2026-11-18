@@ -16,6 +16,7 @@ from .test_deepseek_v4_optimization_contract import _flash_base_config
 
 FOLD = OptimizationFeature.DEEPSEEK_V41_SHARED_EXPERT_FOLD
 W4AFP8_OVERLAP = OptimizationFeature.DEEPSEEK_V41_W4AFP8_SHARED_EXPERT_OVERLAP
+BLOCK128 = OptimizationFeature.DEEPSEEK_V41_DENSE_FP8_BLOCK128
 
 
 def _v41_flash_config(
@@ -107,7 +108,7 @@ def test_v41_flash_tp8_prefers_the_shared_expert_fold() -> None:
     assert contract.model.role is ModelRole.TEXT
     assert contract.profile == "deepseek_v4.1.tp8_flash"
     assert contract.prefers(FOLD)
-    assert contract.preferred_features == {FOLD}
+    assert contract.preferred_features == {FOLD, BLOCK128}
 
 
 @pytest.mark.parametrize("expert_dtype", ["int4", "fp4"])
@@ -117,7 +118,7 @@ def test_v41_w4afp8_ep_prefers_external_shared_expert_overlap(expert_dtype) -> N
     )
 
     assert contract.model.family is ModelFamily.DEEPSEEK_V41
-    assert contract.supported_features == {W4AFP8_OVERLAP}
+    assert contract.supported_features == {W4AFP8_OVERLAP, BLOCK128}
     assert contract.prefers(W4AFP8_OVERLAP)
     assert not contract.prefers(FOLD)
 
@@ -293,4 +294,37 @@ def test_v41_stays_outside_the_deepseek_v4_family() -> None:
     contract = resolve_optimization_contract(_v41_flash_config())
 
     assert contract.model.family is not ModelFamily.DEEPSEEK_V4
-    assert contract.supported_features == {FOLD}
+    assert contract.supported_features == {FOLD, BLOCK128}
+
+
+@pytest.mark.parametrize("factory", [_v41_flash_config, _v41_w4afp8_config])
+@pytest.mark.parametrize("max_num_seqs", [1, 4, 16])
+def test_dense_block128_is_preferred_for_both_models_and_concurrencies(
+    factory, max_num_seqs
+) -> None:
+    config = factory()
+    config.scheduler_config.max_num_seqs = max_num_seqs
+    assert resolve_optimization_contract(config).prefers(BLOCK128)
+
+
+@pytest.mark.parametrize("factory", [_v41_flash_config, _v41_w4afp8_config])
+@pytest.mark.parametrize("method", ["dspark", "mtp", "eagle"])
+def test_dense_block128_excludes_unvalidated_speculative_paths(factory, method) -> None:
+    assert not resolve_optimization_contract(
+        factory(speculative_method=method)
+    ).prefers(BLOCK128)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("tensor_parallel_size", 4),
+        ("pipeline_parallel_size", 2),
+        ("data_parallel_size", 2),
+        ("decode_context_parallel_size", 2),
+    ],
+)
+def test_dense_block128_excludes_unvalidated_parallel_layouts(field, value) -> None:
+    config = _v41_flash_config()
+    setattr(config.parallel_config, field, value)
+    assert not resolve_optimization_contract(config).prefers(BLOCK128)
