@@ -4,6 +4,7 @@
 """Attention layer with FlashAttention."""
 
 import copy
+import os
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, ClassVar
@@ -455,6 +456,12 @@ class FlashAttentionMetadata:
     # to the faster mubin TCE flash-attention.
     prefill_no_prefix: bool = False
 
+    # MUSA: batch size the AOT scheduler metadata was built for. The draft
+    # decode graph refreshes that metadata in place, and must reproduce the same
+    # batch size the capture used (padding-aware, so it may differ from
+    # num_decodes).
+    schedule_batch_size: int = 0
+
 
 def _get_sliding_window_configs(
     vllm_config: VllmConfig,
@@ -610,6 +617,62 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         # populated on first build() call.
         self.aot_sliding_window: tuple[int, int] | None = None
 
+        # MUSA: FA3 AOT decode metadata is a pure device-side function of
+        # seq_lens / query_start_loc, so a speculator may refresh it inside the
+        # draft decode graph instead of rebuilding metadata eagerly per step.
+        # DCP rewrites its local seq lens on the host, so keep that path eager.
+        # Opt-out kept for A/B evidence and quick rollback.
+        self.supports_draft_decode_metadata_update = (
+            self.aot_schedule
+            and self.dcp_world_size == 1
+            and self.use_full_cuda_graph
+            and os.environ.get("VLLM_MUSA_DISABLE_FUSED_DRAFT_DECODE", "0") != "1"
+        )
+        if self.supports_draft_decode_metadata_update:
+            logger.info_once(
+                "MUSA FA3: draft decode metadata update enabled "
+                "(fused multi-step draft decode)."
+            )
+
+    def _get_aot_scheduler_metadata(
+        self,
+        *,
+        batch_size: int,
+        cu_query_lens: torch.Tensor,
+        max_query_len: int,
+        seqlens: torch.Tensor,
+        max_seq_len: int,
+        causal: bool | torch.Tensor,
+        max_num_splits: int,
+    ) -> torch.Tensor | None:
+        """FA3 AOT schedule for one decode batch.
+
+        Reads only device buffers (seq_lens / cu_seqlens_q), so it is safe to
+        record inside a CUDA graph.
+        """
+        cache_dtype = self.cache_config.cache_dtype
+        if cache_dtype.startswith("fp8"):
+            qkv_dtype = MUSAFlashAttentionBackend.get_fp8_dtype_for_flashattn(
+                cache_dtype
+            )
+        else:
+            qkv_dtype = self.kv_cache_dtype
+        return get_scheduler_metadata(
+            batch_size=batch_size,
+            max_seqlen_q=max_query_len,
+            max_seqlen_k=max_seq_len,
+            num_heads_q=self.num_heads_q * self.dcp_world_size,
+            num_heads_kv=self.num_heads_kv,
+            headdim=self.headdim,
+            cache_seqlens=seqlens,
+            qkv_dtype=qkv_dtype,
+            cu_seqlens_q=cu_query_lens,
+            page_size=self.block_size,
+            causal=causal,
+            window_size=self.aot_sliding_window,
+            num_splits=max_num_splits,
+        )
+
     def build(
         self,
         common_prefix_len: int,
@@ -760,30 +823,17 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         def schedule(
             batch_size, cu_query_lens, max_query_len, seqlens, max_seq_len, causal
         ):
-            cache_dtype = self.cache_config.cache_dtype
-            if cache_dtype.startswith("fp8"):
-                qkv_dtype = MUSAFlashAttentionBackend.get_fp8_dtype_for_flashattn(
-                    cache_dtype
-                )
-            else:
-                qkv_dtype = self.kv_cache_dtype
-            if aot_schedule:
-                return get_scheduler_metadata(
-                    batch_size=batch_size,
-                    max_seqlen_q=max_query_len,
-                    max_seqlen_k=max_seq_len,
-                    num_heads_q=self.num_heads_q * self.dcp_world_size,
-                    num_heads_kv=self.num_heads_kv,
-                    headdim=self.headdim,
-                    cache_seqlens=seqlens,
-                    qkv_dtype=qkv_dtype,
-                    cu_seqlens_q=cu_query_lens,
-                    page_size=self.block_size,
-                    causal=causal,
-                    window_size=self.aot_sliding_window,
-                    num_splits=max_num_splits,
-                )
-            return None
+            if not aot_schedule:
+                return None
+            return self._get_aot_scheduler_metadata(
+                batch_size=batch_size,
+                cu_query_lens=cu_query_lens,
+                max_query_len=max_query_len,
+                seqlens=seqlens,
+                max_seq_len=max_seq_len,
+                causal=causal,
+                max_num_splits=max_num_splits,
+            )
 
         use_cascade = common_prefix_len > 0
         max_dcp_context_kv_len = 0
@@ -964,8 +1014,66 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
             prefix_scheduler_metadata=prefix_scheduler_metadata,
             max_num_splits=max_num_splits,
             causal=causal,
+            schedule_batch_size=num_reqs,
         )
         return attn_metadata
+
+    def update_draft_decode_metadata(
+        self, metadata: FlashAttentionMetadata
+    ) -> None:
+        """Refresh captured FA3 decode metadata for the next draft step.
+
+        The speculator records this call inside its draft decode CUDA graph, so
+        every op must be capture-safe and must write into persistent buffers
+        that ``metadata`` already references. ``seq_lens`` and
+        ``query_start_loc`` are views into the runner's persistent input
+        buffers, already advanced by the previous draft step.
+        """
+        if metadata.scheduler_metadata is None and metadata.cu_seqlens_k is None:
+            return
+
+        batch_size = metadata.schedule_batch_size or metadata.num_decodes
+        assert self.dcp_world_size == 1
+        logger.info_once(
+            "MUSA FA3: refreshing draft decode metadata inside the draft "
+            "decode graph."
+        )
+
+        buf = self._cu_seqlens_k_buffer
+        if (
+            buf is not None
+            and metadata.cu_seqlens_k is not None
+            and metadata.cu_seqlens_k.data_ptr() == buf.data_ptr()
+        ):
+            n = batch_size + 1
+            buf[0].zero_()
+            torch.cumsum(
+                metadata.seq_lens[:batch_size],
+                dim=0,
+                dtype=torch.int32,
+                out=buf[1:n],
+            )
+            metadata.cu_seqlens_k = buf[:n]
+
+        if metadata.scheduler_metadata is None:
+            # The captured shape used a schedule without AOT metadata (e.g. the
+            # Qwen direct decode schedule); only cu_seqlens_k moves per step.
+            return
+
+        scheduler_metadata = self._get_aot_scheduler_metadata(
+            batch_size=batch_size,
+            cu_query_lens=metadata.query_start_loc,
+            max_query_len=metadata.max_query_len,
+            seqlens=metadata.seq_lens,
+            max_seq_len=metadata.max_seq_len,
+            causal=metadata.causal,
+            max_num_splits=metadata.max_num_splits,
+        )
+        n = scheduler_metadata.shape[0]
+        self.scheduler_metadata[:n] = scheduler_metadata
+        # Zero the tail so no thread block picks up stale scheduler entries.
+        self.scheduler_metadata[n:] = 0
+        metadata.scheduler_metadata = self.scheduler_metadata[:n]
 
     def update_block_table(
         self,
