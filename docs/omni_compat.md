@@ -273,7 +273,10 @@ and `omni_compat.unsupported_paths()` lists it at runtime. Current entries on th
 * the worker_v2 autoregressive model runner under data parallelism
   (`vllm_omni/worker_v2/omni_model_runner.py`; diffusion pipelines do not use it);
 * decode context parallelism with a NixlConnector KV transfer;
-* img2img PrefixLM on a stage configured `model_runner: v2`. The adapter puts
+* img2img PrefixLM on a stage configured `model_runner: v2`. This one is not
+  class E -- the meaning did not change, the *consumer* did not move with the
+  symbol -- but the answer is the same, because no bridge can make a module
+  nobody reads matter. The adapter puts
   0.33's range builder where Omni's patch reads it, but on the pin nothing reads
   that module: the v1 runner fills the ranges with an inline loop that filters
   only audio, so img2img is already admitted, while the v2 runner's model state
@@ -347,9 +350,10 @@ Attribute calls are reported but never failed: the receiver cannot be resolved
 statically, and vLLM-Omni has its own `post_forward` hook protocol that name
 matching alone cannot distinguish from `ActiveKVConnector.post_forward`.
 
-**What this tool cannot see yet, and it is not a small set.** The semantics pass
-indexes `module.func` and `module.Class.method`; it never indexes the class
-itself, and it matches a call by its callee name. So three shapes are invisible:
+**What this tool cannot see yet, and it is not a small set.** Both call-shape
+passes -- `calls` and `semantics` -- index `module.func` and
+`module.Class.method`, never the class itself, and match a call by its callee
+name. So three shapes are invisible to each of them:
 
 * **constructor keywords** -- `OnlineRenderer(**kwargs)` records the callee as
   `OnlineRenderer`, never `__init__`, so a parameter added to `__init__` is not
@@ -511,7 +515,7 @@ Without `--target-vllm` -- which is what both build gates run -- the same trees
 give the same four pin-only passes and `PASS (imports, attributes, calls,
 staleness; semantics not compared, no --target-vllm)`.
 
-`tests/test_omni_compat.py`: 69 passed on **both** Python 3.10 and Python 3.12.
+`tests/test_omni_compat.py`: 73 passed on **both** Python 3.10 and Python 3.12.
 
 ### Hardware, on the superseded base
 

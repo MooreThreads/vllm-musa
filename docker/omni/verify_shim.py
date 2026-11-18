@@ -43,11 +43,11 @@ _DEVICE_MARKERS = (
 def _stale_adapter(applied: dict) -> str | None:
     """Why an adapter that had nothing to do must still fail the build, or None.
 
-    The loader no longer raises for this: the pin already serves the call, so a
-    deployed interpreter is right to carry on rather than take every model down
-    over a shim it does not need. The image is the other way round -- it must
-    not ship a table entry that no longer describes its own pin -- so the
-    refusal moves here.
+    The import hook lets this through, because the pin already serves the call
+    and a deployed interpreter is right to carry on rather than take every
+    model down over a shim it does not need. An image is the other way round:
+    it must not ship a table entry that does not describe its own pin, so the
+    refusal lives here.
     """
     if not applied.get("stale"):
         return None

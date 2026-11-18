@@ -1685,3 +1685,165 @@ def test_an_adapter_with_nothing_to_do_does_not_break_the_import(tmp_path):
     assert message is not None
     assert "the entry is stale" in message
     assert result["marker"]["remove_when"] in message
+
+
+def _stale_pin_site(root: Path) -> Path:
+    """A pin whose ``apply_top_k_top_p`` already takes the newer keyword."""
+    site = root / "site"
+    _write(site / "vllm" / "__init__.py", f"__version__ = {PIN_VERSION!r}\n")
+    for parent in ("v1", "v1/sample", "v1/sample/ops"):
+        _write(site / "vllm" / parent / "__init__.py")
+    _write(
+        site / "vllm" / "v1" / "sample" / "ops" / "topk_topp_sampler.py",
+        """
+        def apply_top_k_top_p(logits, k, p, has_topp_only_rows=True):
+            return ["pin", has_topp_only_rows]
+        """,
+    )
+    return site
+
+
+def test_the_in_package_loader_also_survives_a_satisfied_adapter(tmp_path):
+    """The twin of the bootstrap case, through ``install()``.
+
+    The two loaders are separate implementations of the same contract and both
+    failed the import for a satisfied adapter. A test on one of them says
+    nothing about the other, and the package loader is the one an in-process
+    caller and the test suite use.
+    """
+    result = _run(
+        _stale_pin_site(tmp_path),
+        """
+        import vllm.v1.sample.ops.topk_topp_sampler as mod
+        result["value"] = list(mod.apply_top_k_top_p("l", 1, 2, has_topp_only_rows=False))
+        result["marker"] = getattr(mod, "__vllm_musa_adapted__", None)
+        """,
+        version=PIN_VERSION,
+    )
+    assert result["value"] == ["pin", False]
+    assert result["marker"]["names"] == []
+    assert result["marker"]["stale"] is True
+
+
+def test_the_mm_prefix_bridge_is_still_found_under_omni_s_own_wrapper():
+    """``vllm_omni.utils.mm_prefix`` decorates the bridge with functools.wraps.
+
+    So the live attribute after ``import vllm_omni`` is Omni's wrapper, not
+    ours, and the build gate asks the adapter whether the name is adapted
+    *right now*. Answering by reading a flag worked only because
+    ``functools.wraps`` copies ``__dict__``; the test pins the behaviour so the
+    marker change cannot quietly invert it, and the negative case proves the
+    answer is not simply always yes.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_mm_prefix_adapter",
+        ROOT / "vllm_musa" / "omni_compat" / "adapters" / "attention_backends_utils.py",
+    )
+    adapter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(adapter)
+
+    import functools
+    from types import ModuleType
+
+    module = ModuleType("vllm.v1.attention.backends.utils")
+    assert adapter.is_applied(module) == []
+    assert adapter.is_satisfied(module) is False
+
+    assert adapter.apply(module) == ["compute_mm_prefix_ranges"]
+    assert adapter.is_applied(module) == ["compute_mm_prefix_ranges"]
+    assert adapter.is_satisfied(module) is True
+    # Idempotent: a second pass has nothing to add and must not say it failed.
+    assert adapter.apply(module) == []
+
+    @functools.wraps(module.compute_mm_prefix_ranges)
+    def omni_wrapper(*args, **kwargs):
+        return module.compute_mm_prefix_ranges(*args, **kwargs)
+
+    module.compute_mm_prefix_ranges = omni_wrapper
+    assert adapter.is_applied(module) == ["compute_mm_prefix_ranges"]
+    assert adapter.is_satisfied(module) is True
+
+    # An unrelated function under the same name is not the bridge.
+    module.compute_mm_prefix_ranges = lambda *a, **k: {}
+    assert adapter.is_applied(module) == []
+    # ... but the module can still serve the call Omni's patch makes, so the
+    # loader must not call that a stale entry.
+    assert adapter.is_satisfied(module) is True
+
+
+def test_a_breaking_call_fails_the_verdict_and_the_exit_code(tmp_path, capsys):
+    """The pass is only a gate if the exit code carries it.
+
+    Automation reads the exit code, not the JSON. A pass that reports an
+    offence while ``main`` still returns 0 is the same defect this branch
+    removed from the semantic pass, one pass further along.
+    """
+    tool = _load_audit_tool()
+    pin = tmp_path / "pin" / "vllm"
+    _write(pin / "__init__.py", f"__version__ = {PIN_VERSION!r}\n")
+    # A symbol the shipped table says nothing about, so nothing suppresses it.
+    _write(pin / "ranges.py", "def build_ranges(a):\n    return a\n")
+
+    omni = tmp_path / "omni"
+    _write(omni / "vllm_omni" / "__init__.py")
+    _write(
+        omni / "vllm_omni" / "stage.py",
+        """
+        from vllm.ranges import build_ranges
+
+        def run():
+            return build_ranges(1, span_pad=2)
+        """,
+    )
+
+    report = tmp_path / "report.json"
+    code = tool.main(
+        [
+            "--omni-root",
+            str(omni),
+            "--vllm-root",
+            str(pin),
+            "--vllm-version",
+            PIN_VERSION,
+            "--report",
+            str(report),
+        ]
+    )
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "BREAKS   vllm.ranges.build_ranges" in out
+    assert "[verdict]   FAIL" in out
+    payload = json.loads(report.read_text())
+    assert payload["verdict"] == "fail"
+    assert payload["calls"]["status"] == "fail"
+
+
+def test_a_copied_mm_prefix_marker_does_not_read_as_adapted():
+    """The marker has to name itself, not merely be present.
+
+    ``functools.wraps`` copies the adapter's ``__dict__`` into whatever wraps
+    the bridge, so a replacement can carry the marker without delegating. The
+    build gate asks whether the 0.33 builder is live, and for such a
+    replacement the honest answer is no.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_mm_prefix_marker",
+        ROOT / "vllm_musa" / "omni_compat" / "adapters" / "attention_backends_utils.py",
+    )
+    adapter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(adapter)
+
+    from types import ModuleType
+
+    module = ModuleType("vllm.v1.attention.backends.utils")
+    adapter.apply(module)
+    bridge = module.compute_mm_prefix_ranges
+
+    def replacement(*args, **kwargs):
+        return {}
+
+    # Exactly what a copied __dict__ leaves behind: the marker, naming ours.
+    vars(replacement).update(vars(bridge))
+    assert getattr(replacement, adapter.ADAPTED, None) is bridge
+    module.compute_mm_prefix_ranges = replacement
+    assert adapter.is_applied(module) == []

@@ -59,10 +59,11 @@ def _wraps_the_bridge(obj: object) -> bool:
 
     ``vllm_omni.utils.mm_prefix`` decorates the bridge with ``functools.wraps``,
     so after ``import vllm_omni`` the live attribute is Omni's wrapper rather
-    than ours. It still reaches the bridge, so it is adapted -- but the test
-    has to say that by walking ``__wrapped__``, not by relying on
-    ``functools.wraps`` having copied a ``True`` flag out of our ``__dict__``.
-    The marker is the function itself, so a copy names ours and not itself.
+    than ours. It still reaches the bridge, so it is adapted, and walking
+    ``__wrapped__`` is what establishes that. A flag would not: the same
+    ``functools.wraps`` copies our ``__dict__``, so anything built that way
+    carries the marker whether or not it delegates. The marker is the function
+    itself, so a copy names ours rather than itself and cannot pass the test.
 
     Local rather than shared: the ``.pth`` bootstrap loads each adapter by file
     path, so an adapter must not import a sibling module.
