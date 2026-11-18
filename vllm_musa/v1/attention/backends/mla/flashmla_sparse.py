@@ -14,12 +14,13 @@ import torch
 from vllm.config.cache import CacheDType
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability
-from vllm.v1.attention.backend import MultipleOf
 from vllm.v1.attention.backends.mla.flashmla_sparse import FlashMLASparseBackend
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 
 from vllm_musa.v1.attention.ops.flashmla import (
     flash_mla_sparse_fwd as _musa_flash_mla_sparse_fwd,
+)
+from vllm_musa.v1.attention.ops.flashmla import (
     is_flashmla_sparse_supported,
 )
 
@@ -29,9 +30,12 @@ logger = init_logger(__name__)
 # those names in the core sparse module to the MUSA `flash_mla` equivalents so
 # the sparse metadata builder and impl execute on MUSA.
 import vllm.v1.attention.backends.mla.flashmla_sparse as _core_sparse
+
+from vllm_musa.v1.attention.ops.flashmla import FlashMLASchedMeta as _musa_sched_meta
 from vllm_musa.v1.attention.ops.flashmla import (
-    FlashMLASchedMeta as _musa_sched_meta,
     flash_mla_with_kvcache as _musa_mla_kvcache,
+)
+from vllm_musa.v1.attention.ops.flashmla import (
     get_mla_metadata as _musa_get_mla_metadata,
 )
 
@@ -130,16 +134,19 @@ def _musa_backend_sparse_fwd(
 
     if sparse_mla_fwd_bf16 is not None:
         # This monkeypatch is private to FlashMLASparseImpl._bf16_flash_mla_kernel,
-        # which consumes only the first return value. Keep the public op on the
+        # which consumes the output and LSE. Keep the public op on the
         # native flash_mla path so callers that need aux tensors keep that contract.
         result = sparse_mla_fwd_bf16(
             q, kv, indices, sm_scale, d_v=d_v, topk_length=topk_length
         )
+        if isinstance(result, tuple):
+            result, max_logits, lse = result
+        else:
+            max_logits = lse = q.new_empty(0)
         if out is not None:
             out.copy_(result)
             result = out
-        aux = q.new_empty(0)
-        return result, aux, aux
+        return result, max_logits, lse
 
     return _musa_flash_mla_sparse_fwd(
         q=q,

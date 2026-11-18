@@ -24,13 +24,19 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 from build_utils.build_info import write_build_info  # noqa: E402
 from build_utils.ccache import configure_compiler_cache  # noqa: E402
+from build_utils.git_proxy import (  # noqa: E402
+    PROXY_ENV,
+    candidate_commands,
+    resolve_proxy,
+    resolve_stall_s,
+)
 
 third_party = Path("third_party")
 arch = platform.machine().lower()
 
 
 def _read_pins():
-    """Read third_party/PINS (KEY=VALUE; py3.10 has no tomllib). Shared with
+    """Read third_party/PINS (KEY=VALUE, no parser dependency). Shared with
     Makefile.sync so the build and patch-gen pins can't desync."""
     pins = {}
     pins_path = root / "third_party" / "PINS"
@@ -118,11 +124,10 @@ def develop_dynamic_library(package_name, source_dir="./", target_override=None)
 class _RepoInfo:
     """Configuration for a third-party git repository."""
 
-    def __init__(self, name, git_repository, git_tag, git_shallow=False):
+    def __init__(self, name, git_repository, git_tag):
         self.name = name
         self.git_repository = git_repository
         self.git_tag = git_tag
-        self.git_shallow = git_shallow
         self.source_dir = third_party / name
 
 
@@ -130,14 +135,12 @@ _VLLM_REPO = _RepoInfo(
     name="vllm",
     git_repository="https://github.com/vllm-project/vllm.git",
     git_tag=_PINS.get("VLLM_COMMIT", _PINS["VLLM_TAG"]),
-    git_shallow=False,
 )
 
 _FLASHINFER_REPO = _RepoInfo(
     name="flashinfer",
     git_repository="https://github.com/flashinfer-ai/flashinfer.git",
     git_tag=_PINS["FLASHINFER_COMMIT"],
-    git_shallow=False,
 )
 
 INCLUDE_DIRS = [
@@ -314,9 +317,13 @@ _STABLE_BOX_HEADER = _ta_stable_box()
 # Explicitly add torchada's stable_compat include dir (the include_paths()
 # auto-append does not reach the torch_musa MUSAExtension compile path).
 STABLE_INCLUDE_DIRS = INCLUDE_DIRS + [_ta_stable_inc()]
+# Shared quantization headers use TORCH_CHECK, which torch 2.13's stable headers
+# do not provide; STD_TORCH_CHECK is the stable-ABI spelling.
+_STABLE_TORCH_CHECK = "-DTORCH_CHECK=STD_TORCH_CHECK"
 STABLE_COMPILE_ARGS = {
-    "mcc": MCC_FLAGS + ["-DCUDA_VERSION=0", "-include", _STABLE_BOX_HEADER],
-    "cxx": CXX_FLAGS + ["-include", _STABLE_BOX_HEADER],
+    "mcc": MCC_FLAGS
+    + ["-DCUDA_VERSION=0", _STABLE_TORCH_CHECK, "-include", _STABLE_BOX_HEADER],
+    "cxx": CXX_FLAGS + [_STABLE_TORCH_CHECK, "-include", _STABLE_BOX_HEADER],
 }
 STABLE_LINK_LIBRARIES = LINK_LIBRARIES + ["torch_cpu"]
 
@@ -367,6 +374,11 @@ EXT_MODULES = [
 class _CustomBuildExt(BuildExtension):
     """Custom build extension that clones third-party repositories before building."""
 
+    # A failed attempt that ran this long and received nothing did not fail
+    # transiently: the host never answered, and another attempt would wait out
+    # the same connect timeout, so the next candidate runs instead.
+    _SLOW_CONNECT_FAIL_S = 120
+
     def build_extensions(self):
         super().build_extensions()
         # The source tree serves editable installs; build_lib is what a wheel packs,
@@ -379,17 +391,35 @@ class _CustomBuildExt(BuildExtension):
             print(f"Recorded MUSA arch {MUSA_ARCH.name} in {path}")
 
     @staticmethod
-    def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):
-        attempts = int(os.environ.get("VLLM_MUSA_GIT_RETRY_ATTEMPTS", "8"))
-        delay_s = int(os.environ.get("VLLM_MUSA_GIT_RETRY_DELAY_S", "10"))
+    def _git_dir_bytes(cwd):
+        """Bytes held by the checkout's git directory, 0 without one."""
+        total = 0
+        for dirpath, _dirnames, filenames in os.walk(Path(cwd or ".") / ".git"):
+            for name in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                except OSError:
+                    continue
+        return total
+
+    @staticmethod
+    def _retry_git_call(cmd, cwd, attempts, delay_s, slow_fail_s=None):
+        """Run one git command variant, retrying transient failures."""
+        if slow_fail_s is None:
+            slow_fail_s = _CustomBuildExt._SLOW_CONNECT_FAIL_S
         for attempt in range(1, attempts + 1):
+            started = time.monotonic()
+            received = _CustomBuildExt._git_dir_bytes(cwd)
             try:
                 subprocess.check_call(cmd, cwd=cwd)
                 return
             except subprocess.CalledProcessError:
-                if cleanup_path is not None:
-                    shutil.rmtree(cleanup_path, ignore_errors=True)
                 if attempt == attempts:
+                    raise
+                if (
+                    time.monotonic() - started >= slow_fail_s
+                    and _CustomBuildExt._git_dir_bytes(cwd) == received
+                ):
                     raise
                 sleep_s = delay_s * attempt
                 print(
@@ -400,23 +430,87 @@ class _CustomBuildExt(BuildExtension):
                 time.sleep(sleep_s)
 
     @staticmethod
-    def _clone_and_checkout(repo_path, repo_url, git_tag, git_shallow):
-        """Clone a git repository and checkout a specific tag/commit."""
+    def _mirror_attempts(attempts):
+        """Attempts the mirror gets before the direct fallback runs."""
+        # Enough to ride out a flaky link (a handshake that fails now may work on
+        # the next try), but not the whole budget: a mirror that is really down
+        # must not delay the direct fetch for the entire retry schedule.
+        return max(2, attempts // 2)
+
+    @staticmethod
+    def _git_check_call_with_retries(cmd, cwd=None):
+        """Run a network git command, through the GitHub mirror when enabled.
+
+        The mirror is tried first and a direct connection last, so a mirror that
+        fails costs time instead of breaking the build. Set
+        ``VLLM_MUSA_GIT_PROXY=0`` to skip the mirror. A mirrored attempt carries
+        git's low-speed guard (``VLLM_MUSA_GIT_PROXY_STALL_S``), so a mirror that
+        accepts the connection and then stops transferring fails the attempt
+        instead of hanging the build; the direct attempt keeps no guard, like any
+        plain ``git fetch``. The mirror gets half of the retry budget, because a
+        link that drops one connection often serves the next one. An attempt that
+        fails after the whole stall window without receiving anything is not
+        retried: an unreachable host answers nothing the second time either.
+        """
+        attempts = max(1, int(os.environ.get("VLLM_MUSA_GIT_RETRY_ATTEMPTS") or "8"))
+        delay_s = max(0, int(os.environ.get("VLLM_MUSA_GIT_RETRY_DELAY_S") or "10"))
+        stall_s = resolve_stall_s()
+        candidates = candidate_commands(cmd, stall_s=str(stall_s))
+        for candidate in candidates[:-1]:
+            try:
+                _CustomBuildExt._retry_git_call(
+                    candidate,
+                    cwd,
+                    _CustomBuildExt._mirror_attempts(attempts),
+                    delay_s,
+                    slow_fail_s=stall_s or _CustomBuildExt._SLOW_CONNECT_FAIL_S,
+                )
+                return
+            except subprocess.CalledProcessError:
+                print(
+                    f"Git command failed through {resolve_proxy()}; retrying "
+                    f"directly (set {PROXY_ENV}=0 to skip the mirror).",
+                    flush=True,
+                )
+        _CustomBuildExt._retry_git_call(candidates[-1], cwd, attempts, delay_s)
+
+    @staticmethod
+    def _clone_and_checkout(repo_path, repo_url, git_tag):
+        """Materialize a repository at exactly ``git_tag``, without its history.
+
+        Both pins are immutable commits, so fetching that one commit is all the
+        build needs. A full clone transfers the whole history -- several times
+        the size of the commit being built -- and that transfer is what stalls or
+        dies first on a slow link.
+        """
         repo_path.parent.mkdir(exist_ok=True)
-        if not repo_path.exists():
-            clone_cmd = ["git", "clone"]
-            if git_shallow:
-                clone_cmd += ["--depth", "1"]
-            clone_cmd += [repo_url, str(repo_path)]
-            _CustomBuildExt._git_check_call_with_retries(
-                clone_cmd, cleanup_path=repo_path
+        if not (repo_path / ".git").exists():
+            if repo_path.exists():
+                # git init in a populated directory would make every file
+                # untracked, and the `git clean -fdx` below would delete them.
+                raise RuntimeError(
+                    f"{repo_path} exists but is not a git checkout: remove it, or "
+                    "stage the pinned tree and build with SKIP_THIRD_PARTY=1"
+                )
+            repo_path.mkdir()
+            subprocess.check_call(["git", "init", "-q", str(repo_path)])
+            subprocess.check_call(
+                ["git", "remote", "add", "origin", repo_url], cwd=repo_path
             )
-            subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
-        else:
+        # Skip the network entirely when the pin is already in the object store.
+        if subprocess.call(
+            ["git", "cat-file", "-e", f"{git_tag}^{{commit}}"],
+            cwd=repo_path,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ):
             _CustomBuildExt._git_check_call_with_retries(
-                ["git", "fetch", "--all"], cwd=repo_path
+                ["git", "fetch", "--depth", "1", "origin", git_tag],
+                cwd=repo_path,
             )
-            subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
+        subprocess.check_call(
+            ["git", "checkout", "-f", "--detach", git_tag], cwd=repo_path
+        )
         subprocess.check_call(["git", "reset", "--hard", git_tag], cwd=repo_path)
         subprocess.check_call(["git", "clean", "-fdx"], cwd=repo_path)
 
@@ -515,18 +609,18 @@ class _CustomBuildExt(BuildExtension):
         if os.environ.get("SKIP_THIRD_PARTY", "0") == "1":
             print("Skipping third-party repositories cloning (SKIP_THIRD_PARTY=1)")
         else:
-            print("Cloning third-party repositories...")
+            proxy = resolve_proxy()
+            via = f" through {proxy}" if proxy else ""
+            print(f"Fetching pinned third-party sources{via}...")
             self._clone_and_checkout(
                 _VLLM_REPO.source_dir,
                 _VLLM_REPO.git_repository,
                 _VLLM_REPO.git_tag,
-                _VLLM_REPO.git_shallow,
             )
             self._clone_and_checkout(
                 _FLASHINFER_REPO.source_dir,
                 _FLASHINFER_REPO.git_repository,
                 _FLASHINFER_REPO.git_tag,
-                _FLASHINFER_REPO.git_shallow,
             )
             print("Third-party repositories ready.")
 

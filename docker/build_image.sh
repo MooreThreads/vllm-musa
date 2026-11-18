@@ -5,19 +5,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-PYTHON_VERSION="${PYTHON_VERSION:-3.10}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 BASE_IMAGE="${BASE_IMAGE:-ubuntu:22.04}"
 
+if [[ "${PYTHON_VERSION}" != "3.12" ]]; then
+    echo "vllm-musa supports only PYTHON_VERSION=3.12 (got ${PYTHON_VERSION})" >&2
+    exit 1
+fi
+
+DEADSNAKES_MIRROR_URL="${DEADSNAKES_MIRROR_URL:-}"
+DEADSNAKES_GPGKEY_URL="${DEADSNAKES_GPGKEY_URL:-}"
+GET_PIP_URL="${GET_PIP_URL:-https://bootstrap.pypa.io/get-pip.py}"
 MUSA_APT_SOURCE="${MUSA_APT_SOURCE:-https://dl.mthreads.com/repo/repository/ubuntu2204/}"
 INSTALL_MUSA_STACK="${INSTALL_MUSA_STACK:-auto}"
 MUSA_RUNTIME_VERSION="${MUSA_RUNTIME_VERSION:-5.2}"
 MCCL_VERSION="${MCCL_VERSION:-2.4.0}"
+MTSHMEM_VERSION="${MTSHMEM_VERSION:-3.2.5.1}"
 
 # Python package indexes. MUSA/MT wheels (torch, torch_musa, mate, ...) resolve
 # from the internal Moore Threads index only; ordinary third-party wheels resolve
 # from public PyPI. See docker/musa.Dockerfile for why the two are not merged.
-PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple}"
+PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
+PIP_BOOTSTRAP_INDEX_URL="${PIP_BOOTSTRAP_INDEX_URL:-${PYPI_INDEX_URL}}"
 MUSA_PIP_INDEX_URL="${MUSA_PIP_INDEX_URL:-https://dl.mthreads.com/repo/api/pypi/pypi/simple}"
+
+# GitHub mirror for the vendored vLLM/FlashInfer fetch performed by setup.py.
+# Leave empty for setup.py's default (https://gh-proxy.org/), or set 0 to fetch
+# from github.com directly.
+VLLM_MUSA_GIT_PROXY="${VLLM_MUSA_GIT_PROXY:-}"
 
 PYTORCH_RELEASE="$(
     awk -F'==' '/^torch==/ {gsub(/\.\*/, "", $2); print $2; exit}' \
@@ -46,12 +61,18 @@ docker build \
     -t "${IMAGE_TAG}" \
     --build-arg BASE_IMAGE="${BASE_IMAGE}" \
     --build-arg PYTHON_VERSION="${PYTHON_VERSION}" \
+    --build-arg DEADSNAKES_MIRROR_URL="${DEADSNAKES_MIRROR_URL}" \
+    --build-arg DEADSNAKES_GPGKEY_URL="${DEADSNAKES_GPGKEY_URL}" \
+    --build-arg GET_PIP_URL="${GET_PIP_URL}" \
+    --build-arg PIP_BOOTSTRAP_INDEX_URL="${PIP_BOOTSTRAP_INDEX_URL}" \
     --build-arg MUSA_APT_SOURCE="${MUSA_APT_SOURCE}" \
     --build-arg PYPI_INDEX_URL="${PYPI_INDEX_URL}" \
+    --build-arg VLLM_MUSA_GIT_PROXY="${VLLM_MUSA_GIT_PROXY}" \
     --build-arg MUSA_PIP_INDEX_URL="${MUSA_PIP_INDEX_URL}" \
     --build-arg INSTALL_MUSA_STACK="${INSTALL_MUSA_STACK}" \
     --build-arg MUSA_RUNTIME_VERSION="${MUSA_RUNTIME_VERSION}" \
     --build-arg MCCL_VERSION="${MCCL_VERSION}" \
+    --build-arg MTSHMEM_VERSION="${MTSHMEM_VERSION}" \
     --build-arg MOONCAKE_VERSION="${MOONCAKE_VERSION}" \
     --build-arg BUILD_VLLM_RS="${BUILD_VLLM_RS}" \
     --build-arg VLLM_MUSA_COMMIT="${VLLM_MUSA_COMMIT}" \

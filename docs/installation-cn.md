@@ -5,11 +5,11 @@
 
 ## 环境要求
 
-- x86_64 Linux、CPython 3.10（固定版本的 MUSA wheel 针对这一组合发布）。
+- x86_64 Linux、CPython 3.12（固定版本的 MUSA wheel 针对这一组合发布）。
 - 配备兼容 MUSA 驱动和工具包的摩尔线程（Moore Threads）GPU。
 - vLLM-MUSA v0.32.0-dev 及对应的 PyTorch/MUSA wheel。
 
-v0.32.0-dev 依赖栈使用 PyTorch 2.11.x。驱动、工具包和 wheel 应来自同一版本系列。
+v0.32.0-dev 依赖栈使用 PyTorch 2.13.x。驱动、工具包和 wheel 应来自同一版本系列。
 
 ## 软件包索引
 
@@ -70,6 +70,11 @@ pip install . --no-build-isolation -v
 ```
 
 在已有环境中，请先将 torchada 升级到 `requirements/common.txt` 固定的版本：`setup.py` 在构建时导入 `torchada.arch`。
+
+构建时会从 github.com 获取固定版本的上游 vLLM 和 FlashInfer 提交（不含历史），
+默认经由 `https://gh-proxy.org/` 代理。设置 `VLLM_MUSA_GIT_PROXY=0` 可直连
+github.com，也可以将其设为其他镜像前缀，详见
+[配置参考（英文）](configuration.md#third-party-source-clones)。
 
 开发时使用可编辑安装：
 

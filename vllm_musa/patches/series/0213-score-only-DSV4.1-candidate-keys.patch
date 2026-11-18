@@ -1,0 +1,181 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 13 Nov 2026 11:20:17 +0800
+Subject: [PATCH] score only DSV4.1 candidate keys
+
+---
+ vllm/forward_context.py                       |  1 +
+ .../layers/sparse_attn_indexer.py             | 47 ++++++++++++++++++-
+ vllm/v1/worker/gpu/cudagraph_utils.py         | 21 ++++++++-
+ vllm/v1/worker/gpu/model_runner.py            | 17 +++++++
+ 4 files changed, 84 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/forward_context.py b/vllm/forward_context.py
+index 9ddc8e9255..23339ae5eb 100644
+--- a/vllm/forward_context.py
++++ b/vllm/forward_context.py
+@@ -55,6 +55,7 @@ class BatchDescriptor:
+     (like fused_moe_lora) whose grid size depends on num_active_loras
+     to be properly captured.
+     """
++    use_sparse_indexer_candidates: bool = True
+ 
+ 
+ def _compute_sp_num_tokens(
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 6693701f85..2092efce8a 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -2331,6 +2331,40 @@ def sparse_attn_indexer(
+     # fill.
+     if not skip_topk_buffer_clear:
+         topk_indices_buffer[: hidden_states.shape[0]] = -1
++    if (
++        current_platform.is_out_of_tree()
++        and current_platform.is_musa()
++        and candidate_blocks is not None
++        and not use_pcp
++    ):
++        from vllm_musa.kernels.sparse_mqa import try_candidate_indexer
++        from vllm_musa.kernels.sparse_mqa_dispatch import candidate_path_enabled
++
++        if candidate_path_enabled() and try_candidate_indexer(
++            q_quant,
++            kv_cache,
++            weights,
++            attn_metadata_narrowed,
++            candidate_blocks,
++            candidate_block_size,
++            topk_indices_buffer[:, :topk_tokens],
++            max_model_len,
++            use_fp4_cache,
++            candidate_write,
++        ):
++            return topk_indices_buffer
++        return _musa_fill_exact_sparse_indexer_indices(
++            hidden_states,
++            k_cache_prefix,
++            kv_cache,
++            q_quant,
++            weights,
++            topk_tokens,
++            head_dim,
++            max_model_len,
++            topk_indices_buffer,
++            use_fp4_cache,
++        )
+     if has_prefill:
+         prefill_metadata = attn_metadata_narrowed.prefill
+         assert prefill_metadata is not None
+@@ -2820,7 +2854,18 @@ class SparseAttnIndexer(CustomOp):
+         k: torch.Tensor | None,
+         weights: torch.Tensor,
+     ):
+-        if current_platform.is_cuda() or current_platform.is_xpu():
++        use_candidates = False
++        if current_platform.is_out_of_tree() and current_platform.is_musa():
++            from vllm_musa.kernels.sparse_mqa_dispatch import candidate_path_enabled
++
++            use_candidates = (
++                self.candidate_blocks is not None and candidate_path_enabled()
++            )
++        if (
++            current_platform.is_cuda()
++            or current_platform.is_xpu()
++            or use_candidates
++        ):
+             return self.forward_cuda(hidden_states, q_quant, k, weights)
+         elif current_platform.is_rocm():
+             if self.use_pcp and self.dcp_world_size > 1:
+diff --git a/vllm/v1/worker/gpu/cudagraph_utils.py b/vllm/v1/worker/gpu/cudagraph_utils.py
+index 1a9e29fb53..421c57dbed 100644
+--- a/vllm/v1/worker/gpu/cudagraph_utils.py
++++ b/vllm/v1/worker/gpu/cudagraph_utils.py
+@@ -78,6 +78,7 @@ class BatchExecutionDescriptor:
+     num_active_loras: int = 0
+     # Number of microbatches the batch is split into (DBO). 1 means no splitting.
+     num_ubatches: int = 1
++    use_sparse_indexer_candidates: bool = True
+ 
+ 
+ def make_cudagraph_stats(
+@@ -161,6 +162,15 @@ class CudaGraphManager:
+         self.cudagraph_mode = cudagraph_mode
+         self.decode_query_len = decode_query_len
+         self.varlen_decode = varlen_decode
++        self.sparse_indexer_context_threshold = 0
++        if current_platform.is_out_of_tree() and current_platform.is_musa():
++            from vllm_musa.optimization_contract.policy import (
++                deepseek_v41_indexer_context_threshold,
++            )
++
++            self.sparse_indexer_context_threshold = (
++                deepseek_v41_indexer_context_threshold(vllm_config)
++            )
+         # DBO supports FULL CUDA graphs only.
+         self.ubatch_runner = ubatch_runner
+ 
+@@ -369,6 +379,11 @@ class CudaGraphManager:
+                     descs_by_mode[mixed_mode].append(ubatch_desc)
+ 
+         for mode, descs in descs_by_mode.items():
++            if self.sparse_indexer_context_threshold:
++                descs.extend(
++                    replace(desc, use_sparse_indexer_candidates=False)
++                    for desc in list(descs)
++                )
+             descs.sort(key=lambda d: d.num_tokens, reverse=True)
+             self._capture_descs[mode] = descs
+ 
+@@ -739,11 +754,15 @@ class ModelCudaGraphManager(CudaGraphManager):
+ 
+             def forward_fn(cg_mode: CUDAGraphMode) -> None:
+                 batch_descriptor = None
+-                if cg_mode == CUDAGraphMode.PIECEWISE:
++                if (
++                    cg_mode == CUDAGraphMode.PIECEWISE
++                    or self.sparse_indexer_context_threshold
++                ):
+                     batch_descriptor = BatchDescriptor(
+                         num_tokens=num_tokens,
+                         has_lora=has_lora,
+                         num_active_loras=desc.num_active_loras,
++                        use_sparse_indexer_candidates=desc.use_sparse_indexer_candidates,
+                     )
+                 with set_forward_context(
+                     attn_metadata,
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index dca14718a9..1be63a7ce1 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1848,6 +1848,22 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             empty_output = self.kv_connector.no_forward(scheduler_output)
+             return self._merge_ec_connector_no_forward(scheduler_output, empty_output)
+ 
++        if (
++            batch_req_state is not None
++            and self.cudagraph_manager is not None
++            and self.cudagraph_manager.sparse_indexer_context_threshold
++        ):
++            from vllm_musa.kernels.sparse_mqa_dispatch import select_candidate_graph
++
++            batch_desc = select_candidate_graph(
++                batch_desc,
++                self.req_states.num_computed_tokens_np[
++                    batch_req_state.idx_mapping_np
++                ],
++                self.cudagraph_manager.sparse_indexer_context_threshold,
++                batch_req_state.num_scheduled_tokens,
++            )
++
+         cudagraph_stats = None
+         if not dummy_run:
+             # Common case.
+@@ -2056,6 +2072,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 num_tokens=input_batch.num_tokens_after_padding,
+                 has_lora=self.lora_config is not None,
+                 num_active_loras=batch_desc.num_active_loras,
++                use_sparse_indexer_candidates=batch_desc.use_sparse_indexer_candidates,
+             )
+ 
+             with set_forward_context(

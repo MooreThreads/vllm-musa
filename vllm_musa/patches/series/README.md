@@ -14,7 +14,7 @@ filename replay order. The README table below explains each legacy disposition;
 `musa_sync check-series` validates its IDs against the JSON and validates every
 group member against the current filenames. `third_party/PINS` alone selects
 the base and `manifest.py` remains the divergence census. Run
-`python3.10 tools/musa_sync.py report --metadata` for a concise index.
+`python3.12 tools/musa_sync.py report --metadata` for a concise index.
 
 Every top-level `series/*.patch` must have exactly one row in the current-patch
 table below, using its complete filename. Adding, removing, renaming, or
@@ -29,7 +29,7 @@ generated space-only context lines; whitespace fixers must not rewrite patch
 bodies. Successful replay does not prove canonical generation: also run
 `check-series --round-trip` against the commit-bearing checkout.
 
-`.github/workflows/patch-series.yml` runs Python 3.10 offline unit/source
+`.github/workflows/patch-series.yml` runs Python 3.12 offline unit/source
 contracts, canonical format/metadata checks, strict build-path and `git am -3`
 replay plus `verify` on a pristine pinned checkout, and regeneration round-trip
 against a separate commit-bearing checkout. These are source-level gates;
@@ -64,7 +64,7 @@ their v0.32 behavior still requires separate review. The historical observations
 below describe the earlier baseline, not a measured failure of these follow-ups.
 The DeepSeek-V4.1 W4AFP8 adaptation and overlap follow-ups are carried as
 `0203`–`0204` after this baseline, and the Qwen4Exp QSA migration as
-`0205`–`0210`, with the QSA `block_m` tile fix as `0212`.
+`0205`–`0210`, with the QSA `block_m` tile fix as `0215`.
 Hardware validation remains required.
 
 A patch may update several files when they form one atomic feature. The grouped
@@ -265,7 +265,7 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0137-MUSA-vllm.model_executor.layers.fused_moe.fused_moe.patch` | v0.28 0168 | vllm.model_executor.layers.fused_moe.fused_moe |
 | `0138-MUSA-vllm.v1.attention.ops.triton_unified_attention.patch` | v0.28 0169 | vllm.v1.attention.ops.triton_unified_attention |
 | `0139-MUSA-bound-DSV4-long-prefill-indexer-logits.patch` | v0.28 0170 | bound DSV4 long-prefill indexer logits |
-| `0140-MUSA-enable-GLM-5-models-with-eager-MCCL-init-and-GL.patch` | v0.28 0171 | enable GLM-5 models with eager MCCL init and GLM sparse dispatch |
+| `0140-MUSA-enable-GLM-5-models-with-eager-MCCL-init-and-GL.patch` | v0.28 0171 | enable GLM-5 models with eager MCCL init and GLM sparse dispatch, including MUSA-only `is_glm_dsa` metadata forwarding without phase metadata |
 | `0141-MUSA-rotate-V2-output-copy-streams.patch` | v0.28 0172 continued | rotate V2 output copy streams |
 | `0142-MUSA-skip-Prometheus-observe-for-connectors-without-.patch` | v0.28 0173 continued | skip Prometheus observe for connectors without metrics |
 | `0143-MUSA-perf-musa-extend-DSV4-score-DeepGEMM-to-decode-.patch` | v0.28 0174 continued | perf(musa): extend DSV4 score DeepGEMM to decode batches |
@@ -338,9 +338,23 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0209-MUSA-use-native-QSA-fast-top-k.patch` | v0.32 new/updated | use the native MUSA QSA fast top-k kernel |
 | `0210-MUSA-route-QSA-prefill-to-TileLang.patch` | v0.32 new/updated | dispatch QSA prefill to the TileLang sparse paged GQA kernel and prewarm it before capture |
 | `0211-MUSA-keep-fused-MoE-even_Ks-loads-in-bounds.patch` | v0.32 new/updated | mask the fused MoE even_Ks A/B loads under the MUSA pipeliner |
-| `0212-MUSA-pad-the-QSA-BLOCK_M-8-wmma-tile-to-16.patch` | v0.32 new/updated | pad the QSA `block_m == 8` tile to 16 so group sizes 5-8 leave the unimplemented MUSA `mthreads_wmma` layout, while 1/2/4 keep their current tiles |
+| `0212-enable-indexer-row-sharding-and-bound-candidate.patch` | v0.32 new/updated | reuse total-row TP sharding on MUSA and bound candidate block scoring/top-k by visible row lengths |
+| `0213-score-only-DSV4.1-candidate-keys.patch` | v0.32 new/updated | route FP8 two-level indexers through paged candidate-only MQA scoring; specialize V2 graphs at the contract's fixed 32768-token context cutoff |
+| `0214-MUSA-insert-sparse-indexer-K-cache-before-native-dis.patch` | v0.32 new/updated | insert native indexer K cache before exact sparse dispatch; preserve external writes, PCP/MTP gathering and warmup handling. |
+| `0215-MUSA-pad-the-QSA-BLOCK_M-8-wmma-tile-to-16.patch` | v0.32 new/updated | pad the QSA `block_m == 8` tile to 16 so group sizes 5-8 leave the unimplemented MUSA `mthreads_wmma` layout, while 1/2/4 keep their current tiles |
 
-Currently **212 patches** and **0 upstream entries** in `upstream/`.
+For non-speculative DSV4.1 on Model Runner V2 (DP1, no microbatching),
+the optimization contract fixes the context cutoff at `32768` tokens. All-short batches
+use the original indexer; a batch containing a query row at or above the cutoff
+retains candidate filtering. Chunked prefill checks the last scheduled query row.
+Both graph variants are captured separately. Other execution configurations
+do not use context-based graph specialization and retain candidate routing
+subject to the existing candidate-buffer and kernel eligibility checks.
+Candidate-only scoring is selected whenever its width is smaller than the dense
+window, and eligible prefill query rows are sharded across TP ranks. These
+decisions do not require environment-variable overrides.
+
+Currently **215 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
@@ -364,7 +378,7 @@ The round-trip holder is produced by applying this exact series to a clean
 checkout at `VLLM_COMMIT`; an already-patched v0.32 checkout with a different
 commit grouping is not a valid holder for that check. To verify the stack, use a
 **pristine** checkout or archive of the pinned vLLM commit with
-`python3.10 tools/musa_sync.py verify --repo <pristine-vllm>`. The verifier checks
+`python3.12 tools/musa_sync.py verify --repo <pristine-vllm>`. The verifier checks
 every patch in order; an already-patched tree is not a valid input for that
 command. A strict replay is `git apply --check` followed by `git apply` for each
 patch in filename order. Compare the resulting source hashes with the runtime

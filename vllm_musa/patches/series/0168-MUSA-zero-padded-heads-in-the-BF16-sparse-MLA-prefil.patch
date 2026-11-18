@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: zero padded heads in the BF16 sparse MLA prefill
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
-index dc9bb41ff7..7aa3d19e9a 100644
+index 615665e357..06d6331041 100644
 --- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
 +++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
 @@ -1373,7 +1373,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):

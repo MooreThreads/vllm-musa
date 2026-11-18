@@ -5,12 +5,12 @@ model-specific launch command, start with the [serving cookbook](cookbook/README
 
 ## Requirements
 
-- x86_64 Linux and CPython 3.10 (the pinned MUSA wheels target this
+- x86_64 Linux and CPython 3.12 (the pinned MUSA wheels target this
   interpreter/platform pair).
 - A Moore Threads GPU with a compatible MUSA driver and toolkit.
 - vLLM-MUSA v0.32.0-dev and its matching PyTorch/MUSA wheels.
 
-The v0.32.0-dev dependency stack uses PyTorch 2.11.x. Keep the driver, toolkit,
+The v0.32.0-dev dependency stack uses PyTorch 2.13.x. Keep the driver, toolkit,
 and wheel versions from the same release family.
 
 ## Package indexes
@@ -79,6 +79,12 @@ pip install . --no-build-isolation -v
 
 In an existing environment, upgrade torchada to the `requirements/common.txt` pin
 first: `setup.py` imports `torchada.arch` at build time.
+
+The install fetches the pinned upstream vLLM and FlashInfer commits (without
+their history) from github.com, through `https://gh-proxy.org/` by default. Set
+`VLLM_MUSA_GIT_PROXY=0` to fetch github.com directly, or set it to another
+mirror base URL; see
+[Configuration](configuration.md#third-party-source-clones).
 
 For an editable install:
 
