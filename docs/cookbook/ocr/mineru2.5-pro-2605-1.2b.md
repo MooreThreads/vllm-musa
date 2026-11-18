@@ -27,12 +27,16 @@ extraction pipeline.
 
 ## Prerequisites
 
-- vLLM-MUSA v0.28.0-dev with its patched vLLM installed.
+- vLLM-MUSA with vLLM v0.32.0 and
+  `vllm_musa.v1.worker.gpu.sample.no_repeat_ngram.NoRepeatNGramState` installed.
+- Model Runner V2 with speculative decoding off.
 - The MinerU2.5-Pro-2605-1.2B checkpoint available at `MODEL_PATH`.
-- `mineru-vl-utils` installed wherever the vLLM engine runs for
-  `MinerULogitsProcessor`, and wherever the MinerU client runs.
+- `mineru-vl-utils` installed wherever the MinerU client runs.
 
-## Validation
+## Historical validation (v0.28)
+
+The following records describe the original recipe, before the native V2
+processor entry point below was added.
 
 | Item | Value |
 |---|---|
@@ -64,7 +68,7 @@ vllm serve "${MODEL_PATH}" \
   --enable-prefix-caching \
   --enable-chunked-prefill \
   --hf-overrides '{"tie_word_embeddings":true}' \
-  --logits-processors mineru_vl_utils:MinerULogitsProcessor \
+  --logits-processors vllm_musa.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState \
   --compilation-config '{"mode":"VLLM_COMPILE","cudagraph_mode":"FULL_AND_PIECEWISE"}'
 ```
 
@@ -90,6 +94,19 @@ client = MinerUClient(
     use_tqdm=False,
 )
 
+# Preserve MinerU's complete generated-history search within this server's
+# 8,192-token context. Adapt only this client instance's outgoing requests.
+build_request_body = client.client.build_request_body
+
+def build_request_with_ngram_window(*args, **kwargs):
+    body = build_request_body(*args, **kwargs)
+    extra = body.get("vllm_xargs", {})
+    if extra.get("no_repeat_ngram_size") is not None:
+        extra["window_size"] = 8192
+    return body
+
+client.client.build_request_body = build_request_with_ngram_window
+
 async def request() -> None:
     with Image.open(Path("<IMAGE_PATH>")) as image:
         blocks = await client.aio_two_step_extract(image.convert("RGB"))
@@ -104,6 +121,15 @@ asyncio.run(request())
 
 - The HTTP client calls MinerU's two-step extraction method. A direct VLM
   completion does not run the complete pipeline.
+- MinerU's [official client defaults](https://github.com/opendatalab/mineru-vl-utils/blob/c3b3446901697a1c9e3b98ea6186ccf08834441f/mineru_vl_utils/mineru_client.py#L36-L46)
+  use `no_repeat_ngram_size=100`. Its original processor retains generated
+  history in a cache. The shared V2 processor defaults to a 100-token search
+  window, so the example explicitly sends `window_size=8192` to cover all
+  generated history within this recipe's context. This window is an adapter
+  setting, not an additional official MinerU model parameter. Increase it if
+  you increase the context limit.
+- Keep MinerU's own NGram field and sampling defaults. Do not copy the
+  DeepSeek-OCR N=30, window=90 or table-token whitelist into MinerU requests.
 - MUSA selects `FLASH_ATTN` for ViT and `MMEncoderAttention` automatically.
   Do not add the language-model `--attention-config` option to select it.
 - The image processor uses the checkpoint's own defaults. Do not add a pixel

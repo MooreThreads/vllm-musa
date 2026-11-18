@@ -21,7 +21,16 @@ BF16 vision-language OCR recipe for a single S5000 GPU.
 | Maximum sequences | 64 |
 | Prefix caching | Off |
 
-## Validation
+## Prerequisites
+
+- vLLM-MUSA with vLLM v0.32.0 and
+  `vllm_musa.v1.worker.gpu.sample.no_repeat_ngram.NoRepeatNGramState` installed.
+- Model Runner V2. This processor does not support speculative decoding.
+
+## Historical validation (v0.28)
+
+The following records describe the original recipe, before the V2 processor
+entry point below was added.
 
 | Item | Value |
 |---|---|
@@ -51,16 +60,57 @@ vllm serve /models/DeepSeek-OCR \
   --max-num-batched-tokens 8192 \
   --gpu-memory-utilization 0.90 \
   --mm-processor-cache-gb 0 \
-  --no-enable-prefix-caching \
-  --logits-processors vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor
+  --logits-processors vllm_musa.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState \
+  --no-enable-prefix-caching
+```
+
+## Send an image
+
+Load the processor once at server startup, then enable it for each request.
+The model's [official example](https://github.com/deepseek-ai/DeepSeek-OCR/blob/09eaf526153e7a01ed16c9dea8c96282aaea29c0/README.md#L151-L155)
+uses N=30, a 90-token window, and the table-token whitelist below.
+
+```python
+import base64
+from pathlib import Path
+
+from openai import OpenAI
+
+image = base64.b64encode(Path("<IMAGE_PATH>").read_bytes()).decode()
+client = OpenAI(api_key="EMPTY", base_url="http://127.0.0.1:8000/v1")
+response = client.chat.completions.create(
+    model="DeepSeek-OCR",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "image_url", "image_url": {
+                "url": f"data:image/png;base64,{image}",
+            }},
+            {"type": "text", "text": "Free OCR."},
+        ],
+    }],
+    temperature=0.0,
+    extra_body={
+        "skip_special_tokens": False,
+        "vllm_xargs": {
+            "ngram_size": 30,
+            "window_size": 90,
+            "whitelist_token_ids": [128821, 128822],
+        },
+    },
+)
+print(response.choices[0].message.content)
 ```
 
 ## Configuration notes
 
 - `--mm-processor-cache-gb 0` disables the multimodal processor cache, which
   keeps memory predictable for image-heavy OCR traffic.
-- The NGram per-request logits processor is part of the validated DeepSeek-OCR
-  decoding path; keep it in the command.
+- The native V2 processor is selected explicitly by `--logits-processors`.
+  Requests without `ngram_size` or `no_repeat_ngram_size` pass through without
+  NGram masking. Do not supply both field names in one request.
+- The original upstream V1 processor remains available for Model Runner V1;
+  this recipe does not select or change the runner.
 - The 8,192-token batched budget admits a full document page in one prefill.
 - Vision attention routes through the Triton backend by default on this
   branch; no backend flag is required.
