@@ -64,7 +64,8 @@ their v0.32 behavior still requires separate review. The historical observations
 below describe the earlier baseline, not a measured failure of these follow-ups.
 The DeepSeek-V4.1 W4AFP8 adaptation and overlap follow-ups are carried as
 `0203`–`0204` after this baseline, and the Qwen4Exp QSA migration as
-`0205`–`0211`. Hardware validation remains required.
+`0205`–`0210`, with the QSA `block_m` tile fix as `0215`.
+Hardware validation remains required.
 
 A patch may update several files when they form one atomic feature. The grouped
 entries are intentionally multi-file: `0037` contains
@@ -340,6 +341,7 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0212-enable-indexer-row-sharding-and-bound-candidate.patch` | v0.32 new/updated | reuse total-row TP sharding on MUSA and bound candidate block scoring/top-k by visible row lengths |
 | `0213-score-only-DSV4.1-candidate-keys.patch` | v0.32 new/updated | route FP8 two-level indexers through paged candidate-only MQA scoring; specialize V2 graphs at the contract's fixed 32768-token context cutoff |
 | `0214-MUSA-insert-sparse-indexer-K-cache-before-native-dis.patch` | v0.32 new/updated | insert native indexer K cache before exact sparse dispatch; preserve external writes, PCP/MTP gathering and warmup handling. |
+| `0215-MUSA-pad-the-QSA-BLOCK_M-8-wmma-tile-to-16.patch` | v0.32 new/updated | pad the QSA `block_m == 8` tile to 16 so group sizes 5-8 leave the unimplemented MUSA `mthreads_wmma` layout, while 1/2/4 keep their current tiles |
 
 For non-speculative DSV4.1 on Model Runner V2 (DP1, no microbatching),
 the optimization contract fixes the context cutoff at `32768` tokens. All-short batches
@@ -352,7 +354,7 @@ Candidate-only scoring is selected whenever its width is smaller than the dense
 window, and eligible prefill query rows are sharded across TP ranks. These
 decisions do not require environment-variable overrides.
 
-Currently **214 patches** and **0 upstream entries** in `upstream/`.
+Currently **215 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
