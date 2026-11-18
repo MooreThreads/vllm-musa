@@ -80,7 +80,10 @@ RUN set -eux; \
     python /opt/omni-compat/stage_shim.py --source /opt/omni-compat/src
 
 # Gate 1, before anything is installed: can the pinned vLLM serve this Omni
-# tree's imports and calls, with the shim? Source only, no GPU.
+# tree's imports and calls, with the shim? Source only, no GPU. The signature
+# diff against the vLLM Omni targets is not run here -- it needs a second vLLM
+# source tree this build deliberately does not fetch -- so the verdict line
+# says so rather than printing a bare PASS.
 RUN set -eux; \
     python /opt/omni-compat/check_omni_compat.py \
         --omni-root /vllm-workspace/vllm-omni \

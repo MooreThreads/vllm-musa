@@ -216,6 +216,31 @@ ENTRIES: tuple[ShimEntry, ...] = (
         omni_refs=("vllm_omni/patch.py", "vllm_omni/utils/mm_prefix.py"),
     ),
     ShimEntry(
+        module="vllm.v1.worker.gpu.attn_utils",
+        names=(),
+        kind=CAPABILITY,
+        target="compute_mm_prefix_ranges",
+        applies_to="<0.33",
+        reason=(
+            "The adapter above installs 0.33's range builder in "
+            "vllm.v1.attention.backends.utils, which is where 0.33 keeps it and where "
+            "vllm_omni/patch.py reads it to alias img2img onto image. On the pin the "
+            "builder lives here instead, and nothing on the pin reads the other "
+            "module, so the aliasing does not reach the consumer. The v1 model runner "
+            "is unaffected because it does not use a builder at all: it fills the "
+            "ranges with an inline loop that filters only audio, so img2img is "
+            "admitted. Only the v2 runner's model state binds this module's builder."
+        ),
+        remove_when="the pin is >= 0.33, which keeps the builder in the module Omni patches.",
+        unsupported=(
+            "img2img PrefixLM on a stage with model_runner: v2 -- the ranges come out "
+            "empty rather than failing. Omni's stage default is v1, which builds them "
+            "inline and is unaffected, and no shipped deploy sets v2 for an img2img "
+            "model",
+        ),
+        omni_refs=("vllm_omni/patch.py", "vllm_omni/utils/mm_prefix.py"),
+    ),
+    ShimEntry(
         module="vllm.v1.worker.gpu.dp_utils",
         names=(),
         kind=CAPABILITY,

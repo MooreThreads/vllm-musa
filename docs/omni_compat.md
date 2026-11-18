@@ -272,14 +272,23 @@ and `omni_compat.unsupported_paths()` lists it at runtime. Current entries on th
 
 * the worker_v2 autoregressive model runner under data parallelism
   (`vllm_omni/worker_v2/omni_model_runner.py`; diffusion pipelines do not use it);
-* decode context parallelism with a NixlConnector KV transfer.
+* decode context parallelism with a NixlConnector KV transfer;
+* img2img PrefixLM on a stage configured `model_runner: v2`. The adapter puts
+  0.33's range builder where Omni's patch reads it, but on the pin nothing reads
+  that module: the v1 runner fills the ranges with an inline loop that filters
+  only audio, so img2img is already admitted, while the v2 runner's model state
+  binds the builder that stayed in `vllm.v1.worker.gpu.attn_utils`. Omni's
+  stage default is v1 and no shipped deploy sets v2 for an img2img model, so the
+  path is latent -- but on v2 the ranges come out empty rather than failing,
+  which is why it is declared rather than left to be discovered.
 
 Writing a wrapper that guesses at either would be worse than saying so.
 
 ## Finding the next drift
 
-`tools/check_omni_compat.py` runs four passes on source alone, in seconds, with
-no GPU and no install:
+`tools/check_omni_compat.py` runs five passes on source alone, in seconds, with
+no GPU and no install. Four of them need only the pin, so the build gates run
+them; the signature diff needs a second vLLM tree and is a desk tool:
 
 ```bash
 # in an image, against the installed vLLM
@@ -296,8 +305,27 @@ python3 tools/check_omni_compat.py \
 |---|---|---|
 | `imports` | does every `from vllm.x import y` resolve on the pin? | an unshimmed miss outside `TYPE_CHECKING` |
 | `attrs` | does every attribute Omni reads off a vLLM module exist? | a missing attribute with no shim |
+| `calls` | does Omni call a pinned symbol with an argument the pin cannot take? | a call the pin would raise `TypeError` on |
 | `staleness` | is every active entry still needed on this pin? | an entry the pin has made dead |
-| `semantics` | did a symbol Omni calls change signature between the pin and the vLLM Omni targets? | a call that passes what the pin cannot take |
+| `semantics` | did a symbol Omni calls change signature between the pin and the vLLM Omni targets? | nothing by itself: needs `--target-vllm`, which no build gate passes, so a run without it prints `semantics not compared` and the four passes above are the whole verdict |
+
+`calls` is the pass that makes the fatal half of class D automatic. It needs no
+second tree, because whether a call fits the *pin* is decided by the pin's
+signature and Omni's call; with the table emptied it rediscovers both
+call-shape rows on its own (`apply_top_k_top_p(has_topp_only_rows=)` and
+`dispatch_cg_and_sync_dp(allow_skip_drafts=)`), which is how it is tested. Two
+things it deliberately does not report:
+
+* a call whose `TypeError` is caught by an enclosing `except TypeError`. That is
+  how Omni spans vLLM versions -- `_get_helium_rope` calls the new `get_rope`
+  and falls back to the old argument list -- so the fallback not fitting the pin
+  is the reason it exists. A broad `except Exception` does not count; Omni's
+  streaming chat handler wraps 840 lines in one.
+* two call sites listed in `OMNI_STALE_CALLS`, where Omni passes an argument
+  that *neither* the pin nor 0.33 declares, so no shim entry could be right.
+  Each is keyed by what the call passes, so a different unaccepted argument to
+  the same symbol still fails, and a declared site that stops breaking is
+  reported as dead.
 
 Three details decide whether the output is usable rather than noise, and all
 three were false-positive bugs first:
@@ -391,7 +419,10 @@ Stages, each of which fails the build rather than deferring a surprise:
    bootstrap in `py-modules` does get it mapped -- measured on setuptools
    80.10.2, the version the base now caps to -- but that is the case where this
    step is already a no-op.
-4. **Gate 1** — the four audit passes, on source, before installing anything.
+4. **Gate 1** — the four pin-only audit passes, on source, before installing
+   anything. The signature diff is not among them: it needs a second vLLM
+   source tree, which this build deliberately does not fetch, so the verdict
+   line says `semantics not compared` rather than a bare `PASS`.
 5. **Install** — `pip install -e` with every package the base installed frozen as
    a constraint, so Omni may *add* packages and any attempt to *move* one is a
    `ResolutionImpossible` at build time. Verified afterwards by comparing the
@@ -440,7 +471,8 @@ python /opt/omni-compat/verify_shim.py --require-omni
 ## Adding support for a newer Omni ref
 
 1. Run the audit against the candidate ref with `--target-vllm` pointed at the
-   vLLM that ref targets. The four passes name every new drift item and its class.
+   vLLM that ref targets. All five passes then run, and they name every new
+   drift item and its class.
 2. For each one, add a `ShimEntry`:
    * moved module, same symbols -> `RELOCATION` with `source=`;
    * module absent -> `BACKPORT` plus a module under `backports/` built from
@@ -469,11 +501,17 @@ in the image, so they are unaffected by the interpreter or the torch version:
 ```text
 [imports]   pass: 4336 vllm imports, 11 shimmed, 0 unshimmed
 [attrs]     pass: 181 module attributes used, 2 shimmed, 0 missing
-[staleness] pass: 7 entries still needed, 0 stale
+[calls]     pass: 1572 calls to 251 pinned symbols, 0 the pin cannot accept, 2 declared stale in Omni
+[staleness] pass: 8 entries still needed, 0 stale
 [semantics] review: 2578 symbols compared, 0 breaking, 6 changed meaning, 25 latent
+[verdict]   PASS (imports, attributes, calls, staleness, semantics)
 ```
 
-`tests/test_omni_compat.py`: 63 passed on **both** Python 3.10 and Python 3.12.
+Without `--target-vllm` -- which is what both build gates run -- the same trees
+give the same four pin-only passes and `PASS (imports, attributes, calls,
+staleness; semantics not compared, no --target-vllm)`.
+
+`tests/test_omni_compat.py`: 69 passed on **both** Python 3.10 and Python 3.12.
 
 ### Hardware, on the superseded base
 
@@ -587,5 +625,11 @@ is bound.
 
 Not run: any CUDA, ROCm, XPU or NPU build; the Qwen3-Omni and MiniCPM-o talker
 paths the top-k adapter serves (no staged checkpoint that fits one card); a
-multi-card or served-endpoint smoke; the two declared-unsupported paths, which
+multi-card or served-endpoint smoke; the three declared-unsupported paths, which
 are declared precisely because they are not usable on this pin.
+
+The two runs quoted above predate the gate and adapter changes in this branch,
+and their `unsupported: 2` is what they printed -- a third `CAPABILITY` row and
+the `calls` pass were added afterwards, so the counts a rerun prints are 3 and
+one more pass. Nothing in those changes touches the image's serving path, but
+the hardware evidence is for the code as it stood, not as it stands.

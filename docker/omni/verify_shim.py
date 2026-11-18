@@ -40,6 +40,23 @@ _DEVICE_MARKERS = (
 )
 
 
+def _stale_adapter(applied: dict) -> str | None:
+    """Why an adapter that had nothing to do must still fail the build, or None.
+
+    The loader no longer raises for this: the pin already serves the call, so a
+    deployed interpreter is right to carry on rather than take every model down
+    over a shim it does not need. The image is the other way round -- it must
+    not ship a table entry that no longer describes its own pin -- so the
+    refusal moves here.
+    """
+    if not applied.get("stale"):
+        return None
+    return (
+        "the adapter patched nothing because the pin already serves this call; "
+        f"the entry is stale -- {applied['remove_when']}"
+    )
+
+
 def _needs_a_device(exc: BaseException) -> bool:
     """Whether an import failed for want of a GPU rather than for want of a shim."""
     return any(marker in str(exc) for marker in _DEVICE_MARKERS)
@@ -165,6 +182,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"{entry.module}: the adapter did not run; the hook was installed too late"
             )
             result["adapted"][entry.module] = "not adapted"
+            continue
+        stale = _stale_adapter(applied)
+        if stale is not None:
+            failures.append(f"{entry.module}: {stale}")
+            result["adapted"][entry.module] = "stale (the pin provides it)"
             continue
         # The marker above only says the adapter *ran*. Ask the adapter what is
         # adapted right now: vllm-musa rebinds one of these names at module

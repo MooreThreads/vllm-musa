@@ -175,10 +175,16 @@ class _AdaptingLoader:
                 f"for {entry.module}"
             )
         applied = adapter.apply(module)
-        # An adapter that quietly patches nothing is the failure mode that
-        # matters most: the run continues and breaks later, in the model, with
-        # no mention of the shim. Fail here instead.
-        if not applied:
+        # "Patched nothing" is two different states, and only one of them is a
+        # failure. An adapter that matched nothing has left the module unable
+        # to serve Omni's call and nothing downstream would mention the shim,
+        # so fail the import. An adapter with nothing left to do -- the pin
+        # grew the shape itself -- is a stale table entry: a repo bug, not a
+        # runtime one. Raising there would take every model on the image down
+        # over a shim that is no longer needed, so record it and let the build
+        # gate (docker/omni/verify_shim.py) refuse the image.
+        satisfied = getattr(adapter, "is_satisfied", None)
+        if not applied and not (satisfied is not None and satisfied(module)):
             raise ImportError(
                 f"vllm_musa.omni_compat adapter {entry.adapter} patched nothing in "
                 f"{entry.module}. The entry is stale -- {entry.remove_when}"
@@ -187,6 +193,7 @@ class _AdaptingLoader:
             "names": list(applied),
             "reason": entry.reason,
             "remove_when": entry.remove_when,
+            "stale": not applied,
         }
 
     def __getattr__(self, name):  # pragma: no cover - loader protocol passthrough

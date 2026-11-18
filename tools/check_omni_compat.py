@@ -54,7 +54,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA = 2
+SCHEMA = 3
 SKIP_DIRS = {"__pycache__", "build", "dist", ".git", ".venv", "tests"}
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -424,7 +424,7 @@ def audit_module_attributes(uses: list[dict], index: VllmIndex, table) -> dict:
         checked += 1
         if index.has_symbol(module, attr):
             continue
-        cover = shim_covers(table, module, attr, index.version)
+        cover = shim_covers(table, index, module, attr)
         if cover is None:
             for entry in table.adapter_entries():
                 if entry.module == module and attr in entry.names:
@@ -460,6 +460,51 @@ def _type_checking_lines(tree: ast.Module) -> set[int]:
     return lines
 
 
+def _typeerror_guarded_lines(tree: ast.Module) -> set[int]:
+    """Lines whose ``TypeError`` is already handled by an enclosing ``try``.
+
+    Omni supports several vLLM versions in one source tree by calling the new
+    signature and catching the ``TypeError``::
+
+        try:
+            return get_rope(**new_kwargs)
+        except TypeError:
+            return get_rope(rotary_dim=..., base=...)   # older vLLM
+
+    Both calls are deliberate, and the second one not fitting the pin is the
+    point of writing it, so neither is a break. Without this the audit reports
+    a version-compatibility idiom as a defect.
+
+    The handler has to name ``TypeError``. A broad ``except Exception`` means
+    the call's failure becomes an error response, not that an older signature
+    is supported, so it does not count.
+    """
+    guarded: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        # Only an explicit ``except TypeError``. A broad ``except Exception``
+        # is error handling, not a supported fallback -- Omni's streaming chat
+        # handler wraps 840 lines in one, which would absolve every call in it.
+        handlers = []
+        for handler in node.handlers:
+            caught = handler.type
+            if isinstance(caught, ast.Name):
+                names = {caught.id}
+            elif isinstance(caught, ast.Tuple):
+                names = {e.id for e in caught.elts if isinstance(e, ast.Name)}
+            else:
+                continue
+            if "TypeError" in names:
+                handlers.append(handler)
+        if not handlers:
+            continue
+        for statement in [*node.body, *(s for h in handlers for s in h.body)]:
+            end = getattr(statement, "end_lineno", statement.lineno)
+            guarded.update(range(statement.lineno, end + 1))
+    return guarded
+
+
 def collect_omni_calls(omni_root: Path, interesting: set[str]) -> dict[str, list[dict]]:
     """Where Omni calls any of ``interesting``, by plain name or as an attribute.
 
@@ -479,6 +524,7 @@ def collect_omni_calls(omni_root: Path, interesting: set[str]) -> dict[str, list
             rel = str(path.relative_to(omni_root))
         except ValueError:  # pragma: no cover - scan_root outside omni_root
             rel = path.name
+        guarded = _typeerror_guarded_lines(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -497,6 +543,7 @@ def collect_omni_calls(omni_root: Path, interesting: set[str]) -> dict[str, list
             hits.setdefault(name, []).append(
                 {
                     "attribute": isinstance(node.func, ast.Attribute),
+                    "guarded": node.lineno in guarded,
                     "omni_file": rel,
                     "lineno": node.lineno,
                     "positional": positional,
@@ -551,16 +598,27 @@ def load_shim_table():
     return module
 
 
-def shim_covers(
-    table, module: str, name: str | None, vllm_version: str | None
-) -> dict | None:
-    """The entry covering ``module.name`` on ``vllm_version``, if any."""
+def shim_covers(table, index: VllmIndex, module: str, name: str | None) -> dict | None:
+    """The entry covering ``module.name`` on the indexed vLLM, if any.
+
+    A ``RELOCATION`` module is served by delegating every attribute to its
+    source, so a name the table does not list is covered exactly when the
+    source module has it. Treating the kind alone as coverage would make this
+    pass unable to fail for a relocated module -- and a relocated module's
+    names are all absent from the pin by construction, which is the only reason
+    the pass consults this function at all.
+    """
     for entry in table.importable_entries():
         if entry.module != module:
             continue
-        if not _version_ok(entry.applies_to, vllm_version):
+        if not _version_ok(entry.applies_to, index.version):
             continue
-        if name is None or name in entry.names or entry.kind == table.RELOCATION:
+        covered = name is None or name in entry.names
+        if not covered and entry.kind == table.RELOCATION and entry.source:
+            covered = index.has_symbol(entry.source, name) or index.has_module(
+                f"{entry.source}.{name}"
+            )
+        if covered:
             return {
                 "kind": entry.kind,
                 "source": entry.source,
@@ -600,7 +658,7 @@ def audit_imports(omni_imports: list[OmniImport], index: VllmIndex, table) -> di
             )
         if present:
             continue
-        cover = shim_covers(table, item.module, item.name, index.version)
+        cover = shim_covers(table, index, item.module, item.name)
         record = {
             "module": item.module,
             "name": item.name,
@@ -638,6 +696,8 @@ def _risk(pin_sig: dict, target_sig: dict, calls: list[dict]) -> tuple[str, list
     for call in calls:
         if call["starargs"]:
             continue  # cannot tell statically what is passed
+        if call.get("guarded"):
+            continue  # its TypeError is caught; see _typeerror_guarded_lines
         unknown = [kw for kw in call["keywords"] if kw not in pin_params]
         too_many = call["positional"] > pin_positional
         if (unknown and not accepts_extra_kw) or (too_many and not accepts_extra_pos):
@@ -652,6 +712,145 @@ def _risk(pin_sig: dict, target_sig: dict, calls: list[dict]) -> tuple[str, list
     if same_arity and pin_sig["annotations"] != target_sig["annotations"]:
         return "meaning", []
     return "latent", []
+
+
+# Omni call sites that the pin cannot accept and no shim entry can fix: the
+# same call breaks on the vLLM that Omni targets, because Omni's call predates
+# a vLLM refactor that landed before the pin. Verified by reading the symbol in
+# the 0.32.0 pin and in 0.33 -- the signatures are identical, so the pin is not
+# the cause. Each is keyed by what the call actually passes, so a *different*
+# unaccepted argument to the same symbol still fails the gate.
+OMNI_STALE_CALLS: dict[str, dict] = {
+    "vllm.model_executor.models.utils._merge_multimodal_embeddings": {
+        "unknown_keywords": (),
+        "positional": 4,
+        "why": (
+            "step_audio2's thinker passes the pre-refactor (input_ids, inputs_embeds, "
+            "multimodal_embeddings, placeholder_token_id) argument list; both the pin "
+            "and 0.33 take (inputs_embeds, multimodal_embeddings, is_multimodal)."
+        ),
+    },
+    "vllm.tool_parsers.streaming.extract_required_tool_call_streaming": {
+        "unknown_keywords": ("delta_text", "function_name_returned"),
+        "positional": None,
+        "why": (
+            "serving_chat passes delta_text and function_name_returned, which neither "
+            "the pin nor 0.33 declares; it reaches only tool_choice='required' "
+            "streaming."
+        ),
+    },
+}
+
+
+def _offence_key(call: dict) -> tuple[tuple[str, ...], int | None]:
+    """What a call passes that the pin cannot take, as a comparable key."""
+    return (
+        tuple(sorted(call.get("unknown_keywords") or ())),
+        call["positional"] if call.get("too_many_positional") else None,
+    )
+
+
+def audit_calls(
+    omni_imports: list[OmniImport], pin: VllmIndex, table, omni_root: Path
+) -> dict:
+    """Omni calls the *pinned* signature cannot accept, from the pin alone.
+
+    This is the fatal half of the call-shape question, and unlike
+    :func:`audit_semantics` it needs no second vLLM tree: whether a call site
+    passes an argument the pin cannot take is decided by the pin's signature
+    and Omni's call. So both build gates can run it, which is the point -- the
+    target diff answers the different and softer question of which signatures
+    moved between two vLLM trees, and is skipped whenever no ``--target-vllm``
+    is given.
+
+    Only a name Omni imports from vLLM and then calls plainly, in the file that
+    imported it, is scored. An attribute call's receiver is unknown to the AST
+    -- Omni has its own ``apply_top_k_top_p`` and its own ``post_forward``
+    protocol -- so scoring those against vLLM's function would invent failures.
+    """
+    declared = {entry.target for entry in table.capability_entries() if entry.target}
+    adapted = {
+        f"{entry.module}.{name}"
+        for entry in table.adapter_entries()
+        for name in entry.names
+    }
+
+    # Keyed by qualname, so a call is scored only against the signature its own
+    # file imported: two Omni files may import one short name from two modules.
+    importers: dict[str, set[str]] = {}
+    for item in omni_imports:
+        if item.name is None:
+            continue
+        qualname = f"{item.module}.{item.name}"
+        if qualname in pin.signatures:
+            importers.setdefault(qualname, set()).add(item.omni_file)
+
+    shorts = {qualname.rsplit(".", 1)[1] for qualname in importers}
+    calls = collect_omni_calls(omni_root, shorts) if shorts else {}
+
+    # One file importing the same short name from two vLLM modules binds only
+    # the last one, and the AST does not say which: ambiguous, so not scored.
+    bindings: dict[tuple[str, str], int] = {}
+    for qualname, files in importers.items():
+        short = qualname.rsplit(".", 1)[1]
+        for omni_file in files:
+            bindings[(short, omni_file)] = bindings.get((short, omni_file), 0) + 1
+
+    offences: list[dict] = []
+    stale_calls: list[dict] = []
+    scored = 0
+    for qualname in sorted(importers):
+        short = qualname.rsplit(".", 1)[1]
+        sites = [
+            call
+            for call in calls.get(short, [])
+            if not call["attribute"]
+            and call["omni_file"] in importers[qualname]
+            and bindings[(short, call["omni_file"])] == 1
+        ]
+        if not sites:
+            continue
+        scored += len(sites)
+        pin_sig = pin.signatures[qualname]
+        # Both arguments are the pin: only the offender arm can fire, which is
+        # the one that needs no target.
+        risk, offenders = _risk(pin_sig, pin_sig, sites)
+        if risk != "breaks":
+            continue
+        owner = qualname.rsplit(".", 1)[0].split(".")[-1]
+        if qualname in adapted or any(
+            d.endswith(f"{owner}.{short}") or d == short for d in declared
+        ):
+            continue
+        known = OMNI_STALE_CALLS.get(qualname)
+        expected = (
+            (tuple(sorted(known["unknown_keywords"])), known["positional"])
+            if known
+            else None
+        )
+        record = {
+            "symbol": qualname,
+            "pin": {
+                key: pin_sig[key] for key in ("positional", "kwonly", "vararg", "kwarg")
+            },
+            "omni_calls": offenders[:5],
+            "omni_call_count": len(sites),
+        }
+        if expected is not None and all(
+            _offence_key(call) == expected for call in offenders
+        ):
+            stale_calls.append({**record, "why": known["why"]})
+            continue
+        offences.append(record)
+    unfired = sorted(set(OMNI_STALE_CALLS) - {r["symbol"] for r in stale_calls})
+    return {
+        "status": "fail" if offences else "pass",
+        "symbols": len(importers),
+        "calls": scored,
+        "offences": offences,
+        "declared_stale": stale_calls,
+        "declared_stale_unfired": unfired,
+    }
 
 
 def audit_semantics(
@@ -970,6 +1169,27 @@ def main(argv: list[str] | None = None) -> int:
             f"  MISSING  {record['module']}.{record['attr']} ({record['omni_file']}:{record['lineno']})"
         )
 
+    calls = audit_calls(omni_imports, pin, table, OMNI_ROOT)
+    print(
+        f"[calls]     {calls['status']}: {calls['calls']} calls to "
+        f"{calls['symbols']} pinned symbols, {len(calls['offences'])} the pin cannot accept, "
+        f"{len(calls['declared_stale'])} declared stale in Omni"
+    )
+    for record in calls["declared_stale"]:
+        print(f"  OMNI-BUG {record['symbol']}: {record['why']}")
+    for name in calls["declared_stale_unfired"]:
+        print(f"  DEAD     {name} is declared a stale Omni call but no longer breaks")
+    for record in calls["offences"]:
+        print(f"  BREAKS   {record['symbol']}")
+        print(f"           pin    {record['pin']['positional']}")
+        for call in record["omni_calls"][:3]:
+            extra = ""
+            if call.get("unknown_keywords"):
+                extra = f" passes {call['unknown_keywords']}"
+            elif call.get("too_many_positional"):
+                extra = f" passes {call['positional']} positional"
+            print(f"           {call['omni_file']}:{call['lineno']}{extra}")
+
     staleness = audit_staleness(pin, table, target)
     print(
         f"[staleness] {staleness['status']}: {len(staleness['active'])} entries still needed, "
@@ -1034,11 +1254,19 @@ def main(argv: list[str] | None = None) -> int:
         imports["status"] == "fail"
         or attributes["status"] == "fail"
         or staleness["status"] == "fail"
+        or calls["status"] == "fail"
         or semantics.get("breaks")
         or (args.fail_on_review and semantics.get("meaning"))
     )
     verdict = "FAIL" if failed else "PASS"
-    print(f"[verdict]   {verdict}")
+    # The verdict has to carry its own coverage. Without this a run with no
+    # --target-vllm printed a bare PASS and exited 0 while the semantic diff
+    # had not run at all, and automation reads the exit code.
+    coverage = ["imports", "attributes", "calls", "staleness"]
+    if target is not None:
+        coverage.append("semantics")
+    note = "" if target is not None else "; semantics not compared, no --target-vllm"
+    print(f"[verdict]   {verdict} ({', '.join(coverage)}{note})")
 
     if args.report is not None:
         args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -1052,6 +1280,8 @@ def main(argv: list[str] | None = None) -> int:
                     "vllm_version": pin.version,
                     "target_vllm": str(args.target_vllm) if args.target_vllm else None,
                     "attributes": attributes,
+                    "calls": calls,
+                    "coverage": coverage,
                     "imports": imports,
                     "semantics": semantics,
                     "staleness": staleness,

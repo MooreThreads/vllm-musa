@@ -38,6 +38,23 @@ ADAPTED = "__vllm_musa_drops_has_topp_only_rows__"
 NAME = "apply_top_k_top_p"
 
 
+def _is_the_bridge(obj: object) -> bool:
+    """Whether ``obj`` is the wrapper this adapter installed.
+
+    The marker is the function itself, so ``functools.wraps`` copying it out of
+    our ``__dict__`` into somebody else's wrapper cannot forge the answer --
+    that wrapper's marker names ours, not itself. Identity is the right test
+    here because the hazard is *replacement*: vllm-musa binds its own
+    ``apply_top_k_top_p``, and one that copied our metadata with
+    ``functools.wraps`` would otherwise read as adapted while not taking the
+    keyword at all, so the guard below would skip re-wrapping it.
+
+    Local rather than shared: the ``.pth`` bootstrap loads each adapter by file
+    path, so an adapter must not import a sibling module.
+    """
+    return getattr(obj, ADAPTED, None) is obj
+
+
 class _ReapplyingModule(ModuleType):
     """Re-runs the adapter when anything rebinds the adapted name.
 
@@ -52,8 +69,8 @@ class _ReapplyingModule(ModuleType):
     only the argument list is widened.
 
     Recursion ends after one extra level: re-applying assigns the wrapper, which
-    arrives here already carrying ``ADAPTED``, so :func:`apply` returns without
-    assigning again.
+    arrives here as its own marker, so :func:`apply` returns without assigning
+    again.
     """
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -69,14 +86,41 @@ def is_applied(module: ModuleType) -> list[str]:
     patch time: the whole hazard here is that something rebinds the name
     afterwards, and a module-level marker cannot see that.
     """
+    return [NAME] if _is_the_bridge(getattr(module, NAME, None)) else []
+
+
+def is_satisfied(module: ModuleType) -> bool:
+    """Whether the live callable already accepts the newer hint.
+
+    True in two unrelated ways -- the adapter is in place, or the pin caught up
+    and declares the parameter itself -- and the loader has to tell both from
+    "the adapter matched nothing", which is the only one worth failing an
+    import over.
+    """
     live = getattr(module, NAME, None)
-    return [NAME] if getattr(live, ADAPTED, False) else []
+    if live is None:
+        return False
+    if _is_the_bridge(live):
+        return True
+    try:
+        # follow_wrapped=False: the wrapper this adapter installs carries
+        # __wrapped__, so a followed signature reports the pin's parameters and
+        # answers a different question than the one asked here.
+        parameters = inspect.signature(live, follow_wrapped=False).parameters
+    except (TypeError, ValueError):  # pragma: no cover - C callables
+        return False
+    if "has_topp_only_rows" in parameters:
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
 
 
 def apply(module: ModuleType) -> list[str]:
     """Let the pinned ``apply_top_k_top_p`` accept and ignore the newer hint."""
     original = getattr(module, NAME, None)
-    if original is None or getattr(original, ADAPTED, False):
+    if original is None or _is_the_bridge(original):
         return []
 
     try:
@@ -93,7 +137,7 @@ def apply(module: ModuleType) -> list[str]:
         del has_topp_only_rows
         return original(*args, **kwargs)
 
-    setattr(apply_top_k_top_p, ADAPTED, True)
+    setattr(apply_top_k_top_p, ADAPTED, apply_top_k_top_p)
     # Assign before guarding so this first patch does not re-enter __setattr__.
     module.apply_top_k_top_p = apply_top_k_top_p
     if type(module) is not _ReapplyingModule:

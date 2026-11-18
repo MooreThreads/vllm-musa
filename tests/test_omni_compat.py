@@ -183,12 +183,18 @@ def _run(
     shim is process-global by design, so in-process tests would leak into each
     other.
     """
-    script = textwrap.dedent("""
+    script = (
+        textwrap.dedent(
+            """
         import json, sys
         import vllm_musa.omni_compat as compat
         compat.install()
         result = {"installed": compat.is_installed()}
-        """) + textwrap.dedent(body) + "\nprint('@@' + json.dumps(result))\n"
+        """
+        )
+        + textwrap.dedent(body)
+        + "\nprint('@@' + json.dumps(result))\n"
+    )
     env = {
         "PYTHONPATH": f"{site}:{ROOT}",
         "PATH": "/usr/bin:/bin",
@@ -248,6 +254,11 @@ def test_every_entry_is_well_formed():
             assert callable(
                 module.is_applied
             ), f"adapter {entry.adapter} must expose is_applied(module)"
+            # Without this the loader cannot tell "the pin serves this already"
+            # from "the adapter matched nothing", and fails closed on both.
+            assert callable(
+                module.is_satisfied
+            ), f"adapter {entry.adapter} must expose is_satisfied(module)"
 
 
 @pytest.mark.parametrize(
@@ -483,7 +494,8 @@ def test_backport_reproduces_the_pinned_grouping(pin_site):
 
 def test_backport_rejects_inconsistent_worker_specs(pin_site):
     """The pinned assertion must survive the backport, not be softened by it."""
-    script = textwrap.dedent("""
+    script = textwrap.dedent(
+        """
         import vllm_musa.omni_compat as compat
         compat.install()
         from vllm.v1.core.kv_cache_planning import get_global_kv_cache_groups
@@ -492,7 +504,8 @@ def test_backport_rejects_inconsistent_worker_specs(pin_site):
             num_prefill_lookahead_tokens = 1
 
         get_global_kv_cache_groups(Config(), [{"l": "a"}, {"l": "b"}])
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -511,7 +524,8 @@ def test_backport_rejects_inconsistent_worker_specs(pin_site):
 def test_a_stale_relocation_fails_loudly(tmp_path, monkeypatch):
     """A table row pointing at a source without the symbol must raise on import."""
     site = _make_vllm(tmp_path, PIN_VERSION, moved=False)
-    script = textwrap.dedent("""
+    script = textwrap.dedent(
+        """
         import vllm_musa.omni_compat as compat
         from vllm_musa.omni_compat import table
 
@@ -527,7 +541,8 @@ def test_a_stale_relocation_fails_loudly(tmp_path, monkeypatch):
         table.ENTRIES = (bad,)
         compat.install()
         import vllm.entrypoints.common.cli_args
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -621,7 +636,8 @@ def test_bootstrap_imports_nothing_heavy(pin_site):
     ``import vllm_musa.omni_compat`` would execute ``vllm_musa/__init__.py``,
     which imports torchada and torch; the bootstrap exists to avoid exactly that.
     """
-    script = textwrap.dedent("""
+    script = textwrap.dedent(
+        """
         import json, sys
         import vllm_musa_omni_compat_pth as boot
         heavy = sorted(
@@ -634,7 +650,8 @@ def test_bootstrap_imports_nothing_heavy(pin_site):
             "is_last": type(sys.meta_path[-1]).__name__ == "OmniCompatPathFinder",
             "is_first": type(sys.meta_path[0]).__name__ == "OmniCompatPathFinder",
         }))
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -663,7 +680,8 @@ def test_bootstrap_serves_without_importing_the_package(pin_site):
     ``vllm_musa``'s initialisation while a vLLM module is mid-import, which is
     the circular import this bootstrap exists to avoid.
     """
-    script = textwrap.dedent("""
+    script = textwrap.dedent(
+        """
         import json, sys
         import vllm_musa_omni_compat_pth  # noqa: F401  -- installs the hook
         from vllm.entrypoints.common.startup import cli_env_setup
@@ -671,7 +689,8 @@ def test_bootstrap_serves_without_importing_the_package(pin_site):
             "value": cli_env_setup(),
             "imported_vllm_musa": "vllm_musa" in sys.modules,
         }))
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -698,7 +717,8 @@ def test_bootstrap_adapter_survives_a_later_rebind(pin_site):
     holds through the standalone bootstrap, which loads the adapter by file path
     and is what the image actually runs.
     """
-    script = textwrap.dedent("""
+    script = textwrap.dedent(
+        """
         import json, sys
         import vllm_musa_omni_compat_pth  # noqa: F401  -- installs the hook
         import vllm.v1.sample.ops.topk_topp_sampler as mod
@@ -712,7 +732,8 @@ def test_bootstrap_adapter_survives_a_later_rebind(pin_site):
             "value": list(apply_top_k_top_p("l", 1, 2, has_topp_only_rows=False)),
             "imported_vllm_musa": "vllm_musa" in sys.modules,
         }))
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -733,13 +754,15 @@ def test_bootstrap_adapter_survives_a_later_rebind(pin_site):
 
 
 def test_bootstrap_respects_the_disable_env(pin_site):
-    script = textwrap.dedent("""
+    script = textwrap.dedent(
+        """
         import sys
         import vllm_musa_omni_compat_pth as boot
         assert not any(type(f).__name__ == "OmniCompatPathFinder" for f in sys.meta_path)
         assert boot.install() is False
         import vllm.entrypoints.common.startup
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -835,7 +858,8 @@ def test_pth_line_is_processed_and_installs_the_startup_hook(tmp_path):
         timeout=120,
         check=True,
     )
-    probe = textwrap.dedent(f"""
+    probe = textwrap.dedent(
+        f"""
         import json, site, sys
         site.addsitedir({str(site)!r})          # processes the .pth, as startup does
         from vllm_musa.omni_compat import active_hooks
@@ -845,7 +869,8 @@ def test_pth_line_is_processed_and_installs_the_startup_hook(tmp_path):
             "served": cli_env_setup(),
             "bootstrap": "vllm_musa_omni_compat_pth" in sys.modules,
         }}))
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True,
@@ -1148,13 +1173,15 @@ def test_adapter_reaches_a_module_imported_after_install(pin_site):
 
 def test_adapter_warns_when_the_module_was_already_imported(pin_site):
     """Installing too late cannot work, and must say so rather than look fine."""
-    script = textwrap.dedent("""
+    script = textwrap.dedent(
+        """
         import logging, sys
         logging.basicConfig(level=logging.WARNING)
         import vllm.v1.sample.ops.topk_topp_sampler  # before the shim: too late
         import vllm_musa.omni_compat as compat
         compat.install()
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -1172,7 +1199,8 @@ def test_adapter_warns_when_the_module_was_already_imported(pin_site):
 
 def test_an_adapter_that_patches_nothing_fails_the_import(pin_site, tmp_path):
     """A silent no-op adapter is the failure mode that matters most."""
-    script = textwrap.dedent("""
+    script = textwrap.dedent(
+        """
         import sys
         import vllm_musa.omni_compat as compat
         from vllm_musa.omni_compat import _patcher, table
@@ -1196,7 +1224,8 @@ def test_an_adapter_that_patches_nothing_fails_the_import(pin_site, tmp_path):
         )
         _patcher.install_adapters()
         import vllm.v1.sample.ops.topk_topp_sampler
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -1368,3 +1397,291 @@ def test_audit_tool_refuses_a_root_that_holds_no_omni(tmp_path, capsys):
     tool = _load_audit_tool()
     assert tool.main(["--omni-root", str(tmp_path)]) == 2
     assert "does not contain vllm_omni/" in capsys.readouterr().err
+
+
+def test_imports_pass_fails_a_name_the_relocation_source_does_not_have():
+    """A relocated module is served by delegating, so its coverage is the source's.
+
+    Every name on a relocated module is absent from the pin by construction --
+    that is the reason the row exists -- and the imports pass only consults
+    ``shim_covers`` for names the pin lacks. Treating the kind alone as
+    coverage therefore made this pass unable to fail for any name on any
+    relocation row, which is the most common drift kind it exists to catch.
+    """
+    tool = _load_audit_tool()
+    source = "vllm.entrypoints.launchers.cli_args"
+    index = tool.VllmIndex(
+        root=ROOT, version=PIN_VERSION, modules={source: {"make_arg_parser"}}
+    )
+
+    def audit(name: str) -> dict:
+        item = tool.OmniImport(
+            module="vllm.entrypoints.common.cli_args",
+            name=name,
+            omni_file="vllm_omni/entrypoints/cli/serve.py",
+            lineno=1,
+            type_checking=False,
+        )
+        return tool.audit_imports([item], index, compat_table)
+
+    # Listed in the table and present in the source: served.
+    assert audit("make_arg_parser")["status"] == "pass"
+
+    # Not listed, but the source has it. The relocation delegates unknown
+    # attributes, so this works without a table edit and must stay passing.
+    index.modules[source].add("not_in_the_table")
+    assert audit("not_in_the_table")["status"] == "pass"
+
+    # Absent from the source too: nothing can serve it, and the pass has to say so.
+    result = audit("validate_api_server_args")
+    assert result["status"] == "fail"
+    assert result["blocking"] == 1
+    assert [r["name"] for r in result["unshimmed"]] == ["validate_api_server_args"]
+
+
+# --------------------------------------------------------------------------- #
+# The call-shape pass, which needs no second vLLM tree
+# --------------------------------------------------------------------------- #
+def _call_fixture(tmp_path: Path, pin_body: str, omni_body: str) -> tuple:
+    """A one-symbol pin and a one-file Omni tree, indexed the way main() does."""
+    tool = _load_audit_tool()
+    pin = tmp_path / "pin" / "vllm"
+    _write(pin / "__init__.py", "__version__ = '0.32.0'\n")
+    _write(pin / "v1" / "__init__.py")
+    _write(pin / "v1" / "sample" / "__init__.py")
+    _write(pin / "v1" / "sample" / "ops" / "__init__.py")
+    _write(pin / "v1" / "sample" / "ops" / "topk_topp_sampler.py", pin_body)
+
+    omni = tmp_path / "omni"
+    _write(omni / "vllm_omni" / "__init__.py")
+    _write(omni / "vllm_omni" / "talker.py", omni_body)
+
+    tool.OMNI_ROOT = omni
+    index = tool.VllmIndex.build(pin, PIN_VERSION)
+    return tool, tool.collect_omni_imports(omni), index, omni
+
+
+class _BlindTable:
+    """A table with no answers, to prove the pass finds the drift on its own."""
+
+    RELOCATION = compat_table.RELOCATION
+    importable_entries = staticmethod(lambda: ())
+    adapter_entries = staticmethod(lambda: ())
+    capability_entries = staticmethod(lambda: ())
+
+
+def test_call_pass_finds_a_keyword_the_pin_cannot_take_without_a_target_tree(tmp_path):
+    """The fatal half of call-shape drift, from the pin alone.
+
+    This is the class that produced two of the table's rows and that a human
+    found by hand: the name resolves, the import audit is happy, and the call
+    raises TypeError. The semantic pass could see it only with --target-vllm,
+    which no build gate passes, so nothing automated saw it at all.
+    """
+    tool, omni_imports, index, omni = _call_fixture(
+        tmp_path,
+        "def apply_top_k_top_p(logits, k, p):\n    return logits\n",
+        "from vllm.v1.sample.ops.topk_topp_sampler import apply_top_k_top_p\n"
+        "def sample(logits):\n"
+        "    return apply_top_k_top_p(logits, None, None, has_topp_only_rows=True)\n",
+    )
+
+    blind = tool.audit_calls(omni_imports, index, _BlindTable, omni)
+    assert blind["status"] == "fail"
+    assert [o["symbol"] for o in blind["offences"]] == [
+        "vllm.v1.sample.ops.topk_topp_sampler.apply_top_k_top_p"
+    ]
+    assert blind["offences"][0]["omni_calls"][0]["unknown_keywords"] == [
+        "has_topp_only_rows"
+    ]
+
+    # The shipped table adapts exactly this, so the real run must stay quiet.
+    assert tool.audit_calls(omni_imports, index, compat_table, omni)["status"] == "pass"
+
+
+def test_call_pass_does_not_flag_a_typeerror_guarded_fallback(tmp_path):
+    """Omni spans vLLM versions by catching the TypeError.
+
+    ``_get_helium_rope`` calls the new ``get_rope`` and falls back to the old
+    argument list in ``except TypeError``. The fallback not fitting the pin is
+    the reason it was written, so reporting it would make the gate cry wolf on
+    a compatibility idiom -- while a broad ``except Exception`` (Omni's
+    streaming chat handler wraps 840 lines in one) must still not absolve it.
+    """
+    pin_body = "def apply_top_k_top_p(logits, k, p):\n    return logits\n"
+    call = "apply_top_k_top_p(logits, None, None, has_topp_only_rows=True)"
+
+    guarded = (
+        "from vllm.v1.sample.ops.topk_topp_sampler import apply_top_k_top_p\n"
+        "def sample(logits):\n"
+        "    try:\n"
+        f"        return {call}\n"
+        "    except TypeError:\n"
+        "        return apply_top_k_top_p(logits, None, None)\n"
+    )
+    tool, omni_imports, index, omni = _call_fixture(tmp_path, pin_body, guarded)
+    assert tool.audit_calls(omni_imports, index, _BlindTable, omni)["status"] == "pass"
+
+    broad = guarded.replace("except TypeError:", "except Exception:")
+    tool, omni_imports, index, omni = _call_fixture(tmp_path / "b", pin_body, broad)
+    assert tool.audit_calls(omni_imports, index, _BlindTable, omni)["status"] == "fail"
+
+
+def test_a_skipped_semantics_pass_says_so_in_the_verdict(tmp_path, capsys):
+    """A bare PASS asserted more than was checked.
+
+    Neither build gate passes --target-vllm, so the semantic diff self-reported
+    ``skipped`` inside the JSON while the verdict line read PASS and the exit
+    code was 0 -- and automation reads the exit code.
+    """
+    tool, _, _, omni = _call_fixture(
+        tmp_path,
+        "def apply_top_k_top_p(logits, k, p):\n    return logits\n",
+        "import vllm\n",
+    )
+    pin = tmp_path / "pin" / "vllm"
+    report = tmp_path / "report.json"
+    assert (
+        tool.main(
+            [
+                "--omni-root",
+                str(omni),
+                "--vllm-root",
+                str(pin),
+                "--vllm-version",
+                PIN_VERSION,
+                "--report",
+                str(report),
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "[verdict]   PASS (imports, attributes, calls, staleness;" in out
+    assert "semantics not compared" in out
+    payload = json.loads(report.read_text())
+    assert payload["coverage"] == ["imports", "attributes", "calls", "staleness"]
+    assert payload["semantics"]["status"] == "skipped"
+
+
+# --------------------------------------------------------------------------- #
+# What the adapters do when somebody else gets there first
+# --------------------------------------------------------------------------- #
+def _bootstrap(site: Path, body: str, *, version: str = PIN_VERSION) -> dict:
+    """Run ``body`` after the ``.pth`` bootstrap, which is what the image runs."""
+    script = (
+        textwrap.dedent(
+            """
+        import json, sys
+        import vllm_musa_omni_compat_pth  # noqa: F401  -- installs the hook
+        result = {}
+        """
+        )
+        + textwrap.dedent(body)
+        + "\nprint('@@' + json.dumps(result))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env={
+            "PYTHONPATH": f"{site}:{ROOT}",
+            "PATH": "/usr/bin:/bin",
+            "VLLM_VERSION": version,
+        },
+        timeout=120,
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    marker = [line for line in proc.stdout.splitlines() if line.startswith("@@")]
+    assert marker, f"no result line: {proc.stdout}\n{proc.stderr}"
+    return json.loads(marker[-1][2:])
+
+
+def test_a_rebind_that_copied_the_marker_is_still_re_adapted(pin_site):
+    """``functools.wraps`` copies our marker, so the marker cannot be a flag.
+
+    vllm-musa rebinds ``apply_top_k_top_p`` at module scope. If it ever does so
+    with a function built by ``functools.wraps(ours)`` -- which copies our
+    ``__dict__``, marker included -- then a boolean marker made the re-apply
+    guard return early: no re-wrap, while ``is_applied()`` still reported the
+    name live, so the build gate passed and the talker raised TypeError on its
+    first sampling step. The marker is now the function itself, which a copy
+    cannot forge.
+    """
+    adapter = ROOT / "vllm_musa" / "omni_compat" / "adapters" / "topk_topp_sampler.py"
+    result = _bootstrap(
+        pin_site,
+        f"""
+        ADAPTER_PATH = {str(adapter)!r}
+        import functools, importlib.util
+        import vllm.v1.sample.ops.topk_topp_sampler as mod
+
+        spec = importlib.util.spec_from_file_location(
+            "_ad", ADAPTER_PATH
+        )
+        ad = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ad)
+
+        @functools.wraps(mod.apply_top_k_top_p)   # the adapted wrapper
+        def _musa_sampler(logits, k, p):
+            return ["musa", logits, k, p]
+
+        # The copy really happens; that is the premise of this test.
+        result["inherited_marker"] = ad.ADAPTED in vars(_musa_sampler)
+        mod.apply_top_k_top_p = _musa_sampler
+        result["live"] = ad.is_applied(mod)
+        result["value"] = list(
+            mod.apply_top_k_top_p("l", 1, 2, has_topp_only_rows=False)
+        )
+        """,
+    )
+    assert result["inherited_marker"] is True
+    # Re-adapted, so the hint is absorbed and MUSA's implementation still runs.
+    assert result["live"] == ["apply_top_k_top_p"]
+    assert result["value"] == ["musa", "l", 1, 2]
+
+
+def test_an_adapter_with_nothing_to_do_does_not_break_the_import(tmp_path):
+    """A stale entry is a repo bug; it must not take vLLM down for it.
+
+    Returning no names means two unrelated things, and the loader failed the
+    import for both. One of them is "the pin grew the shape itself", where the
+    right runtime answer is to let the pin serve the call: raising ImportError
+    on a core vLLM module instead breaks every model on the image over a shim
+    that is no longer needed. The image still has to refuse the entry, which is
+    what ``verify_shim._stale_adapter`` now does.
+    """
+    site = tmp_path / "site"
+    _write(site / "vllm" / "__init__.py", f"__version__ = {PIN_VERSION!r}\n")
+    for parent in ("v1", "v1/sample", "v1/sample/ops"):
+        _write(site / "vllm" / parent / "__init__.py")
+    _write(
+        site / "vllm" / "v1" / "sample" / "ops" / "topk_topp_sampler.py",
+        """
+        def apply_top_k_top_p(logits, k, p, has_topp_only_rows=True):
+            return ["pin", has_topp_only_rows]
+        """,
+    )
+
+    result = _bootstrap(
+        site,
+        """
+        import vllm.v1.sample.ops.topk_topp_sampler as mod
+        result["value"] = list(mod.apply_top_k_top_p("l", 1, 2, has_topp_only_rows=False))
+        result["marker"] = getattr(mod, "__vllm_musa_adapted__", None)
+        """,
+    )
+    # The pin's own function serves the call, unwrapped.
+    assert result["value"] == ["pin", False]
+    assert result["marker"]["names"] == []
+    assert result["marker"]["stale"] is True
+
+    # And the build gate is the one that refuses it.
+    verify = _load_verify_shim()
+    assert (
+        verify._stale_adapter({"names": ["apply_top_k_top_p"], "stale": False}) is None
+    )
+    message = verify._stale_adapter(result["marker"])
+    assert message is not None
+    assert "the entry is stale" in message
+    assert result["marker"]["remove_when"] in message
