@@ -4,7 +4,6 @@
 """Attention layer with FlashAttention."""
 
 import copy
-import os
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, ClassVar
@@ -620,13 +619,16 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         # MUSA: FA3 AOT decode metadata is a pure device-side function of
         # seq_lens / query_start_loc, so a speculator may refresh it inside the
         # draft decode graph instead of rebuilding metadata eagerly per step.
-        # DCP rewrites its local seq lens on the host, so keep that path eager.
-        # Opt-out kept for A/B evidence and quick rollback.
+        # All three conditions are hard requirements, not tunables:
+        #   - aot_schedule: only FA3 has an AOT schedule to refresh;
+        #   - use_full_cuda_graph: the refresh is recorded once inside the
+        #     captured draft decode graph, and the persistent scheduler_metadata
+        #     buffer only exists in this mode;
+        #   - dcp_world_size == 1: DCP rewrites its local seq lens on the host.
         self.supports_draft_decode_metadata_update = (
             self.aot_schedule
             and self.dcp_world_size == 1
             and self.use_full_cuda_graph
-            and os.environ.get("VLLM_MUSA_DISABLE_FUSED_DRAFT_DECODE", "0") != "1"
         )
         if self.supports_draft_decode_metadata_update:
             logger.info_once(
