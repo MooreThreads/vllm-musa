@@ -1186,10 +1186,16 @@ def load_from_git(repo: Path, ref: str) -> tuple[Path, str]:
 # ---------------------------------------------------------------------------
 
 
+CODE_SAMPLE_RE = re.compile(r"<pre>.*?</pre>", re.S)
+
+
 def verify(out: Path) -> list[str]:
     problems: list[str] = []
     for page in out.rglob("*.html"):
         text = page.read_text(encoding="utf-8")
+        # Sample code keeps literal quotes ("src=\"images/x.jpg\""), so a naive
+        # attribute scan reports links that no browser would ever request.
+        text = CODE_SAMPLE_RE.sub("", text)
         for attr, value in re.findall(r'(href|src)="([^"]+)"', text):
             if re.match(r"^(https?:|mailto:|data:|#)", value):
                 continue
