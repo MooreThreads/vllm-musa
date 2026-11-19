@@ -606,6 +606,44 @@ def test_install_is_idempotent_and_reversible(pin_site):
     assert result["after"] is False
 
 
+def test_uninstall_also_removes_the_startup_hooks(pin_site):
+    """The hooks the image runs are the ones uninstall used to leave behind.
+
+    The ``.pth`` bootstrap installs instances of its own classes, defined in a
+    top-level module this package never imports, so a sweep that recognises
+    hooks by ``isinstance`` finds none of them: it returned 0 while the shim it
+    claimed to remove went on serving every later import. ``_bootstrap`` runs
+    the real startup path, which is the only arrangement where that shows up.
+    """
+    result = _bootstrap(
+        pin_site,
+        """
+        import vllm_musa.omni_compat as compat
+        result["before"] = compat.is_installed()
+        result["removed"] = compat.uninstall()
+        result["after"] = compat.is_installed()
+        result["hooks"] = compat.active_hooks()
+        try:
+            import vllm.entrypoints.common.startup   # only the shim has it
+            result["served"] = True
+        except ImportError:
+            result["served"] = False
+        import vllm.v1.sample.ops.topk_topp_sampler as mod
+        result["adapted"] = hasattr(mod, "__vllm_musa_adapted__")
+        """,
+    )
+    assert result["before"] is True
+    # Both halves: serving last, adapting first.
+    assert result["removed"] == 2
+    assert result["after"] is False
+    assert result["hooks"] == {"serve": False, "adapt": False, "startup": False}
+    # The claim is about later imports, so the test has to make some: a module
+    # only the shim provides must now fail, and one the pin provides must load
+    # unpatched.
+    assert result["served"] is False
+    assert result["adapted"] is False
+
+
 def test_hook_is_last_so_ordinary_finders_win(pin_site):
     result = _run(
         pin_site,

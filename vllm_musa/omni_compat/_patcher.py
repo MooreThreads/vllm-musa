@@ -138,11 +138,3 @@ def install_adapters() -> bool:
         )
     sys.meta_path.insert(0, finder)
     return True
-
-
-def uninstall_adapters() -> int:
-    before = len(sys.meta_path)
-    sys.meta_path[:] = [
-        f for f in sys.meta_path if not isinstance(f, OmniAdapterFinder)
-    ]
-    return before - len(sys.meta_path)

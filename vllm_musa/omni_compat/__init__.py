@@ -35,7 +35,7 @@ from vllm_musa.omni_compat._finder import (
     is_enabled,
     version_matches,
 )
-from vllm_musa.omni_compat._patcher import install_adapters, uninstall_adapters
+from vllm_musa.omni_compat._patcher import install_adapters
 from vllm_musa.omni_compat.table import ENTRIES, capability_entries, importable_entries
 
 __all__ = [
@@ -64,6 +64,20 @@ _PTH_LINE = "import vllm_musa_omni_compat_pth\n"
 importing :mod:`vllm_musa` runs its ``__init__``, which imports torchada and
 torch, and a ``.pth`` runs in every interpreter on the machine."""
 
+_HOOK_ROLES = {
+    "OmniCompatFinder": "serve",
+    "OmniAdapterFinder": "adapt",
+    "OmniCompatPathFinder": "startup",
+}
+"""Every hook class this package can meet in ``sys.meta_path``, by name.
+
+By name and not by identity because the ``.pth`` bootstrap defines its own
+classes in a top-level module this package never imports, so ``isinstance``
+cannot recognise them -- and the ``.pth`` is the mechanism the Omni image
+actually uses. :func:`active_hooks` and :func:`uninstall` read the same set, so
+a hook this package can report is also one it can remove.
+"""
+
 
 def install() -> bool:
     """Install both hooks. Idempotent; returns whether any is active.
@@ -85,10 +99,25 @@ def install() -> bool:
 
 
 def uninstall() -> int:
-    """Remove every installed hook. Returns how many were removed."""
+    """Remove every installed hook from this interpreter. Returns how many.
+
+    Both installers are covered: the hooks :func:`install` adds and the ones the
+    ``.pth`` bootstrap installs at startup.
+
+    Hooks only decide what *later* imports see, so nothing already imported is
+    reverted -- a served module stays in ``sys.modules`` and an adapted one
+    keeps its patch, which is also the only safe answer: Omni binds those names
+    into its own namespace at import time, and no hook can reach those
+    bindings. Scope is this process too; the ``.pth`` installs again in every
+    new interpreter, workers included. To take the shim off an image use
+    ``python -m vllm_musa.omni_compat remove-pth``, or ``VLLM_MUSA_OMNI_COMPAT=0``
+    to leave it installed and inert.
+    """
     before = len(sys.meta_path)
-    sys.meta_path[:] = [f for f in sys.meta_path if not isinstance(f, OmniCompatFinder)]
-    return (before - len(sys.meta_path)) + uninstall_adapters()
+    sys.meta_path[:] = [
+        finder for finder in sys.meta_path if type(finder).__name__ not in _HOOK_ROLES
+    ]
+    return before - len(sys.meta_path)
 
 
 def active_hooks() -> dict[str, bool]:
@@ -103,18 +132,16 @@ def active_hooks() -> dict[str, bool]:
     """
     hooks = {"serve": False, "adapt": False, "startup": False}
     for finder in sys.meta_path:
-        name = type(finder).__name__
-        if name == "OmniCompatFinder":
-            hooks["serve"] = True
-        elif name == "OmniAdapterFinder":
-            hooks["adapt"] = True
-        elif name == "OmniCompatPathFinder":
-            # The startup hook from the .pth bootstrap, which carries its own
-            # role because it implements both halves without this package.
-            hooks["startup"] = True
-            role = getattr(finder, "role", None)
-            if role in hooks:
-                hooks[role] = True
+        role = _HOOK_ROLES.get(type(finder).__name__)
+        if role is None:
+            continue
+        hooks[role] = True
+        if role == "startup":
+            # The startup hook carries its own role, because it implements both
+            # halves without this package.
+            own = getattr(finder, "role", None)
+            if own in hooks:
+                hooks[own] = True
     return hooks
 
 

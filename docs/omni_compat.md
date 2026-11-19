@@ -174,9 +174,17 @@ the hook is installed by the interpreter itself, from a `.pth`:
 
 ```bash
 python -m vllm_musa.omni_compat install-pth   # what docker/omni.Dockerfile runs
+python -m vllm_musa.omni_compat remove-pth    # take the startup hook off again
 python -m vllm_musa.omni_compat status        # what is active, as JSON
 VLLM_MUSA_OMNI_COMPAT=0 ...                   # make an installed hook inert
 ```
+
+`uninstall()` is the in-process counterpart: it removes the hooks of either
+installer from the calling interpreter -- the `.pth`'s included, which are
+instances of the bootstrap's own classes -- and reverts nothing already
+imported, because Omni binds the names it imported into its own namespace. A
+new interpreter processes the `.pth` again, so an image is deactivated with
+`remove-pth` or the environment variable, not with `uninstall()`.
 
 The `.pth` is **not** installed by `pip install vllm-musa`: a shim that changes
 the meaning of `import vllm.*` belongs to images that run Omni, so activation is
@@ -515,7 +523,7 @@ Without `--target-vllm` -- which is what both build gates run -- the same trees
 give the same four pin-only passes and `PASS (imports, attributes, calls,
 staleness; semantics not compared, no --target-vllm)`.
 
-`tests/test_omni_compat.py`: 73 passed on **both** Python 3.10 and Python 3.12.
+`tests/test_omni_compat.py`: 74 passed on **both** Python 3.10 and Python 3.12.
 
 ### Hardware, on the superseded base
 
