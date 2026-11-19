@@ -607,13 +607,13 @@ def test_install_is_idempotent_and_reversible(pin_site):
 
 
 def test_uninstall_also_removes_the_startup_hooks(pin_site):
-    """The hooks the image runs are the ones uninstall used to leave behind.
+    """The ``.pth``'s hooks are the ones the image runs, so uninstall must take them.
 
-    The ``.pth`` bootstrap installs instances of its own classes, defined in a
-    top-level module this package never imports, so a sweep that recognises
-    hooks by ``isinstance`` finds none of them: it returned 0 while the shim it
-    claimed to remove went on serving every later import. ``_bootstrap`` runs
-    the real startup path, which is the only arrangement where that shows up.
+    The bootstrap installs instances of its own classes, defined in a top-level
+    module this package never imports, so a sweep that recognises hooks by
+    ``isinstance`` finds none of them: it returns 0 while the shim it claims to
+    have removed goes on serving every later import. ``_bootstrap`` runs the
+    real startup path, which is the only arrangement where that shows.
     """
     result = _bootstrap(
         pin_site,
