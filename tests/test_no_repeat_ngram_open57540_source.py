@@ -12,7 +12,6 @@ from collections.abc import Iterable
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,8 +27,8 @@ def source():
 def admission_class(source):
     tree = ast.parse(source)
     original = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'NoRepeatNGramState')
-    # The real methods execute with CPU arrays. GPU buffer construction and
-    # kernel launch are intentionally outside this CPU-only evidence.
+    # The real methods execute with mutable CPU slots. GPU buffer construction,
+    # NumPy dtype behavior, and kernel launch are outside this CPU-only evidence.
     cls = ast.ClassDef(
         name=original.name,
         bases=[],
@@ -72,9 +71,9 @@ def instance(admission_class):
     state = admission_class()
     state.max_model_len = 128
     state.req_states = SimpleNamespace(vocab_size=64)
-    state.ngram_sizes = SimpleNamespace(np=np.zeros(2, dtype=np.int32))
-    state.window_sizes = SimpleNamespace(np=np.zeros(2, dtype=np.int32))
-    state.whitelist_lens = SimpleNamespace(np=np.zeros(2, dtype=np.int32))
+    state.ngram_sizes = SimpleNamespace(np=[0, 0])
+    state.window_sizes = SimpleNamespace(np=[0, 0])
+    state.whitelist_lens = SimpleNamespace(np=[0, 0])
     state.staged_whitelist = []
     state.whitelist_token_ids = SimpleNamespace(
         stage_write=lambda *args: state.staged_whitelist.append(args)
