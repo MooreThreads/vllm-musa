@@ -484,6 +484,29 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def check_and_update_config(cls, vllm_config: "VllmConfig") -> None:
+        # `--use-fp64-gumbel` cannot run on MUSA. The dtype itself works here
+        # (verified on an S5000: float64 tensors, matmul at 1.46 TFLOP/s, and
+        # Triton `tl.float64` arithmetic all behave as true float64), but
+        # MUDNN's reduce-with-indices does not: the V2 Gumbel sampler keeps its
+        # per-block maxima in float64 and then calls
+        # `local_max.argmax(dim=-1)` (vllm/v1/worker/gpu/sample/gumbel.py), which
+        # fails during the warmup profile run with
+        # "RuntimeError: ReduceIndicesOnlyCall MUDNN failed in: RunIndices".
+        # Reject at config time with the reason. Do not downgrade silently: the
+        # flag is an exactness request, so honouring it with float32 would be a
+        # wrong answer rather than a fallback.
+        _model_config = getattr(vllm_config, "model_config", None)
+        if _model_config is not None and getattr(
+            _model_config, "use_fp64_gumbel", False
+        ):
+            raise ValueError(
+                "--use-fp64-gumbel is not supported on MUSA: the float64 Gumbel "
+                "sampler calls Tensor.argmax on a float64 buffer and MUDNN has "
+                "no float64 reduce-with-indices kernel "
+                "(ReduceIndicesOnlyCall MUDNN failed in: RunIndices). Drop the "
+                "flag to use the float32 sampler."
+            )
+
         # pin the diffusion backend before anything reads the attention config
         force_triton_attn_for_diffusion(vllm_config)
 
