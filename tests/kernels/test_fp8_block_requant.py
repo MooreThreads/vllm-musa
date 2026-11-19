@@ -12,6 +12,9 @@ if getattr(torch.version, "musa", None) is None:
 
 requant_module = import_module("vllm_musa.kernels.fp8_block_requant")
 requantize_fp8_block32_to_block128 = requant_module.requantize_fp8_block32_to_block128
+block_gemv = import_module(
+    "vllm_musa.model_executor.kernels.linear.scaled_mm.block_gemv"
+)
 
 
 def _reference(weight: torch.Tensor, scales: torch.Tensor):
@@ -158,8 +161,6 @@ def _make_layer_kernel(
 ):
     from types import SimpleNamespace
 
-    from vllm_musa.model_executor.kernels.linear.scaled_mm import block_gemv
-
     monkeypatch.setattr(
         block_gemv, "get_current_vllm_config", lambda: SimpleNamespace()
     )
@@ -195,10 +196,22 @@ def _make_layer_kernel(
     kernel = block_gemv.MUSAFp8BlockGemvScaledMMKernel.__new__(
         block_gemv.MUSAFp8BlockGemvScaledMMKernel
     )
-    kernel.config = SimpleNamespace(out_dtype=torch.bfloat16)
+    kernel.config = SimpleNamespace(
+        out_dtype=torch.bfloat16,
+        activation_quant_key=SimpleNamespace(
+            scale=SimpleNamespace(group_shape=block_gemv.GroupShape(1, 32))
+        ),
+    )
     kernel.weight_group_shape = (32, 32)
     kernel.process_weights_after_loading(layer)
     return layer, kernel, original, scales
+
+
+def test_weight_block_size_defaults_to_block32() -> None:
+    kernel = block_gemv.MUSAFp8BlockGemvScaledMMKernel.__new__(
+        block_gemv.MUSAFp8BlockGemvScaledMMKernel
+    )
+    assert kernel._weight_block_size is block_gemv._Fp8WeightBlockSize.BLOCK32
 
 
 @pytest.mark.parametrize(
@@ -218,7 +231,7 @@ def test_block128_loader_guards_preserve_ineligible_layers(
     assert layer.weight.data_ptr() == original.data_ptr()
     assert layer.weight_scale_inv.data_ptr() == scales.data_ptr()
     assert layer.weight_block_size == list(kwargs.get("weight_block_size", (32, 32)))
-    assert not hasattr(kernel, "_musa_block128")
+    assert kernel._weight_block_size is block_gemv._Fp8WeightBlockSize.BLOCK32
 
 
 @pytest.mark.parametrize("shape", [(576, 5120), (5120, 288)])
@@ -231,7 +244,7 @@ def test_load_time_conversion_keeps_only_block128_weights(monkeypatch, shape) ->
     assert layer.weight.data_ptr() != original.data_ptr()
     assert layer.weight_block_size == [128, 128]
     assert kernel.weight_group_shape.col == 128
-    assert kernel._musa_block128 is True
+    assert kernel._weight_block_size is block_gemv._Fp8WeightBlockSize.BLOCK128
     assert set(layer.state_dict()) == {"weight", "weight_scale_inv"}
     assert not list(layer.named_buffers())
     assert torch.equal(
@@ -254,8 +267,8 @@ def test_shared_expert_preserves_original_block32_weights(
     )
     assert layer.weight.data_ptr() == original.data_ptr()
     torch.testing.assert_close(layer.weight_scale_inv, scales, rtol=0, atol=0)
-    assert not hasattr(layer, "musa_weight_block128")
-    assert not hasattr(kernel, "_musa_block128")
+    assert layer.weight_block_size == [32, 32]
+    assert kernel._weight_block_size is block_gemv._Fp8WeightBlockSize.BLOCK32
 
 
 def test_dense_projection_with_shared_expert_shape_remains_eligible(
@@ -265,13 +278,25 @@ def test_dense_projection_with_shared_expert_shape_remains_eligible(
         monkeypatch, (576, 5120), "model.layers.0.self_attn.dense_proj"
     )
     assert layer.weight.data_ptr() != original.data_ptr()
-    assert kernel._musa_block128 is True
+    assert kernel._weight_block_size is block_gemv._Fp8WeightBlockSize.BLOCK128
+
+
+@pytest.mark.parametrize("shape", [(64, 256), (64, 288)])
+@pytest.mark.parametrize("rows", [1, 512])
+def test_converted_layer_rejects_legacy_fused_swiglu(monkeypatch, shape, rows) -> None:
+    layer, kernel, original, scales = _make_layer_kernel(monkeypatch, shape)
+    gate_up = torch.randn((rows, 2 * shape[1]), dtype=torch.bfloat16, device="musa")
+    assert kernel._weight_block_size is block_gemv._Fp8WeightBlockSize.BLOCK128
+
+    def legacy_path(*args, **kwargs):
+        pytest.fail("Converted dense layer must not use a block32 SwiGLU path")
+
+    monkeypatch.setattr(block_gemv, "fp8_block_gemv_quant_supported", legacy_path)
+    assert kernel.apply_swiglu_clamp_weights(layer, gate_up, 7.0) is None
 
 
 @pytest.mark.parametrize("rows", [0, 1, 4, 16, 512])
 def test_converted_layer_uses_mudnn_for_all_rows(monkeypatch, rows) -> None:
-    from vllm_musa.model_executor.kernels.linear.scaled_mm import block_gemv
-
     layer, kernel, original, scales = _make_layer_kernel(monkeypatch, (64, 288))
     inputs = torch.randn((2, rows, 288), device="musa", dtype=torch.bfloat16)
     bias = torch.ones((64,), device="musa", dtype=torch.bfloat16)
@@ -315,13 +340,8 @@ def test_converted_bf16_linear_matches_original_weight_reference(
     assert (output.float() - reference).norm() / reference.norm() < 0.05
 
 
-@pytest.mark.parametrize("prequantized", [False, True])
-def test_block128_helpers_explicitly_select_mudnn(monkeypatch, prequantized) -> None:
+def test_block128_bf16_helper_explicitly_selects_mudnn(monkeypatch) -> None:
     import mate.deep_gemm as deep_gemm
-
-    from vllm_musa.model_executor.layers.quantization.utils.fp8_utils import (
-        per_token_group_quant_fp8,
-    )
 
     inputs = torch.randn((1, 288), dtype=torch.bfloat16, device="musa")
     weight = torch.zeros((64, 384), dtype=torch.float8_e4m3fn, device="musa")
@@ -335,124 +355,8 @@ def test_block128_helpers_explicitly_select_mudnn(monkeypatch, prequantized) -> 
         output.zero_()
 
     monkeypatch.setattr(deep_gemm, "fp8_gemm_nt", gemm)
-    if prequantized:
-        quantized, input_scales = per_token_group_quant_fp8(
-            inputs, 32, use_ue8m0=False, column_major_scales=False
-        )
-        result = requant_module.fp8_block128_prequantized_linear(
-            quantized, input_scales, weight, scales, torch.bfloat16
-        )
-    else:
-        result = requant_module.fp8_block128_bf16_linear(
-            inputs, weight, scales, torch.bfloat16
-        )
+    result = requant_module.fp8_block128_bf16_linear(
+        inputs, weight, scales, torch.bfloat16
+    )
     assert backends == ["mudnn"]
     assert result.shape == (1, 64)
-
-
-@pytest.mark.parametrize("shape", [(1, 32), (4, 128), (16, 288), (512, 1280)])
-@pytest.mark.parametrize("zero_scales", [False, True])
-def test_activation_requant_has_exact_power_of_two_reference(
-    shape, zero_scales
-) -> None:
-    rows, cols = shape
-    torch.manual_seed(3720)
-    inputs = torch.randn(shape).to(torch.float8_e4m3fn)
-    scales = 2.0 ** torch.randint(-6, 3, (rows, (cols + 31) // 32)).float()
-    if zero_scales:
-        scales.zero_()
-    groups128 = (cols + 127) // 128
-    padded_scales = torch.zeros((rows, groups128 * 4))
-    padded_scales[:, : scales.shape[1]] = scales
-    expected_scales = padded_scales.view(rows, groups128, 4).amax(-1)
-    expected_scales = torch.where(expected_scales > 0, expected_scales, 1.0)
-    expanded_target = expected_scales.repeat_interleave(128, 1)
-    expected = torch.zeros((rows, groups128 * 128))
-    expected[:, :cols] = inputs.float() * (
-        scales.repeat_interleave(32, 1)[:, :cols] / expanded_target[:, :cols]
-    )
-    actual, actual_scales = requant_module.requantize_fp8_activation32_to128(
-        inputs.to("musa"), scales.to("musa")
-    )
-    assert torch.equal(
-        actual.cpu().view(torch.uint8),
-        expected.to(torch.float8_e4m3fn).view(torch.uint8),
-    )
-    torch.testing.assert_close(actual_scales.cpu(), expected_scales, rtol=0, atol=0)
-
-
-def test_activation_requant_accepts_strides_and_preserves_group128_input() -> None:
-    inputs = torch.randn((8, 256), device="musa").to(torch.float8_e4m3fn)[:, ::2]
-    scales = torch.rand((4, 8), device="musa").t() + 0.1
-    actual, actual_scales = requant_module.requantize_fp8_activation32_to128(
-        inputs, scales
-    )
-    assert actual.shape == (8, 128)
-    assert torch.isfinite(actual.float()).all()
-    expected = inputs.float() * scales.repeat_interleave(32, 1)
-    restored = actual.float() * actual_scales.repeat_interleave(128, 1)
-    assert (restored - expected).norm() / expected.norm() < 0.04
-    same, same_scales = requant_module.requantize_fp8_activation32_to128(
-        actual, actual_scales
-    )
-    assert same is actual and same_scales is actual_scales
-
-
-@pytest.mark.parametrize("rows", [4, 512])
-@pytest.mark.parametrize("shape", [(4096, 1280), (5120, 288)])
-def test_prequantized_linear_dispatch_matches_block32_reference(
-    monkeypatch, shape, rows
-) -> None:
-    from vllm_musa.model_executor.layers.quantization.utils.fp8_utils import (
-        per_token_group_quant_fp8,
-    )
-
-    layer, kernel, original, scales = _make_layer_kernel(monkeypatch, shape)
-    inputs = torch.randn((rows, shape[1]), dtype=torch.bfloat16, device="musa")
-    quantized, input_scales = per_token_group_quant_fp8(
-        inputs, 32, use_ue8m0=False, column_major_scales=False
-    )
-    output = kernel.apply_block_scaled_mm(
-        quantized, layer.weight, input_scales, layer.weight_scale_inv
-    )
-    restored_inputs = quantized.float() * input_scales.repeat_interleave(32, 1)
-    restored_weight = original.float() * scales.repeat_interleave(
-        32, 0
-    ).repeat_interleave(32, 1)
-    reference = restored_inputs @ restored_weight[: shape[0], : shape[1]].t()
-    assert torch.isfinite(output).all()
-    assert (output.float() - reference).norm() / reference.norm() < 0.05
-    if shape == (4096, 1280) and rows == 512:
-        alternate = (-layer.weight.float()).to(layer.weight.dtype)
-        alternate_output = kernel.apply_block_scaled_mm(
-            quantized, alternate, input_scales, layer.weight_scale_inv
-        )
-        assert (alternate_output.float() + reference).norm() / reference.norm() < 0.05
-
-
-def test_prequantized_consumer_can_be_captured_and_replayed(monkeypatch) -> None:
-    from vllm_musa.model_executor.layers.quantization.utils.fp8_utils import (
-        per_token_group_quant_fp8,
-    )
-
-    layer, kernel, original, scales = _make_layer_kernel(monkeypatch, (576, 5120))
-    inputs = torch.randn((512, 5120), dtype=torch.bfloat16, device="musa")
-    quantized, input_scales = per_token_group_quant_fp8(
-        inputs, 32, use_ue8m0=False, column_major_scales=False
-    )
-
-    def forward():
-        return kernel.apply_block_scaled_mm(
-            quantized, layer.weight, input_scales, layer.weight_scale_inv
-        )
-
-    for iteration in range(3):
-        forward()
-    graph = torch.musa.MUSAGraph()
-    with torch.musa.graph(graph):
-        output = forward()
-    graph.replay()
-    expected = output.clone()
-    input_scales.mul_(2)
-    graph.replay()
-    torch.testing.assert_close(output, expected * 2, rtol=0, atol=0)

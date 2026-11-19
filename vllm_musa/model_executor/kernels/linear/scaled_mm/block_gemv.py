@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from enum import Enum
 
 import torch
 from vllm.config import get_current_vllm_config
@@ -33,7 +34,6 @@ from vllm_musa.kernels.fp8_block_gemv import (
 )
 from vllm_musa.kernels.fp8_block_requant import (
     fp8_block128_bf16_linear,
-    fp8_block128_prequantized_linear,
     requantize_fp8_block32_to_block128,
 )
 from vllm_musa.kernels.fp8_block_splitk import fp8_block_splitk_config
@@ -85,6 +85,11 @@ def _small_m_path(weight: torch.Tensor, weight_scale: torch.Tensor, rows: int) -
     return fp8_block_splitk_config(weight, weight_scale, rows) is not None
 
 
+class _Fp8WeightBlockSize(Enum):
+    BLOCK32 = 32
+    BLOCK128 = 128
+
+
 class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
     """MUSA block-FP8 linear for scale blocks finer than DeepGEMM's 128.
 
@@ -92,6 +97,8 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
     and a BF16 GEMM on dequantized weights for prefill. DSV4.1 dense weights
     converted to block128 use the muDNN W8A8 path for every nonempty M.
     """
+
+    _weight_block_size = _Fp8WeightBlockSize.BLOCK32
 
     @classmethod
     def is_supported(cls, compute_capability=None):
@@ -141,7 +148,7 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
             replace_parameter(layer, params.block_scale_attr, scales128)
             layer.weight_block_size = [128, 128]
             self.weight_group_shape = GroupShape(128, 128)
-            self._musa_block128 = True
+            self._weight_block_size = _Fp8WeightBlockSize.BLOCK128
             logger.info_once(
                 "Converted DSV4.1 dense weights to one block128 FP8 "
                 "representation; all M use MATE muDNN W8A8."
@@ -156,7 +163,7 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
     ) -> torch.Tensor:
         rows = x.numel() // x.shape[-1] if x.dim() > 0 else 0
         params = self._get_layer_params(layer)
-        if getattr(self, "_musa_block128", False):
+        if self._weight_block_size is _Fp8WeightBlockSize.BLOCK128:
             output = fp8_block128_bf16_linear(
                 x.reshape(rows, x.shape[-1]),
                 params.weight,
@@ -209,6 +216,8 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
 
         Returns ``None`` outside the small-M GEMV path.
         """
+        if self._weight_block_size is _Fp8WeightBlockSize.BLOCK128:
+            return None
         group_size = self.config.activation_quant_key.scale.group_shape.col
         rows = gate_up.numel() // gate_up.shape[-1] if gate_up.dim() > 0 else 0
         params = self._get_layer_params(layer)
@@ -275,9 +284,6 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
         As: torch.Tensor,
         Bs: torch.Tensor,
     ) -> torch.Tensor:
-        if A.dim() == 2 and getattr(self, "_musa_block128", False):
-            logger.info_once("DSV4.1 prequantized linear uses FP8 group128 muDNN.")
-            return fp8_block128_prequantized_linear(A, As, B, Bs, self.config.out_dtype)
         if (
             A.dim() == 2
             and _small_m_path(B, Bs, A.shape[0])
