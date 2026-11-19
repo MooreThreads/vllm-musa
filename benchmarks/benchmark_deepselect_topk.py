@@ -15,9 +15,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 import torch
-import torchada
+import torchada as torchada
 import vllm._deepselect_C as deepselect_extension
 from mate.testing.utils import bench_gpu_time_with_musa_event, bench_kineto
+from vllm.model_executor.layers.indexer_topk import get_deep_select_stride_requirement
 
 import vllm_musa
 from vllm_musa import _custom_ops
@@ -48,7 +49,7 @@ def check_output(
     valid = ranks < lengths[:, None].clamp(max=topk)
     if not bool(torch.all(output[~valid] == -1)):
         raise AssertionError("Out-of-bounds entries must be padded with -1")
-    if not bool(torch.all((output[valid] >= 0))):
+    if not bool(torch.all(output[valid] >= 0)):
         raise AssertionError("Unwritten or negative valid index")
     if not bool(torch.all(output[valid] < lengths[:, None].expand_as(output)[valid])):
         raise AssertionError("Selected index exceeds its row length")
@@ -242,8 +243,6 @@ def run_case(batch: int, width: int, args: argparse.Namespace, profile: bool) ->
         / kernel_seconds["deepselect"],
         "kernels": kernels,
     }
-    del logits, outputs, torch_values, torch_indices, oracle_input, lengths
-    torch.musa.empty_cache()
     return result
 
 
@@ -313,12 +312,14 @@ def main() -> None:
             shapes.extend(
                 (batch, width) for batch in README_BATCHES for width in README_WIDTHS
             )
-    alignment = 32 // getattr(torch, args.dtype).itemsize
+    alignment = get_deep_select_stride_requirement()[0]
+    itemsize = getattr(torch, args.dtype).itemsize
     if any(
-        batch <= 0 or width < args.topk or width % alignment for batch, width in shapes
+        batch <= 0 or width < args.topk or width * itemsize % alignment
+        for batch, width in shapes
     ):
         parser.error(
-            "Positive batches, widths >= topk and 32-byte aligned input rows are required"
+            f"Positive batches, widths >= topk and {alignment}-byte aligned input rows are required"
         )
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     vllm_musa.register_custom_ops()
@@ -326,6 +327,7 @@ def main() -> None:
     report = {"provenance": provenance(args.dtype), "results": []}
     for shape_index, (batch, width) in enumerate(shapes):
         result = run_case(batch, width, args, profile=shape_index == 0)
+        torch.musa.empty_cache()
         report["results"].append(result)
         args.output.write_text(json.dumps(report, indent=2) + "\n")
         LOGGER.info(

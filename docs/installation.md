@@ -119,7 +119,7 @@ DEEPSELECT_SRC_DIR=/path/to/musa-deepselect pip install -e . --no-build-isolatio
 This builds `vllm._deepselect_C`; no separate DeepSelect package is needed.
 Use the `DEEPSELECT_SRC_DIR` environment variable, not just `CMAKE_ARGS=-D...`.
 Restart serving with
-`--attention-config '{"sparse_indexer_topk_backend":"deep_select"}'`.
+`--sparse-indexer-topk-backend deep_select`.
 Without the source override, the default install does not build DeepSelect.
 
 ## Device visibility
