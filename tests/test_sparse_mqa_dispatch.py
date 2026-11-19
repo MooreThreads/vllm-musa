@@ -241,8 +241,9 @@ def test_threshold_does_not_specialize_other_execution_paths(unsupported):
 
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("candidate_write", [False, True])
+@pytest.mark.parametrize("topk_backend", ["auto", "deep_select"])
 def test_short_context_uses_original_indexer_without_candidate_work(
-    monkeypatch, enabled, candidate_write
+    monkeypatch, enabled, candidate_write, topk_backend
 ):
     monkeypatch.setitem(
         sys.modules,
@@ -294,6 +295,7 @@ def test_short_context_uses_original_indexer_without_candidate_work(
         skip_k_cache_insert=True,
         k_cache=SimpleNamespace(prefix="layer", kv_cache=object()),
         topk_tokens=512,
+        topk_backend=topk_backend,
         head_dim=128,
         max_model_len=262144,
         topk_indices_buffer=object(),
@@ -304,6 +306,8 @@ def test_short_context_uses_original_indexer_without_candidate_work(
     assert result == ("candidate" if enabled else "original")
     assert original.call_count == int(not enabled)
     assert indexer.forward_cuda.call_count == int(enabled)
+    if not enabled:
+        assert original.call_args.args[-1] == topk_backend
 
 
 @pytest.mark.parametrize("mode", [_GraphMode.FULL_DECODE_ONLY, _GraphMode.PIECEWISE])

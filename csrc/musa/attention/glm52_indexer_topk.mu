@@ -246,9 +246,9 @@ __global__ void sparse_indexer_fill_all_kernel(
                    topk);
 }
 
-template <typename OutT>
+template <typename LogitT, typename OutT>
 __global__ void sparse_indexer_topk_kernel(
-    const float *__restrict__ logits, int64_t logits_stride0,
+    const LogitT *__restrict__ logits, int64_t logits_stride0,
     int64_t logits_stride1, int64_t columns, const void *__restrict__ row_starts,
     int row_starts_kind, int64_t row_starts_stride,
     const void *__restrict__ row_ends, int row_ends_kind,
@@ -292,7 +292,7 @@ __global__ void sparse_indexer_topk_kernel(
   }
   __syncthreads();
 
-  const float *row_logits = logits + row * logits_stride0;
+  const LogitT *row_logits = logits + row * logits_stride0;
 #pragma unroll
   for (int shift = 24; shift >= 0; shift -= 8) {
     for (int bin = tid; bin < 256; bin += blockDim.x) {
@@ -615,7 +615,7 @@ void launch_fill_all(const torch::Tensor &lengths, torch::Tensor &topk_indices,
       topk_indices.stride(1), lengths.numel(), topk);
 }
 
-template <typename OutT>
+template <typename LogitT, typename OutT>
 void launch_sparse_indexer_topk(const torch::Tensor &logits,
                                 const torch::Tensor &row_starts,
                                 const torch::Tensor &row_ends,
@@ -623,8 +623,8 @@ void launch_sparse_indexer_topk(const torch::Tensor &logits,
                                 musaStream_t stream) {
   const dim3 grid(static_cast<unsigned int>(logits.size(0)));
   const dim3 block(kThreads);
-  sparse_indexer_topk_kernel<OutT><<<grid, block, 0, stream>>>(
-      static_cast<const float *>(logits.data_ptr()), logits.stride(0),
+  sparse_indexer_topk_kernel<LogitT, OutT><<<grid, block, 0, stream>>>(
+      static_cast<const LogitT *>(logits.data_ptr()), logits.stride(0),
       logits.stride(1), logits.size(1), row_starts.data_ptr(),
       index_kind(row_starts, "row_starts"), row_starts.stride(0),
       row_ends.data_ptr(), index_kind(row_ends, "row_ends"),
@@ -633,15 +633,15 @@ void launch_sparse_indexer_topk(const torch::Tensor &logits,
       false);
 }
 
-template <typename OutT>
+template <typename LogitT, typename OutT>
 void launch_sparse_indexer_topk_decode(const torch::Tensor &logits,
                                        const torch::Tensor &seq_lens,
                                        torch::Tensor &topk_indices,
                                        int64_t topk, musaStream_t stream) {
   const dim3 grid(static_cast<unsigned int>(logits.size(0)));
   const dim3 block(kThreads);
-  sparse_indexer_topk_kernel<OutT><<<grid, block, 0, stream>>>(
-      static_cast<const float *>(logits.data_ptr()), logits.stride(0),
+  sparse_indexer_topk_kernel<LogitT, OutT><<<grid, block, 0, stream>>>(
+      static_cast<const LogitT *>(logits.data_ptr()), logits.stride(0),
       logits.stride(1), logits.size(1), nullptr, kIndexInt32, 0,
       seq_lens.data_ptr(), index_kind(seq_lens, "seq_lens"),
       seq_lens.stride(0), static_cast<OutT *>(topk_indices.data_ptr()),
@@ -777,8 +777,9 @@ void sparse_indexer_topk(const torch::Tensor &logits,
   check_same_device(logits, row_starts, "row_starts");
   check_same_device(logits, row_ends, "row_ends");
   check_same_device(logits, topk_indices, "topk_indices");
-  TORCH_CHECK(logits.scalar_type() == torch::kFloat32,
-              "logits must be float32");
+  TORCH_CHECK(logits.scalar_type() == torch::kFloat32 ||
+                  logits.scalar_type() == torch::kBFloat16,
+              "logits must be float32 or bfloat16");
   TORCH_CHECK(logits.dim() == 2, "logits must be 2-D");
   TORCH_CHECK(row_starts.dim() == 1 && row_starts.numel() >= logits.size(0),
               "row_starts must have at least one entry per logit row");
@@ -803,11 +804,21 @@ void sparse_indexer_topk(const torch::Tensor &logits,
   const at::musa::OptionalMUSAGuard device_guard(device_of(logits));
   musaStream_t stream = at::musa::getCurrentMUSAStream();
   if (topk_indices.scalar_type() == torch::kInt32) {
-    launch_sparse_indexer_topk<int32_t>(logits, row_starts, row_ends,
-                                        topk_indices, topk, stream);
+    if (logits.scalar_type() == torch::kBFloat16) {
+      launch_sparse_indexer_topk<__mt_bfloat16, int32_t>(
+          logits, row_starts, row_ends, topk_indices, topk, stream);
+    } else {
+      launch_sparse_indexer_topk<float, int32_t>(
+          logits, row_starts, row_ends, topk_indices, topk, stream);
+    }
   } else if (topk_indices.scalar_type() == torch::kInt64) {
-    launch_sparse_indexer_topk<int64_t>(logits, row_starts, row_ends,
-                                        topk_indices, topk, stream);
+    if (logits.scalar_type() == torch::kBFloat16) {
+      launch_sparse_indexer_topk<__mt_bfloat16, int64_t>(
+          logits, row_starts, row_ends, topk_indices, topk, stream);
+    } else {
+      launch_sparse_indexer_topk<float, int64_t>(
+          logits, row_starts, row_ends, topk_indices, topk, stream);
+    }
   } else {
     TORCH_CHECK(false, "topk_indices must be int32 or int64");
   }
@@ -822,8 +833,9 @@ void sparse_indexer_topk_decode(const torch::Tensor &logits,
   check_musa_tensor(logits, "logits");
   check_same_device(logits, seq_lens, "seq_lens");
   check_same_device(logits, topk_indices, "topk_indices");
-  TORCH_CHECK(logits.scalar_type() == torch::kFloat32,
-              "logits must be float32");
+  TORCH_CHECK(logits.scalar_type() == torch::kFloat32 ||
+                  logits.scalar_type() == torch::kBFloat16,
+              "logits must be float32 or bfloat16");
   TORCH_CHECK(logits.dim() == 2, "logits must be 2-D");
   TORCH_CHECK(seq_lens.dim() == 1 && seq_lens.numel() >= logits.size(0),
               "seq_lens must have at least one entry per logit row");
@@ -845,11 +857,21 @@ void sparse_indexer_topk_decode(const torch::Tensor &logits,
   const at::musa::OptionalMUSAGuard device_guard(device_of(logits));
   musaStream_t stream = at::musa::getCurrentMUSAStream();
   if (topk_indices.scalar_type() == torch::kInt32) {
-    launch_sparse_indexer_topk_decode<int32_t>(logits, seq_lens,
-                                               topk_indices, topk, stream);
+    if (logits.scalar_type() == torch::kBFloat16) {
+      launch_sparse_indexer_topk_decode<__mt_bfloat16, int32_t>(
+          logits, seq_lens, topk_indices, topk, stream);
+    } else {
+      launch_sparse_indexer_topk_decode<float, int32_t>(
+          logits, seq_lens, topk_indices, topk, stream);
+    }
   } else if (topk_indices.scalar_type() == torch::kInt64) {
-    launch_sparse_indexer_topk_decode<int64_t>(logits, seq_lens,
-                                               topk_indices, topk, stream);
+    if (logits.scalar_type() == torch::kBFloat16) {
+      launch_sparse_indexer_topk_decode<__mt_bfloat16, int64_t>(
+          logits, seq_lens, topk_indices, topk, stream);
+    } else {
+      launch_sparse_indexer_topk_decode<float, int64_t>(
+          logits, seq_lens, topk_indices, topk, stream);
+    }
   } else {
     TORCH_CHECK(false, "topk_indices must be int32 or int64");
   }

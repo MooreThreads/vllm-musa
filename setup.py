@@ -112,7 +112,11 @@ def develop_dynamic_library(package_name, source_dir="./", target_override=None)
             reverse=True,
         )
         for src in candidates:
-            sos = list(src.glob("*.so"))
+            sos = [
+                so
+                for so in src.glob("*.so")
+                if not so.name.startswith("_deepselect_C.")
+            ]
             if sos:
                 for so in sos:
                     shutil.copy2(so, target_dir)

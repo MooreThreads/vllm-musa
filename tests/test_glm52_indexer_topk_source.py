@@ -109,6 +109,7 @@ def test_sparse_mla_sanitizes_indices_before_kv_loads():
 
 
 @pytest.mark.parametrize("shard_decode", [False, True])
+@pytest.mark.parametrize("topk_backend", ["auto", "deep_select"])
 @pytest.mark.parametrize(
     "warmup,skip,pcp,slots,k_rows,fp4",
     [
@@ -125,7 +126,7 @@ def test_sparse_mla_sanitizes_indices_before_kv_loads():
     ],
 )
 def test_musa_native_inserts_cache_before_exact_shortcut(
-    warmup, skip, pcp, slots, k_rows, fp4, shard_decode, monkeypatch
+    warmup, skip, pcp, slots, k_rows, fp4, shard_decode, topk_backend, monkeypatch
 ):
     """Exercise the real entry without importing GPU-dependent vLLM modules."""
     monkeypatch.setitem(
@@ -216,6 +217,7 @@ def test_musa_native_inserts_cache_before_exact_shortcut(
         k_cache=SimpleNamespace(prefix="encoded", kv_cache=cache),
         topk_indices_buffer=buffer,
         topk_tokens=2048,
+        topk_backend=topk_backend,
         head_dim=128,
         max_model_len=8192,
         use_musa_materialized_prefill=False,
