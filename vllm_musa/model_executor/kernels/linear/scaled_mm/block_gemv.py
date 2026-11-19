@@ -90,12 +90,17 @@ class _Fp8WeightBlockSize(Enum):
     BLOCK128 = 128
 
 
+_BLOCK128_N_ALIGNMENT = 64
+
+
 class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
     """MUSA block-FP8 linear for scale blocks finer than DeepGEMM's 128.
 
     Unconverted weights use block GEMV for small M, block GEMM for larger M,
     and a BF16 GEMM on dequantized weights for prefill. DSV4.1 dense weights
     converted to block128 use the muDNN W8A8 path for every nonempty M.
+    That route is validated only for N divisible by _BLOCK128_N_ALIGNMENT;
+    other output widths retain block32 weights and the existing fallback.
     """
 
     _weight_block_size = _Fp8WeightBlockSize.BLOCK32
@@ -139,7 +144,7 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
             and not getattr(layer, "is_bmm", False)
             and ".shared_experts." not in getattr(layer, "prefix", "")
             and params.weight.ndim == 2
-            and params.weight.shape[0] % 64 == 0
+            and params.weight.shape[0] % _BLOCK128_N_ALIGNMENT == 0
         ):
             weight128, scales128 = requantize_fp8_block32_to_block128(
                 params.weight, fp32_scale
