@@ -108,7 +108,7 @@ def test_v41_flash_tp8_prefers_the_shared_expert_fold() -> None:
     assert contract.model.role is ModelRole.TEXT
     assert contract.profile == "deepseek_v4.1.tp8_flash"
     assert contract.prefers(FOLD)
-    assert contract.preferred_features == {FOLD, BLOCK128}
+    assert contract.preferred_features == {FOLD}
 
 
 @pytest.mark.parametrize("expert_dtype", ["int4", "fp4"])
@@ -120,6 +120,7 @@ def test_v41_w4afp8_ep_prefers_external_shared_expert_overlap(expert_dtype) -> N
     assert contract.model.family is ModelFamily.DEEPSEEK_V41
     assert contract.supported_features == {W4AFP8_OVERLAP, BLOCK128}
     assert contract.prefers(W4AFP8_OVERLAP)
+    assert contract.preferred_features == {W4AFP8_OVERLAP}
     assert not contract.prefers(FOLD)
 
 
@@ -299,12 +300,14 @@ def test_v41_stays_outside_the_deepseek_v4_family() -> None:
 
 @pytest.mark.parametrize("factory", [_v41_flash_config, _v41_w4afp8_config])
 @pytest.mark.parametrize("max_num_seqs", [1, 4, 16])
-def test_dense_block128_is_preferred_for_both_models_and_concurrencies(
+def test_dense_block128_is_supported_but_not_preferred_without_accuracy_validation(
     factory, max_num_seqs
 ) -> None:
     config = factory()
     config.scheduler_config.max_num_seqs = max_num_seqs
-    assert resolve_optimization_contract(config).prefers(BLOCK128)
+    contract = resolve_optimization_contract(config)
+    assert contract.supports(BLOCK128)
+    assert not contract.prefers(BLOCK128)
 
 
 @pytest.mark.parametrize("factory", [_v41_flash_config, _v41_w4afp8_config])
