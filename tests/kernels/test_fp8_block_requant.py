@@ -147,7 +147,15 @@ def test_requantized_mudnn_gemm_can_be_captured_and_replayed() -> None:
     torch.testing.assert_close(output, expected * 2, rtol=0, atol=0)
 
 
-def _make_layer_kernel(monkeypatch, shape, prefix="", fold_shared=False):
+def _make_layer_kernel(
+    monkeypatch,
+    shape,
+    prefix="",
+    fold_shared=False,
+    block128=True,
+    is_bmm=False,
+    weight_block_size=(32, 32),
+):
     from types import SimpleNamespace
 
     from vllm_musa.model_executor.kernels.linear.scaled_mm import block_gemv
@@ -159,13 +167,21 @@ def _make_layer_kernel(monkeypatch, shape, prefix="", fold_shared=False):
         block_gemv,
         "prefers_feature",
         lambda config, feature: (
-            feature != block_gemv.OptimizationFeature.DEEPSEEK_V41_SHARED_EXPERT_FOLD
-            or fold_shared
+            block128
+            if feature == block_gemv.OptimizationFeature.DEEPSEEK_V41_DENSE_FP8_BLOCK128
+            else (
+                fold_shared
+                if feature
+                == block_gemv.OptimizationFeature.DEEPSEEK_V41_SHARED_EXPERT_FOLD
+                else True
+            )
         ),
     )
     layer = torch.nn.Module()
-    layer.weight_block_size = [32, 32]
+    layer.weight_block_size = list(weight_block_size)
     layer.prefix = prefix
+    if is_bmm:
+        layer.is_bmm = True
     original = torch.randn(shape, device="musa").to(torch.float8_e4m3fn)
     scales = (
         torch.rand(((shape[0] + 31) // 32, (shape[1] + 31) // 32), device="musa") + 0.1
@@ -183,6 +199,28 @@ def _make_layer_kernel(monkeypatch, shape, prefix="", fold_shared=False):
     kernel.weight_group_shape = (32, 32)
     kernel.process_weights_after_loading(layer)
     return layer, kernel, original, scales
+
+
+@pytest.mark.parametrize(
+    "shape,kwargs",
+    [
+        ((576, 5120), {"block128": False}),
+        ((576, 5120), {"is_bmm": True}),
+        ((576, 5120), {"weight_block_size": (64, 32)}),
+        ((65, 288), {}),
+    ],
+)
+def test_block128_loader_guards_preserve_ineligible_layers(
+    monkeypatch, shape, kwargs
+) -> None:
+    layer, kernel, original, scales = _make_layer_kernel(
+        monkeypatch, shape, **kwargs
+    )
+
+    assert layer.weight.data_ptr() == original.data_ptr()
+    assert layer.weight_scale_inv.data_ptr() == scales.data_ptr()
+    assert layer.weight_block_size == list(kwargs.get("weight_block_size", (32, 32)))
+    assert not hasattr(kernel, "_musa_block128")
 
 
 @pytest.mark.parametrize("shape", [(576, 5120), (5120, 288)])

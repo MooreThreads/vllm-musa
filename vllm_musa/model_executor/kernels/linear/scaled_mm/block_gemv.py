@@ -86,12 +86,11 @@ def _small_m_path(weight: torch.Tensor, weight_scale: torch.Tensor, rows: int) -
 
 
 class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
-    """Block-FP8 linear for scale blocks finer than DeepGEMM's 128.
+    """MUSA block-FP8 linear for scale blocks finer than DeepGEMM's 128.
 
-    Small M runs the block GEMV, which also quantizes the activation; larger M
-    keeps the separate activation quantization and runs a block GEMM whose K
-    tile spans several scale groups; prefill row counts run the BF16 GEMM on a
-    dequantized weight.
+    Unconverted weights use block GEMV for small M, block GEMM for larger M,
+    and a BF16 GEMM on dequantized weights for prefill. DSV4.1 dense weights
+    converted to block128 use the muDNN W8A8 path for every nonempty M.
     """
 
     @classmethod
