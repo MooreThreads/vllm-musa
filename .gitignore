@@ -219,4 +219,5 @@ vllm/
 vllm_musa/_build_info.py
 
 # Cookbook site build output (tools/cookbook-site).
+/_site/
 /tools/cookbook-site/_site/

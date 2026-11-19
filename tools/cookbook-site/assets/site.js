@@ -57,6 +57,7 @@
       document.getElementById("filter-vendor"),
       document.getElementById("filter-precision"),
       document.getElementById("filter-arch"),
+      document.getElementById("filter-task"),
       document.getElementById("filter-spec"),
     ].filter(Boolean);
     var countEl = document.getElementById("catalog-count");
@@ -80,6 +81,7 @@
         vendor: card.getAttribute("data-vendor") || "",
         precision: card.getAttribute("data-precision") || "",
         arch: card.getAttribute("data-arch") || "",
+        task: card.getAttribute("data-task") || "",
         spec: card.getAttribute("data-spec") || "",
       };
     });

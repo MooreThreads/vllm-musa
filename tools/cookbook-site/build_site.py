@@ -35,9 +35,9 @@ from __future__ import annotations
 
 import argparse
 import html
-import os
 import io
 import json
+import os
 import posixpath
 import re
 import shutil
@@ -69,7 +69,9 @@ ASSETS_SRC = HERE / "assets"
 # ---------------------------------------------------------------------------
 
 DEFAULT_SITE_NAME = "vLLM-MUSA Recipes"
-DEFAULT_TAGLINE = "Pick a model, get a vllm serve line that runs on Moore Threads S5000."
+DEFAULT_TAGLINE = (
+    "Pick a model, get a vllm serve line that runs on Moore Threads S5000."
+)
 DEFAULT_REPO_URL = "https://github.com/MooreThreads/vllm-musa"
 DEFAULT_REF = "main"
 DEFAULT_HARDWARE = "Moore Threads S5000 (MUSA)"
@@ -99,6 +101,8 @@ VENDOR_BLURB = {
 
 # Sections whose first code block is the command the "Copy launch command"
 # button should pick up.
+LAUNCH_RE = re.compile(r"\bvllm\s+serve\b|\bvllm_musa\b|\bdocker\s+run\b")
+
 PRIMARY_SECTION_HINTS = (
     "launching the server",
     "environment",
@@ -264,20 +268,52 @@ def fence_languages(md: str) -> list[str]:
     return langs
 
 
+def fence_blocks(md: str) -> list[tuple[str, str]]:
+    """(language, content) for every fenced block, in document order."""
+    blocks: list[tuple[str, str]] = []
+    lang, buf, in_fence = "", [], False
+    for line in md.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if in_fence:
+                blocks.append((lang, "\n".join(buf)))
+                lang, buf, in_fence = "", [], False
+            else:
+                match = FENCE_RE.match(stripped)
+                lang, in_fence = (match.group(1) if match else "") or "text", True
+            continue
+        if in_fence:
+            buf.append(line)
+    if in_fence:
+        blocks.append((lang, "\n".join(buf)))
+    return blocks
+
+
 def primary_block_index(sections: list[Section]) -> int:
-    """Index of the code block that carries the launch command."""
-    block = 0
+    """Index of the code block that carries the launch command.
+
+    Content beats heading text: a block that actually starts a server
+    (``vllm serve``, ``docker run``) wins over one that only exports variables,
+    even when the exports sit under a hint section. Without that ordering,
+    ``## Environment`` (exports only) shadowed GLM-5.3's serve line under
+    ``## Recommended graph profile`` and the copy button handed out exports.
+    """
+    ranked: list[tuple[int, int, int, int]] = []  # (launches, lang, hint, order)
+    order = 0
     for section in sections:
-        langs = fence_languages(section.body)
-        if langs and section.title and any(
-            hint in section.title.lower() for hint in PRIMARY_SECTION_HINTS
-        ):
-            for i, lang in enumerate(langs):
-                if lang in ("bash", "shell", "sh", "console"):
-                    return block + i
-            return block
-        block += len(langs)
-    return 0 if block else -1
+        title = section.title.lower()
+        hint = next(
+            (i for i, needle in enumerate(PRIMARY_SECTION_HINTS) if needle in title),
+            len(PRIMARY_SECTION_HINTS) + 1 if not title else len(PRIMARY_SECTION_HINTS),
+        )
+        for lang, content in fence_blocks(section.body):
+            launches = 0 if LAUNCH_RE.search(content) else 1
+            shell = 0 if lang in ("bash", "shell", "sh", "console") else 1
+            ranked.append((launches, shell, hint, order))
+            order += 1
+    if not ranked:
+        return -1
+    return min(ranked)[3]
 
 
 def parse_recipe(root: Path, path: Path) -> Recipe:
@@ -369,6 +405,7 @@ def render_markdown(text: str) -> tuple[str, list[dict]]:
 
 def decorate_html(body: str, langs: list[str], primary_block: int) -> str:
     """Post-process converted markdown: alerts, code chrome, primary anchor."""
+
     def _alert(match: re.Match) -> str:
         kind = match.group(1).lower()
         inner = match.group(2).strip().replace("\n", " ")
@@ -382,7 +419,7 @@ def decorate_html(body: str, langs: list[str], primary_block: int) -> str:
         return (
             f'<div class="callout callout-{kind}">'
             f'<span class="callout-title">{label}</span>'
-            f"<div class=\"callout-body\">{inner}</div></div>"
+            f'<div class="callout-body">{inner}</div></div>'
         )
 
     body = ALERT_RE.sub(_alert, body)
@@ -403,7 +440,9 @@ def decorate_html(body: str, langs: list[str], primary_block: int) -> str:
             f"{match.group(0)}</div>"
         )
 
-    body = re.sub(r'<div class="highlight">.*?</div>\s*(?=<|$)', _code, body, flags=re.S)
+    body = re.sub(
+        r'<div class="highlight">.*?</div>\s*(?=<|$)', _code, body, flags=re.S
+    )
     return body
 
 
@@ -442,8 +481,15 @@ def recipe_badges(recipe: Recipe) -> str:
         out.append(badge(precision, "precision"))
     hardware = recipe.facet("Hardware")
     if hardware:
-        match = re.search(r"(\d+)\s*[x×]\s*[A-Za-z0-9]+", hardware)
-        out.append(badge(hardware if match else hardware, "hardware"))
+        # "2 nodes, 8x S5000 per node" is too long for a badge and hides the
+        # total, so collapse it to the GPU count it actually means.
+        nodes = re.search(r"(\d+)\s*nodes?", hardware, re.I)
+        per_node = re.search(r"(\d+)\s*[x\u00d7]\s*([A-Za-z0-9.]+)", hardware)
+        if nodes and per_node:
+            hardware = (
+                f"{int(nodes.group(1)) * int(per_node.group(1))}x {per_node.group(2)}"
+            )
+        out.append(badge(hardware, "hardware"))
     tp = recipe.facet("Tensor parallelism")
     if tp:
         out.append(badge(tp, "tp"))
@@ -453,7 +499,9 @@ def recipe_badges(recipe: Recipe) -> str:
     arch = recipe.facet("Architecture")
     if arch and "moe" in arch.lower():
         out.append(badge("MoE", "arch"))
-    if re.search(r"\bvl\b|vision|image|audio|omni", recipe.title + " " + recipe.overview, re.I):
+    if re.search(
+        r"\bvl\b|vision|image|audio|omni", recipe.title + " " + recipe.overview, re.I
+    ):
         out.append(badge("Multimodal", "arch"))
     return "".join(out)
 
@@ -465,8 +513,7 @@ def card(recipe: Recipe, page: str) -> str:
     ctx = recipe.facet("Maximum context")
     meta = " · ".join(x for x in (tp, ctx) if x)
     facets = " ".join(
-        f'data-{key}="{esc(value)}"'
-        for key, value in recipe.facets().items()
+        f'data-{key}="{esc(value)}"' for key, value in recipe.facets().items()
     )
     return f"""<article class="card" {facets} data-vendor="{esc(recipe.vendor)}">
   <a class="card-hit" href="{esc(url)}"></a>
@@ -495,7 +542,7 @@ def nav_html(page: str, meta: "SiteMeta", vendors: list[str]) -> str:
     ]
     links = []
     for target, label in items:
-        active = " aria-current=\"page\"" if target == page else ""
+        active = ' aria-current="page"' if target == page else ""
         links.append(
             f'<a class="nav-link" href="{esc(rel_link(page, target))}"{active}>{label}</a>'
         )
@@ -609,8 +656,10 @@ def recipe_facets(recipe: Recipe) -> dict[str, str]:
             recipe.body_md,
         )
     ).lower()
-    if "moe" in arch_text or "expert" in arch_text or re.search(
-        r"\ba\d+b\b", recipe.title.lower()
+    if (
+        "moe" in arch_text
+        or "expert" in arch_text
+        or re.search(r"\ba\d+b\b", recipe.title.lower())
     ):
         arch = "MoE"
     else:
@@ -633,9 +682,13 @@ def recipe_facets(recipe: Recipe) -> dict[str, str]:
     gpus = ""
     if per_node:
         gpus = str(int(per_node.group(1)) * (int(nodes.group(1)) if nodes else 1))
-    task = "Multimodal" if MULTIMODAL_RE.search(
-        recipe.title + " " + recipe.overview + " " + recipe.facet("Architecture")
-    ) else "Text"
+    task = (
+        "Multimodal"
+        if MULTIMODAL_RE.search(
+            recipe.title + " " + recipe.overview + " " + recipe.facet("Architecture")
+        )
+        else "Text"
+    )
 
     return {
         "precision": precision,
@@ -754,7 +807,9 @@ def render_index(recipes: list[Recipe], meta: SiteMeta, vendors: list[str]) -> s
     )
 
 
-def render_vendor(vendor: str, recipes: list[Recipe], meta: SiteMeta, vendors: list[str]) -> str:
+def render_vendor(
+    vendor: str, recipes: list[Recipe], meta: SiteMeta, vendors: list[str]
+) -> str:
     page = f"{vendor}/index.html"
     cards = "\n".join(card(recipe, page) for recipe in recipes)
     blurb = VENDOR_BLURB.get(vendor, "")
@@ -798,7 +853,7 @@ def glance_html(recipe: Recipe) -> str:
     if not recipe.at_a_glance:
         return ""
     rows = "".join(
-        f"<div class=\"spec\"><dt>{esc(k)}</dt><dd>{inline_md(v)}</dd></div>"
+        f'<div class="spec"><dt>{esc(k)}</dt><dd>{inline_md(v)}</dd></div>'
         for k, v in recipe.at_a_glance
     )
     return f'<div class="specs"><dl>{rows}</dl></div>'
@@ -807,9 +862,7 @@ def glance_html(recipe: Recipe) -> str:
 def inline_md(text: str) -> str:
     """Render inline markdown for table values (code spans, emphasis)."""
     out = esc(text)
-    out = re.sub(
-        r"`([^`]+)`", lambda m: f"<code>{m.group(1)}</code>", out
-    )
+    out = re.sub(r"`([^`]+)`", lambda m: f"<code>{m.group(1)}</code>", out)
     out = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", out)
     return out
 
@@ -840,7 +893,9 @@ def render_recipe(
     if meta.embed_sources:
         source_url = rel_link(page, f"src/{recipe.source_path}")
     else:
-        source_url = f"{meta.repo_url}/blob/{meta.ref}/docs/cookbook/{recipe.source_path}"
+        source_url = (
+            f"{meta.repo_url}/blob/{meta.ref}/docs/cookbook/{recipe.source_path}"
+        )
     json_url = rel_link(page, f"api/recipes/{recipe.vendor}/{recipe.slug}.json")
     has_command = recipe.primary_block >= 0
     body_html = decorate_html(
@@ -965,7 +1020,9 @@ def render_readme(
     )
 
 
-def rewrite_links(body_html: str, page: str, source_path: str, recipes: list[Recipe]) -> str:
+def rewrite_links(
+    body_html: str, page: str, source_path: str, recipes: list[Recipe]
+) -> str:
     """Point ``*.md`` links at generated pages; fall back to the repo blob URL."""
     by_source = {recipe.source_path: recipe.page_path for recipe in recipes}
     by_source["README.md"] = "getting-started.html"
@@ -1163,7 +1220,9 @@ def main(argv: list[str] | None = None) -> int:
         default="HEAD",
         help="git ref holding docs/cookbook (default: HEAD)",
     )
-    parser.add_argument("--out", type=Path, default=HERE / "site", help="output directory")
+    parser.add_argument(
+        "--out", type=Path, default=HERE / "site", help="output directory"
+    )
     parser.add_argument(
         "--embed-sources",
         action="store_true",
@@ -1177,7 +1236,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--name", default=DEFAULT_SITE_NAME, help="site name")
     parser.add_argument("--tagline", default=DEFAULT_TAGLINE, help="hero tagline")
-    parser.add_argument("--repo-url", default=DEFAULT_REPO_URL, help="source repository URL")
+    parser.add_argument(
+        "--repo-url", default=DEFAULT_REPO_URL, help="source repository URL"
+    )
     parser.add_argument(
         "--ref",
         default=None,
@@ -1197,9 +1258,9 @@ def main(argv: list[str] | None = None) -> int:
         root = args.source.resolve()
     else:  # auto-detect a sibling worktree next to this script
         candidates = [
-            Path("../../docs/cookbook"),          # tools/cookbook-site inside the repo
-            Path("docs/cookbook"),                # run from the repository root
-            Path("../vllm-musa/docs/cookbook"),   # sibling checkout
+            Path("../../docs/cookbook"),  # tools/cookbook-site inside the repo
+            Path("docs/cookbook"),  # run from the repository root
+            Path("../vllm-musa/docs/cookbook"),  # sibling checkout
             Path("../vllm-musa-v0280-cookbook/docs/cookbook"),
         ]
         found = next((c for c in candidates if (HERE / c).resolve().is_dir()), None)
@@ -1226,11 +1287,19 @@ def main(argv: list[str] | None = None) -> int:
         sys.exit(f"error: {root} does not look like a cookbook (no README.md)")
 
     readme_md = (root / "README.md").read_text(encoding="utf-8")
-    recipes = [
-        parse_recipe(root, path)
-        for path in sorted(root.glob("*/*.md"))
-        if path.name.lower() != "readme.md"
+    sources = [
+        path for path in sorted(root.glob("*/*.md")) if path.name.lower() != "readme.md"
     ]
+    untitled = [
+        path for path in sources if not H1_RE.search(path.read_text(encoding="utf-8"))
+    ]
+    if untitled:
+        for path in untitled:
+            print(
+                f"::error file={path.relative_to(root)}::recipe is missing a '# Title' heading"
+            )
+        sys.exit(f"error: {len(untitled)} recipe(s) without an H1 title")
+    recipes = [parse_recipe(root, path) for path in sources]
     if not recipes:
         sys.exit(f"error: no recipes found under {root}")
 
@@ -1334,12 +1403,18 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"built {len(recipes)} recipes from {source_label}")
     print(f"output: {out}")
-    print(f"pages : {len(list(out.rglob('*.html')))} html, "
-          f"{len(list(out.rglob('*.json')))} json")
+    print(
+        f"pages : {len(list(out.rglob('*.html')))} html, "
+        f"{len(list(out.rglob('*.json')))} json"
+    )
     if problems:
-        print(f"warning: {len(problems)} internal link(s) point outside the site:")
+        # The workflow uploads only when this exits 0, so a cookbook edit that
+        # drops a recipe fails the run instead of publishing a dead link.
+        print(f"error: {len(problems)} internal link(s) point outside the site:")
         for problem in problems[:20]:
             print(f"  {problem}")
+        print(f"::error::{len(problems)} broken internal link(s) in the generated site")
+        return 1
     return 0
 
 

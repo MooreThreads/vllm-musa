@@ -6,13 +6,15 @@ name: Cookbook site
 # build needs only `markdown` + `pygments` — no Node toolchain, no front-end
 # build step, and no generated files in the repository.
 #
-# Pull requests build (and fail on broken links) without publishing; pushes to
-# the default branch and manual runs deploy.
+# Branching: the push trigger has no branch filter, because hard-coding the
+# branch name breaks the next time the default branch is renamed. Every branch
+# carries this workflow, so the guard sits on the job instead and compares the
+# pushed ref with the repository's current default branch. Feature-branch pushes
+# skip the job; pull requests build (and fail on broken links) without
+# publishing.
 
 on:
   push:
-    branches:
-      - 'v0.32.0-dev'
     paths:
       - '.github/workflows/cookbook-site.yml'
       - 'docs/cookbook/**'
@@ -38,11 +40,19 @@ permissions:
   id-token: write
 
 concurrency:
-  group: cookbook-site-pages
-  cancel-in-progress: true
+  # Keyed by ref so a pull-request build can never cancel a deploy that is
+  # already running for the default branch.
+  group: cookbook-site-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
+    # Publish from the default branch only. A feature branch that has this
+    # workflow (every branch cut from the default branch does) still builds on
+    # its pull request, but cannot overwrite the site.
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -78,8 +88,8 @@ jobs:
           path: _site
 
   deploy:
-    # Pull requests validate the build only; publishing needs the default branch
-    # or a manual run.
+    # Pull requests validate the build only; the `if` above already restricts
+    # pushes and manual runs to the default branch.
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
