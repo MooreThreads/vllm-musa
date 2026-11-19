@@ -213,9 +213,7 @@ def _make_layer_kernel(
 def test_block128_loader_guards_preserve_ineligible_layers(
     monkeypatch, shape, kwargs
 ) -> None:
-    layer, kernel, original, scales = _make_layer_kernel(
-        monkeypatch, shape, **kwargs
-    )
+    layer, kernel, original, scales = _make_layer_kernel(monkeypatch, shape, **kwargs)
 
     assert layer.weight.data_ptr() == original.data_ptr()
     assert layer.weight_scale_inv.data_ptr() == scales.data_ptr()
