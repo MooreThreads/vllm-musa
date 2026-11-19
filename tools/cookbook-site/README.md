@@ -71,22 +71,19 @@ never guesses a value it cannot read, and it fails loudly on a missing
 ## CI
 
 `.github/workflows/cookbook-site.yml` builds on every push that touches
-`docs/cookbook/**` or this directory, and on pull requests that do. The job
-publishes only from the repository's **default branch** (`github.ref_name ==
-github.event.repository.default_branch`), so a feature branch that carries the
-workflow builds on its PR but cannot overwrite the site, and renaming the
+`docs/cookbook/**` or this directory, and on pull requests that do.
+
+One site, one source: the published pages always describe the repository's
+**default branch** (`github.ref_name == github.event.repository.default_branch`),
+the same model as recipes.vllm.ai, whose `sources.yaml` has a single `latest`
+channel pointing at `main`. There is no per-release selector — an older branch
+keeps its cookbook in git history, but it does not publish, so a recipe fix has
+to land on the default branch to reach the site. Feature branches carrying this
+workflow still build on their pull request; they cannot deploy. Renaming the
 default branch needs no workflow change.
 
 It deploys through `actions/deploy-pages`, which requires Pages to be
 configured with **Source: GitHub Actions**.
-
-`workflow_dispatch` takes an optional `cookbook_ref` input, so a recipe branch
-can be previewed on the real site before it is merged — the dispatch has to run
-on the default branch:
-
-```console
-$ gh workflow run cookbook-site.yml -f cookbook_ref=my/recipe-branch
-```
 
 The build is the gate: a recipe without an `# H1`, an unreadable `## At a
 glance` table, or an internal link that resolves to nothing fails the run

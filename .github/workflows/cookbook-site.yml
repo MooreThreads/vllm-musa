@@ -6,6 +6,10 @@ name: Cookbook site
 # build needs only `markdown` + `pygments` — no Node toolchain, no front-end
 # build step, and no generated files in the repository.
 #
+# One site, one source: the published pages always describe the default branch,
+# matching recipes.vllm.ai, whose sources.yaml has a single `latest` channel
+# pointing at main. There is no per-release selector.
+#
 # Branching: the push trigger has no branch filter, because hard-coding the
 # branch name breaks the next time the default branch is renamed. Every branch
 # carries this workflow, so the guard sits on the job instead and compares the
@@ -25,14 +29,6 @@ on:
       - 'docs/cookbook/**'
       - 'tools/cookbook-site/**'
   workflow_dispatch:
-    inputs:
-      cookbook_ref:
-        description: >-
-          Optional git ref to build docs/cookbook from (for example a recipe
-          branch that is not merged yet). Leave empty to build this commit.
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: read
@@ -65,23 +61,15 @@ jobs:
       - name: Install build dependencies
         run: python -m pip install 'markdown>=3.3,<4' 'pygments>=2.15'
       - name: Build the site
-        env:
-          COOKBOOK_REF: ${{ inputs.cookbook_ref }}
         run: |
           set -euo pipefail
-          build() {
-            python tools/cookbook-site/build_site.py \
-              --embed-sources \
-              --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
-              --out _site "$@"
-          }
-          if [ -n "${COOKBOOK_REF}" ]; then
-            git fetch --depth=1 origin "${COOKBOOK_REF}"
-            build --git-repo . --git-ref FETCH_HEAD --ref "${COOKBOOK_REF}"
-          else
-            test -d docs/cookbook || { echo "::error::docs/cookbook is missing"; exit 1; }
-            build --source docs/cookbook --ref "${GITHUB_REF_NAME}"
-          fi
+          test -d docs/cookbook || { echo "::error::docs/cookbook is missing"; exit 1; }
+          python tools/cookbook-site/build_site.py \
+            --embed-sources \
+            --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --out _site \
+            --source docs/cookbook \
+            --ref "${GITHUB_REF_NAME}"
       - name: Upload the Pages artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
