@@ -113,6 +113,8 @@ def resolve_deepseek_v41_contract(
     if flash_fp8 or w4afp8:
         feature = OptimizationFeature.DEEPSEEK_V41_DENSE_FP8_BLOCK128
         supported.add(feature)
+        if _matches_tp8(execution) and not execution.has_speculative_config:
+            preferred.add(feature)
 
     if flash_fp8:
         # The folded shared expert rides the small-M FP8 MoE kernel after the

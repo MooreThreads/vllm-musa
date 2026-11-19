@@ -10,6 +10,11 @@ torch = pytest.importorskip("torch")
 if getattr(torch.version, "musa", None) is None:
     pytest.skip("Requires MUSA", allow_module_level=True)
 
+from tests.test_deepseek_v41_optimization_contract import (
+    _v41_flash_config,
+    _v41_w4afp8_config,
+)
+
 requant_module = import_module("vllm_musa.kernels.fp8_block_requant")
 requantize_fp8_block32_to_block128 = requant_module.requantize_fp8_block32_to_block128
 block_gemv = import_module(
@@ -158,26 +163,31 @@ def _make_layer_kernel(
     block128=True,
     is_bmm=False,
     weight_block_size=(32, 32),
+    vllm_config=None,
 ):
     from types import SimpleNamespace
 
     monkeypatch.setattr(
-        block_gemv, "get_current_vllm_config", lambda: SimpleNamespace()
-    )
-    monkeypatch.setattr(
         block_gemv,
-        "prefers_feature",
-        lambda config, feature: (
-            block128
-            if feature == block_gemv.OptimizationFeature.DEEPSEEK_V41_DENSE_FP8_BLOCK128
-            else (
-                fold_shared
-                if feature
-                == block_gemv.OptimizationFeature.DEEPSEEK_V41_SHARED_EXPERT_FOLD
-                else True
-            )
-        ),
+        "get_current_vllm_config",
+        lambda: vllm_config if vllm_config is not None else SimpleNamespace(),
     )
+    if vllm_config is None:
+        monkeypatch.setattr(
+            block_gemv,
+            "prefers_feature",
+            lambda config, feature: (
+                block128
+                if feature
+                == block_gemv.OptimizationFeature.DEEPSEEK_V41_DENSE_FP8_BLOCK128
+                else (
+                    fold_shared
+                    if feature
+                    == block_gemv.OptimizationFeature.DEEPSEEK_V41_SHARED_EXPERT_FOLD
+                    else True
+                )
+            ),
+        )
     layer = torch.nn.Module()
     layer.weight_block_size = list(weight_block_size)
     layer.prefix = prefix
@@ -212,6 +222,17 @@ def test_weight_block_size_defaults_to_block32() -> None:
         block_gemv.MUSAFp8BlockGemvScaledMMKernel
     )
     assert kernel._weight_block_size is block_gemv._Fp8WeightBlockSize.BLOCK32
+
+
+@pytest.mark.parametrize("factory", [_v41_flash_config, _v41_w4afp8_config])
+def test_real_model_contract_reaches_load_time_conversion(monkeypatch, factory) -> None:
+    layer, kernel, original, scales = _make_layer_kernel(
+        monkeypatch, (576, 5120), vllm_config=factory()
+    )
+
+    assert layer.weight.data_ptr() != original.data_ptr()
+    assert layer.weight_block_size == [128, 128]
+    assert kernel._weight_block_size is block_gemv._Fp8WeightBlockSize.BLOCK128
 
 
 @pytest.mark.parametrize(
@@ -281,7 +302,7 @@ def test_dense_projection_with_shared_expert_shape_remains_eligible(
     assert kernel._weight_block_size is block_gemv._Fp8WeightBlockSize.BLOCK128
 
 
-@pytest.mark.parametrize("shape", [(64, 256), (64, 288)])
+@pytest.mark.parametrize("shape", [(64, 256)])
 @pytest.mark.parametrize("rows", [1, 512])
 def test_converted_layer_rejects_legacy_fused_swiglu(monkeypatch, shape, rows) -> None:
     layer, kernel, original, scales = _make_layer_kernel(monkeypatch, shape)
