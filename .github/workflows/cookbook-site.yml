@@ -1,0 +1,91 @@
+name: Cookbook site
+
+# Builds the recipe site from docs/cookbook and publishes it to GitHub Pages.
+#
+# The cookbook is plain Markdown (# H1, ## At a glance, fenced bash), so the
+# build needs only `markdown` + `pygments` — no Node toolchain, no front-end
+# build step, and no generated files in the repository.
+#
+# Pull requests build (and fail on broken links) without publishing; pushes to
+# the default branch and manual runs deploy.
+
+on:
+  push:
+    branches:
+      - 'v0.32.0-dev'
+    paths:
+      - '.github/workflows/cookbook-site.yml'
+      - 'docs/cookbook/**'
+      - 'tools/cookbook-site/**'
+  pull_request:
+    paths:
+      - '.github/workflows/cookbook-site.yml'
+      - 'docs/cookbook/**'
+      - 'tools/cookbook-site/**'
+  workflow_dispatch:
+    inputs:
+      cookbook_ref:
+        description: >-
+          Optional git ref to build docs/cookbook from (for example a recipe
+          branch that is not merged yet). Leave empty to build this commit.
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: cookbook-site-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: python -m pip install 'markdown>=3.3,<4' 'pygments>=2.15'
+      - name: Build the site
+        env:
+          COOKBOOK_REF: ${{ inputs.cookbook_ref }}
+        run: |
+          set -euo pipefail
+          build() {
+            python tools/cookbook-site/build_site.py \
+              --embed-sources \
+              --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+              --out _site "$@"
+          }
+          if [ -n "${COOKBOOK_REF}" ]; then
+            git fetch --depth=1 origin "${COOKBOOK_REF}"
+            build --git-repo . --git-ref FETCH_HEAD --ref "${COOKBOOK_REF}"
+          else
+            test -d docs/cookbook || { echo "::error::docs/cookbook is missing"; exit 1; }
+            build --source docs/cookbook --ref "${GITHUB_REF_NAME}"
+          fi
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: _site
+
+  deploy:
+    # Pull requests validate the build only; publishing needs the default branch
+    # or a manual run.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
