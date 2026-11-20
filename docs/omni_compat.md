@@ -79,8 +79,11 @@ this document follows all three:
 | `main` 9a2ae280e6 | 0.32.0 (the pin) | 4307 | 0 | 174 | 0 |
 | `01c3f711a` (0.32-era) | 0.32.0 | 4132 | 0 | 177 | 0 |
 
-Omni main against 0.33 is clean and the 0.32-era Omni against 0.32 is clean, so
-every finding below is exactly the version gap.
+Omni main on the v0.34 line is clean after the v0.32 import adapters and
+backports in this branch. The audit still reports semantic differences in
+worker-v2, speculative decoding, and selected optional serving paths. Those
+paths remain explicitly unsupported until the pinned runtime receives the
+corresponding vLLM implementation.
 
 ### Five classes, not one
 
