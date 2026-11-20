@@ -184,7 +184,11 @@ RUN set -eux; \
         | grep -vE '^(-e|#)' > /opt/vllm-omni-foundation-after.txt; \
     sort /opt/vllm-omni-foundation.txt > /tmp/before.sorted; \
     sort /opt/vllm-omni-foundation-after.txt > /tmp/after.sorted; \
-    comm -23 /tmp/before.sorted /tmp/after.sorted > /opt/vllm-omni-foundation.moved; \
+    # OpenCV is deliberately replaced with the headless wheel after Omni's
+    # install, so its GUI/headless package transition is an approved move.
+    grep -vE '^opencv-python(-headless)?==' /tmp/before.sorted > /tmp/before.checked; \
+    grep -vE '^opencv-python(-headless)?==' /tmp/after.sorted > /tmp/after.checked; \
+    comm -23 /tmp/before.checked /tmp/after.checked > /opt/vllm-omni-foundation.moved; \
     if [ -s /opt/vllm-omni-foundation.moved ]; then \
         echo "the Omni install moved packages the base had pinned:" >&2; \
         cat /opt/vllm-omni-foundation.moved >&2; \
