@@ -91,8 +91,8 @@ RUN set -eux; \
 
 # vLLM-Omni's media and guardrail dependencies import cv2. Some MUSA base
 # images contain both OpenCV distributions, whose wheels write the same cv2/
-# directory. Restore the base-pinned headless wheel last, while leaving the GUI
-# distribution installed for packages that declare it, so cv2 never needs libGL.
+# directory. Record the base's headless version and restore that wheel after
+# Omni's install so cv2 never needs libGL and vLLM's video IO floor is preserved.
 # The MUSA foundation is a contract, not a suggestion: torch, torch_musa, vllm,
 # vllm-musa, MATE, numpy and the rest were built and validated together. Freezing
 # everything the base installed as a pip constraint lets Omni *add* packages
@@ -121,24 +121,14 @@ RUN set -eux; \
         'numpy>=1.26.4,<2'; \
     python -m pip list "$@" --exclude-editable --format=freeze \
         | grep -vE '^(-e|#)' > /opt/vllm-omni-foundation.txt; \
-    # Keep Omni's opencv-python requirement deterministic. The unconstrained
-    # package currently offers several large ABI-tagged wheels and makes the
-    # resolver spend several minutes backtracking on the image build.
-    printf '%s\n' 'opencv-python==4.10.0.84' >> /opt/vllm-omni-foundation.txt; \
     OPENCV_HEADLESS="$(awk -F== '$1 == "opencv-python-headless" {print $2}' \
         /opt/vllm-omni-foundation.txt)"; \
-    if [ -z "${OPENCV_HEADLESS}" ]; then \
-        OPENCV_HEADLESS="$(awk -F== '$1 == "opencv-python" {print $2}' \
-            /opt/vllm-omni-foundation.txt)"; \
-    fi; \
-    if [ -n "${OPENCV_HEADLESS}" ]; then \
-        python -m pip install --no-deps --force-reinstall \
-            ${PYPI_INDEX_URL:+--index-url ${PYPI_INDEX_URL}} \
-            "opencv-python-headless==${OPENCV_HEADLESS}"; \
-    else \
-        echo "opencv-python is absent from the pinned MUSA foundation" >&2; \
-        exit 1; \
-    fi; \
+    test -n "${OPENCV_HEADLESS}"; \
+    printf 'opencv-python==%s\n' "${OPENCV_HEADLESS}" \
+        >> /opt/vllm-omni-foundation.txt; \
+    python -m pip install --no-deps --force-reinstall \
+        ${PYPI_INDEX_URL:+--index-url ${PYPI_INDEX_URL}} \
+        "opencv-python-headless==${OPENCV_HEADLESS}"; \
     python -c "import cv2; info=cv2.getBuildInformation(); gui=next((line.strip() for line in info.splitlines() if line.strip().startswith('GUI:')), ''); print('cv2', cv2.__version__, gui); assert gui.endswith('NONE'), gui"; \
     wc -l /opt/vllm-omni-foundation.txt
 
@@ -163,14 +153,16 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         -e /vllm-workspace/vllm-omni
 
 # Omni's dependency resolver installs opencv-python after the foundation check.
-# Replace that GUI wheel after the install so every runtime import uses the
-# headless build and does not require libGL from the host.
+# Replace that GUI wheel after the install with the base-pinned headless build.
 RUN --mount=type=cache,target=/root/.cache/pip \
     set -eux; \
+    OPENCV_HEADLESS="$(awk -F== '$1 == "opencv-python-headless" {print $2}' \
+        /opt/vllm-omni-foundation.txt)"; \
+    test -n "${OPENCV_HEADLESS}"; \
     python -m pip uninstall -y opencv-python opencv-python-headless || true; \
     python -m pip install --no-deps \
         ${PYPI_INDEX_URL:+--index-url ${PYPI_INDEX_URL}} \
-        opencv-python-headless==4.10.0.84; \
+        "opencv-python-headless==${OPENCV_HEADLESS}"; \
     python -c "import cv2; info=cv2.getBuildInformation(); gui=next((line.strip() for line in info.splitlines() if line.strip().startswith('GUI:')), ''); print('cv2', cv2.__version__, gui); assert gui.endswith('NONE'), gui"
 
 # Prove the contract held rather than trusting the constraint file. Omni is
