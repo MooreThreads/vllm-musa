@@ -29,7 +29,8 @@ ARG GET_PIP_URL
 ARG PIP_BOOTSTRAP_INDEX_URL
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 RUN sed -i 's@http://archive.ubuntu.com/ubuntu/@http://mirrors.aliyun.com/ubuntu/@g' /etc/apt/sources.list
 
