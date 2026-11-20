@@ -124,7 +124,7 @@ RUN set -eux; \
     # Keep Omni's opencv-python requirement deterministic. The unconstrained
     # package currently offers several large ABI-tagged wheels and makes the
     # resolver spend several minutes backtracking on the image build.
-    printf '%s\n' 'opencv-python==4.12.0.88' >> /opt/vllm-omni-foundation.txt; \
+    printf '%s\n' 'opencv-python==4.10.0.84' >> /opt/vllm-omni-foundation.txt; \
     OPENCV_HEADLESS="$(awk -F== '$1 == "opencv-python-headless" {print $2}' \
         /opt/vllm-omni-foundation.txt)"; \
     if [ -z "${OPENCV_HEADLESS}" ]; then \
