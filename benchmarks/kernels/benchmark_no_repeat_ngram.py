@@ -7,7 +7,7 @@ import time
 
 import torch
 
-from vllm_musa.v1.worker.gpu.sample.no_repeat_ngram import apply_no_repeat_ngram
+from vllm.v1.worker.gpu.sample.no_repeat_ngram import apply_no_repeat_ngram
 
 
 def build_mineru_caches(output_ids: list[list[int]], ngram_size: int):

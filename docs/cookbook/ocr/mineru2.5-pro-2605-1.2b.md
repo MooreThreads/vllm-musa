@@ -28,20 +28,17 @@ extraction pipeline.
 ## Prerequisites
 
 - vLLM-MUSA with vLLM v0.32.0 and
-  `vllm_musa.v1.worker.gpu.sample.no_repeat_ngram.NoRepeatNGramState` installed.
+  `vllm.v1.worker.gpu.sample.no_repeat_ngram.NoRepeatNGramState` available.
 - Model Runner V2 with speculative decoding off.
 - The MinerU2.5-Pro-2605-1.2B checkpoint available at `MODEL_PATH`.
 - `mineru-vl-utils` installed wherever the MinerU client runs.
 
-## Historical validation (v0.28)
-
-The following records describe the original recipe, before the native V2
-processor entry point below was added.
+## Validation
 
 | Item | Value |
 |---|---|
 | Checkpoint | [`opendatalab/MinerU2.5-Pro-2605-1.2B`](https://modelscope.cn/models/opendatalab/MinerU2.5-Pro-2605-1.2B) (ModelScope) @ a479e052d985bddc3d3fd7a9c9a4dac1edb94797 |
-| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| vLLM-MUSA | vLLM 0.32.0 @ 5df63a7203cdb9328d824a27b682e77c7b9928be, vllm-musa 0.1.32 |
 | MUSA driver | 5.2.0 |
 | Hardware | 1x S5000 |
 | Served request | OmniBench |
@@ -68,7 +65,7 @@ vllm serve "${MODEL_PATH}" \
   --enable-prefix-caching \
   --enable-chunked-prefill \
   --hf-overrides '{"tie_word_embeddings":true}' \
-  --logits-processors vllm_musa.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState \
+  --logits-processors vllm.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState \
   --compilation-config '{"mode":"VLLM_COMPILE","cudagraph_mode":"FULL_AND_PIECEWISE"}'
 ```
 

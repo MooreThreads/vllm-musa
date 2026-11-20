@@ -11,7 +11,7 @@ from vllm.platforms import current_platform
 
 from vllm.model_executor.models.deepseek_ocr import NoRepeatNGramLogitsProcessor
 from vllm.sampling_params import SamplingParams
-from vllm_musa.v1.worker.gpu.sample.no_repeat_ngram import (
+from vllm.v1.worker.gpu.sample.no_repeat_ngram import (
     NoRepeatNGramState,
     apply_no_repeat_ngram,
 )
@@ -293,7 +293,7 @@ def test_native_fqcn_uses_real_v2_loader_and_request_state():
     )
     from vllm.v1.worker.gpu.states import RequestState
 
-    fqcn = "vllm_musa.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState"
+    fqcn = "vllm.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState"
     validator = build_custom_logits_processors_params_validator([fqcn])
     active = SamplingParams(extra_args={"ngram_size": 3, "window_size": 90})
     whitelisted = SamplingParams(extra_args={

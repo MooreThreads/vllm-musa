@@ -526,12 +526,6 @@ _SHADOW_MODULES = [
     ),
     (
         "5",
-        "vllm_musa/v1/worker/gpu/sample/no_repeat_ngram.py",
-        None,
-        "V2 no-repeat n-gram port (vllm-project/vllm#57540; absent from upstream pin)",
-    ),
-    (
-        "5",
         "vllm_musa/worker.py",
         None,
         "new MUSA module (no upstream same-path; MTGPUWorker)",

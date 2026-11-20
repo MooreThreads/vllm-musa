@@ -24,18 +24,15 @@ BF16 vision-language OCR recipe for a single S5000 GPU.
 ## Prerequisites
 
 - vLLM-MUSA with vLLM v0.32.0 and
-  `vllm_musa.v1.worker.gpu.sample.no_repeat_ngram.NoRepeatNGramState` installed.
+  `vllm.v1.worker.gpu.sample.no_repeat_ngram.NoRepeatNGramState` available.
 - Model Runner V2. This processor does not support speculative decoding.
 
-## Historical validation (v0.28)
-
-The following records describe the original recipe, before the V2 processor
-entry point below was added.
+## Validation
 
 | Item | Value |
 |---|---|
 | Checkpoint | [`deepseek-ai/DeepSeek-OCR`](https://modelscope.cn/models/deepseek-ai/DeepSeek-OCR) (ModelScope) @ 99e7e2063f5efd86e50e69c41d37f53b1438caad |
-| vLLM-MUSA | vLLM 0.28.0 @ 2cf0a69, vllm-musa 0.1.28 |
+| vLLM-MUSA | vLLM 0.32.0 @ 5df63a7203cdb9328d824a27b682e77c7b9928be, vllm-musa 0.1.32 |
 | MUSA driver | 5.2.0 |
 | Hardware | 1x S5000 |
 | Served request | OmniBench |
@@ -60,7 +57,7 @@ vllm serve /models/DeepSeek-OCR \
   --max-num-batched-tokens 8192 \
   --gpu-memory-utilization 0.90 \
   --mm-processor-cache-gb 0 \
-  --logits-processors vllm_musa.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState \
+  --logits-processors vllm.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState \
   --no-enable-prefix-caching
 ```
 
