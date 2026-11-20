@@ -75,7 +75,7 @@ bash docker/build_omni_image.sh \
   --base "${VLLM_MUSA_IMAGE}" \
   --omni-clone "${VLLM_OMNI_CLONE}" \
   --omni-ref "${OMNI_REF}" \
-  --tag "vllm-omni-musa:${OMNI_REF}"
+  --tag "vllm-omni-musa:${OMNI_REF//\//-}"
 ```
 
 The script records the vLLM-MUSA and Omni revisions, stages an immutable Omni
