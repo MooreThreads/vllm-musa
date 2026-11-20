@@ -258,18 +258,12 @@ def _run(
     shim is process-global by design, so in-process tests would leak into each
     other.
     """
-    script = (
-        textwrap.dedent(
-            """
+    script = textwrap.dedent("""
         import json, sys
         import vllm_musa.omni_compat as compat
         compat.install()
         result = {"installed": compat.is_installed()}
-        """
-        )
-        + textwrap.dedent(body)
-        + "\nprint('@@' + json.dumps(result))\n"
-    )
+        """) + textwrap.dedent(body) + "\nprint('@@' + json.dumps(result))\n"
     env = {
         "PYTHONPATH": f"{site}:{ROOT}",
         "PATH": "/usr/bin:/bin",
@@ -569,8 +563,7 @@ def test_backport_reproduces_the_pinned_grouping(pin_site):
 
 def test_backport_rejects_inconsistent_worker_specs(pin_site):
     """The pinned assertion must survive the backport, not be softened by it."""
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import vllm_musa.omni_compat as compat
         compat.install()
         from vllm.v1.core.kv_cache_planning import get_global_kv_cache_groups
@@ -579,8 +572,7 @@ def test_backport_rejects_inconsistent_worker_specs(pin_site):
             num_prefill_lookahead_tokens = 1
 
         get_global_kv_cache_groups(Config(), [{"l": "a"}, {"l": "b"}])
-        """
-    )
+        """)
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -654,8 +646,7 @@ def test_v034_rows_leave_native_symbols_untouched(next_site):
 def test_a_stale_relocation_fails_loudly(tmp_path, monkeypatch):
     """A table row pointing at a source without the symbol must raise on import."""
     site = _make_vllm(tmp_path, PIN_VERSION, moved=False)
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import vllm_musa.omni_compat as compat
         from vllm_musa.omni_compat import table
 
@@ -671,8 +662,7 @@ def test_a_stale_relocation_fails_loudly(tmp_path, monkeypatch):
         table.ENTRIES = (bad,)
         compat.install()
         import vllm.entrypoints.common.cli_args
-        """
-    )
+        """)
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -804,8 +794,7 @@ def test_bootstrap_imports_nothing_heavy(pin_site):
     ``import vllm_musa.omni_compat`` would execute ``vllm_musa/__init__.py``,
     which imports torchada and torch; the bootstrap exists to avoid exactly that.
     """
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import json, sys
         import vllm_musa_omni_compat_pth as boot
         heavy = sorted(
@@ -818,8 +807,7 @@ def test_bootstrap_imports_nothing_heavy(pin_site):
             "is_last": type(sys.meta_path[-1]).__name__ == "OmniCompatPathFinder",
             "is_first": type(sys.meta_path[0]).__name__ == "OmniCompatPathFinder",
         }))
-        """
-    )
+        """)
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -848,8 +836,7 @@ def test_bootstrap_serves_without_importing_the_package(pin_site):
     ``vllm_musa``'s initialisation while a vLLM module is mid-import, which is
     the circular import this bootstrap exists to avoid.
     """
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import json, sys
         import vllm_musa_omni_compat_pth  # noqa: F401  -- installs the hook
         from vllm.entrypoints.common.startup import cli_env_setup
@@ -857,8 +844,7 @@ def test_bootstrap_serves_without_importing_the_package(pin_site):
             "value": cli_env_setup(),
             "imported_vllm_musa": "vllm_musa" in sys.modules,
         }))
-        """
-    )
+        """)
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -885,8 +871,7 @@ def test_bootstrap_adapter_survives_a_later_rebind(pin_site):
     holds through the standalone bootstrap, which loads the adapter by file path
     and is what the image actually runs.
     """
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import json, sys
         import vllm_musa_omni_compat_pth  # noqa: F401  -- installs the hook
         import vllm.v1.sample.ops.topk_topp_sampler as mod
@@ -900,8 +885,7 @@ def test_bootstrap_adapter_survives_a_later_rebind(pin_site):
             "value": list(apply_top_k_top_p("l", 1, 2, has_topp_only_rows=False)),
             "imported_vllm_musa": "vllm_musa" in sys.modules,
         }))
-        """
-    )
+        """)
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -922,15 +906,13 @@ def test_bootstrap_adapter_survives_a_later_rebind(pin_site):
 
 
 def test_bootstrap_respects_the_disable_env(pin_site):
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import sys
         import vllm_musa_omni_compat_pth as boot
         assert not any(type(f).__name__ == "OmniCompatPathFinder" for f in sys.meta_path)
         assert boot.install() is False
         import vllm.entrypoints.common.startup
-        """
-    )
+        """)
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -1026,8 +1008,7 @@ def test_pth_line_is_processed_and_installs_the_startup_hook(tmp_path):
         timeout=120,
         check=True,
     )
-    probe = textwrap.dedent(
-        f"""
+    probe = textwrap.dedent(f"""
         import json, site, sys
         site.addsitedir({str(site)!r})          # processes the .pth, as startup does
         from vllm_musa.omni_compat import active_hooks
@@ -1037,8 +1018,7 @@ def test_pth_line_is_processed_and_installs_the_startup_hook(tmp_path):
             "served": cli_env_setup(),
             "bootstrap": "vllm_musa_omni_compat_pth" in sys.modules,
         }}))
-        """
-    )
+        """)
     proc = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True,
@@ -1341,15 +1321,13 @@ def test_adapter_reaches_a_module_imported_after_install(pin_site):
 
 def test_adapter_warns_when_the_module_was_already_imported(pin_site):
     """Installing too late cannot work, and must say so rather than look fine."""
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import logging, sys
         logging.basicConfig(level=logging.WARNING)
         import vllm.v1.sample.ops.topk_topp_sampler  # before the shim: too late
         import vllm_musa.omni_compat as compat
         compat.install()
-        """
-    )
+        """)
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -1367,8 +1345,7 @@ def test_adapter_warns_when_the_module_was_already_imported(pin_site):
 
 def test_an_adapter_that_patches_nothing_fails_the_import(pin_site, tmp_path):
     """A silent no-op adapter is the failure mode that matters most."""
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import sys
         import vllm_musa.omni_compat as compat
         from vllm_musa.omni_compat import _patcher, table
@@ -1392,8 +1369,7 @@ def test_an_adapter_that_patches_nothing_fails_the_import(pin_site, tmp_path):
         )
         _patcher.install_adapters()
         import vllm.v1.sample.ops.topk_topp_sampler
-        """
-    )
+        """)
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -1757,17 +1733,11 @@ def test_a_skipped_semantics_pass_says_so_in_the_verdict(tmp_path, capsys):
 # --------------------------------------------------------------------------- #
 def _bootstrap(site: Path, body: str, *, version: str = PIN_VERSION) -> dict:
     """Run ``body`` after the ``.pth`` bootstrap, which is what the image runs."""
-    script = (
-        textwrap.dedent(
-            """
+    script = textwrap.dedent("""
         import json, sys
         import vllm_musa_omni_compat_pth  # noqa: F401  -- installs the hook
         result = {}
-        """
-        )
-        + textwrap.dedent(body)
-        + "\nprint('@@' + json.dumps(result))\n"
-    )
+        """) + textwrap.dedent(body) + "\nprint('@@' + json.dumps(result))\n"
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
