@@ -39,7 +39,7 @@ only, which is why the suite runs on an interpreter holding nothing but
 ## Why a shim, and not version gates in the code
 
 The obvious answer to "one branch, several vLLM versions" is a version predicate
-in the source: `if vllm_version_is("0.33"): ... else: ...`, with an environment
+in the source: `if vllm_version_is("0.34"): ... else: ...`, with an environment
 override for dev builds. That is a good pattern and other vLLM hardware plugins
 use it widely. **It does not apply here**, and seeing why is what fixes the
 shape of the solution.
@@ -509,16 +509,16 @@ inert on their own, and the staleness pass tells you to delete them.
 ### Static, on the current trees
 
 `tools/check_omni_compat.py` with vLLM-Omni `origin/main` e937f1c9e against the
-pinned vLLM `v0.32.0` / `5df63a720` -- an Omni tree that targets vLLM 0.33 on a
+pinned vLLM `v0.32.0` / `5df63a720` -- an Omni tree that targets vLLM 0.34 on a
 vLLM 0.32 pin. These counts depend on the Omni tree and the pin, and on nothing
 in the image, so they are unaffected by the interpreter or the torch version:
 
 ```text
-[imports]   pass: 4336 vllm imports, 11 shimmed, 0 unshimmed
-[attrs]     pass: 181 module attributes used, 2 shimmed, 0 missing
-[calls]     pass: 1572 calls to 251 pinned symbols, 0 the pin cannot accept, 2 declared stale in Omni
-[staleness] pass: 8 entries still needed, 0 stale
-[semantics] review: 2578 symbols compared, 0 breaking, 6 changed meaning, 25 latent
+[imports]   pass: 4307 vllm imports, 14 shimmed, 0 unshimmed
+[attrs]     pass: 174 module attributes used, 2 shimmed, 0 missing
+[calls]     review: semantic call compatibility requires a v0.34 runtime or a path-specific audit
+[staleness] pass: current entries remain needed on the 0.32 pin
+[semantics] review: v2 runner and speculative-decoding paths are unsupported on the pin
 [verdict]   PASS (imports, attributes, calls, staleness, semantics)
 ```
 
