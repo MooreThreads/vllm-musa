@@ -198,6 +198,12 @@ def main(argv: list[str] | None = None) -> int:
             f"vllm_musa.omni_compat.adapters.{entry.adapter}"
         )
         live = adapter.is_applied(module)
+        # Omni's v0.34 config module intentionally rebinds ModelConfig and
+        # VllmConfig to subclasses after the adapter has added the inherited
+        # method. The class identity changes, but the method contract survives
+        # through inheritance and is_satisfied is the correct live check.
+        if entry.adapter in {"config_model", "config_vllm"} and adapter.is_satisfied(module):
+            live = applied["names"]
         missing = [name for name in applied["names"] if name not in live]
         if missing:
             failures.append(
