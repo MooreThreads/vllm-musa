@@ -162,6 +162,17 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         --constraint /opt/vllm-omni-foundation.txt \
         -e /vllm-workspace/vllm-omni
 
+# Omni's dependency resolver installs opencv-python after the foundation check.
+# Replace that GUI wheel after the install so every runtime import uses the
+# headless build and does not require libGL from the host.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    set -eux; \
+    python -m pip uninstall -y opencv-python opencv-python-headless || true; \
+    python -m pip install --no-deps \
+        ${PYPI_INDEX_URL:+--index-url ${PYPI_INDEX_URL}} \
+        opencv-python-headless==4.10.0.84; \
+    python -c "import cv2; info=cv2.getBuildInformation(); gui=next((line.strip() for line in info.splitlines() if line.strip().startswith('GUI:')), ''); print('cv2', cv2.__version__, gui); assert gui.endswith('NONE'), gui"
+
 # Prove the contract held rather than trusting the constraint file. Omni is
 # expected to have *added* packages, so only the base's own pins are compared.
 RUN set -eux; \
