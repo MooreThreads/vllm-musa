@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 12 Nov 2026 21:31:26 +0800
+Subject: [PATCH] MUSA: carry shared indexer top-k through generic PP
+
+Use the upstream PP helpers backported from vllm-project/vllm#59961 on the generic DeepseekV2/GLM DSA model selected by MUSA. Preserve the pinned hidden_states/residual protocol and persistent indexer buffer. No captured-prefill or ragged-decode guards are included.
+
+Co-authored-by: OpenAI GPT-6.1
+---
+ vllm/model_executor/models/deepseek_v2.py | 29 +++++++++++++----------
+ 1 file changed, 17 insertions(+), 12 deletions(-)
+
+diff --git a/vllm/model_executor/models/deepseek_v2.py b/vllm/model_executor/models/deepseek_v2.py
+index a1a919fae6..dfe60e7b79 100644
+--- a/vllm/model_executor/models/deepseek_v2.py
++++ b/vllm/model_executor/models/deepseek_v2.py
+@@ -121,12 +121,15 @@ from .interfaces import (
+ )
+ from .utils import (
+     PPMissingLayer,
++    compute_skip_topk_layers,
++    copy_pp_buffers,
+     get_pp_missing_layer_names,
+     get_spec_layer_idx_from_weight_name,
+     is_pp_missing_parameter,
+     make_empty_intermediate_tensors_factory,
+     make_layers,
+     maybe_prefix,
++    pp_topk_buffers,
+ )
+ 
+ logger = init_logger(__name__)
+@@ -1142,18 +1145,8 @@ class DeepseekV2MLAAttention(nn.Module):
+         _skip_topk = False
+         is_mtp_layer = False
+         if self.is_v32:
+-            _index_topk_freq = getattr(config, "index_topk_freq", 1)
+-            _index_topk_pattern = getattr(config, "index_topk_pattern", None)
+-            _index_skip_topk_offset = getattr(config, "index_skip_topk_offset", 2)
+             layer_id = extract_layer_index(prefix)
+-
+-            if _index_topk_pattern is None:
+-                _skip_topk = (
+-                    max(layer_id - _index_skip_topk_offset + 1, 0) % _index_topk_freq
+-                    != 0
+-                )
+-            elif 0 <= layer_id < len(_index_topk_pattern):
+-                _skip_topk = _index_topk_pattern[layer_id] == "S"
++            _skip_topk = layer_id in compute_skip_topk_layers(config)
+ 
+             # The skip pattern only governs backbone layers. MTP/nextn
+             # layers (layer_id >= num_hidden_layers) always build a full
+@@ -1447,6 +1440,13 @@ class DeepseekV2Model(nn.Module):
+             )
+         else:
+             topk_indices_buffer = None
++        self._pp_buffers = (
++            pp_topk_buffers(
++                config, topk_indices_buffer, range(config.num_hidden_layers)
++            )
++            if topk_indices_buffer is not None
++            else {}
++        )
+         index_group_builder = (
+             SparseMLAIndexGroupBuilder(
+                 topk_indices_buffer,
+@@ -1487,7 +1487,7 @@ class DeepseekV2Model(nn.Module):
+         else:
+             self.norm = PPMissingLayer()
+         self.make_empty_intermediate_tensors = make_empty_intermediate_tensors_factory(
+-            ["hidden_states", "residual"], self.hidden_size
++            ["hidden_states", "residual"], self.hidden_size, buffers=self._pp_buffers
+         )
+ 
+         self.aux_hidden_state_layers = tuple[int, ...]()
+@@ -1527,6 +1527,7 @@ class DeepseekV2Model(nn.Module):
+             assert intermediate_tensors is not None
+             hidden_states = intermediate_tensors["hidden_states"]
+             residual = intermediate_tensors["residual"]
++            copy_pp_buffers(intermediate_tensors, self._pp_buffers)
+ 
+         # Compute llama 4 scaling once per forward pass if enabled
+         llama_4_scaling_config = getattr(self.config, "llama_4_scaling", None)
+@@ -1573,6 +1574,10 @@ class DeepseekV2Model(nn.Module):
+         if not get_pp_group().is_last_rank:
+             return IntermediateTensors(
+                 {"hidden_states": hidden_states, "residual": residual}
++                | {
++                    key: buffer[: positions.shape[0]]
++                    for key, buffer in self._pp_buffers.items()
++                }
+             )
+ 
+         if hidden_states.shape[0] != positions.shape[0]:

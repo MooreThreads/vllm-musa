@@ -782,7 +782,7 @@
          return None
 
 
-@@ -527,69 +417,56 @@
+@@ -527,69 +417,62 @@
      block_table: torch.Tensor
      slot_mapping: torch.Tensor
 
@@ -846,6 +846,12 @@
 +    # so prefill attention reads contiguous K/V (no block_table) and mate routes
 +    # to the faster mubin TCE flash-attention.
 +    prefill_no_prefix: bool = False
++
++    # MUSA: batch size the AOT scheduler metadata was built for. The draft
++    # decode graph refreshes that metadata in place, and must reproduce the same
++    # batch size the capture used (padding-aware, so it may differ from
++    # num_decodes).
++    schedule_batch_size: int = 0
 
 
  def _get_sliding_window_configs(
@@ -885,7 +891,7 @@
 
 
  class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetadata]):
-@@ -618,64 +495,17 @@
+@@ -618,18 +501,142 @@
      )
      supports_update_block_table: bool = True
 
@@ -901,121 +907,46 @@
 +        kv_cache_spec: "AttentionSpec",
      ) -> AttentionCGSupport:
          return cls._cudagraph_support
--
+
 -    def _get_scheduler_metadata(
--        self,
--        *,
--        aot_schedule: bool,
--        batch_size: int,
--        cu_query_lens: torch.Tensor,
--        max_query_len: int,
--        seqlens: torch.Tensor,
--        max_seq_len: int,
--        causal: bool | torch.Tensor,
--        max_num_splits: int,
--    ) -> torch.Tensor | None:
--        if not aot_schedule:
--            return None
--
--        cache_dtype = self.cache_config.cache_dtype
--        if is_quantized_kv_cache(cache_dtype):
--            qkv_dtype = current_platform.fp8_dtype()
--        else:
--            qkv_dtype = self.kv_cache_dtype
--        return get_scheduler_metadata(
--            batch_size=batch_size,
--            max_seqlen_q=max_query_len,
--            max_seqlen_k=max_seq_len,
--            num_heads_q=self.num_heads_q * self.dcp_world_size,
--            num_heads_kv=self.num_heads_kv,
--            headdim=self.headdim,
--            cache_seqlens=seqlens,
--            qkv_dtype=qkv_dtype,
--            cu_seqlens_q=cu_query_lens,
--            page_size=self.block_size,
--            causal=causal,
--            window_size=_maybe_symmetrize_window(self.aot_sliding_window, causal),
--            num_splits=max_num_splits,
--        )
--
--    def _store_scheduler_metadata(
--        self, scheduler_metadata: torch.Tensor | None
--    ) -> torch.Tensor | None:
--        if self.use_full_cuda_graph and scheduler_metadata is not None:
--            n = scheduler_metadata.shape[0]
--            assert self.scheduler_metadata is not None
--            self.scheduler_metadata[:n] = scheduler_metadata
--            # NOTE(woosuk): We should zero out the rest of the scheduler
--            # metadata to guarantee the correctness. Otherwise, some thread
--            # blocks may use the invalid scheduler metadata and overwrite the
--            # output buffer.
--            self.scheduler_metadata[n:] = 0
--            return self.scheduler_metadata[:n]
--        return scheduler_metadata
-
-     def __init__(
-         self,
-@@ -691,50 +521,22 @@
-         self.compilation_config = vllm_config.compilation_config
-         self.attention_config = vllm_config.attention_config
-
--        self.num_heads_q = get_num_attention_heads_from_layers(
--            vllm_config, layer_names
--        ) or self.model_config.get_num_attention_heads(self.parallel_config)
--        self.num_heads_kv = kv_cache_spec.num_kv_heads
++    def __init__(
++        self,
++        kv_cache_spec: AttentionSpec,
++        layer_names: list[str],
++        vllm_config: VllmConfig,
++        device: torch.device,
++    ):
++        super().__init__(kv_cache_spec, layer_names, vllm_config, device)
++        self.model_config = vllm_config.model_config
++        self.parallel_config = vllm_config.parallel_config
++        self.cache_config = vllm_config.cache_config
++        self.compilation_config = vllm_config.compilation_config
++        self.attention_config = vllm_config.attention_config
++
 +        self.num_heads_q = self.model_config.get_num_attention_heads(
 +            self.parallel_config
 +        )
 +        self.num_heads_kv = self.model_config.get_num_kv_heads(self.parallel_config)
-         self.kv_cache_dtype = kv_cache_spec.dtype
--        self.headdim = kv_cache_spec.head_size
++        self.kv_cache_dtype = kv_cache_spec.dtype
 +        self.headdim = self.model_config.get_head_size()
-         self.block_size = kv_cache_spec.block_size
-
-         self.max_num_splits = 0  # No upper bound on the number of splits.
-         self.aot_schedule = get_flash_attn_version() == 3
--        head_size_v = getattr(kv_cache_spec, "head_size_v", None)
--        fa_version = get_flash_attn_version(
--            head_size=self.headdim,
--            head_size_v=head_size_v,
--            kv_cache_block_size=self.block_size,
--            supports_fa4_hd256=True,
--        )
--        self.fa4_hd256 = fa_version == 4 and uses_fa4_hd256_kernel(
--            self.headdim, head_size_v
--        )
--
--        if (
--            vllm_config.kernel_config.enable_jit_warmup
--            and self.model_config.hf_config.model_type in ("gemma4", "gemma4_unified")
--            and fa_version == 4
--        ):
--            _FA4_DENSE_ATTENTION_KERNEL.register_warmup(
--                vllm_config=vllm_config,
--                kv_cache_spec=kv_cache_spec,
--                num_qo_heads=self.num_heads_q,
--            )
++        self.block_size = kv_cache_spec.block_size
++
++        self.max_num_splits = 0  # No upper bound on the number of splits.
++        self.aot_schedule = get_flash_attn_version() == 3
 +        self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
-
-         self.dcp_world_size, self.dcp_rank = get_dcp_world_size_and_rank(
-             kv_cache_spec.dcp_sharded
-         )
-
--        # Fused draft decode reuses the captured metadata object across draft
--        # steps. For DCP, build-time host-side decisions such as
--        # skip_dcp_context_attention() can change the metadata shape/control
--        # path (for example max_dcp_context_kv_len), and those Python-side
--        # fields are not refreshed in-place between graph replays. Keep the
--        # fused path disabled until DCP gets a full replay-safe refresh model.
--        self.supports_draft_decode_metadata_update = self.dcp_world_size == 1
--
-         self.cp_kv_cache_interleave_size = (
-             self.parallel_config.cp_kv_cache_interleave_size
-         )
-@@ -743,6 +545,16 @@
-             self.compilation_config.cudagraph_mode.has_full_cudagraphs()
-         )
-         self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
++
++        self.dcp_world_size, self.dcp_rank = get_dcp_world_size_and_rank(
++            kv_cache_spec.dcp_sharded
++        )
++
++        self.cp_kv_cache_interleave_size = (
++            self.parallel_config.cp_kv_cache_interleave_size
++        )
++
++        self.use_full_cuda_graph = (
++            self.compilation_config.cudagraph_mode.has_full_cudagraphs()
++        )
++        self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
 +
 +        self._sm_count = 60
 +        self._sm_count_query_succeeded = False
@@ -1026,18 +957,28 @@
 +            and _has_supported_fa3_scheduler_layout()
 +        )
 +        # ========================== END ==========================
-
-         if self.use_full_cuda_graph and self.aot_schedule:
-             # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
-@@ -765,46 +577,38 @@
-             self.max_num_splits = (
-                 self.attention_config.flash_attn_max_num_splits_for_cuda_graph
-             )
--
--        if self.dcp_world_size > 1:
--            max_num_reqs = vllm_config.scheduler_config.max_num_seqs
--            self._dcp_context_kv_lens = torch.zeros(
--                max_num_reqs,
++
++        if self.use_full_cuda_graph and self.aot_schedule:
++            # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
++            # The +1 is for the tile_count_semaphore (synchronization).
++            # The 4 slots per batch element (num_prepare_batch_vectors) are:
++            #   prepare_varlen + dynamic_split + sort_batches + head_swizzle
++            # See: https://github.com/vllm-project/flash-attention/blob/5824e6e/hopper/flash_api.cpp#L664-L671  # noqa: E501
++            max_batch_size = max(
++                vllm_config.scheduler_config.max_num_seqs,
++                self.max_cudagraph_size or 0,
++            )
++            self.scheduler_metadata = torch.zeros(
++                1 + round_up(max_batch_size, 4) * 4,
++                dtype=torch.int32,
++                device=self.device,
++            )
++            # When using cuda graph, we need to set the upper bound of the
++            # number of splits so that large enough intermediate buffers are
++            # pre-allocated during capture.
++            self.max_num_splits = (
++                self.attention_config.flash_attn_max_num_splits_for_cuda_graph
++            )
 +            try:
 +                self._sm_count = torch.musa.get_device_properties(
 +                    self.device
@@ -1062,14 +1003,186 @@
 +        if self.use_full_cuda_graph:
 +            self._cu_seqlens_k_buffer = torch.zeros(
 +                vllm_config.scheduler_config.max_num_seqs + 1,
-                 dtype=torch.int32,
-                 device=self.device,
-             )
++                dtype=torch.int32,
++                device=self.device,
++            )
 +        # ========================== END ==========================
-
-         # Sliding window size to be used with the AOT scheduler will be
-         # populated on first build() call.
-         self.aot_sliding_window: tuple[int, int] | None = None
++
++        # Sliding window size to be used with the AOT scheduler will be
++        # populated on first build() call.
++        self.aot_sliding_window: tuple[int, int] | None = None
++
++        # MUSA: FA3 AOT decode metadata is a pure device-side function of
++        # seq_lens / query_start_loc, so a speculator may refresh it inside the
++        # draft decode graph instead of rebuilding metadata eagerly per step.
++        # All three conditions are hard requirements, not tunables:
++        #   - aot_schedule: only FA3 has an AOT schedule to refresh;
++        #   - use_full_cuda_graph: the refresh is recorded once inside the
++        #     captured draft decode graph, and the persistent scheduler_metadata
++        #     buffer only exists in this mode;
++        #   - dcp_world_size == 1: DCP rewrites its local seq lens on the host.
++        self.supports_draft_decode_metadata_update = (
++            self.aot_schedule and self.dcp_world_size == 1 and self.use_full_cuda_graph
++        )
++        if self.supports_draft_decode_metadata_update:
++            logger.info_once(
++                "MUSA FA3: draft decode metadata update enabled "
++                "(fused multi-step draft decode)."
++            )
++
++    def _get_aot_scheduler_metadata(
+         self,
+         *,
+-        aot_schedule: bool,
+         batch_size: int,
+         cu_query_lens: torch.Tensor,
+         max_query_len: int,
+@@ -638,12 +645,16 @@
+         causal: bool | torch.Tensor,
+         max_num_splits: int,
+     ) -> torch.Tensor | None:
+-        if not aot_schedule:
+-            return None
+-
++        """FA3 AOT schedule for one decode batch.
++
++        Reads only device buffers (seq_lens / cu_seqlens_q), so it is safe to
++        record inside a CUDA graph.
++        """
+         cache_dtype = self.cache_config.cache_dtype
+-        if is_quantized_kv_cache(cache_dtype):
+-            qkv_dtype = current_platform.fp8_dtype()
++        if cache_dtype.startswith("fp8"):
++            qkv_dtype = MUSAFlashAttentionBackend.get_fp8_dtype_for_flashattn(
++                cache_dtype
++            )
+         else:
+             qkv_dtype = self.kv_cache_dtype
+         return get_scheduler_metadata(
+@@ -658,153 +669,9 @@
+             cu_seqlens_q=cu_query_lens,
+             page_size=self.block_size,
+             causal=causal,
+-            window_size=_maybe_symmetrize_window(self.aot_sliding_window, causal),
++            window_size=self.aot_sliding_window,
+             num_splits=max_num_splits,
+         )
+-
+-    def _store_scheduler_metadata(
+-        self, scheduler_metadata: torch.Tensor | None
+-    ) -> torch.Tensor | None:
+-        if self.use_full_cuda_graph and scheduler_metadata is not None:
+-            n = scheduler_metadata.shape[0]
+-            assert self.scheduler_metadata is not None
+-            self.scheduler_metadata[:n] = scheduler_metadata
+-            # NOTE(woosuk): We should zero out the rest of the scheduler
+-            # metadata to guarantee the correctness. Otherwise, some thread
+-            # blocks may use the invalid scheduler metadata and overwrite the
+-            # output buffer.
+-            self.scheduler_metadata[n:] = 0
+-            return self.scheduler_metadata[:n]
+-        return scheduler_metadata
+-
+-    def __init__(
+-        self,
+-        kv_cache_spec: AttentionSpec,
+-        layer_names: list[str],
+-        vllm_config: VllmConfig,
+-        device: torch.device,
+-    ):
+-        super().__init__(kv_cache_spec, layer_names, vllm_config, device)
+-        self.model_config = vllm_config.model_config
+-        self.parallel_config = vllm_config.parallel_config
+-        self.cache_config = vllm_config.cache_config
+-        self.compilation_config = vllm_config.compilation_config
+-        self.attention_config = vllm_config.attention_config
+-
+-        self.num_heads_q = get_num_attention_heads_from_layers(
+-            vllm_config, layer_names
+-        ) or self.model_config.get_num_attention_heads(self.parallel_config)
+-        self.num_heads_kv = kv_cache_spec.num_kv_heads
+-        self.kv_cache_dtype = kv_cache_spec.dtype
+-        self.headdim = kv_cache_spec.head_size
+-        self.block_size = kv_cache_spec.block_size
+-
+-        self.max_num_splits = 0  # No upper bound on the number of splits.
+-        self.aot_schedule = get_flash_attn_version() == 3
+-        head_size_v = getattr(kv_cache_spec, "head_size_v", None)
+-        fa_version = get_flash_attn_version(
+-            head_size=self.headdim,
+-            head_size_v=head_size_v,
+-            kv_cache_block_size=self.block_size,
+-            supports_fa4_hd256=True,
+-        )
+-        self.fa4_hd256 = fa_version == 4 and uses_fa4_hd256_kernel(
+-            self.headdim, head_size_v
+-        )
+-
+-        if (
+-            vllm_config.kernel_config.enable_jit_warmup
+-            and self.model_config.hf_config.model_type in ("gemma4", "gemma4_unified")
+-            and fa_version == 4
+-        ):
+-            _FA4_DENSE_ATTENTION_KERNEL.register_warmup(
+-                vllm_config=vllm_config,
+-                kv_cache_spec=kv_cache_spec,
+-                num_qo_heads=self.num_heads_q,
+-            )
+-
+-        self.dcp_world_size, self.dcp_rank = get_dcp_world_size_and_rank(
+-            kv_cache_spec.dcp_sharded
+-        )
+-
+-        # Fused draft decode reuses the captured metadata object across draft
+-        # steps. For DCP, build-time host-side decisions such as
+-        # skip_dcp_context_attention() can change the metadata shape/control
+-        # path (for example max_dcp_context_kv_len), and those Python-side
+-        # fields are not refreshed in-place between graph replays. Keep the
+-        # fused path disabled until DCP gets a full replay-safe refresh model.
+-        self.supports_draft_decode_metadata_update = self.dcp_world_size == 1
+-
+-        self.cp_kv_cache_interleave_size = (
+-            self.parallel_config.cp_kv_cache_interleave_size
+-        )
+-
+-        self.use_full_cuda_graph = (
+-            self.compilation_config.cudagraph_mode.has_full_cudagraphs()
+-        )
+-        self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
+-
+-        if self.use_full_cuda_graph and self.aot_schedule:
+-            # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
+-            # The +1 is for the tile_count_semaphore (synchronization).
+-            # The 4 slots per batch element (num_prepare_batch_vectors) are:
+-            #   prepare_varlen + dynamic_split + sort_batches + head_swizzle
+-            # See: https://github.com/vllm-project/flash-attention/blob/5824e6e/hopper/flash_api.cpp#L664-L671  # noqa: E501
+-            max_batch_size = max(
+-                vllm_config.scheduler_config.max_num_seqs,
+-                self.max_cudagraph_size or 0,
+-            )
+-            self.scheduler_metadata = torch.zeros(
+-                1 + round_up(max_batch_size, 4) * 4,
+-                dtype=torch.int32,
+-                device=self.device,
+-            )
+-            # When using cuda graph, we need to set the upper bound of the
+-            # number of splits so that large enough intermediate buffers are
+-            # pre-allocated during capture.
+-            self.max_num_splits = (
+-                self.attention_config.flash_attn_max_num_splits_for_cuda_graph
+-            )
+-
+-        if self.dcp_world_size > 1:
+-            max_num_reqs = vllm_config.scheduler_config.max_num_seqs
+-            self._dcp_context_kv_lens = torch.zeros(
+-                max_num_reqs,
+-                dtype=torch.int32,
+-                device=self.device,
+-            )
+-
+-        # Sliding window size to be used with the AOT scheduler will be
+-        # populated on first build() call.
+-        self.aot_sliding_window: tuple[int, int] | None = None
 -
 -        # R-SWA: persistent CUDA-graph-safe buffers owned by this builder.
 -        self.rswa_window: int | None = self.model_config.rswa_window
@@ -1101,7 +1214,7 @@
 
      def build(
          self,
-@@ -812,7 +616,8 @@
+@@ -812,7 +679,8 @@
          common_attn_metadata: CommonAttentionMetadata,
          fast_build: bool = False,
      ) -> FlashAttentionMetadata:
@@ -1111,7 +1224,7 @@
          iterations i.e. spec-decode
          """
          num_reqs = common_attn_metadata.num_reqs
-@@ -825,11 +630,25 @@
+@@ -825,11 +693,25 @@
          slot_mapping = common_attn_metadata.slot_mapping
          causal = common_attn_metadata.causal
 
@@ -1142,7 +1255,7 @@
 
          if self.aot_sliding_window is None:
              self.aot_sliding_window = (-1, -1)
-@@ -857,100 +676,263 @@
+@@ -857,100 +739,250 @@
              # usage, because the intermediate buffers of size [num_splits,
              # num_heads, num_tokens, head_size] are allocated. Therefore,
              # we only set num_splits when using cuda graphs.
@@ -1231,30 +1344,17 @@
 +        def schedule(
 +            batch_size, cu_query_lens, max_query_len, seqlens, max_seq_len, causal
 +        ):
-+            cache_dtype = self.cache_config.cache_dtype
-+            if cache_dtype.startswith("fp8"):
-+                qkv_dtype = MUSAFlashAttentionBackend.get_fp8_dtype_for_flashattn(
-+                    cache_dtype
-+                )
-+            else:
-+                qkv_dtype = self.kv_cache_dtype
-+            if aot_schedule:
-+                return get_scheduler_metadata(
-+                    batch_size=batch_size,
-+                    max_seqlen_q=max_query_len,
-+                    max_seqlen_k=max_seq_len,
-+                    num_heads_q=self.num_heads_q * self.dcp_world_size,
-+                    num_heads_kv=self.num_heads_kv,
-+                    headdim=self.headdim,
-+                    cache_seqlens=seqlens,
-+                    qkv_dtype=qkv_dtype,
-+                    cu_seqlens_q=cu_query_lens,
-+                    page_size=self.block_size,
-+                    causal=causal,
-+                    window_size=self.aot_sliding_window,
-+                    num_splits=max_num_splits,
-+                )
-+            return None
++            if not aot_schedule:
++                return None
++            return self._get_aot_scheduler_metadata(
++                batch_size=batch_size,
++                cu_query_lens=cu_query_lens,
++                max_query_len=max_query_len,
++                seqlens=seqlens,
++                max_seq_len=max_seq_len,
++                causal=causal,
++                max_num_splits=max_num_splits,
++            )
 +
 +        use_cascade = common_prefix_len > 0
          max_dcp_context_kv_len = 0
@@ -1480,7 +1580,7 @@
 
          attn_metadata = FlashAttentionMetadata(
              num_actual_tokens=num_actual_tokens,
-@@ -958,62 +940,31 @@
+@@ -958,63 +990,88 @@
              query_start_loc=query_start_loc,
              max_seq_len=max_seq_len,
              seq_lens=seq_lens,
@@ -1512,7 +1612,7 @@
 +            prefix_scheduler_metadata=prefix_scheduler_metadata,
              max_num_splits=max_num_splits,
              causal=causal,
-         )
+-        )
 -
 -        # Compute mm_prefix range tensor if the batch contains
 -        # multimodal tokens with bidirectional ranges.  Built for every FA
@@ -1544,10 +1644,37 @@
 -        # R-SWA: copy prefix lengths into persistent buffers (outside the
 -        # compiled region) so forward() never allocates during CUDA graph
 -        # capture.  rswa_window is a static model config scalar read here.
--        if (
++            schedule_batch_size=num_reqs,
++        )
++        return attn_metadata
++
++    def update_draft_decode_metadata(self, metadata: FlashAttentionMetadata) -> None:
++        """Refresh captured FA3 decode metadata for the next draft step.
++
++        The speculator records this call inside its draft decode CUDA graph, so
++        every op must be capture-safe and must write into persistent buffers
++        that ``metadata`` already references. ``seq_lens`` and
++        ``query_start_loc`` are views into the runner's persistent input
++        buffers, already advanced by the previous draft step.
++        """
++        if metadata.scheduler_metadata is None and metadata.cu_seqlens_k is None:
++            return
++
++        batch_size = metadata.schedule_batch_size or metadata.num_decodes
++        assert self.dcp_world_size == 1
++        logger.info_once(
++            "MUSA FA3: refreshing draft decode metadata inside the draft "
++            "decode graph."
++        )
++
++        buf = self._cu_seqlens_k_buffer
+         if (
 -            self.rswa_window is not None
 -            and common_attn_metadata.rswa_prefix_lens is not None
--        ):
++            buf is not None
++            and metadata.cu_seqlens_k is not None
++            and metadata.cu_seqlens_k.data_ptr() == buf.data_ptr()
+         ):
 -            assert self.persistent_rswa_prefix_lens is not None
 -            assert self.persistent_rswa_window_tensor is not None
 -            src = common_attn_metadata.rswa_prefix_lens
@@ -1557,10 +1684,40 @@
 -            attn_metadata.rswa_window = self.rswa_window
 -            attn_metadata.rswa_window_tensor = self.persistent_rswa_window_tensor
 -
-         return attn_metadata
+-        return attn_metadata
++            n = batch_size + 1
++            buf[0].zero_()
++            torch.cumsum(
++                metadata.seq_lens[:batch_size],
++                dim=0,
++                dtype=torch.int32,
++                out=buf[1:n],
++            )
++            metadata.cu_seqlens_k = buf[:n]
++
++        if metadata.scheduler_metadata is None:
++            # The captured shape used a schedule without AOT metadata (e.g. the
++            # Qwen direct decode schedule); only cu_seqlens_k moves per step.
++            return
++
++        scheduler_metadata = self._get_aot_scheduler_metadata(
++            batch_size=batch_size,
++            cu_query_lens=metadata.query_start_loc,
++            max_query_len=metadata.max_query_len,
++            seqlens=metadata.seq_lens,
++            max_seq_len=metadata.max_seq_len,
++            causal=metadata.causal,
++            max_num_splits=metadata.max_num_splits,
++        )
++        n = scheduler_metadata.shape[0]
++        self.scheduler_metadata[:n] = scheduler_metadata
++        # Zero the tail so no thread block picks up stale scheduler entries.
++        self.scheduler_metadata[n:] = 0
++        metadata.scheduler_metadata = self.scheduler_metadata[:n]
 
      def update_block_table(
-@@ -1024,34 +975,18 @@
+         self,
+@@ -1024,34 +1081,18 @@
      ) -> FlashAttentionMetadata:
          new_metadata = copy.copy(metadata)
          new_metadata.block_table = blk_table
@@ -1600,7 +1757,7 @@
 
      def __init__(
          self,
-@@ -1090,89 +1025,57 @@
+@@ -1090,89 +1131,57 @@
          self.num_queries_per_kv = self.num_heads // self.num_kv_heads
 
          self.attn_type = attn_type
@@ -1716,7 +1873,7 @@
 
      def forward(
          self,
-@@ -1182,36 +1085,31 @@
+@@ -1182,36 +1191,31 @@
          value: torch.Tensor,
          kv_cache: torch.Tensor,
          attn_metadata: FlashAttentionMetadata,
@@ -1761,7 +1918,7 @@
 
          if output_scale is not None or output_block_scale is not None:
              raise NotImplementedError(
-@@ -1248,181 +1146,688 @@
+@@ -1248,181 +1252,693 @@
                  layer,
              )
 
@@ -2299,9 +2456,11 @@
 +
 +    def qwen3_qk_rope_kvcache_supported(self) -> bool:
 +        """Whether this layer is inside a validated Qwen3 cache-out envelope."""
-+        supported_shape = (
-+            (self.num_heads, self.num_kv_heads, self.head_size)
-+            in ((16, 8, 128), (32, 8, 128), (4, 1, 256), (32, 2, 256))
++        supported_shape = (self.num_heads, self.num_kv_heads, self.head_size) in (
++            (16, 8, 128),
++            (32, 8, 128),
++            (4, 1, 256),
++            (32, 2, 256),
 +        )
 +        return (
 +            get_flash_attn_version() == 3
@@ -2352,7 +2511,9 @@
 +            and get_kv_cache_layout() == "NHD"
 +        )
 +        if can_fuse_cache:
-+            key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
++            key_cache, value_cache = kv_cache.transpose(1, 2).split(
++                self.head_size, dim=-1
++            )
 +            expected_tail = (self.num_kv_heads, self.head_size)
 +            flat_cache_supported = (
 +                key_cache.is_contiguous()
@@ -2365,8 +2526,7 @@
 +                and is_interleaved
 +                and self.head_size == 256
 +                and cos_sin_cache.shape[-1] == 64
-+                and (mrope_section_t, mrope_section_h, mrope_section_w)
-+                == (11, 11, 10)
++                and (mrope_section_t, mrope_section_h, mrope_section_w) == (11, 11, 10)
 +            )
 +            paged_cache_supported = (
 +                h256_paged_specialization
@@ -2455,7 +2615,9 @@
 +    ) -> None:
 +        """Apply Qwen2 RoPE and populate its NHD cache in one MUSA launch."""
 +        if query.shape[0] <= 1:
-+            key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
++            key_cache, value_cache = kv_cache.transpose(1, 2).split(
++                self.head_size, dim=-1
++            )
 +            from vllm_musa.kernels.qwen2_rope_kv import try_qwen2_rope_kv_cache
 +
 +            if try_qwen2_rope_kv_cache(
@@ -2618,7 +2780,7 @@
 
      def do_kv_cache_update(
          self,
-@@ -1437,9 +1842,7 @@
+@@ -1437,9 +1953,7 @@
              # we use direct Q, K, V tensors without caching
              return
 
@@ -2629,7 +2791,7 @@
          key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
          # Reshape the input keys and values and store them in the cache.
-@@ -1460,182 +1863,6 @@
+@@ -1460,182 +1974,6 @@
              layer._v_scale,
          )
 
@@ -2812,7 +2974,7 @@
      def _forward_encoder_attention(
          self,
          query: torch.Tensor,
-@@ -1654,14 +1881,13 @@
+@@ -1654,14 +1992,13 @@
              output: shape = [num_encoder_tokens, num_heads, head_size]
              attn_metadata: Encoder attention metadata
              layer: The attention layer
@@ -2831,7 +2993,7 @@
              raise NotImplementedError(
                  "quantization is not supported for encoder attention"
              )
-@@ -1672,203 +1898,198 @@
+@@ -1672,203 +2009,198 @@
          max_seqlen_q = attn_metadata.max_query_len
          max_seqlen_k = attn_metadata.max_query_len
 

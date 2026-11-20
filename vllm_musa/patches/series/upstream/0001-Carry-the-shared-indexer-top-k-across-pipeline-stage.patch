@@ -1,0 +1,772 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sun, 1 Nov 2026 01:47:35 -0500
+Subject: [PATCH] Carry the shared indexer top-k across pipeline stages
+ (#59961)
+
+Signed-off-by: aoshen524 <aoshen524@gmail.com>
+Co-authored-by: aoshen524 <aoshen524@gmail.com>
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Co-authored-by: aoshen02 <aoshen@inferact.ai>
+Co-authored-by: Roger Wang <hey@rogerw.io>
+(cherry picked from commit 63d3d39c84724daeaf098eae209fb3b6bdec02d2)
+---
+ .buildkite/test_areas/models_basic.yaml   |   3 +-
+ tests/models/deepseek_v32/test_pp_topk.py | 129 ++++++++++++++++++++++
+ vllm/model_executor/models/utils.py       |  94 +++++++++++++++-
+ vllm/models/deepseek_v32/amd/model.py     |  18 ++-
+ vllm/models/deepseek_v32/attention.py     |  17 +--
+ vllm/models/deepseek_v32/nvidia/model.py  |  14 ++-
+ vllm/models/dots3_note/nvidia/model.py    |  10 +-
+ vllm/models/hy_v4/amd/model.py            |  22 +++-
+ vllm/models/hy_v4/nvidia/attention.py     |  64 +----------
+ vllm/models/hy_v4/nvidia/model.py         |  22 +++-
+ vllm/models/minimax_m3/amd/model.py       |  12 ++
+ 11 files changed, 314 insertions(+), 91 deletions(-)
+ create mode 100644 tests/models/deepseek_v32/test_pp_topk.py
+
+diff --git a/.buildkite/test_areas/models_basic.yaml b/.buildkite/test_areas/models_basic.yaml
+index 552910e85a..2b4933f5f7 100644
+--- a/.buildkite/test_areas/models_basic.yaml
++++ b/.buildkite/test_areas/models_basic.yaml
+@@ -253,12 +253,13 @@ steps:
+   - tests/model_executor/layers/test_activation.py
+   - tests/models/test_language_model_cache_is_weak.py
+   - tests/models/deepseek_v32/test_sequence_parallel.py
++  - tests/models/deepseek_v32/test_pp_topk.py
+   - tests/models/test_deepseek_v4_fi_moe_ep.py
+   - tests/models/test_dspark_mla.py
+   - tests/models/transformers/test_layer_registry.py
+   device: cpu-small
+   commands:
+-    - pytest -v -s models/test_utils.py models/test_vision.py models/test_adapters.py models/test_qwen3_5_mtp_config.py models/transformers/fusers/ model_executor/layers/test_activation.py models/test_language_model_cache_is_weak.py models/deepseek_v32/test_sequence_parallel.py models/test_deepseek_v4_fi_moe_ep.py models/test_dspark_mla.py models/transformers/test_layer_registry.py
++    - pytest -v -s models/test_utils.py models/test_vision.py models/test_adapters.py models/test_qwen3_5_mtp_config.py models/transformers/fusers/ model_executor/layers/test_activation.py models/test_language_model_cache_is_weak.py models/deepseek_v32/test_sequence_parallel.py models/deepseek_v32/test_pp_topk.py models/test_deepseek_v4_fi_moe_ep.py models/test_dspark_mla.py models/transformers/test_layer_registry.py
+ 
+ - label: ':amd: (MI355) DeepSeek-V4.1 Mono Decode Numerics'
+   key: dsv41-mono-decode-numerics-amd
+diff --git a/tests/models/deepseek_v32/test_pp_topk.py b/tests/models/deepseek_v32/test_pp_topk.py
+new file mode 100644
+index 0000000000..6309cdfef7
+--- /dev/null
++++ b/tests/models/deepseek_v32/test_pp_topk.py
+@@ -0,0 +1,129 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++from types import SimpleNamespace
++
++import pytest
++import torch
++from torch import nn
++
++from vllm.distributed import parallel_state
++from vllm.model_executor.models import utils as model_utils
++from vllm.models.deepseek_v32.nvidia import model as deepseek_v32_model
++from vllm.sequence import IntermediateTensors
++
++# GLM-5.3: each group of 4 layers from layer 3 reuses its first layer's top-k.
++GLM5_TOPK = dict(index_topk_freq=4, index_skip_topk_offset=3)
++
++
++def _set_pp_size(monkeypatch, pp_size: int) -> None:
++    monkeypatch.setattr(
++        parallel_state, "get_pp_group", lambda: SimpleNamespace(world_size=pp_size)
++    )
++
++
++class TestPPSplitsLayerSharing:
++    @pytest.mark.parametrize(
++        "num_layers,users,consumers,pp_size,expected",
++        [
++            (8, range(8), {1, 2, 3, 5, 6, 7}, 2, False),
++            (8, range(8), {1, 2, 4, 5, 6, 7}, 2, True),
++            (8, range(8), {1, 2, 4, 5, 6, 7}, 1, False),
++            # Layers 4-5 do not use the state, so stage 1's first user is 6.
++            (8, {0, 1, 2, 3, 6, 7}, {1, 2, 3, 7}, 2, False),
++            (8, {0, 1, 2, 3, 6, 7}, {1, 2, 3, 6, 7}, 2, True),
++            (12, range(12), {1, 2, 3, 5, 6, 7, 9, 10, 11}, 3, False),
++            (12, range(12), {1, 2, 3, 4, 6, 7, 9, 10, 11}, 3, True),
++        ],
++        ids=[
++            "split-on-producer",
++            "split-on-consumer",
++            "no-pp",
++            "skip-unrelated-layers",
++            "unrelated-then-consumer",
++            "pp3-aligned",
++            "pp3-middle-split",
++        ],
++    )
++    def test_stage_boundaries(
++        self, monkeypatch, num_layers, users, consumers, pp_size, expected
++    ):
++        _set_pp_size(monkeypatch, pp_size)
++        assert (
++            model_utils.pp_splits_layer_sharing(num_layers, users, consumers)
++            == expected
++        )
++
++    @pytest.mark.parametrize(
++        "num_layers,expected",
++        [(78, True), (76, False)],
++        ids=["glm5-default-split", "split-on-group-start"],
++    )
++    def test_topk_buffers(self, monkeypatch, num_layers, expected):
++        _set_pp_size(monkeypatch, 2)
++        config = SimpleNamespace(
++            num_hidden_layers=num_layers, index_topk=8, **GLM5_TOPK
++        )
++        buffer = torch.empty(4, 8, dtype=torch.int32)
++        buffers = model_utils.pp_topk_buffers(config, buffer, range(num_layers))
++        assert buffers == ({"topk_indices": buffer} if expected else {})
++
++
++def test_empty_intermediate_tensors_follow_buffers():
++    buffer = torch.empty(16, 8, dtype=torch.int32)
++    make_empty = model_utils.make_empty_intermediate_tensors_factory(
++        ["hidden_states", "residual"], 4, {"topk_indices": buffer}
++    )
++    tensors = make_empty(3, torch.bfloat16, torch.device("cpu"))
++
++    assert tensors["residual"].shape == (3, 4)
++    assert tensors["topk_indices"].shape == (3, 8)
++    assert tensors["topk_indices"].dtype == torch.int32
++
++
++class _TopkReusingLayer(nn.Module):
++    """Reads the shared top-k like a reusing layer, then indexes like the next."""
++
++    def __init__(self, topk_indices_buffer: torch.Tensor) -> None:
++        super().__init__()
++        self.topk_indices_buffer = topk_indices_buffer
++        self.seen_topk: torch.Tensor | None = None
++
++    def forward(self, positions, hidden_states, residual, attn_in=None):
++        num_tokens = hidden_states.shape[0]
++        self.seen_topk = self.topk_indices_buffer[:num_tokens].clone()
++        self.topk_indices_buffer[:num_tokens] += 10
++        return hidden_states, torch.zeros_like(hidden_states)
++
++
++def test_middle_pp_stage_receives_and_forwards_topk(monkeypatch):
++    model = object.__new__(deepseek_v32_model.DeepseekV32Model)
++    nn.Module.__init__(model)
++    model.topk_indices_buffer = torch.full((8, 2), -1, dtype=torch.int32)
++    layer = _TopkReusingLayer(model.topk_indices_buffer)
++    model.layers = nn.ModuleList([layer])
++    model.start_layer, model.end_layer = 0, 1
++    model.use_sequence_parallel = False
++    model.aux_hidden_state_layers = ()
++    model.pp_buffers = {"topk_indices": model.topk_indices_buffer}
++    monkeypatch.setattr(
++        deepseek_v32_model,
++        "get_pp_group",
++        lambda: SimpleNamespace(is_first_rank=False, is_last_rank=False),
++    )
++
++    received_topk = torch.arange(6, dtype=torch.int32).view(3, 2)
++    output = model(
++        None,
++        torch.arange(3),
++        IntermediateTensors(
++            {
++                "hidden_states": torch.zeros(3, 4),
++                "residual": torch.zeros(3, 4),
++                "topk_indices": received_topk,
++            }
++        ),
++    )
++
++    torch.testing.assert_close(layer.seen_topk, received_topk)
++    torch.testing.assert_close(output["topk_indices"], received_topk + 10)
+diff --git a/vllm/model_executor/models/utils.py b/vllm/model_executor/models/utils.py
+index ef1aac6de5..7be5348c84 100644
+--- a/vllm/model_executor/models/utils.py
++++ b/vllm/model_executor/models/utils.py
+@@ -952,7 +952,93 @@ def is_pp_missing_parameter(name: str, model: torch.nn.Module) -> bool:
+     )
+ 
+ 
+-def make_empty_intermediate_tensors_factory(keys: list[str], hidden_size: int):
++def compute_skip_topk_layers(config: "PreTrainedConfig") -> set[int]:
++    """Backbone layers that reuse the top-k of the closest preceding indexer
++    layer instead of building their own indexer."""
++    if not hasattr(config, "index_topk"):
++        return set()
++
++    num_hidden_layers = config.num_hidden_layers
++    indexer_types = getattr(config, "indexer_types", None)
++    if indexer_types is not None:
++        if len(indexer_types) != num_hidden_layers:
++            raise ValueError(
++                "indexer_types must contain one entry per hidden layer: "
++                f"expected {num_hidden_layers}, got {len(indexer_types)}."
++            )
++        invalid_types = sorted(set(indexer_types) - {"full", "shared"})
++        if invalid_types:
++            raise ValueError(
++                f"indexer_types only supports 'full' and 'shared', got {invalid_types}."
++            )
++        return {
++            layer_idx
++            for layer_idx, indexer_type in enumerate(indexer_types)
++            if indexer_type == "shared"
++        }
++
++    freq = getattr(config, "index_topk_freq", 1)
++    if not isinstance(freq, int) or freq <= 0:
++        raise ValueError(f"index_topk_freq must be a positive integer, got {freq!r}.")
++    pattern = getattr(config, "index_topk_pattern", None)
++    offset = getattr(config, "index_skip_topk_offset", 2)
++    skip_layers: set[int] = set()
++    for layer_idx in range(num_hidden_layers):
++        if pattern is None:
++            if max(layer_idx - offset + 1, 0) % freq != 0:
++                skip_layers.add(layer_idx)
++        elif 0 <= layer_idx < len(pattern) and pattern[layer_idx] == "S":
++            skip_layers.add(layer_idx)
++    return skip_layers
++
++
++def pp_splits_layer_sharing(
++    num_hidden_layers: int, users: Iterable[int], consumers: set[int]
++) -> bool:
++    """Whether a later PP stage's first ``users`` layer is one of ``consumers``,
++    which read state an earlier layer wrote in the same forward pass."""
++    from vllm.distributed.parallel_state import get_pp_group
++    from vllm.distributed.utils import get_pp_indices
++
++    users = sorted(users)
++    pp_size = get_pp_group().world_size
++    for rank in range(1, pp_size):
++        start, _ = get_pp_indices(num_hidden_layers, rank, pp_size)
++        if next((layer for layer in users if layer >= start), None) in consumers:
++            return True
++    return False
++
++
++def pp_topk_buffers(
++    config: "PreTrainedConfig",
++    topk_indices_buffer: torch.Tensor,
++    topk_layers: Iterable[int],
++) -> dict[str, torch.Tensor]:
++    """The shared top-k, if a later PP stage starts on a layer that reuses it."""
++    topk_layers = set(topk_layers)
++    skip_layers = compute_skip_topk_layers(config) & topk_layers
++    if pp_splits_layer_sharing(config.num_hidden_layers, topk_layers, skip_layers):
++        return {"topk_indices": topk_indices_buffer}
++    return {}
++
++
++def copy_pp_buffers(
++    intermediate_tensors: IntermediateTensors, buffers: Mapping[str, torch.Tensor]
++) -> None:
++    """Copy cross-layer state received from the previous PP stage into place."""
++    for key, buffer in buffers.items():
++        tensor = intermediate_tensors[key]
++        buffer[: tensor.shape[0]].copy_(tensor)
++
++
++def make_empty_intermediate_tensors_factory(
++    keys: list[str],
++    hidden_size: int,
++    buffers: Mapping[str, torch.Tensor] | None = None,
++):
++    """``buffers`` are token-major cross-layer state sent along with ``keys``."""
++    buffers = buffers or {}
++
+     def make_empty_intermediate_tensors(
+         batch_size: int,
+         dtype: torch.dtype,
+@@ -963,6 +1049,12 @@ def make_empty_intermediate_tensors_factory(keys: list[str], hidden_size: int):
+                 key: torch.zeros((batch_size, hidden_size), dtype=dtype, device=device)
+                 for key in keys
+             }
++            | {
++                key: torch.zeros(
++                    (batch_size, *buffer.shape[1:]), dtype=buffer.dtype, device=device
++                )
++                for key, buffer in buffers.items()
++            }
+         )
+ 
+     return make_empty_intermediate_tensors
+diff --git a/vllm/models/deepseek_v32/amd/model.py b/vllm/models/deepseek_v32/amd/model.py
+index d2325372d9..89b640a2a6 100644
+--- a/vllm/models/deepseek_v32/amd/model.py
++++ b/vllm/models/deepseek_v32/amd/model.py
+@@ -32,10 +32,12 @@ from vllm.model_executor.models.deepseek_v2 import (
+ )
+ from vllm.model_executor.models.utils import (
+     PPMissingLayer,
++    copy_pp_buffers,
+     get_pp_missing_layer_names,
+     is_pp_missing_parameter,
+     make_empty_intermediate_tensors_factory,
+     make_layers,
++    pp_topk_buffers,
+ )
+ from vllm.models.common.ops.fused_allreduce_rms_norm import fused_allreduce_rms_norm
+ from vllm.sequence import IntermediateTensors
+@@ -134,7 +136,7 @@ class DeepseekV32Model(torch.nn.Module):
+ 
+         self.vocab_size = config.vocab_size
+         self.is_v32 = True
+-        topk_indices_buffer = torch.empty(
++        self.topk_indices_buffer = torch.empty(
+             vllm_config.scheduler_config.max_num_batched_tokens,
+             config.index_topk,
+             dtype=torch.int32,
+@@ -156,7 +158,7 @@ class DeepseekV32Model(torch.nn.Module):
+             lambda prefix: DeepseekV32DecoderLayer(
+                 vllm_config=vllm_config,
+                 prefix=prefix,
+-                topk_indices_buffer=topk_indices_buffer,
++                topk_indices_buffer=self.topk_indices_buffer,
+             ),
+             prefix=f"{prefix}.layers",
+         )
+@@ -171,8 +173,11 @@ class DeepseekV32Model(torch.nn.Module):
+             self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+         else:
+             self.norm = PPMissingLayer()
++        self.pp_buffers = pp_topk_buffers(
++            config, self.topk_indices_buffer, range(config.num_hidden_layers)
++        )
+         self.make_empty_intermediate_tensors = make_empty_intermediate_tensors_factory(
+-            ["hidden_states", "residual"], config.hidden_size
++            ["hidden_states", "residual"], config.hidden_size, self.pp_buffers
+         )
+ 
+         self.aux_hidden_state_layers = tuple[int, ...]()
+@@ -201,6 +206,7 @@ class DeepseekV32Model(torch.nn.Module):
+             assert intermediate_tensors is not None
+             hidden_states = intermediate_tensors["hidden_states"]
+             residual = intermediate_tensors["residual"]
++            copy_pp_buffers(intermediate_tensors, self.pp_buffers)
+ 
+         aux_hidden_states = []
+         for idx, layer in enumerate(
+@@ -213,7 +219,11 @@ class DeepseekV32Model(torch.nn.Module):
+ 
+         if not get_pp_group().is_last_rank:
+             return IntermediateTensors(
+-                {"hidden_states": hidden_states, "residual": residual}
++                {
++                    "hidden_states": hidden_states,
++                    "residual": residual,
++                    **{k: v[:positions.shape[0]] for k, v in self.pp_buffers.items()},
++                }
+             )
+ 
+         hidden_states, _ = fused_allreduce_rms_norm(hidden_states, residual, self.norm)
+diff --git a/vllm/models/deepseek_v32/attention.py b/vllm/models/deepseek_v32/attention.py
+index 384b96dbf8..d0c9ffef85 100644
+--- a/vllm/models/deepseek_v32/attention.py
++++ b/vllm/models/deepseek_v32/attention.py
+@@ -31,7 +31,10 @@ from vllm.model_executor.models.deepseek_v2 import (
+     DeepseekV32IndexerCache,
+     yarn_get_mscale,
+ )
+-from vllm.model_executor.models.utils import extract_layer_index
++from vllm.model_executor.models.utils import (
++    compute_skip_topk_layers,
++    extract_layer_index,
++)
+ from vllm.models.deepseek_v32.common.kernels import fused_norm_rope, fused_q
+ from vllm.platforms import current_platform
+ from vllm.utils.torch_utils import is_quantized_kv_cache
+@@ -164,17 +167,7 @@ class DeepseekV32Attention(MLAAttention):
+             scaling = scaling * mscale * mscale
+ 
+         layer_id = extract_layer_index(prefix)
+-        index_topk_freq = getattr(config, "index_topk_freq", 1)
+-        index_topk_pattern = getattr(config, "index_topk_pattern", None)
+-        index_skip_topk_offset = getattr(config, "index_skip_topk_offset", 2)
+-        if index_topk_pattern is None:
+-            skip_topk = (
+-                max(layer_id - index_skip_topk_offset + 1, 0) % index_topk_freq != 0
+-            )
+-        elif 0 <= layer_id < len(index_topk_pattern):
+-            skip_topk = index_topk_pattern[layer_id] == "S"
+-        else:
+-            skip_topk = False
++        skip_topk = layer_id in compute_skip_topk_layers(config)
+ 
+         num_hidden_layers = getattr(config, "num_hidden_layers", None)
+         is_mtp_layer = num_hidden_layers is not None and layer_id >= num_hidden_layers
+diff --git a/vllm/models/deepseek_v32/nvidia/model.py b/vllm/models/deepseek_v32/nvidia/model.py
+index b42ba28c8d..7dd13558d6 100644
+--- a/vllm/models/deepseek_v32/nvidia/model.py
++++ b/vllm/models/deepseek_v32/nvidia/model.py
+@@ -32,10 +32,12 @@ from vllm.model_executor.models.deepseek_v2 import (
+ )
+ from vllm.model_executor.models.utils import (
+     PPMissingLayer,
++    copy_pp_buffers,
+     get_pp_missing_layer_names,
+     is_pp_missing_parameter,
+     make_empty_intermediate_tensors_factory,
+     make_layers,
++    pp_topk_buffers,
+ )
+ from vllm.models.common.ops.fused_allreduce_rms_norm import fused_allreduce_rms_norm
+ from vllm.models.common.ops.sequence_parallel import (
+@@ -228,8 +230,11 @@ class DeepseekV32Model(torch.nn.Module):
+             self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+         else:
+             self.norm = PPMissingLayer()
++        self.pp_buffers = pp_topk_buffers(
++            config, self.topk_indices_buffer, range(config.num_hidden_layers)
++        )
+         self.make_empty_intermediate_tensors = make_empty_intermediate_tensors_factory(
+-            ["hidden_states", "residual"], config.hidden_size
++            ["hidden_states", "residual"], config.hidden_size, self.pp_buffers
+         )
+ 
+         self.aux_hidden_state_layers = tuple[int, ...]()
+@@ -268,6 +273,7 @@ class DeepseekV32Model(torch.nn.Module):
+             assert intermediate_tensors is not None
+             hidden_states = intermediate_tensors["hidden_states"]
+             residual = intermediate_tensors["residual"]
++            copy_pp_buffers(intermediate_tensors, self.pp_buffers)
+ 
+         full_num_tokens = positions.shape[0]
+         if self.use_sequence_parallel:
+@@ -298,7 +304,11 @@ class DeepseekV32Model(torch.nn.Module):
+                 "Currently, SP is not supported with PP"
+             )
+             return IntermediateTensors(
+-                {"hidden_states": hidden_states, "residual": residual}
++                {
++                    "hidden_states": hidden_states,
++                    "residual": residual,
++                    **{k: v[:full_num_tokens] for k, v in self.pp_buffers.items()},
++                }
+             )
+ 
+         if self.use_sequence_parallel:
+diff --git a/vllm/models/dots3_note/nvidia/model.py b/vllm/models/dots3_note/nvidia/model.py
+index 15128132be..bd420b5274 100644
+--- a/vllm/models/dots3_note/nvidia/model.py
++++ b/vllm/models/dots3_note/nvidia/model.py
+@@ -44,6 +44,7 @@ from vllm.model_executor.models.utils import (
+     PPMissingLayer,
+     make_empty_intermediate_tensors_factory,
+     make_layers,
++    pp_topk_buffers,
+     sequence_parallel_chunk,
+ )
+ from vllm.models.deepseek_v32.nvidia.model import (
+@@ -582,7 +583,7 @@ class Dots3NoteModel(DeepseekV32Model):
+         self.use_sequence_parallel = False
+         self.is_v32 = True
+         self._weight_block_size = getattr(quant_config, "weight_block_size", None)
+-        topk_indices_buffer = torch.empty(
++        self.topk_indices_buffer = torch.empty(
+             vllm_config.scheduler_config.max_num_batched_tokens,
+             config.index_topk,
+             dtype=torch.int32,
+@@ -603,7 +604,7 @@ class Dots3NoteModel(DeepseekV32Model):
+             lambda prefix: Dots3NoteDecoderLayer(
+                 vllm_config=vllm_config,
+                 prefix=prefix,
+-                topk_indices_buffer=topk_indices_buffer,
++                topk_indices_buffer=self.topk_indices_buffer,
+             ),
+             prefix=f"{prefix}.layers",
+         )
+@@ -611,8 +612,11 @@ class Dots3NoteModel(DeepseekV32Model):
+             self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+         else:
+             self.norm = PPMissingLayer()
++        self.pp_buffers = pp_topk_buffers(
++            config, self.topk_indices_buffer, range(config.num_hidden_layers)
++        )
+         self.make_empty_intermediate_tensors = make_empty_intermediate_tensors_factory(
+-            ["hidden_states", "residual"], config.hidden_size
++            ["hidden_states", "residual"], config.hidden_size, self.pp_buffers
+         )
+         self.aux_hidden_state_layers = tuple[int, ...]()
+         self.num_redundant_experts = (
+diff --git a/vllm/models/hy_v4/amd/model.py b/vllm/models/hy_v4/amd/model.py
+index 772e4e5b74..3b9725c8c3 100644
+--- a/vllm/models/hy_v4/amd/model.py
++++ b/vllm/models/hy_v4/amd/model.py
+@@ -55,19 +55,22 @@ from vllm.model_executor.models.utils import (
+     AutoWeightsLoader,
+     PPMissingLayer,
+     WeightsMapper,
++    compute_skip_topk_layers,
++    copy_pp_buffers,
+     get_pp_missing_layer_names,
+     is_pp_missing_parameter,
+     make_empty_intermediate_tensors_factory,
+     make_layers,
+     maybe_prefix,
++    pp_topk_buffers,
+ )
+ from vllm.platforms import current_platform
+ from vllm.sequence import IntermediateTensors
+ 
+ from ..nvidia.attention import (
+     HYV4MLAAttention,
+-    compute_skip_topk_layers,
+     is_skip_topk_indexer_weight,
++    sparse_layer_ids,
+ )
+ from ..nvidia.hc import HYV4HCHeadLayer, HYV4HCLayer
+ from ..nvidia.moe import HYV4FeedForward, HYV4MoEFused
+@@ -264,6 +267,9 @@ class HYV4Model(nn.Module):
+             self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+         else:
+             self.norm = PPMissingLayer()
++        self.pp_buffers = pp_topk_buffers(
++            config, self.topk_indices_buffer, sparse_layer_ids(config)
++        )
+         if self.enable_ihc:
+             # iHC head layer: merge the residual channels into one stream.
+             if get_pp_group().is_last_rank:
+@@ -278,13 +284,15 @@ class HYV4Model(nn.Module):
+                 self.hc_head = PPMissingLayer()
+             self.make_empty_intermediate_tensors = (
+                 make_empty_intermediate_tensors_factory(
+-                    ["hidden_states"], config.hc_mult * config.hidden_size
++                    ["hidden_states"],
++                    config.hc_mult * config.hidden_size,
++                    self.pp_buffers,
+                 )
+             )
+         else:
+             self.make_empty_intermediate_tensors = (
+                 make_empty_intermediate_tensors_factory(
+-                    ["hidden_states", "residual"], config.hidden_size
++                    ["hidden_states", "residual"], config.hidden_size, self.pp_buffers
+                 )
+             )
+ 
+@@ -375,17 +383,21 @@ class HYV4Model(nn.Module):
+             # previous PP stage is reshaped back to 3D by the first layer's
+             # prepare_input, and residual is unused.
+             residual = None if self.enable_ihc else intermediate_tensors["residual"]
++            copy_pp_buffers(intermediate_tensors, self.pp_buffers)
+ 
+         for layer in islice(self.layers, self.start_layer, self.end_layer):
+             hidden_states, residual = layer(positions, hidden_states, residual)
+ 
+         if not get_pp_group().is_last_rank:
++            buffers = {k: v[: positions.shape[0]] for k, v in self.pp_buffers.items()}
+             if self.enable_ihc:
+                 # hidden_states is [num_tokens, hc, h]; flatten the channel dim
+                 # for PP transfer (matches the 2D receive buffer).
+-                return IntermediateTensors({"hidden_states": hidden_states.flatten(1)})
++                return IntermediateTensors(
++                    {"hidden_states": hidden_states.flatten(1), **buffers}
++                )
+             return IntermediateTensors(
+-                {"hidden_states": hidden_states, "residual": residual}
++                {"hidden_states": hidden_states, "residual": residual, **buffers}
+             )
+         if self.enable_ihc:
+             hidden_states = self.hc_head(hidden_states)
+diff --git a/vllm/models/hy_v4/nvidia/attention.py b/vllm/models/hy_v4/nvidia/attention.py
+index 48d769a856..7b91ba23ad 100644
+--- a/vllm/models/hy_v4/nvidia/attention.py
++++ b/vllm/models/hy_v4/nvidia/attention.py
+@@ -41,6 +41,7 @@ from vllm.model_executor.layers.quantization.utils.fp8_utils import (
+ from vllm.model_executor.layers.rotary_embedding import get_rope
+ from vllm.model_executor.layers.sparse_attn_indexer import SparseAttnIndexer
+ from vllm.model_executor.models.deepseek_v2 import DeepseekV32IndexerCache
++from vllm.model_executor.models.utils import compute_skip_topk_layers
+ from vllm.platforms import current_platform
+ from vllm.v1.attention.backend import AttentionBackend, AttentionType
+ from vllm.v1.attention.selector import get_attn_backend
+@@ -57,59 +58,12 @@ _SPARSE_LAYER_TYPES = (
+ _WEIGHT_LAYER_INDEX_RE = re.compile(r"(?:^|\.)layers\.(\d+)(?:\.|$)")
+ 
+ 
+-def compute_skip_topk_layers(config: PreTrainedConfig) -> set[int]:
+-    """Return the backbone layers that reuse a previous layer's top-k indices.
+-
+-    A "shared" indexer layer performs sparse attention with the indices computed
+-    by the closest preceding "full" indexer layer, so it does not build its own
+-    indexer and its checkpoint indexer weights must be skipped.
+-
+-    Args:
+-        config: The model config.
+-
+-    Returns:
+-        The set of layer indices that share another layer's top-k indices.
+-
+-    Raises:
+-        ValueError: If ``indexer_types`` has the wrong length or an unknown
+-            entry, or if ``index_topk_freq`` is not a positive integer.
+-
+-    """
++def sparse_layer_ids(config: PreTrainedConfig) -> set[int]:
++    """Layers that run sparse attention, MTP layers included."""
+     if not hasattr(config, "index_topk"):
+         return set()
+-
+-    num_hidden_layers = config.num_hidden_layers
+-    indexer_types = getattr(config, "indexer_types", None)
+-    if indexer_types is not None:
+-        if len(indexer_types) != num_hidden_layers:
+-            raise ValueError(
+-                "indexer_types must contain one entry per hidden layer: "
+-                f"expected {num_hidden_layers}, got {len(indexer_types)}."
+-            )
+-        invalid_types = sorted(set(indexer_types) - {"full", "shared"})
+-        if invalid_types:
+-            raise ValueError(
+-                f"indexer_types only supports 'full' and 'shared', got {invalid_types}."
+-            )
+-        return {
+-            layer_idx
+-            for layer_idx, indexer_type in enumerate(indexer_types)
+-            if indexer_type == "shared"
+-        }
+-
+-    freq = getattr(config, "index_topk_freq", 1)
+-    if not isinstance(freq, int) or freq <= 0:
+-        raise ValueError(f"index_topk_freq must be a positive integer, got {freq!r}.")
+-    pattern = getattr(config, "index_topk_pattern", None)
+-    offset = getattr(config, "index_skip_topk_offset", 2)
+-    skip_layers: set[int] = set()
+-    for layer_idx in range(num_hidden_layers):
+-        if pattern is None:
+-            if max(layer_idx - offset + 1, 0) % freq != 0:
+-                skip_layers.add(layer_idx)
+-        elif 0 <= layer_idx < len(pattern) and pattern[layer_idx] == "S":
+-            skip_layers.add(layer_idx)
+-    return skip_layers
++    layer_types = getattr(config, "layer_types", None) or ()
++    return {i for i, t in enumerate(layer_types) if t in _SPARSE_LAYER_TYPES}
+ 
+ 
+ def is_skip_topk_indexer_weight(weight_name: str, skip_topk_layers: set[int]) -> bool:
+@@ -318,13 +272,7 @@ class HYV4MLAAttention(nn.Module):
+         self.num_local_heads = num_heads // tp_size
+ 
+         self.layer_id = int(prefix.split(".")[-2])
+-        layer_types = getattr(config, "layer_types", None)
+-        requested_sparse = (
+-            hasattr(config, "index_topk")
+-            and layer_types is not None
+-            and self.layer_id < len(layer_types)
+-            and layer_types[self.layer_id] in _SPARSE_LAYER_TYPES
+-        )
++        requested_sparse = self.layer_id in sparse_layer_ids(config)
+         # Only actual sparse layers may share another layer's top-k indices.
+         self.skip_topk = requested_sparse and self.layer_id in compute_skip_topk_layers(
+             config
+diff --git a/vllm/models/hy_v4/nvidia/model.py b/vllm/models/hy_v4/nvidia/model.py
+index e9313989fa..69b8958790 100644
+--- a/vllm/models/hy_v4/nvidia/model.py
++++ b/vllm/models/hy_v4/nvidia/model.py
+@@ -54,19 +54,22 @@ from vllm.model_executor.models.utils import (
+     AutoWeightsLoader,
+     PPMissingLayer,
+     WeightsMapper,
++    compute_skip_topk_layers,
++    copy_pp_buffers,
+     get_pp_missing_layer_names,
+     is_pp_missing_parameter,
+     make_empty_intermediate_tensors_factory,
+     make_layers,
+     maybe_prefix,
++    pp_topk_buffers,
+ )
+ from vllm.platforms import current_platform
+ from vllm.sequence import IntermediateTensors
+ 
+ from .attention import (
+     HYV4MLAAttention,
+-    compute_skip_topk_layers,
+     is_skip_topk_indexer_weight,
++    sparse_layer_ids,
+ )
+ from .hc import HYV4HCHeadLayer, HYV4HCLayer
+ from .moe import HYV4FeedForward, HYV4MoEFused
+@@ -262,6 +265,9 @@ class HYV4Model(nn.Module):
+             self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+         else:
+             self.norm = PPMissingLayer()
++        self.pp_buffers = pp_topk_buffers(
++            config, self.topk_indices_buffer, sparse_layer_ids(config)
++        )
+         if self.enable_ihc:
+             # iHC head layer: merge the residual channels into one stream.
+             if get_pp_group().is_last_rank:
+@@ -276,13 +282,15 @@ class HYV4Model(nn.Module):
+                 self.hc_head = PPMissingLayer()
+             self.make_empty_intermediate_tensors = (
+                 make_empty_intermediate_tensors_factory(
+-                    ["hidden_states"], config.hc_mult * config.hidden_size
++                    ["hidden_states"],
++                    config.hc_mult * config.hidden_size,
++                    self.pp_buffers,
+                 )
+             )
+         else:
+             self.make_empty_intermediate_tensors = (
+                 make_empty_intermediate_tensors_factory(
+-                    ["hidden_states", "residual"], config.hidden_size
++                    ["hidden_states", "residual"], config.hidden_size, self.pp_buffers
+                 )
+             )
+ 
+@@ -373,17 +381,21 @@ class HYV4Model(nn.Module):
+             # previous PP stage is reshaped back to 3D by the first layer's
+             # prepare_input, and residual is unused.
+             residual = None if self.enable_ihc else intermediate_tensors["residual"]
++            copy_pp_buffers(intermediate_tensors, self.pp_buffers)
+ 
+         for layer in islice(self.layers, self.start_layer, self.end_layer):
+             hidden_states, residual = layer(positions, hidden_states, residual)
+ 
+         if not get_pp_group().is_last_rank:
++            buffers = {k: v[: positions.shape[0]] for k, v in self.pp_buffers.items()}
+             if self.enable_ihc:
+                 # hidden_states is [num_tokens, hc, h]; flatten the channel dim
+                 # for PP transfer (matches the 2D receive buffer).
+-                return IntermediateTensors({"hidden_states": hidden_states.flatten(1)})
++                return IntermediateTensors(
++                    {"hidden_states": hidden_states.flatten(1), **buffers}
++                )
+             return IntermediateTensors(
+-                {"hidden_states": hidden_states, "residual": residual}
++                {"hidden_states": hidden_states, "residual": residual, **buffers}
+             )
+         if self.enable_ihc:
+             hidden_states = self.hc_head(hidden_states)
+diff --git a/vllm/models/minimax_m3/amd/model.py b/vllm/models/minimax_m3/amd/model.py
+index 3bf8928603..f6af2c56a9 100644
+--- a/vllm/models/minimax_m3/amd/model.py
++++ b/vllm/models/minimax_m3/amd/model.py
+@@ -85,6 +85,7 @@ from vllm.model_executor.models.utils import (
+     make_empty_intermediate_tensors_factory,
+     make_layers,
+     maybe_prefix,
++    pp_splits_layer_sharing,
+     spec_decode_needs_target_embed,
+ )
+ from vllm.model_executor.models.vision import run_dp_sharded_mrope_vision_model
+@@ -1436,6 +1437,17 @@ class MiniMaxM3Model(nn.Module, EagleModelMixin):
+                 )
+         else:
+             self.topk_indices_buffer = None
++        sparse_layers = _sparse_attention_layer_ids(config)
++        skip_layers = {i for i in sparse_layers if _should_skip_index_topk(config, i)}
++        if pp_splits_layer_sharing(
++            config.num_hidden_layers, sparse_layers, skip_layers
++        ):
++            # The top-k is sharded over TP index heads, so PP cannot send it.
++            raise NotImplementedError(
++                "use_index_cache with a PP stage that starts on a top-k sharing "
++                "layer is not supported. Set VLLM_PP_LAYER_PARTITION so every "
++                "stage starts on a top-k computing layer."
++            )
+ 
+         self.start_layer, self.end_layer, self.layers = make_layers(
+             config.num_hidden_layers,

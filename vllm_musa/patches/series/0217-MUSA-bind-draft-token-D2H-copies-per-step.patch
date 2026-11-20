@@ -1,0 +1,436 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 19 Nov 2026 12:12:34 +0000
+Subject: [PATCH] MUSA: bind draft-token D2H copies per step
+
+MUSA-100041. Two upstream correctness gaps in DraftTokensHandler, plus the
+MUSA stream hazard they expose.
+
+Upstream status (verified against v0.32.0, v0.33.0rc0 and v0.33.0rc1 on
+2026-11-19; re-check at the next pin bump):
+
+- A batch without structured output requests erasing drafts retained for
+  in-flight structured requests is fixed upstream by 322f90a2a3 (#63219,
+  per-request draft retention). That commit is not an ancestor of the v0.32.0
+  pin (5df63a7203), and the same single-slot code is still present in
+  v0.33.0rc1, so it landed after 2026-10-28 or is still unmerged.
+- The missing retrieval on non-deferred structured+spec steps is fixed upstream
+  by d5bd3d1f92 (#66081). It is not in v0.32.0 or in any v0.33 rc inspected
+  here; confirm its merge state before assuming the fix is released.
+- Neither upstream commit removes the single copy_stream/copy_event, so the
+  MUSA per-copy stream/event binding (the shape 0141 fixed for output copies)
+  is not superseded by either one.
+
+Drop this entry only when the target pin contains both upstream commits AND
+per-copy stream/event binding exists on the MUSA side. `musa_sync
+upgrade-plan <new-ref> --history <full-vllm-clone>` is the mechanical check: a
+MUSA entry that is already applied against the target is reported as
+"already in the target: upstreamed?" for review.
+---
+ tests/v1/worker/test_draft_tokens_handler.py | 104 ++++++++++++++
+ vllm/v1/core/sched/async_scheduler.py        |  24 +++-
+ vllm/v1/core/sched/output.py                 |   4 +
+ vllm/v1/engine/core.py                       |  10 ++
+ vllm/v1/worker/gpu/model_runner.py           |   2 +
+ vllm/v1/worker/gpu/spec_decode/utils.py      | 142 +++++++++++++++----
+ 6 files changed, 259 insertions(+), 27 deletions(-)
+ create mode 100644 tests/v1/worker/test_draft_tokens_handler.py
+
+diff --git a/tests/v1/worker/test_draft_tokens_handler.py b/tests/v1/worker/test_draft_tokens_handler.py
+new file mode 100644
+index 0000000000..edd852528c
+--- /dev/null
++++ b/tests/v1/worker/test_draft_tokens_handler.py
+@@ -0,0 +1,104 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++from types import SimpleNamespace
++
++import pytest
++import torch
++
++from vllm.v1.worker.gpu.spec_decode.utils import DraftTokensHandler
++
++
++def _device() -> torch.device | None:
++    if hasattr(torch, "musa") and torch.musa.is_available():
++        return torch.device("musa")
++    if torch.cuda.is_available():
++        return torch.device("cuda")
++    return None
++
++
++DEVICE = _device()
++
++
++def _input_batch(req_ids: list[str], structured: bool):
++    return SimpleNamespace(
++        req_ids=req_ids, has_structured_output_reqs=structured
++    )
++
++
++def _set(
++    handler: DraftTokensHandler,
++    req_ids: list[str],
++    tokens: list[list[int]],
++    structured: bool,
++) -> None:
++    handler.set_draft_tokens(
++        _input_batch(req_ids, structured),
++        torch.tensor(tokens, device=DEVICE),
++    )
++
++
++def _begin_step(handler: DraftTokensHandler, req_ids: list[str]) -> None:
++    handler.begin_step(
++        SimpleNamespace(
++            pending_structured_output_tokens=False,
++            has_structured_output_spec_decode=True,
++            scheduled_spec_decode_tokens={req_id: [-1] for req_id in req_ids},
++        )
++    )
++
++
++@pytest.mark.skipif(DEVICE is None, reason="Requires a GPU device")
++def test_structured_drafts_survive_unstructured_set() -> None:
++    handler = DraftTokensHandler(DEVICE)
++    _set(handler, ["a", "b"], [[11, 12], [21, 22]], structured=True)
++    _set(handler, ["plain"], [[31, 32]], structured=False)
++
++    _begin_step(handler, ["a", "b", "plain"])
++    drafts = handler.get_draft_tokens()
++    assert drafts is not None
++    assert dict(zip(drafts.req_ids, drafts.draft_token_ids, strict=True)) == {
++        "a": [11, 12],
++        "b": [21, 22],
++        "plain": [-1, -1],
++    }
++
++
++@pytest.mark.skipif(DEVICE is None, reason="Requires a GPU device")
++def test_two_in_flight_sets_keep_their_own_event_and_rows() -> None:
++    handler = DraftTokensHandler(DEVICE)
++    _set(handler, ["a"], [[11, 12]], structured=True)
++    first_event = handler._pending_copies[0][1]
++    _set(handler, ["b"], [[21, 22]], structured=True)
++    second_event = handler._pending_copies[1][1]
++
++    # A shared, re-recorded event is the MUSA wait-delay bug: the second
++    # record() would make the first synchronize() wait on the second copy.
++    assert first_event is not second_event
++
++    _begin_step(handler, ["a", "b"])
++    drafts = handler.get_draft_tokens()
++    assert drafts is not None
++    assert dict(zip(drafts.req_ids, drafts.draft_token_ids, strict=True)) == {
++        "a": [11, 12],
++        "b": [21, 22],
++    }
++    assert not handler._pending_copies
++    assert len(handler._free_streams) == 2
++
++
++@pytest.mark.skipif(DEVICE is None, reason="Requires a GPU device")
++def test_discard_and_empty_get() -> None:
++    handler = DraftTokensHandler(DEVICE)
++    _set(handler, ["a", "b"], [[11, 12], [21, 22]], structured=True)
++    handler.discard("b")
++
++    _begin_step(handler, ["a"])
++    drafts = handler.get_draft_tokens()
++    assert drafts is not None
++    assert dict(zip(drafts.req_ids, drafts.draft_token_ids, strict=True)) == {
++        "a": [11, 12]
++    }
++
++    handler.discard("a")
++    _begin_step(handler, ["a"])
++    assert handler.get_draft_tokens() is None
+diff --git a/vllm/v1/core/sched/async_scheduler.py b/vllm/v1/core/sched/async_scheduler.py
+index 290204d58c..59f380c800 100644
+--- a/vllm/v1/core/sched/async_scheduler.py
++++ b/vllm/v1/core/sched/async_scheduler.py
+@@ -29,19 +29,30 @@ class AsyncScheduler(Scheduler):
+         self._spec_token_placeholders = [
+             -1
+         ] * scheduler_output.num_spec_tokens_to_schedule
++        pending_structured_output_tokens = (
++            scheduler_output.pending_structured_output_tokens
++        )
++        structured_output_spec_decode = (
++            scheduler_output.has_structured_output_spec_decode
++        )
+         for req_id in scheduler_output.num_scheduled_tokens:
+             request = self.requests[req_id]
+             if request.is_prefill_chunk:
+                 continue
+ 
+-            scheduler_output.pending_structured_output_tokens |= (
+-                request.use_structured_output and request.num_output_placeholders > 0
+-            )
+             # The request will generate num_sampled_tokens_per_step new tokens
+             # plus num_spec_tokens in this scheduling step. Diffusion has no AR
+             # bonus token (num_sampled_tokens_per_step == 0) — only the canvas
+             # (spec) tokens.
+             cur_num_spec_tokens = len(spec_decode_tokens.get(req_id, ()))
++            if (
++                scheduler_output.has_structured_output_requests
++                and request.use_structured_output
++            ):
++                pending_structured_output_tokens |= (
++                    request.num_output_placeholders > 0
++                )
++                structured_output_spec_decode |= cur_num_spec_tokens > 0
+             request.num_output_placeholders += (
+                 self.num_sampled_tokens_per_step + cur_num_spec_tokens
+             )
+@@ -56,6 +67,13 @@ class AsyncScheduler(Scheduler):
+                     self.current_step + self.decode_stagger
+                 )
+ 
++        scheduler_output.pending_structured_output_tokens = (
++            pending_structured_output_tokens
++        )
++        scheduler_output.has_structured_output_spec_decode = (
++            structured_output_spec_decode
++        )
++
+     def _update_request_with_output(
+         self, request: Request, new_token_ids: list[int], is_stale: bool = False
+     ) -> tuple[list[int], bool]:
+diff --git a/vllm/v1/core/sched/output.py b/vllm/v1/core/sched/output.py
+index 9ad0d4e658..de331365ec 100644
+--- a/vllm/v1/core/sched/output.py
++++ b/vllm/v1/core/sched/output.py
+@@ -272,6 +272,10 @@ class SchedulerOutput:
+     # Set only in async scheduling case.
+     has_structured_output_requests: bool = False
+ 
++    # Whether any scheduled request uses structured output with speculative
++    # decoding. Set only in async scheduling case.
++    has_structured_output_spec_decode: bool = False
++
+     # Whether the scheduled requests have all the output tokens they
+     # need to perform grammar bitmask computation.
+     pending_structured_output_tokens: bool = False
+diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
+index 35cc8cc186..6edec188aa 100644
+--- a/vllm/v1/engine/core.py
++++ b/vllm/v1/engine/core.py
+@@ -735,6 +735,16 @@ class EngineCore:
+                 future = cast(Future[ModelRunnerOutput], exec_future)
+             else:
+                 if not scheduler_output.pending_structured_output_tokens:
++                    if scheduler_output.has_structured_output_spec_decode:
++                        # This step's drafts were proposed by the previous
++                        # sample and must be validated before its grammar
++                        # bitmask is computed. Deferral handles the placeholder
++                        # case; retrieve them here for the other steps.
++                        draft_token_ids = self.model_executor.take_draft_token_ids()
++                        if draft_token_ids is not None:
++                            self.scheduler.update_draft_token_ids_in_output(
++                                draft_token_ids, scheduler_output
++                            )
+                     # We aren't waiting for any tokens, get any grammar output
+                     # and sample immediately.
+                     grammar_output = self.scheduler.get_grammar_bitmask(
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 1be63a7ce1..029b413666 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1138,6 +1138,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         # Call model_state.remove_request *before* req_states.remove_request
+         # so the model_state can still look up the slot index.
+         self.model_state.remove_request(req_id)
++        self.draft_tokens_handler.discard(req_id)
+         req_idx = self.req_states.remove_request(req_id)
+         if req_idx is None:
+             return False
+@@ -1774,6 +1775,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         randomize_inputs: bool = False,
+     ) -> ModelRunnerOutput | IntermediateTensors | None:
+         if not dummy_run:
++            self.draft_tokens_handler.begin_step(scheduler_output)
+             # Update the request states.
+             self.update_pp_decode_requests()
+             self.finish_requests(scheduler_output)
+diff --git a/vllm/v1/worker/gpu/spec_decode/utils.py b/vllm/v1/worker/gpu/spec_decode/utils.py
+index b005f5c3f3..e428d825e9 100644
+--- a/vllm/v1/worker/gpu/spec_decode/utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/utils.py
+@@ -1,11 +1,14 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++from collections import deque
++
+ import numpy as np
+ import torch
+ 
+ from vllm.config import LoadConfig, replace
+ from vllm.distributed import get_pp_group
+ from vllm.logger import init_logger
++from vllm.v1.core.sched.output import SchedulerOutput
+ from vllm.v1.outputs import DraftTokenIds
+ from vllm.v1.worker.gpu.async_utils import async_copy_to_np
+ from vllm.v1.worker.gpu.input_batch import InputBatch
+@@ -48,45 +51,136 @@ def get_pp_safe_draft_load_config(load_config: LoadConfig) -> LoadConfig:
+ class DraftTokensHandler:
+     def __init__(self, device: torch.device | None = None):
+         self.device = device
+-        self.copy_stream = torch.cuda.Stream(device)
+-        # Blocking (sleep) event to avoid busy-polling the CUDA driver lock.
+-        self.copy_event = torch.cuda.Event(blocking=True)
+ 
+-        self.req_ids: list[str] = []
+-        self.draft_tokens_np: np.ndarray | None = None
+-        self.num_draft_tokens: int = 0
++        # Latest drafts per live request: a row view into an async-copied
++        # pinned array (synced in get_draft_tokens), or just the draft width
++        # when the scheduler doesn't need the token ids.
++        self._draft_tokens_by_req: dict[str, np.ndarray | int] = {}
++        self._last_set_req_ids: list[str] = []
++        # Requests whose drafts the current scheduler output will consume.
++        self._step_req_ids: set[str] | None = None
++
++        # Each in-flight set gets its own copy stream and event. Re-recording
++        # one event while later steps queue waits on one stream makes a get
++        # block on work enqueued after its own set (the failure 0141 avoids for
++        # output copies on MUSA).
++        self._pending_copies: deque[
++            tuple[torch.cuda.Stream, torch.cuda.Event, list[str], int]
++        ] = deque()
++        self._free_streams: list[torch.cuda.Stream] = []
++        self._latest_copy_id_by_req: dict[str, int] = {}
++        self._next_copy_id = 0
++
++    def begin_step(self, scheduler_output: SchedulerOutput) -> None:
++        # Async scheduling can defer a structured-output batch, so the drafts a
++        # step consumes are not necessarily the ones set by the batch being
++        # processed. Bound retrieval to this step's speculative tokens.
++        if (
++            scheduler_output.pending_structured_output_tokens
++            or scheduler_output.has_structured_output_spec_decode
++        ):
++            self._step_req_ids = set(scheduler_output.scheduled_spec_decode_tokens)
++        else:
++            self._step_req_ids = None
+ 
+     def set_draft_tokens(
+         self, input_batch: InputBatch, draft_tokens: torch.Tensor
+     ) -> None:
+-        self.req_ids = input_batch.req_ids
+-        self.num_draft_tokens = draft_tokens.shape[1]
++        req_ids = list(input_batch.req_ids)
++        self._last_set_req_ids = req_ids
++        num_draft_tokens = draft_tokens.shape[1]
+         if not input_batch.has_structured_output_reqs:
+             # No draft token validation needs to be performed by
+-            # the scheduler for this batch.
+-            self.draft_tokens_np = None
++            # the scheduler for this batch. Record the width only: drafts
++            # retained for other in-flight structured requests must survive.
++            for req_id in req_ids:
++                self._draft_tokens_by_req[req_id] = num_draft_tokens
++                self._latest_copy_id_by_req.pop(req_id, None)
++            self._reap_superseded_copies()
+             return
+ 
+         # For spec decoding + structured outputs, we must transfer the
+         # draft tokens back to the scheduler for grammar validation.
++        stream = (
++            self._free_streams.pop()
++            if self._free_streams
++            else torch.cuda.Stream(self.device)
++        )
++        copy_id = self._next_copy_id
++        self._next_copy_id += 1
+         current_stream = torch.cuda.current_stream(self.device)
+-        self.copy_stream.wait_stream(current_stream)
+-        with torch.cuda.stream(self.copy_stream):
+-            self.draft_tokens_np = async_copy_to_np(draft_tokens)
++        stream.wait_stream(current_stream)
++        # Blocking (sleep) event to avoid busy-polling the CUDA driver lock.
++        # One event per copy: a shared event would be re-recorded by later
++        # steps and its synchronize() would wait for their copies too.
++        event = torch.cuda.Event(blocking=True)
++        with torch.cuda.stream(stream):
++            draft_tokens_np = async_copy_to_np(draft_tokens)
+             # draft_tokens is a temporary allocation on the main stream and read here on
+-            # copy_stream; without record_stream, the caching allocator may reuse its
+-            # memory before the async copy executes.
+-            draft_tokens.record_stream(self.copy_stream)
+-            self.copy_event.record()
++            # the copy stream; without record_stream, the caching allocator may
++            # reuse its memory before the async copy executes.
++            draft_tokens.record_stream(stream)
++            event.record()
++
++        for req_id, row in zip(req_ids, draft_tokens_np):
++            self._draft_tokens_by_req[req_id] = row
++            self._latest_copy_id_by_req[req_id] = copy_id
++        self._pending_copies.append((stream, event, req_ids, copy_id))
++        self._reap_superseded_copies()
+ 
+     def get_draft_tokens(self) -> DraftTokenIds | None:
+-        if self.draft_tokens_np is not None:
+-            self.copy_event.synchronize()
+-            draft_token_ids = self.draft_tokens_np.tolist()
+-        else:
+-            # This case only happens when async scheduling is disabled.
+-            draft_token_ids = [[-1] * self.num_draft_tokens for _ in self.req_ids]
+-        return DraftTokenIds(self.req_ids, draft_token_ids)
++        """Return the latest drafts for the requests this output consumes."""
++        wanted_req_ids = self._step_req_ids
++        if wanted_req_ids is None:
++            # Synchronous scheduling retrieves the batch that was just sampled.
++            wanted_req_ids = set(self._last_set_req_ids)
++        out_req_ids = [
++            req_id for req_id in self._draft_tokens_by_req if req_id in wanted_req_ids
++        ]
++        if not out_req_ids:
++            return None
++
++        wanted = set(out_req_ids)
++        remaining: deque[
++            tuple[torch.cuda.Stream, torch.cuda.Event, list[str], int]
++        ] = deque()
++        while self._pending_copies:
++            stream, event, copy_req_ids, copy_id = self._pending_copies.popleft()
++            if wanted.intersection(copy_req_ids):
++                # The rows we are about to read come from this copy only, so
++                # this cannot wait on a later step's copy.
++                event.synchronize()
++                self._free_streams.append(stream)
++            else:
++                remaining.append((stream, event, copy_req_ids, copy_id))
++        self._pending_copies = remaining
++
++        draft_token_ids: list[list[int]] = []
++        for req_id in out_req_ids:
++            draft_tokens = self._draft_tokens_by_req[req_id]
++            if isinstance(draft_tokens, int):
++                draft_token_ids.append([-1] * draft_tokens)
++            else:
++                draft_token_ids.append(draft_tokens.tolist())
++        return DraftTokenIds(out_req_ids, draft_token_ids)
++
++    def discard(self, req_id: str) -> None:
++        self._draft_tokens_by_req.pop(req_id, None)
++        self._latest_copy_id_by_req.pop(req_id, None)
++
++    def _reap_superseded_copies(self) -> None:
++        # A pinned buffer must outlive its copy. Drop a copy only once every
++        # row it produced has been overwritten by a later set.
++        while self._pending_copies:
++            stream, event, copy_req_ids, copy_id = self._pending_copies[0]
++            if any(
++                self._latest_copy_id_by_req.get(req_id) == copy_id
++                for req_id in copy_req_ids
++            ):
++                break
++            event.synchronize()
++            self._free_streams.append(stream)
++            self._pending_copies.popleft()
+ 
+ 
+ def get_parallel_drafting_token_id(hf_config) -> int:

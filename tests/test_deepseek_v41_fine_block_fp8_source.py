@@ -76,6 +76,23 @@ def test_linear_kernel_takes_only_fine_k_blocks_and_small_m() -> None:
     assert "return super().apply_block_scaled_mm(A, B, As, Bs)" in source
 
 
+def test_block128_conversion_preserves_validated_output_alignment() -> None:
+    source = LINEAR.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    alignment = next(
+        node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_BLOCK128_N_ALIGNMENT"
+            for target in node.targets
+        )
+    )
+    assert ast.literal_eval(alignment) == 64
+    conversion = _function(LINEAR, "process_weights_after_loading")
+    assert "params.weight.shape[0] % _BLOCK128_N_ALIGNMENT == 0" in conversion
+
+
 def test_series_lists_block_gemv_between_deepgemm_and_triton() -> None:
     added = _added(_patch("0183"))
     assert "MUSAFp8BlockGemvScaledMMKernel," in added
