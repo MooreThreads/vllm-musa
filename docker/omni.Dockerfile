@@ -29,6 +29,10 @@ WORKDIR /src
 # A pre-staged archive wins over a clone so a build can be reproduced offline
 # and from a dirty working tree; either way the result is an immutable export.
 COPY ${OMNI_CONTEXT}/ /staged/
+# The GUI wheel is resolver-only. OpenCV releases from 4.12 onward require
+# NumPy 2 on Python 3.12, while this MUSA foundation stays on NumPy 1.26.
+# The post-install step restores the foundation's headless wheel for the
+# actual runtime import.
 RUN set -eux; \
     if [ -f /staged/vllm-omni.tar ]; then \
         mkdir -p /src/vllm-omni && tar xf /staged/vllm-omni.tar -C /src/vllm-omni; \
@@ -124,7 +128,7 @@ RUN set -eux; \
     OPENCV_HEADLESS="$(awk -F== '$1 == "opencv-python-headless" {print $2}' \
         /opt/vllm-omni-foundation.txt)"; \
     test -n "${OPENCV_HEADLESS}"; \
-    printf 'opencv-python==%s\n' "${OPENCV_HEADLESS}" \
+    printf '%s\n' 'opencv-python==4.10.0.84' \
         >> /opt/vllm-omni-foundation.txt; \
     python -m pip install --no-deps --force-reinstall \
         ${PYPI_INDEX_URL:+--index-url ${PYPI_INDEX_URL}} \

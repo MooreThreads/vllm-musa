@@ -14,3 +14,4 @@ def test_omni_image_restores_the_base_pinned_headless_opencv():
 
     assert "opencv-python-headless==${OPENCV_HEADLESS}" in dockerfile
     assert "opencv-python-headless==4.10.0.84" not in dockerfile
+    assert "opencv-python==4.10.0.84" in dockerfile
