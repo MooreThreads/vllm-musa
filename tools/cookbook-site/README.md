@@ -62,7 +62,7 @@ Nothing is hand-maintained; the page structure is the schema.
 | summary | first paragraph of `## Overview` |
 | category / spec / precision / topology | rows of the `## At a glance` table, with a fallback to the file name, title and overview text |
 | GPUs | `Hardware` row, multiplying `N nodes` by `Mx` when both are given |
-| copy-this command | first bash block under `## Launching the server`, `## Environment`, `## Single node`, or `## Prefill node` |
+| copy-this command | the block that actually launches (`vllm serve`, `docker run`), preferring the sections `## Launching the server`, `## Recommended graph profile`, `## Environment`, `## Single node`, `## Prefill node` |
 
 A recipe that omits a field simply gets no badge and no filter entry — the build
 never guesses a value it cannot read, and it fails loudly on a missing
@@ -83,7 +83,24 @@ workflow still build on their pull request; they cannot deploy. Renaming the
 default branch needs no workflow change.
 
 It deploys through `actions/deploy-pages`, which requires Pages to be
-configured with **Source: GitHub Actions**.
+configured with **Source: GitHub Actions**. Both settings are in place today
+(2026-11-20): the site is served from Actions artifacts and the `gh-pages`
+branch it used to read is gone.
+
+Two details worth knowing when changing this setup:
+
+- The `github-pages` environment also carries a deployment branch policy, and it
+  must list the default branch or the deploy job is rejected. GitHub cannot
+  express "the default branch" there, so a branch rename needs that policy
+  updated too.
+- A failed build leaves the previous deployment live: `deploy` needs `build`, so
+  nothing is uploaded when the build exits non-zero.
+
+Re-publish without changing content — after a bad run, or to refresh the site:
+
+```console
+$ gh workflow run cookbook-site.yml -R MooreThreads/vllm-musa
+```
 
 The build is the gate: a recipe without an `# H1`, an unreadable `## At a
 glance` table, or an internal link that resolves to nothing fails the run
