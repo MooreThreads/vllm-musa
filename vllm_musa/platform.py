@@ -276,6 +276,11 @@ class MUSAPlatformBase(Platform):
         return True
 
     @classmethod
+    def is_pin_memory_available(cls) -> bool:
+        """MUSA supports pinned host memory, which UVA availability derives from."""
+        return True
+
+    @classmethod
     def import_kernels(cls) -> None:
         """Import upstream vLLM kernels, including v0.22 stable ABI ops."""
         super().import_kernels()
@@ -471,6 +476,24 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def check_and_update_config(cls, vllm_config: "VllmConfig") -> None:
+        # `--use-fp64-gumbel` cannot run on MUSA: MUDNN has no float64
+        # reduce-with-indices, and the V2 Gumbel sampler calls
+        # `local_max.argmax(dim=-1)` on a float64 buffer
+        # ("RuntimeError: ReduceIndicesOnlyCall MUDNN failed in: RunIndices").
+        # Fail at config time with that reason; never downgrade to float32
+        # silently, since the flag is an exactness request.
+        _model_config = getattr(vllm_config, "model_config", None)
+        if _model_config is not None and getattr(
+            _model_config, "use_fp64_gumbel", False
+        ):
+            raise ValueError(
+                "--use-fp64-gumbel is not supported on MUSA: the float64 Gumbel "
+                "sampler calls Tensor.argmax on a float64 buffer and MUDNN has "
+                "no float64 reduce-with-indices kernel "
+                "(ReduceIndicesOnlyCall MUDNN failed in: RunIndices). Drop the "
+                "flag to use the float32 sampler."
+            )
+
         # pin the diffusion backend before anything reads the attention config
         force_triton_attn_for_diffusion(vllm_config)
 

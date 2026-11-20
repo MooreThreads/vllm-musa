@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import os
+from enum import Enum
 
 import torch
+from vllm.config import get_current_vllm_config
+from vllm.logger import init_logger
 from vllm.model_executor.kernels.linear import FP8ScaledMMLinearLayerConfig
 from vllm.model_executor.kernels.linear.scaled_mm.triton import (
     TritonFp8BlockScaledMMKernel,
@@ -11,6 +14,7 @@ from vllm.model_executor.kernels.linear.scaled_mm.triton import (
 from vllm.model_executor.layers.quantization.utils.fp8_utils import (
     _upcast_e8m0_to_fp32,
 )
+from vllm.model_executor.layers.quantization.utils.quant_utils import GroupShape
 from vllm.model_executor.utils import replace_parameter
 from vllm.platforms import current_platform
 
@@ -28,7 +32,14 @@ from vllm_musa.kernels.fp8_block_gemv import (
     fp8_block_gemv_quant_supported,
     fp8_block_gemv_supported,
 )
+from vllm_musa.kernels.fp8_block_requant import (
+    fp8_block128_bf16_linear,
+    requantize_fp8_block32_to_block128,
+)
 from vllm_musa.kernels.fp8_block_splitk import fp8_block_splitk_config
+from vllm_musa.optimization_contract import OptimizationFeature, prefers_feature
+
+logger = init_logger(__name__)
 
 # The GEMV re-reads the weight per row (or per few rows); past a few rows the
 # block GEMM wins. Crossovers measured on MTT S5000 for the DeepSeek-V4.1 TP8
@@ -74,14 +85,25 @@ def _small_m_path(weight: torch.Tensor, weight_scale: torch.Tensor, rows: int) -
     return fp8_block_splitk_config(weight, weight_scale, rows) is not None
 
 
-class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
-    """Block-FP8 linear for scale blocks finer than DeepGEMM's 128.
+class _Fp8WeightBlockSize(Enum):
+    BLOCK32 = 32
+    BLOCK128 = 128
 
-    Small M runs the block GEMV, which also quantizes the activation; larger M
-    keeps the separate activation quantization and runs a block GEMM whose K
-    tile spans several scale groups; prefill row counts run the BF16 GEMM on a
-    dequantized weight.
+
+_BLOCK128_N_ALIGNMENT = 64
+
+
+class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
+    """MUSA block-FP8 linear for scale blocks finer than DeepGEMM's 128.
+
+    Unconverted weights use block GEMV for small M, block GEMM for larger M,
+    and a BF16 GEMM on dequantized weights for prefill. DSV4.1 dense weights
+    converted to block128 use the muDNN W8A8 path for every nonempty M.
+    That route is validated only for N divisible by _BLOCK128_N_ALIGNMENT;
+    other output widths retain block32 weights and the existing fallback.
     """
+
+    _weight_block_size = _Fp8WeightBlockSize.BLOCK32
 
     @classmethod
     def is_supported(cls, compute_capability=None):
@@ -115,6 +137,27 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
         ).contiguous()
         if fp32_scale is not scale:
             replace_parameter(layer, params.block_scale_attr, fp32_scale)
+        config = get_current_vllm_config()
+        if (
+            prefers_feature(config, OptimizationFeature.DEEPSEEK_V41_DENSE_FP8_BLOCK128)
+            and tuple(layer.weight_block_size) == (32, 32)
+            and not getattr(layer, "is_bmm", False)
+            and ".shared_experts." not in getattr(layer, "prefix", "")
+            and params.weight.ndim == 2
+            and params.weight.shape[0] % _BLOCK128_N_ALIGNMENT == 0
+        ):
+            weight128, scales128 = requantize_fp8_block32_to_block128(
+                params.weight, fp32_scale
+            )
+            replace_parameter(layer, params.WEIGHT, weight128)
+            replace_parameter(layer, params.block_scale_attr, scales128)
+            layer.weight_block_size = [128, 128]
+            self.weight_group_shape = GroupShape(128, 128)
+            self._weight_block_size = _Fp8WeightBlockSize.BLOCK128
+            logger.info_once(
+                "Converted DSV4.1 dense weights to one block128 FP8 "
+                "representation; all M use MATE muDNN W8A8."
+            )
 
     def apply_weights(
         self,
@@ -123,9 +166,17 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
         bias: torch.Tensor | None = None,
         **kwargs,
     ) -> torch.Tensor:
-        group_size = self.config.activation_quant_key.scale.group_shape.col
         rows = x.numel() // x.shape[-1] if x.dim() > 0 else 0
         params = self._get_layer_params(layer)
+        if self._weight_block_size is _Fp8WeightBlockSize.BLOCK128:
+            output = fp8_block128_bf16_linear(
+                x.reshape(rows, x.shape[-1]),
+                params.weight,
+                params.block_scale,
+                self.config.out_dtype,
+            ).view(*x.shape[:-1], params.weight.shape[0])
+            return output + bias if bias is not None else output
+        group_size = self.config.activation_quant_key.scale.group_shape.col
         if (
             _small_m_path(params.weight, params.block_scale, rows)
             and x.dtype in (torch.bfloat16, torch.float16)
@@ -170,6 +221,8 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
 
         Returns ``None`` outside the small-M GEMV path.
         """
+        if self._weight_block_size is _Fp8WeightBlockSize.BLOCK128:
+            return None
         group_size = self.config.activation_quant_key.scale.group_shape.col
         rows = gate_up.numel() // gate_up.shape[-1] if gate_up.dim() > 0 else 0
         params = self._get_layer_params(layer)

@@ -1,0 +1,89 @@
+name: Cookbook site
+
+# Builds the recipe site from docs/cookbook and publishes it to GitHub Pages.
+#
+# The cookbook is plain Markdown (# H1, ## At a glance, fenced bash), so the
+# build needs only `markdown` + `pygments` — no Node toolchain, no front-end
+# build step, and no generated files in the repository.
+#
+# One site, one source: the published pages always describe the default branch,
+# matching recipes.vllm.ai, whose sources.yaml has a single `latest` channel
+# pointing at main. There is no per-release selector.
+#
+# Branching: the push trigger has no branch filter, because hard-coding the
+# branch name breaks the next time the default branch is renamed. Every branch
+# carries this workflow, so the guard sits on the job instead and compares the
+# pushed ref with the repository's current default branch. Feature-branch pushes
+# skip the job; pull requests build (and fail on broken links) without
+# publishing.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/cookbook-site.yml'
+      - 'docs/cookbook/**'
+      - 'tools/cookbook-site/**'
+  pull_request:
+    paths:
+      - '.github/workflows/cookbook-site.yml'
+      - 'docs/cookbook/**'
+      - 'tools/cookbook-site/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  # Keyed by ref so a pull-request build can never cancel a deploy that is
+  # already running for the default branch.
+  group: cookbook-site-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    # Publish from the default branch only. A feature branch that has this
+    # workflow (every branch cut from the default branch does) still builds on
+    # its pull request, but cannot overwrite the site.
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: python -m pip install 'markdown>=3.3,<4' 'pygments>=2.15'
+      - name: Build the site
+        run: |
+          set -euo pipefail
+          test -d docs/cookbook || { echo "::error::docs/cookbook is missing"; exit 1; }
+          python tools/cookbook-site/build_site.py \
+            --embed-sources \
+            --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --out _site \
+            --source docs/cookbook \
+            --ref "${GITHUB_REF_NAME}"
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: _site
+
+  deploy:
+    # Pull requests validate the build only; the `if` above already restricts
+    # pushes and manual runs to the default branch.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

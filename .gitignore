@@ -218,6 +218,10 @@ vllm/
 # Written by setup.py when the native extensions are built.
 vllm_musa/_build_info.py
 
-# Staged by docker/build_omni_image.sh for the duration of the build; its EXIT
+# Cookbook site build output (tools/cookbook-site).
+/_site/
+/tools/cookbook-site/_site/
+
+# Staged by docker/build_omni_image.sh for the duration of the build. Its EXIT
 # trap removes it, so a leftover means the build was killed.
 /.omni-build-context/
