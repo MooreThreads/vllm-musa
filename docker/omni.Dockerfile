@@ -116,6 +116,10 @@ RUN set -eux; \
     if [ "${PLAT}" != "${SITE}" ]; then set -- "$@" --path "${PLAT}"; fi; \
     python -m pip list "$@" --exclude-editable --format=freeze \
         | grep -vE '^(-e|#)' > /opt/vllm-omni-foundation.txt; \
+    # Keep Omni's opencv-python requirement deterministic. The unconstrained
+    # package currently offers several large ABI-tagged wheels and makes the
+    # resolver spend several minutes backtracking on the image build.
+    printf '%s\n' 'opencv-python==4.12.0.88' >> /opt/vllm-omni-foundation.txt; \
     python -m pip install --no-deps \
         ${PYPI_INDEX_URL:+--index-url ${PYPI_INDEX_URL}} \
         'numpy>=1.26.4,<2'; \
