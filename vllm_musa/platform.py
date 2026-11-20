@@ -277,15 +277,7 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def is_pin_memory_available(cls) -> bool:
-        """MUSA supports pinned (page-locked) host memory.
-
-        The base class already answers True outside WSL, so this changes no
-        behaviour today; it states the MUSA contract explicitly because
-        ``is_uva_available()`` is derived from it and the V2 model runner's UVA
-        buffers (``UvaBuffer``/``StagedWriteTensor``) are only used when it is
-        True. Measured on S5000 (driver 5.2.0-server): pinned H2D 52.5 GB/s vs
-        12.0 GB/s pageable, and ``pin_memory()`` on 1024 int32 costs 10.5 us.
-        """
+        """MUSA supports pinned host memory, which UVA availability derives from."""
         return True
 
     @classmethod
@@ -484,17 +476,12 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def check_and_update_config(cls, vllm_config: "VllmConfig") -> None:
-        # `--use-fp64-gumbel` cannot run on MUSA. The dtype itself works here
-        # (verified on an S5000: float64 tensors, matmul at 1.46 TFLOP/s, and
-        # Triton `tl.float64` arithmetic all behave as true float64), but
-        # MUDNN's reduce-with-indices does not: the V2 Gumbel sampler keeps its
-        # per-block maxima in float64 and then calls
-        # `local_max.argmax(dim=-1)` (vllm/v1/worker/gpu/sample/gumbel.py), which
-        # fails during the warmup profile run with
-        # "RuntimeError: ReduceIndicesOnlyCall MUDNN failed in: RunIndices".
-        # Reject at config time with the reason. Do not downgrade silently: the
-        # flag is an exactness request, so honouring it with float32 would be a
-        # wrong answer rather than a fallback.
+        # `--use-fp64-gumbel` cannot run on MUSA: MUDNN has no float64
+        # reduce-with-indices, and the V2 Gumbel sampler calls
+        # `local_max.argmax(dim=-1)` on a float64 buffer
+        # ("RuntimeError: ReduceIndicesOnlyCall MUDNN failed in: RunIndices").
+        # Fail at config time with that reason; never downgrade to float32
+        # silently, since the flag is an exactness request.
         _model_config = getattr(vllm_config, "model_config", None)
         if _model_config is not None and getattr(
             _model_config, "use_fp64_gumbel", False

@@ -27,8 +27,7 @@ def test_guard_runs_before_the_rest_of_config_setup() -> None:
     guard_at = body.find("use_fp64_gumbel")
     first_work_at = body.find("force_triton_attn_for_diffusion")
     assert guard_at != -1, "the --use-fp64-gumbel guard disappeared"
-    assert first_work_at != -1, "check_and_update_config no longer starts with "\
-        "the diffusion backend pin"
+    assert first_work_at != -1, "the diffusion backend pin must still be present"
     assert guard_at < first_work_at, (
         "the guard must run before the rest of config setup so the failure is "
         "reported as a config error, not as a mid-init MUDNN error"
@@ -38,9 +37,9 @@ def test_guard_runs_before_the_rest_of_config_setup() -> None:
 def test_guard_names_the_flag_and_the_mudnn_limit() -> None:
     body = _check_and_update_config_body()
     assert "--use-fp64-gumbel is not supported on MUSA" in body
-    assert "ReduceIndicesOnlyCall MUDNN failed in: RunIndices" in body, (
-        "the message must quote the concrete failure so users can search it"
-    )
+    assert (
+        "ReduceIndicesOnlyCall MUDNN failed in: RunIndices" in body
+    ), "the message must quote the concrete failure so users can search it"
     assert "argmax" in body, "the message must name the failing op"
 
 
