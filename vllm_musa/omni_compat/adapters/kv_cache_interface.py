@@ -29,7 +29,11 @@ def _get_block_table_width(
 
 def is_applied(module: ModuleType) -> list[str]:
     bridge = getattr(module, ADAPTED, None)
-    return ["get_block_table_width"] if bridge is getattr(module, "get_block_table_width", None) else []
+    return (
+        ["get_block_table_width"]
+        if bridge is getattr(module, "get_block_table_width", None)
+        else []
+    )
 
 
 def is_satisfied(module: ModuleType) -> bool:

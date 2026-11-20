@@ -18,7 +18,9 @@ CompileFactors = dict[str, object]
 
 def is_applied(module: ModuleType) -> list[str]:
     alias = getattr(module, ADAPTED, None)
-    return ["CompileFactors"] if alias is getattr(module, "CompileFactors", None) else []
+    return (
+        ["CompileFactors"] if alias is getattr(module, "CompileFactors", None) else []
+    )
 
 
 def is_satisfied(module: ModuleType) -> bool:

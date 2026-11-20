@@ -14,7 +14,11 @@ def _compile_factors(self: Any, include_version: bool = True) -> dict[str, objec
 
 def is_applied(module: ModuleType) -> list[str]:
     vllm_config = getattr(module, "VllmConfig", None)
-    return ["VllmConfig"] if getattr(vllm_config, "compile_factors", None) is _compile_factors else []
+    return (
+        ["VllmConfig"]
+        if getattr(vllm_config, "compile_factors", None) is _compile_factors
+        else []
+    )
 
 
 def is_satisfied(module: ModuleType) -> bool:

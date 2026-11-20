@@ -7,5 +7,10 @@ def test_spawn_is_baked_into_the_shared_musa_runtime_layer():
 
     assert "VLLM_WORKER_MULTIPROC_METHOD=spawn" in runtime_env
     assert dockerfile.count("VLLM_WORKER_MULTIPROC_METHOD") == 1
+
+
+def test_omni_image_restores_the_base_pinned_headless_opencv():
+    dockerfile = (Path(__file__).parents[1] / "docker" / "omni.Dockerfile").read_text()
+
     assert 'opencv-python-headless==${OPENCV_HEADLESS}' in dockerfile
     assert 'opencv-python-headless==4.10.0.84' not in dockerfile

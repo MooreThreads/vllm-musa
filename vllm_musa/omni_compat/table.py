@@ -198,7 +198,9 @@ ENTRIES: tuple[ShimEntry, ...] = (
             "tries to construct it on an unsupported speculative path."
         ),
         remove_when="the pin is >= 0.34, where the draft_logits module is native.",
-        omni_refs=("vllm_omni/model_executor/models/minicpmo_4_5/minicpmo_4_5_omni_tts.py",),
+        omni_refs=(
+            "vllm_omni/model_executor/models/minicpmo_4_5/minicpmo_4_5_omni_tts.py",
+        ),
     ),
     ShimEntry(
         module="vllm.entrypoints.common.cli_args",

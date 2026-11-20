@@ -22,7 +22,11 @@ def _compile_factors(self: Any) -> dict[str, object]:
 
 def is_applied(module: ModuleType) -> list[str]:
     model_config = getattr(module, "ModelConfig", None)
-    return ["ModelConfig"] if getattr(model_config, "compile_factors", None) is _compile_factors else []
+    return (
+        ["ModelConfig"]
+        if getattr(model_config, "compile_factors", None) is _compile_factors
+        else []
+    )
 
 
 def is_satisfied(module: ModuleType) -> bool:
