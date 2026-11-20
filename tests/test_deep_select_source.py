@@ -5,13 +5,11 @@
 from __future__ import annotations
 
 import ast
-import json
 import math
 import os
-import shlex
+import re
 import shutil
 import subprocess
-import sys
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,26 +40,14 @@ def _added_lines(text: str) -> str:
     )
 
 
-def _deepselect_source(relative_path: str) -> Path:
-    root = Path(os.environ.get("DEEPSELECT_SRC_DIR", ROOT.parent / "DeepSelect"))
-    source = root / relative_path
-    if not source.is_file():
-        pytest.skip(
-            f"set DEEPSELECT_SRC_DIR to an updated MUSA checkout: missing {source}"
-        )
-    return source
-
-
-def _bindings_source() -> str:
-    return _deepselect_source("csrc/musa_api.cpp").read_text(encoding="utf-8")
-
-
 def test_series_patch_retains_native_extension_import_detection() -> None:
     source = (
         SERIES / "0216-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
     ).read_text(encoding="utf-8")
     assert "elif not _HAS_DEEP_SELECT_C:" in source
-    assert "vllm._deepselect_C could not be imported" in source
+    assert "vllm._deepselect_C operators are unavailable" in source
+    assert 'hasattr(torch.ops.deep_select, "topk")' in source
+    assert 'torch.ops.deep_select, "get_alignment_requirement"' in source
     assert "_deep_select_op_available" not in source
 
 
@@ -83,11 +69,10 @@ def test_series_patch_keeps_the_cuda_capability_check() -> None:
 
 def _deep_select_validation_helpers(family: int, extension_available: bool) -> dict:
     patch = SERIES / "0216-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
-    source = "\n".join(
-        line[1:]
-        for line in patch.read_text(encoding="utf-8").splitlines()
-        if line.startswith((" ", "+")) and not line.startswith("+++")
-    )
+    source_path = ROOT / "third_party/vllm/vllm/model_executor/layers/indexer_topk.py"
+    if not source_path.exists():
+        pytest.skip("Applied vLLM source is required")
+    source = source_path.read_text(encoding="utf-8")
     branch = source[source.index('        elif self._backend == "deep_select":') :]
     branch = branch.split('        elif self._backend == "aiter":', 1)[0]
     validation = (
@@ -104,6 +89,7 @@ def _deep_select_validation_helpers(family: int, extension_available: bool) -> d
     namespace = {
         "_HAS_DEEP_SELECT_C": extension_available,
         "current_platform": SimpleNamespace(is_device_capability_family=is_family),
+        "is_deep_select_supported": lambda *_: True,
     }
     exec(compile(validation, str(patch), "exec"), namespace)
     namespace["calls"] = calls
@@ -119,7 +105,7 @@ def _deep_select_validation_helpers(family: int, extension_available: bool) -> d
         ("cuda", 90, True, "SM100a/SM103a"),
         ("cpu", 0, True, "CUDA or MUSA"),
         ("rocm", 0, True, "CUDA or MUSA"),
-        ("musa", 0, False, "could not be imported"),
+        ("musa", 0, False, "operators are unavailable"),
     ],
 )
 def test_deep_select_validation_separates_platform_and_extension(
@@ -150,6 +136,53 @@ def test_series_patch_routes_supported_windows_to_explicit_backend() -> None:
     assert "_musa_try_fill_decode_topk_from_paged_logits" in added
     assert "deep_select_topk(" in added
     assert "requires zero-based indexer windows" not in added
+
+
+@pytest.mark.parametrize(
+    "shape, topk, supported",
+    [
+        ((2, 4096), 512, True),
+        ((2, 4096), 4096, True),
+        ((2, 4096), 0, False),
+        ((2, 4096), -1, False),
+        ((2, 4096), 4097, False),
+        ((2, 0), 512, False),
+        ((2, 2**23), 512, False),
+        ((4096,), 512, False),
+        ((2, 4, 4096), 512, False),
+    ],
+)
+@pytest.mark.parametrize("offset, aligned", [(0, True), (1, False), (4, True)])
+def test_deep_select_support_checks_native_shape_and_topk_bounds(
+    shape: tuple[int, ...], topk: int, supported: bool, offset: int, aligned: bool
+) -> None:
+    source_path = ROOT / "third_party/vllm/vllm/model_executor/layers/indexer_topk.py"
+    if not source_path.is_file():
+        pytest.skip("Applied vLLM source is required")
+    function = next(
+        node
+        for node in ast.parse(source_path.read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name == "is_deep_select_supported"
+    )
+    namespace = {
+        "torch": SimpleNamespace(Tensor=object, float32="float32", bfloat16="bfloat16"),
+        "get_deep_select_stride_requirement": lambda: (32, 32),
+    }
+    exec(
+        compile(ast.Module(body=[function], type_ignores=[]), str(source_path), "exec"),
+        namespace,
+    )
+    logits = SimpleNamespace(
+        shape=shape,
+        dim=lambda: len(shape),
+        dtype="float32",
+        stride=lambda axis: (4096, 1)[axis],
+        storage_offset=lambda: offset,
+        element_size=lambda: 4,
+    )
+    assert namespace["is_deep_select_supported"](logits, topk) is (
+        supported and aligned
+    )
 
 
 def _indexer_selection_helpers(
@@ -417,18 +450,6 @@ def test_microbenchmark_uses_vllm_extension_without_standalone_package() -> None
     assert '"deep-select"' not in source
 
 
-def test_extension_defines_upstream_schema_and_native_musa_meta_ops() -> None:
-    source = _bindings_source()
-    assert "TORCH_LIBRARY(deep_select, library)" in source
-    assert "get_alignment_requirement() -> (int, int)" in source
-    assert "Tensor(a!)? output_value, Tensor(b!) output_index" in source
-    assert 'library.impl("topk", torch::kMUSA, &deepselect_topk)' in source
-    assert "TORCH_LIBRARY_IMPL(deep_select, Meta, library)" in source
-    assert "CompositeExplicitAutograd" in source
-    assert '#include "musa_kernels/topk_bf16.mu"' in source
-    assert "torch::kCPU" not in source
-
-
 def test_build_provides_vllm_extension_from_deepselect_source() -> None:
     source = (ROOT / "setup.py").read_text(encoding="utf-8")
     assert 'name="vllm._deepselect_C"' not in source
@@ -438,18 +459,15 @@ def test_build_provides_vllm_extension_from_deepselect_source() -> None:
     build = BUILD_PATCH.read_text(encoding="utf-8")
     assert 'CMakeExtension(name="vllm._deepselect_C")' in build
     assert "deepselect_extension.py_limited_api = False" in build
-    assert 'include("${deepselect_SOURCE_DIR}/cmake/vllm_musa.cmake")' in build
+    assert "include(cmake/external_projects/deepselect.cmake)" in build
     assert 'if(VLLM_TARGET_DEVICE STREQUAL "empty" AND DEEPSELECT_SRC_DIR)' in build
-    assert (
-        'include("${deepselect_SOURCE_DIR}/cmake/vllm_musa_toolchain.cmake")' in build
-    )
-    cmake = _deepselect_source("cmake/vllm_musa.cmake").read_text(encoding="utf-8")
-    assert "define_extension_target(\n    _deepselect_C" in cmake
-    assert 'SOURCES "${deepselect_SOURCE_DIR}/csrc/musa_api.cpp"' in cmake
-    assert (
-        "include cmake/vllm_musa_toolchain.cmake"
-        in _deepselect_source("MANIFEST.in").read_text()
-    )
+    added = _added_lines(build)
+    assert "CMAKE_CXX_COMPILER" not in added
+    assert "csrc/musa_kernels/topk.mu" in added
+    assert "define_extension_target(" in added
+    assert "musa_api.cpp" not in added
+    assert "vllm_musa_toolchain.cmake" not in added
+    assert "deepselect_source.cmake" not in added
     assert not (ROOT / "csrc/deep_select/torch_bindings.mu").exists()
 
 
@@ -498,25 +516,52 @@ def test_native_build_delegates_deepselect_to_vllm(skip: bool) -> None:
     assert clones == expected_clones
 
 
-def test_native_dispatch_retains_kernel_policy_and_capacity_handling() -> None:
-    source = _bindings_source()
-    assert "output_index.narrow(0, 0, input.size(0)).narrow(1, 0, topk)" in source
-    assert "input.size(0) <= 8 && input.size(1) > 65536" in source
-    assert "input.size(1) >= 1048576 ? 48 : 32" in source
-    assert "launch_topk_bf16_multi" in source
-    assert "launch_topk_bf16(input, indices" in source
-    assert "launch_topk_fp32(input, indices" in source
-    assert "static thread_local" in source
-    assert "getCurrentMUSAStream" in source
-    assert "input.size(0) == 0 || input.is_meta()" in source
-
-
-def test_deepselect_source_selection_stays_upstream() -> None:
+@pytest.mark.parametrize(
+    "target, repository, revision",
+    [
+        (
+            "empty",
+            "https://github.com/MooreThreads/DeepSelect.git",
+            "5ae5ef00046f08ee3c800ea7cbdb1267af10a087",
+        ),
+        (
+            "cuda",
+            "https://github.com/vllm-project/DeepSelect.git",
+            "d96d33afe1fab0d6066da49cdc91e64c2bee65ea",
+        ),
+    ],
+)
+def test_deepselect_source_selection_matches_build_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    repository: str,
+    revision: str,
+) -> None:
     assert "DEEPSELECT_" not in PINS.read_text(encoding="utf-8")
-    added = _added_lines(BUILD_PATCH.read_text())
-    assert "GIT_REPOSITORY https://github.com/vllm-project/DeepSelect.git" in added
-    assert "GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea" in added
-    assert "DEEPSELECT_REVISION" not in added
+    source_patch = (
+        BUILD_PATCH.read_text()
+        .split("diff --git a/cmake/external_projects/deepselect.cmake", 1)[1]
+        .split("diff --git", 1)[0]
+    )
+    added = _added_lines(source_patch)
+    selection = (
+        'if(VLLM_TARGET_DEVICE STREQUAL "empty")'
+        + added.split('if(VLLM_TARGET_DEVICE STREQUAL "empty")', 1)[1].split(
+            "endif()", 1
+        )[0]
+        + "endif()\n"
+    )
+    script = tmp_path / "select.cmake"
+    script.write_text(
+        f'set(VLLM_TARGET_DEVICE "{target}")\n'
+        + selection
+        + 'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/selected" '
+        '"${DEEPSELECT_GIT_REPOSITORY};${DEEPSELECT_GIT_TAG}")\n'
+    )
+    monkeypatch.delenv("DEEPSELECT_SRC_DIR", raising=False)
+    subprocess.run(["cmake", "-P", str(script)], cwd=tmp_path, check=True)
+    assert (tmp_path / "selected").read_text().split(";") == [repository, revision]
 
 
 @pytest.mark.parametrize(
@@ -588,13 +633,27 @@ def test_vllm_build_does_not_add_musa_platform_or_compiler_detection() -> None:
 @pytest.mark.parametrize("empty", [False, True])
 @pytest.mark.parametrize("source_dir", [None, "", "/updated-musa-checkout"])
 @pytest.mark.parametrize(
-    "cmake_args", [None, "-DDEEPSELECT_SRC_DIR=/cmake-only-checkout"]
+    ("cmake_args", "cmake_source"),
+    [
+        (None, None),
+        ("-DDEEPSELECT_SRC_DIR=/cmake-only-checkout", "/cmake-only-checkout"),
+        ("-DDEEPSELECT_SRC_DIR:PATH=/typed-checkout", "/typed-checkout"),
+        ("-DDEEPSELECT_SRC_DIR:STRING=/typed-checkout", "/typed-checkout"),
+        ("-DDEEPSELECT_SRC_DIR=", ""),
+        ("-DDEEPSELECT_SRC_DIR_OTHER=/unrelated", None),
+        (
+            "-DDEEPSELECT_SRC_DIR=/first -DDEEPSELECT_SRC_DIR=/last",
+            "/last",
+        ),
+        ("-DDEEPSELECT_SRC_DIR=/first -DDEEPSELECT_SRC_DIR=", ""),
+    ],
 )
-def test_vllm_empty_mode_builds_deepselect_only_with_an_environment_source_override(
+def test_vllm_empty_mode_honors_environment_and_cmake_source_overrides(
     target: str | None,
     empty: bool,
     source_dir: str | None,
     cmake_args: str | None,
+    cmake_source: str | None,
 ) -> None:
     setup_patch = BUILD_PATCH.read_text().split("diff --git a/setup.py", 1)[1]
     source = "if _no_device():\n    ext_modules = []\n" + _added_lines(setup_patch)
@@ -607,88 +666,20 @@ def test_vllm_empty_mode_builds_deepselect_only_with_an_environment_source_overr
     namespace = {
         "_no_device": lambda: empty,
         "os": SimpleNamespace(environ=environment),
+        "re": re,
         "CMakeExtension": lambda **kwargs: SimpleNamespace(**kwargs),
         "ext_modules": extensions,
     }
     exec(compile(source, str(BUILD_PATCH), "exec"), namespace)
     result = namespace["ext_modules"]
-    if empty and source_dir:
+    effective_source = source_dir if source_dir is not None else cmake_source
+    if empty and effective_source:
         assert [extension.name for extension in result] == ["vllm._deepselect_C"]
         assert result[0].py_limited_api is False
     elif empty:
         assert result == []
     else:
         assert result is extensions
-
-
-@pytest.mark.parametrize("missing_toolchain", [False, True])
-@pytest.mark.parametrize("source_override", ["unset", "empty", "env"])
-def test_deepselect_selects_compiler_before_vllm_project(
-    tmp_path: Path, missing_toolchain: bool, source_override: str
-) -> None:
-    patch = BUILD_PATCH.read_text()
-    root_patch = patch.split("diff --git a/CMakeLists.txt", 1)[1]
-    configure = _added_lines(root_patch.split("@@")[2])
-    source_patch = patch.split(
-        "diff --git a/cmake/external_projects/deepselect_source.cmake", 1
-    )[1].split("diff --git", 1)[0]
-    acquisition = tmp_path / "cmake/external_projects/deepselect_source.cmake"
-    acquisition.parent.mkdir(parents=True)
-    acquisition.write_text(_added_lines(source_patch) + "\n")
-    backend = tmp_path / "DeepSelect source"
-    (backend / "cmake").mkdir(parents=True)
-    (backend / "CMakeLists.txt").write_text(
-        'message(FATAL_ERROR "DeepSelect must not configure before vLLM")\n'
-    )
-    enabled = source_override == "env"
-    if enabled and not missing_toolchain:
-        shutil.copy2(
-            _deepselect_source("cmake/vllm_musa_toolchain.cmake"),
-            backend / "cmake/vllm_musa_toolchain.cmake",
-        )
-    compiler = tmp_path / "toolkit/bin/mcc"
-    compiler.parent.mkdir(parents=True)
-    host_compiler = shutil.which("c++")
-    assert host_compiler is not None
-    compiler.write_text(f'#!/bin/sh\nexec {shlex.quote(host_compiler)} "$@"\n')
-    compiler.chmod(0o755)
-    (tmp_path / "CMakeLists.txt").write_text(
-        "cmake_minimum_required(VERSION 3.18)\n"
-        'set(VLLM_TARGET_DEVICE "empty")\n'
-        + configure
-        + "\nproject(deepselect_toolchain LANGUAGES CXX)\n"
-        + 'file(WRITE "${CMAKE_BINARY_DIR}/compiler" "${CMAKE_CXX_COMPILER}")\n'
-    )
-    command = [
-        "cmake",
-        "-S",
-        str(tmp_path),
-        "-B",
-        str(tmp_path / "build"),
-        "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
-    ]
-    environment = {**os.environ, "MUSA_HOME": str(compiler.parent.parent)}
-    environment.pop("DEEPSELECT_SRC_DIR", None)
-    if source_override in ("env", "empty"):
-        environment["DEEPSELECT_SRC_DIR"] = str(backend) if enabled else ""
-        command.append("-DDEEPSELECT_SRC_DIR=/must-not-download")
-    result = subprocess.run(
-        command,
-        env=environment,
-        capture_output=True,
-        text=True,
-    )
-    if not enabled:
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert "DeepSelect is available" not in result.stdout
-        assert not (tmp_path / "build/_deps").exists()
-        assert (tmp_path / "build/compiler").read_text() != str(compiler)
-    elif missing_toolchain:
-        assert result.returncode != 0
-        assert "DeepSelect build integration missing" in result.stderr
-    else:
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert (tmp_path / "build/compiler").read_text() == str(compiler)
 
 
 @pytest.mark.parametrize("stale_only", [False, True])
@@ -720,103 +711,3 @@ def test_editable_copy_does_not_overwrite_vllm_owned_deepselect(
     namespace["develop_dynamic_library"]("vllm", source.parent, target)
     assert (target / "_deepselect_C.so").read_text() == "new vllm binary"
     assert (target / "_C.so").read_text() == "current musa binary"
-
-
-@pytest.mark.skipif(shutil.which("cmake") is None, reason="cmake unavailable")
-@pytest.mark.parametrize(
-    ("target", "missing", "success"),
-    [
-        ("mp_31", False, True),
-        ("mp_22", False, False),
-        ("", False, False),
-        ("mp_22;mp_31", False, False),
-        ("mp_31", True, False),
-    ],
-)
-def test_musa_cmake_target_configuration(
-    tmp_path: Path, target: str, missing: bool, success: bool
-) -> None:
-    kernel = tmp_path / "DeepSelect/csrc/musa_kernels/topk_bf16.mu"
-    kernel.parent.mkdir(parents=True)
-    if not missing:
-        kernel.write_text("int source_marker;")
-    bindings = kernel.parent.parent / "musa_api.cpp"
-    bindings.write_text("int binding_marker;")
-    integration = _deepselect_source("cmake/vllm_musa.cmake")
-    project = f"""cmake_minimum_required(VERSION 3.18)
-project(deepselect_configuration LANGUAGES CXX)
-set(deepselect_SOURCE_DIR "{tmp_path}/DeepSelect")
-function(run_python output)
-  if(output STREQUAL "DEEPSELECT_MUSA_ARCHS")
-    set(${{output}} "{target}" PARENT_SCOPE)
-  elseif(output STREQUAL "DEEPSELECT_MUSA_LIBRARIES")
-    set(${{output}} "c10;torch;torch_cpu;torch_python;musa_python" PARENT_SCOPE)
-  else()
-    set(${{output}} "0" PARENT_SCOPE)
-  endif()
-endfunction()
-function(define_extension_target name)
-  cmake_parse_arguments(ARG "WITH_SOABI" "DESTINATION;LANGUAGE"
-    "SOURCES;INCLUDE_DIRECTORIES;COMPILE_FLAGS;LIBRARIES" ${{ARGN}})
-  if(NOT name STREQUAL "_deepselect_C" OR NOT ARG_DESTINATION STREQUAL "vllm"
-      OR NOT ARG_LANGUAGE STREQUAL "CXX" OR NOT ARG_WITH_SOABI)
-    message(FATAL_ERROR "DeepSelect must use the vLLM extension target")
-  endif()
-  if(NOT "musa_python" IN_LIST ARG_LIBRARIES OR "torch_musa" IN_LIST ARG_LIBRARIES)
-    message(FATAL_ERROR "DeepSelect must use torch_musa's extension libraries")
-  endif()
-  add_library(${{name}} MODULE ${{ARG_SOURCES}})
-  target_compile_options(${{name}} PRIVATE ${{ARG_COMPILE_FLAGS}})
-endfunction()
-include("{integration}")
-"""
-    (tmp_path / "CMakeLists.txt").write_text(project)
-    result = subprocess.run(
-        [
-            "cmake",
-            "-S",
-            str(tmp_path),
-            "-B",
-            str(tmp_path / "build"),
-            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-        ],
-        env={key: value for key, value in os.environ.items() if key != "MTGPU_TARGET"},
-        capture_output=True,
-        text=True,
-    )
-    assert (result.returncode == 0) == success, result.stdout + result.stderr
-    if success:
-        commands = json.loads((tmp_path / "build/compile_commands.json").read_text())
-        arguments = shlex.split(commands[0]["command"])
-        for option in (
-            "-mtgpu-opt-level=1",
-            "-mtgpu-load-store-opt=1",
-            "-mtgpu-fold-global-ldst=1",
-        ):
-            assert arguments[arguments.index(option) - 1] == "-mllvm"
-    if not success:
-        expected = "set DEEPSELECT_SRC_DIR" if missing else "requires visible MP31 GPUs"
-        assert expected in result.stderr
-
-
-@pytest.mark.parametrize(
-    "capabilities", [[], [(3, 1)], [(2, 2)], [(3, 1), (3, 1)], [(3, 1), (2, 2)]]
-)
-def test_deepselect_probes_architecture_from_its_own_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture,
-    capabilities: list,
-) -> None:
-    integration = _deepselect_source("cmake/vllm_musa.cmake").read_text()
-    assert "MTGPU_TARGET" not in integration
-    probe = integration.split('run_python(DEEPSELECT_MUSA_ARCHS\n    "', 1)[1]
-    probe = probe.split('"\n', 1)[0]
-    runtime = SimpleNamespace(
-        device_count=lambda: len(capabilities),
-        get_device_capability=lambda device_index: capabilities[device_index],
-    )
-    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(musa=runtime))
-    monkeypatch.setitem(sys.modules, "torch_musa", SimpleNamespace())
-    exec(compile(probe, "DeepSelect architecture probe", "exec"), {})
-    expected = ";".join(sorted({f"mp_{major}{minor}" for major, minor in capabilities}))
-    assert capsys.readouterr().out.strip() == expected

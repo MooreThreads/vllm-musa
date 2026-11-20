@@ -3,148 +3,319 @@ From: musa <musa@local>
 Date: Tue, 3 Nov 2026 20:30:00 +0800
 Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
-Keep the upstream DeepSelect FetchContent URL, revision, and source override.
-Build only vllm._deepselect_C in the existing empty target mode. DeepSelect
-owns compiler selection and kernel compatibility; vLLM owns compilation,
-installation, and native torch.ops registration.
+Build the public MUSA DeepSelect kernel through the existing vLLM extension
+and installation target. The vLLM-owned adapter registers the standard
+DeepSelect operators and dispatches them to the unchanged MUSA source.
 ---
- CMakeLists.txt                                | 19 ++++++++++++
- cmake/external_projects/deepselect.cmake      | 31 +------------------
- .../external_projects/deepselect_source.cmake | 29 +++++++++++++++++
- setup.py                                      |  4 +++
- 4 files changed, 53 insertions(+), 30 deletions(-)
- create mode 100644 cmake/external_projects/deepselect_source.cmake
+ CMakeLists.txt                           |  11 +++
+ cmake/external_projects/deepselect.cmake |  86 ++++++++++++++++++-
+ csrc/musa_deepselect_adapter.mu.in       | 138 +++++++++++++++++++++++++++++++
+ setup.py                                 |   9 ++
+ 4 files changed, 242 insertions(+), 2 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a71d7e1e5..79b3685536 100644
+index 3a71d7e1e5ad3f754c221790d2169e89c0c13eb9..6b949c33a4a58b9e907410fb10690e80843369a8 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -11,6 +11,17 @@ cmake_minimum_required(VERSION 3.26)
+@@ -11,6 +11,9 @@ cmake_minimum_required(VERSION 3.26)
  # If you want to only build one target, make sure to install it manually:
  # cmake --build . --target _C
  # cmake --install . --component _C
 +if(DEFINED ENV{DEEPSELECT_SRC_DIR})
 +  set(DEEPSELECT_SRC_DIR "$ENV{DEEPSELECT_SRC_DIR}")
 +endif()
-+if(VLLM_TARGET_DEVICE STREQUAL "empty" AND DEEPSELECT_SRC_DIR)
-+  include(cmake/external_projects/deepselect_source.cmake)
-+  if(NOT EXISTS "${deepselect_SOURCE_DIR}/cmake/vllm_musa_toolchain.cmake")
-+    message(FATAL_ERROR "DeepSelect build integration missing; set DEEPSELECT_SRC_DIR to the updated MUSA checkout")
-+  endif()
-+  include("${deepselect_SOURCE_DIR}/cmake/vllm_musa_toolchain.cmake")
-+endif()
-+
  project(vllm_extensions LANGUAGES CXX)
- 
+
  set(CMAKE_CXX_STANDARD 20)
-@@ -47,6 +58,9 @@ install(CODE "set(CMAKE_INSTALL_LOCAL_ONLY TRUE)" ALL_COMPONENTS)
+@@ -47,6 +50,9 @@ install(CODE "set(CMAKE_INSTALL_LOCAL_ONLY TRUE)" ALL_COMPONENTS)
  # first match will be selected.  These should be kept in sync with setup.py.
  #
  set(PYTHON_SUPPORTED_VERSIONS "3.11" "3.12" "3.13" "3.14")
 +if(VLLM_TARGET_DEVICE STREQUAL "empty" AND DEEPSELECT_SRC_DIR)
 +  list(APPEND PYTHON_SUPPORTED_VERSIONS "3.10")
 +endif()
- 
+
  # Supported AMD GPU architectures.
  set(HIP_SUPPORTED_ARCHS "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1250;gfx1030;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201")
-@@ -95,6 +109,11 @@ endif()
+@@ -95,6 +101,11 @@ endif()
  #
  # Update cmake's `CMAKE_PREFIX_PATH` with torch location.
  #
 +if(VLLM_TARGET_DEVICE STREQUAL "empty" AND DEEPSELECT_SRC_DIR)
-+  include("${deepselect_SOURCE_DIR}/cmake/vllm_musa.cmake")
++  include(cmake/external_projects/deepselect.cmake)
 +  return()
 +endif()
 +
  append_cmake_prefix_path("torch" "torch.utils.cmake_prefix_path")
- 
+
  # Ensure the 'nvcc' command is in the PATH
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e61..998e30c5b6 100644
+index e2a5592e6167a9008cc6a88922324a13a872bdc8..7d242e87936293290ba26b45e44f3536d64c0684 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
-@@ -1,33 +1,4 @@
--include(FetchContent)
--
--# If DEEPSELECT_SRC_DIR is set, DeepSelect is built from that directory
--# instead of downloading.
--# It can be set as an environment variable or passed as a cmake argument.
--# The environment variable takes precedence.
--if (DEFINED ENV{DEEPSELECT_SRC_DIR})
--  set(DEEPSELECT_SRC_DIR $ENV{DEEPSELECT_SRC_DIR})
--endif()
--
--if(DEEPSELECT_SRC_DIR)
--  FetchContent_Declare(
--        deepselect
--        SOURCE_DIR ${DEEPSELECT_SRC_DIR}
--        CONFIGURE_COMMAND ""
--        BUILD_COMMAND ""
--  )
--else()
--  FetchContent_Declare(
--        deepselect
+@@ -16,10 +16,17 @@ if(DEEPSELECT_SRC_DIR)
+         BUILD_COMMAND ""
+   )
+ else()
++  if(VLLM_TARGET_DEVICE STREQUAL "empty")
++    set(DEEPSELECT_GIT_REPOSITORY https://github.com/MooreThreads/DeepSelect.git)
++    set(DEEPSELECT_GIT_TAG 5ae5ef00046f08ee3c800ea7cbdb1267af10a087)
++  else()
++    set(DEEPSELECT_GIT_REPOSITORY https://github.com/vllm-project/DeepSelect.git)
++    set(DEEPSELECT_GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea)
++  endif()
+   FetchContent_Declare(
+         deepselect
 -        GIT_REPOSITORY https://github.com/vllm-project/DeepSelect.git
 -        GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea
--        GIT_PROGRESS TRUE
--        CONFIGURE_COMMAND ""
--        BUILD_COMMAND ""
--  )
--endif()
--
--FetchContent_MakeAvailable(deepselect)
--message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
-+include(${CMAKE_CURRENT_LIST_DIR}/deepselect_source.cmake)
- 
++        GIT_REPOSITORY ${DEEPSELECT_GIT_REPOSITORY}
++        GIT_TAG ${DEEPSELECT_GIT_TAG}
+         GIT_PROGRESS TRUE
+         CONFIGURE_COMMAND ""
+         BUILD_COMMAND ""
+@@ -29,6 +36,81 @@ endif()
+ FetchContent_MakeAvailable(deepselect)
+ message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
+
++if(VLLM_TARGET_DEVICE STREQUAL "empty")
++  set(DeepSelect_MUSA_SOURCE "${deepselect_SOURCE_DIR}/csrc/musa_kernels/topk.mu")
++  if(NOT EXISTS "${DeepSelect_MUSA_SOURCE}")
++    message(FATAL_ERROR "DeepSelect MUSA source missing: ${DeepSelect_MUSA_SOURCE}")
++  endif()
++  if(NOT EXISTS "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include/mute/tensor.hpp")
++    message(FATAL_ERROR "DeepSelect MUTLASS submodule is missing; initialize csrc/3rdparty/mutlass")
++  endif()
++
++  find_program(DEEPSELECT_MCC mcc HINTS "$ENV{MUSA_HOME}/bin" /usr/local/musa/bin REQUIRED)
++  run_python(DEEPSELECT_MUSA_INCLUDES
++    "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).include_dirs))"
++    "Failed to locate DeepSelect MUSA headers")
++  run_python(DEEPSELECT_MUSA_LIBRARY_DIRS
++    "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).library_dirs))"
++    "Failed to locate DeepSelect MUSA libraries")
++  run_python(DEEPSELECT_MUSA_LIBRARIES
++    "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).libraries))"
++    "Failed to determine DeepSelect MUSA link libraries")
++  run_python(DEEPSELECT_MUSA_ABI_FLAGS
++    "import torch; from torch.utils.cpp_extension import _get_pybind11_abi_build_flags; print(';'.join(_get_pybind11_abi_build_flags() + ['-D_GLIBCXX_USE_CXX11_ABI=' + str(int(torch._C._GLIBCXX_USE_CXX11_ABI))]))"
++    "Failed to determine DeepSelect PyTorch ABI")
++
++  set(DeepSelect_MUSA_INCLUDES
++    ${DEEPSELECT_MUSA_INCLUDES} ${Python_INCLUDE_DIRS}
++    "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include")
++  set(DeepSelect_MUSA_FLAGS
++    -x musa -O3 -fPIC -std=c++17 --offload-arch=mp_31
++    -ffast-math -Wno-error=address-of-temporary -fmusa-flush-denormals-to-zero
++    -fno-signed-zeros -mllvm -mtgpu-opt-level=1
++    -mllvm -mtgpu-load-store-opt=1 -mllvm -mtgpu-fold-global-ldst=1
++    -DUSE_MUSA -DTORCH_API_INCLUDE_EXTENSION_H
++    -DTORCH_EXTENSION_NAME=_deepselect_C ${DEEPSELECT_MUSA_ABI_FLAGS})
++  foreach(include_dir IN LISTS DeepSelect_MUSA_INCLUDES)
++    list(APPEND DeepSelect_MUSA_FLAGS "-I${include_dir}")
++  endforeach()
++
++  set(DeepSelect_MUSA_ADAPTER_TEMPLATE
++      "${PROJECT_SOURCE_DIR}/csrc/musa_deepselect_adapter.mu.in")
++  if(NOT EXISTS "${DeepSelect_MUSA_ADAPTER_TEMPLATE}")
++    message(FATAL_ERROR "vLLM DeepSelect MUSA adapter is missing: ${DeepSelect_MUSA_ADAPTER_TEMPLATE}")
++  endif()
++  set(DeepSelect_MUSA_ADAPTER
++      "${CMAKE_CURRENT_BINARY_DIR}/deepselect-musa/musa_deepselect_adapter.mu")
++  configure_file(
++    "${DeepSelect_MUSA_ADAPTER_TEMPLATE}"
++    "${DeepSelect_MUSA_ADAPTER}"
++    @ONLY)
++
++  set(DeepSelect_MUSA_OBJECT
++      "${CMAKE_CURRENT_BINARY_DIR}/deepselect-musa/musa_deepselect_adapter.mu.o")
++  add_custom_command(
++    OUTPUT "${DeepSelect_MUSA_OBJECT}"
++    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/deepselect-musa"
++    COMMAND "${DEEPSELECT_MCC}" ${DeepSelect_MUSA_FLAGS}
++      -MMD -MF "${DeepSelect_MUSA_OBJECT}.d"
++      -c "${DeepSelect_MUSA_ADAPTER}" -o "${DeepSelect_MUSA_OBJECT}"
++    DEPENDS "${DeepSelect_MUSA_SOURCE}" "${DeepSelect_MUSA_ADAPTER}"
++      "${DeepSelect_MUSA_ADAPTER_TEMPLATE}" "${CMAKE_CURRENT_LIST_FILE}"
++    DEPFILE "${DeepSelect_MUSA_OBJECT}.d"
++    VERBATIM)
++  define_extension_target(
++    _deepselect_C
++    DESTINATION vllm
++    LANGUAGE CXX
++    SOURCES "${DeepSelect_MUSA_OBJECT}"
++    LIBRARIES ${DEEPSELECT_MUSA_LIBRARIES}
++    WITH_SOABI)
++  target_link_directories(_deepselect_C PRIVATE ${DEEPSELECT_MUSA_LIBRARY_DIRS})
++  set_target_properties(_deepselect_C PROPERTIES
++    LINKER_LANGUAGE CXX
++    INSTALL_RPATH "$ORIGIN/../torch/lib;$ORIGIN/../torch_musa/lib")
++  return()
++endif()
++
  # DeepSelect kernels require CUDA 12.9+; 10.0f (family) covers SM100 and SM103.
  set(DEEPSELECT_SUPPORT_ARCHS)
-diff --git a/cmake/external_projects/deepselect_source.cmake b/cmake/external_projects/deepselect_source.cmake
+ if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.9)
+diff --git a/csrc/musa_deepselect_adapter.mu.in b/csrc/musa_deepselect_adapter.mu.in
 new file mode 100644
-index 0000000000..e2a9e3c890
+index 0000000000000000000000000000000000000000..3265358f1a67707de536cf70379867ef6cf06cc1
 --- /dev/null
-+++ b/cmake/external_projects/deepselect_source.cmake
-@@ -0,0 +1,29 @@
-+include_guard(GLOBAL)
-+include(FetchContent)
++++ b/csrc/musa_deepselect_adapter.mu.in
+@@ -0,0 +1,138 @@
++#include <torch/library.h>
 +
-+if (DEFINED ENV{DEEPSELECT_SRC_DIR})
-+  set(DEEPSELECT_SRC_DIR $ENV{DEEPSELECT_SRC_DIR})
-+endif()
++#include <cstdint>
++#include <tuple>
 +
-+if(DEEPSELECT_SRC_DIR)
-+  FetchContent_Declare(
-+        deepselect
-+        SOURCE_DIR ${DEEPSELECT_SRC_DIR}
-+        SOURCE_SUBDIR _vllm_source_only
-+        CONFIGURE_COMMAND ""
-+        BUILD_COMMAND ""
-+  )
-+else()
-+  FetchContent_Declare(
-+        deepselect
-+        GIT_REPOSITORY https://github.com/vllm-project/DeepSelect.git
-+        GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea
-+        GIT_PROGRESS TRUE
-+        SOURCE_SUBDIR _vllm_source_only
-+        CONFIGURE_COMMAND ""
-+        BUILD_COMMAND ""
-+  )
-+endif()
++#include "@DeepSelect_MUSA_SOURCE@"
 +
-+FetchContent_MakeAvailable(deepselect)
-+message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
++namespace {
++
++constexpr int64_t kDeepSelectMUSAAlignmentBytes = 32;
++
++void check_stride_alignment(const char* name, const at::Tensor& tensor) {
++  TORCH_CHECK(
++      tensor.stride(0) * tensor.element_size() %
++          kDeepSelectMUSAAlignmentBytes == 0,
++      name, ".stride(0) must be aligned to ",
++      kDeepSelectMUSAAlignmentBytes, " bytes");
++}
++
++void musa_topk(
++    const at::Tensor& input,
++    int64_t topk,
++    const c10::optional<at::Tensor>& begin,
++    const c10::optional<at::Tensor>& end,
++    bool sorted_value,
++    bool sorted_index,
++    const c10::optional<at::Tensor>& output_value,
++    const at::Tensor& output_index,
++    const c10::optional<at::Tensor>& output_idx_offset,
++    int64_t idx_oob_fill_value,
++    double value_oob_fill_value,
++    bool return_value,
++    bool abort_when_nan_found) {
++  TORCH_CHECK(
++      input.device().type() == c10::DeviceType::PrivateUse1,
++      "DeepSelect MUSA topk requires a MUSA tensor");
++  TORCH_CHECK(input.dim() == 2, "input must be a 2D tensor");
++  TORCH_CHECK(input.stride(1) == 1, "input must be contiguous in the last dimension");
++  TORCH_CHECK(
++      reinterpret_cast<std::uintptr_t>(input.const_data_ptr()) % 16 == 0,
++      "input data must be 16-byte aligned");
++  TORCH_CHECK(!begin.has_value(), "DeepSelect MUSA topk does not support begin");
++  TORCH_CHECK(
++      !output_idx_offset.has_value(),
++      "DeepSelect MUSA topk does not support output_idx_offset");
++  TORCH_CHECK(!sorted_index, "DeepSelect MUSA topk does not support sorted_index");
++  TORCH_CHECK(
++      !sorted_value || return_value,
++      "return_value must be enabled when sorted_value is true");
++  TORCH_CHECK(topk > 0 && topk <= 4096, "topk must be in [1, 4096]");
++  TORCH_CHECK(
++      output_index.dim() == 2 && output_index.size(0) >= input.size(0) &&
++          output_index.size(1) >= topk,
++      "output_index must have at least [input.size(0), topk] elements");
++  TORCH_CHECK(
++      output_index.device() == input.device(),
++      "output_index must be on the same MUSA device as input");
++
++  check_stride_alignment("input", input);
++  check_stride_alignment("output_index", output_index);
++
++  at::Tensor output = output_index.narrow(0, 0, input.size(0)).narrow(1, 0, topk);
++  c10::optional<at::Tensor> values = c10::nullopt;
++  if (return_value) {
++    TORCH_CHECK(
++        output_value.has_value(),
++        "output_value must be provided when return_value is true");
++  } else {
++    TORCH_CHECK(
++        !output_value.has_value(),
++        "output_value must be omitted when return_value is false");
++  }
++  if (output_value.has_value()) {
++    TORCH_CHECK(
++        output_value->dim() == 2 && output_value->size(0) >= input.size(0) &&
++            output_value->size(1) >= topk,
++        "output_value must have at least [input.size(0), topk] elements");
++    TORCH_CHECK(
++        output_value->device() == input.device(),
++        "output_value must be on the same MUSA device as input");
++    check_stride_alignment("output_value", *output_value);
++    values = output_value->narrow(0, 0, input.size(0)).narrow(1, 0, topk);
++  }
++
++  if (input.scalar_type() == at::kFloat) {
++    const bool sorted_in_kernel = launch_topk_fp32(
++        input, output, values, end, idx_oob_fill_value, value_oob_fill_value,
++        abort_when_nan_found, sorted_value);
++    if (sorted_value && !sorted_in_kernel) {
++      launch_sort_output(output, values, end, input.size(1), true);
++    }
++  } else if (input.scalar_type() == at::kBFloat16) {
++    TORCH_CHECK(
++        !sorted_value,
++        "DeepSelect MUSA topk does not support sorted_value for bfloat16");
++    launch_topk_bf16(
++        input, output, values, end, idx_oob_fill_value, value_oob_fill_value,
++        abort_when_nan_found);
++  } else {
++    TORCH_CHECK(
++        false, "DeepSelect MUSA topk supports only float32 and bfloat16 input");
++  }
++}
++
++std::tuple<int64_t, int64_t> get_alignment_requirement() {
++  return {kDeepSelectMUSAAlignmentBytes, kDeepSelectMUSAAlignmentBytes};
++}
++
++void meta_topk(
++    const at::Tensor&, int64_t, const c10::optional<at::Tensor>&,
++    const c10::optional<at::Tensor>&, bool, bool,
++    const c10::optional<at::Tensor>&, const at::Tensor&,
++    const c10::optional<at::Tensor>&, int64_t, double, bool, bool) {}
++
++}
++
++TORCH_LIBRARY(deep_select, m) {
++  m.def(
++      "topk(Tensor input, int topk, Tensor? begin, Tensor? end, "
++      "bool sorted_value, bool sorted_index, "
++      "Tensor(a!)? output_value, Tensor(b!) output_index, "
++      "Tensor? output_idx_offset, int idx_oob_fill_value, "
++      "float value_oob_fill_value, bool return_value, "
++      "bool abort_when_nan_found) -> ()");
++  m.def("get_alignment_requirement() -> (int, int)");
++}
++
++TORCH_LIBRARY_IMPL(deep_select, PrivateUse1, m) {
++  m.impl("topk", &musa_topk);
++}
++
++TORCH_LIBRARY_IMPL(deep_select, Meta, m) {
++  m.impl("topk", &meta_topk);
++}
++
++TORCH_LIBRARY_IMPL(deep_select, CompositeExplicitAutograd, m) {
++  m.impl("get_alignment_requirement", &get_alignment_requirement);
++}
 diff --git a/setup.py b/setup.py
-index 37bfc3e41b..84f3f273c3 100644
+index 37bfc3e41bb2b1bc6ce821106e637c660ee358ea..fc91cd3f2688c6626e6d691fc8ac22c1aa160f1d 100644
 --- a/setup.py
 +++ b/setup.py
-@@ -1653,6 +1653,10 @@ for rust_extension_path in get_precompiled_rust_extension_paths():
- 
+@@ -1653,6 +1653,15 @@ for rust_extension_path in get_precompiled_rust_extension_paths():
+
  if _no_device():
      ext_modules = []
-+    if os.environ.get("DEEPSELECT_SRC_DIR"):
++    deepselect_source_dir = os.environ.get("DEEPSELECT_SRC_DIR")
++    if deepselect_source_dir is None:
++        for argument in os.environ.get("CMAKE_ARGS", "").split():
++            if re.fullmatch(r"-DDEEPSELECT_SRC_DIR(?::[^=]+)?=.*", argument):
++                deepselect_source_dir = argument.partition("=")[2]
++    if deepselect_source_dir:
 +        deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
 +        deepselect_extension.py_limited_api = False
 +        ext_modules = [deepselect_extension]
- 
+
  if not ext_modules:
      cmdclass = {}

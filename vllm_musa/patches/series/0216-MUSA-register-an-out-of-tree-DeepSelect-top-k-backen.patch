@@ -6,14 +6,51 @@ Subject: [PATCH] MUSA: register an out-of-tree DeepSelect top-k backend
 Accept the MUSA vllm._deepselect_C extension while retaining upstream
 extension-import detection, CUDA capability checks and input validation.
 ---
- vllm/model_executor/layers/indexer_topk.py | 10 +++++-----
- 1 file changed, 5 insertions(+), 5 deletions(-)
+ vllm/model_executor/layers/indexer_topk.py | 26 +++++++++++++++-----------
+ 1 file changed, 15 insertions(+), 11 deletions(-)
 
 diff --git a/vllm/model_executor/layers/indexer_topk.py b/vllm/model_executor/layers/indexer_topk.py
-index 02c4280ea0..42062f7be5 100644
+index 02c4280ea0a1e1a47be7577fddd0770570ffd0ec..e02808af7abd5bac7bc9ac27d77c634edb23772e 100644
 --- a/vllm/model_executor/layers/indexer_topk.py
 +++ b/vllm/model_executor/layers/indexer_topk.py
-@@ -153,8 +153,8 @@ class SparseIndexerTopk(torch.nn.Module):
+@@ -30,7 +30,9 @@ IDX_OOB_FILL_VALUE = -1
+ try:
+     import vllm._deepselect_C  # noqa: F401  (registers torch.ops.deep_select)
+
+-    _HAS_DEEP_SELECT_C = True
++    _HAS_DEEP_SELECT_C = hasattr(torch.ops.deep_select, "topk") and hasattr(
++        torch.ops.deep_select, "get_alignment_requirement"
++    )
+ except ImportError:
+     _HAS_DEEP_SELECT_C = False
+
+@@ -44,10 +46,12 @@ def get_deep_select_stride_requirement() -> tuple[int, int]:
+ def is_deep_select_supported(input: torch.Tensor, topk: int) -> bool:
+     """Whether the kernel accepts this input (dtype/stride/topk constraints)."""
+     return (
+-        topk <= 4096
+-        and input.shape[1] < 2**23
++        input.dim() == 2
++        and 0 < topk <= 4096
++        and 0 < input.shape[1] < 2**23
+         and input.dtype in (torch.float32, torch.bfloat16)
+         and input.stride(1) == 1
++        and input.storage_offset() * input.element_size() % 16 == 0
+         and input.stride(0)
+         * input.element_size()
+         % get_deep_select_stride_requirement()[0]
+@@ -80,8 +84,8 @@ def deep_select_topk(
+
+     Args:
+         input: (num_rows, vocab_size), bf16 or fp32. stride(1) must be 1 and
+-            stride(0) must be 1024B-aligned.
+-        topk: Number of elements to select per row; must be <= 4096.
++            stride(0) must satisfy the kernel's byte alignment requirement.
++        topk: Number of elements to select per row; must be in [1, 4096].
+         end: Optional (num_rows,) int32 tensor with the exclusive right
+             boundary of each row. Rows with `end[i] < topk` get their
+             remaining indices filled with -1.
+@@ -153,8 +157,8 @@ class SparseIndexerTopk(torch.nn.Module):
              )
          self._backend = backend
          self._is_cuda = current_platform.is_cuda()
@@ -24,7 +61,7 @@ index 02c4280ea0..42062f7be5 100644
          )
          self._has_flashinfer_topk = has_flashinfer()
          self._cooperative_capable = self._is_cuda and (
-@@ -190,9 +190,9 @@ class SparseIndexerTopk(torch.nn.Module):
+@@ -190,12 +194,12 @@ class SparseIndexerTopk(torch.nn.Module):
                      f"topk_tokens must be in (512, 1024, 2048), got {topk_tokens}"
                  )
          elif self._backend == "deep_select":
@@ -36,4 +73,8 @@ index 02c4280ea0..42062f7be5 100644
 +            elif self._is_cuda and not current_platform.is_device_capability_family(100):
                  failures.append("requires SM100a/SM103a (10.x device family)")
              elif not _HAS_DEEP_SELECT_C:
-                 failures.append("vllm._deepselect_C could not be imported")
+-                failures.append("vllm._deepselect_C could not be imported")
++                failures.append("vllm._deepselect_C operators are unavailable")
+             elif not is_deep_select_supported(logits, topk_tokens):
+                 failures.append(
+                     f"inputs violate DeepSelect's constraints: dtype={logits.dtype},"
