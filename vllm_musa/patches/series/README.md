@@ -342,6 +342,7 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0213-score-only-DSV4.1-candidate-keys.patch` | v0.32 new/updated | route FP8 two-level indexers through paged candidate-only MQA scoring; specialize V2 graphs at the contract's fixed 32768-token context cutoff |
 | `0214-MUSA-insert-sparse-indexer-K-cache-before-native-dis.patch` | v0.32 new/updated | insert native indexer K cache before exact sparse dispatch; preserve external writes, PCP/MTP gathering and warmup handling. |
 | `0215-MUSA-pad-the-QSA-BLOCK_M-8-wmma-tile-to-16.patch` | v0.32 new/updated | pad the QSA `block_m == 8` tile to 16 so group sizes 5-8 leave the unimplemented MUSA `mthreads_wmma` layout, while 1/2/4 keep their current tiles |
+| `0216-MUSA-make-DeepEncoder-LOG2E-a-Triton-constexpr.patch` | v0.32 compatibility | make DeepEncoder's imported `LOG2E` a module-local Triton constexpr so its relative-position attention kernel compiles; preserve the constant value and NGram behavior. |
 
 For non-speculative DSV4.1 on Model Runner V2 (DP1, no microbatching),
 the optimization contract fixes the context cutoff at `32768` tokens. All-short batches
@@ -354,7 +355,7 @@ Candidate-only scoring is selected whenever its width is smaller than the dense
 window, and eligible prefill query rows are sharded across TP ranks. These
 decisions do not require environment-variable overrides.
 
-Currently **215 patches** and **0 upstream entries** in `upstream/`.
+Currently **216 patches** and **0 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
