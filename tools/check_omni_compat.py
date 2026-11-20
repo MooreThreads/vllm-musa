@@ -624,6 +624,14 @@ def shim_covers(table, index: VllmIndex, module: str, name: str | None) -> dict 
                 "source": entry.source,
                 "backport": entry.backport,
             }
+    # An adapter can add a missing attribute to a module that the pin already
+    # provides. Keep this in the same coverage helper so import and module-
+    # attribute passes agree about a newly introduced vLLM name.
+    for entry in table.adapter_entries():
+        if entry.module != module or not _version_ok(entry.applies_to, index.version):
+            continue
+        if name is None or name in entry.names:
+            return {"kind": entry.kind, "adapter": entry.adapter}
     return None
 
 

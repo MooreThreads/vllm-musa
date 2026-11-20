@@ -31,6 +31,7 @@ from vllm_musa.omni_compat._finder import version_matches  # noqa: E402
 
 PIN_VERSION = "0.32.0"
 NEXT_VERSION = "0.33.0"
+V034_VERSION = "0.34.0"
 
 
 def _write(path: Path, body: str = "") -> None:
@@ -55,6 +56,9 @@ def _make_vllm(root: Path, version: str, *, moved: bool) -> Path:
     _write(pkg / "entrypoints" / "serve" / "utils" / "__init__.py")
     _write(pkg / "v1" / "__init__.py")
     _write(pkg / "v1" / "core" / "__init__.py")
+    _write(pkg / "v1" / "worker" / "__init__.py")
+    _write(pkg / "v1" / "worker" / "gpu" / "__init__.py")
+    _write(pkg / "v1" / "worker" / "gpu" / "spec_decode" / "__init__.py")
 
     # The pinned locations always exist; that is what a relocation reads from.
     _write(
@@ -133,9 +137,38 @@ def _make_vllm(root: Path, version: str, *, moved: bool) -> Path:
                 cls.checked.append(dict(specs))
         """,
     )
+    _write(pkg / "config" / "__init__.py")
+    _write(
+        pkg / "config" / "utils.py",
+        "# The 0.32 fixture intentionally has no CompileFactors alias.\n",
+    )
+    _write(
+        pkg / "config" / "model.py",
+        """
+        class ModelConfig:
+            def compute_hash(self):
+                return "model-hash"
+        """,
+    )
+    _write(
+        pkg / "config" / "vllm.py",
+        """
+        class VllmConfig:
+            def compute_hash(self, include_version=True):
+                return "vllm-hash"
+        """,
+    )
+    _write(
+        pkg / "v1" / "worker" / "block_table.py",
+        """
+        def get_block_table_width(max_num_blocks, block_size, *, token_alignment=128):
+            return max_num_blocks
+        """,
+    )
 
     if moved:
-        # 0.33 provides these natively, with values the shim must not replace.
+        # The newer fixture provides these natively, with values the shim must
+        # not replace.
         _write(
             pkg / "entrypoints" / "common" / "cli_args.py",
             """
@@ -169,6 +202,48 @@ def _make_vllm(root: Path, version: str, *, moved: bool) -> Path:
 
             def get_kv_cache_configs(vllm_config, kv_cache_specs, available_memory, groups):
                 return ["native-config", groups]
+            """,
+        )
+        _write(
+            pkg / "config" / "utils.py",
+            "CompileFactors = dict[str, object]\n",
+        )
+        _write(
+            pkg / "config" / "model.py",
+            """
+            class ModelConfig:
+                def compute_hash(self):
+                    return "model-hash"
+
+                def compile_factors(self):
+                    return {"native": True}
+            """,
+        )
+        _write(
+            pkg / "config" / "vllm.py",
+            """
+            class VllmConfig:
+                def compute_hash(self, include_version=True):
+                    return "vllm-hash"
+
+                def compile_factors(self, include_version=True):
+                    return {"native": True}
+            """,
+        )
+        _write(
+            pkg / "v1" / "kv_cache_interface.py",
+            """
+            def get_block_table_width(max_num_blocks, block_size, *, token_alignment=128):
+                return "native-width"
+            """,
+        )
+        _write(pkg / "v1" / "worker" / "gpu" / "__init__.py")
+        _write(pkg / "v1" / "worker" / "gpu" / "spec_decode" / "__init__.py")
+        _write(
+            pkg / "v1" / "worker" / "gpu" / "spec_decode" / "draft_logits.py",
+            """
+            class DraftLogitsCache:
+                native = True
             """,
         )
     return site
@@ -511,6 +586,61 @@ def test_backport_rejects_inconsistent_worker_specs(pin_site):
     )
     assert proc.returncode != 0
     assert "not supported yet" in proc.stderr
+
+
+def test_v034_imports_are_bridged_on_the_pin(pin_site):
+    result = _run(
+        pin_site,
+        """
+        from vllm.config.utils import CompileFactors
+        from vllm.v1.kv_cache_interface import get_block_table_width
+        from vllm.v1.worker.gpu.spec_decode.draft_logits import DraftLogitsCache
+        result["alias"] = str(CompileFactors)
+        result["width"] = get_block_table_width(17, 16)
+        try:
+            DraftLogitsCache()
+        except NotImplementedError as exc:
+            result["draft_error"] = str(exc)
+        """,
+        version=PIN_VERSION,
+    )
+    assert result["alias"] == "dict[str, object]"
+    assert result["width"] == 24
+    assert "vLLM >= 0.34" in result["draft_error"]
+
+
+def test_v034_compile_factor_methods_bridge_legacy_hashes(pin_site):
+    result = _run(
+        pin_site,
+        """
+        from vllm.config.model import ModelConfig
+        from vllm.config.vllm import VllmConfig
+        result["model"] = ModelConfig().compile_factors()
+        result["vllm"] = VllmConfig().compile_factors()
+        """,
+        version=PIN_VERSION,
+    )
+    assert result["model"] == {"legacy_compute_hash": "model-hash"}
+    assert result["vllm"] == {"legacy_compute_hash": "vllm-hash"}
+
+
+def test_v034_rows_leave_native_symbols_untouched(next_site):
+    result = _run(
+        next_site,
+        """
+        from vllm.config.model import ModelConfig
+        from vllm.v1.kv_cache_interface import get_block_table_width
+        from vllm.v1.worker.gpu.spec_decode.draft_logits import DraftLogitsCache
+        result["model"] = ModelConfig().compile_factors()
+        result["width"] = get_block_table_width(1, 1)
+        result["native"] = DraftLogitsCache.native
+        result["model_stale"] = ModelConfig.__module__
+        """,
+        version=V034_VERSION,
+    )
+    assert result["model"] == {"native": True}
+    assert result["width"] == "native-width"
+    assert result["native"] is True
 
 
 def test_a_stale_relocation_fails_loudly(tmp_path, monkeypatch):
@@ -1451,6 +1581,26 @@ def test_imports_pass_fails_a_name_the_relocation_source_does_not_have():
     assert result["status"] == "fail"
     assert result["blocking"] == 1
     assert [r["name"] for r in result["unshimmed"]] == ["validate_api_server_args"]
+
+
+def test_imports_pass_counts_a_missing_attribute_adapter_as_coverage():
+    """An adapter row also covers a name absent from the pinned module."""
+    tool = _load_audit_tool()
+    index = tool.VllmIndex(
+        root=ROOT,
+        version=PIN_VERSION,
+        modules={"vllm.config.utils": set()},
+    )
+    item = tool.OmniImport(
+        module="vllm.config.utils",
+        name="CompileFactors",
+        omni_file="vllm_omni/config/model.py",
+        lineno=1,
+        type_checking=False,
+    )
+    result = tool.audit_imports([item], index, compat_table)
+    assert result["status"] == "pass"
+    assert result["shimmed"][0]["shim"]["adapter"] == "config_utils"
 
 
 # --------------------------------------------------------------------------- #

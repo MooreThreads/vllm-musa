@@ -118,15 +118,88 @@ class ShimEntry:
 
 
 # --------------------------------------------------------------------------- #
-# vLLM-Omni main (>= 2026-11, targeting vLLM 0.33) on the vLLM 0.32 pin.
+# vLLM-Omni main (the vLLM 0.34 line) on the vLLM 0.32 pin.
 #
-# Measured with tools/check_omni_compat.py against Omni e937f1c9e: 4336 imported
-# vLLM symbols, 8 of them absent from 0.32, all covered below, plus 181 module
-# attributes of which 2 are absent. The same audit against vLLM 0.33 reports
-# zero, so every entry here is a pure version gap. The tool does not yet see
-# constructor keywords or return arity; see docs/omni_compat.md.
+# Measured with tools/check_omni_compat.py against Omni main on the vLLM 0.34
+# line: 4307 imported vLLM symbols, 3 additional imports absent from 0.32, all
+# covered below, plus 174 module attributes of which 2 are absent. The tool does
+# not yet see constructor keywords or return arity, so runtime support remains
+# path-specific. See docs/omni_compat.md.
 # --------------------------------------------------------------------------- #
 ENTRIES: tuple[ShimEntry, ...] = (
+    ShimEntry(
+        module="vllm.config.utils",
+        names=("CompileFactors",),
+        kind=ADAPTER,
+        adapter="config_utils",
+        applies_to="<0.34",
+        reason=(
+            "vLLM 0.34 introduced the CompileFactors type alias used by Omni's "
+            "ModelConfig. The pin still exposes the equivalent legacy compute_hash "
+            "API, so the alias is enough for imports and the config adapters below "
+            "bridge the method called by Omni's subclass."
+        ),
+        remove_when="the pin is >= 0.34, where vllm.config.utils defines CompileFactors.",
+        omni_refs=("vllm_omni/config/model.py",),
+    ),
+    ShimEntry(
+        module="vllm.config.model",
+        names=("ModelConfig",),
+        kind=ADAPTER,
+        adapter="config_model",
+        applies_to="<0.34",
+        reason=(
+            "Omni's v0.34 ModelConfig override calls super().compile_factors(), "
+            "while the 0.32 pin still names the legacy method compute_hash. The "
+            "adapter exposes a stable factor dictionary backed by that legacy hash."
+        ),
+        remove_when="the pin is >= 0.34, where ModelConfig.compile_factors is native.",
+        omni_refs=("vllm_omni/config/model.py",),
+    ),
+    ShimEntry(
+        module="vllm.config.vllm",
+        names=("VllmConfig",),
+        kind=ADAPTER,
+        adapter="config_vllm",
+        applies_to="<0.34",
+        reason=(
+            "The v0.34 compilation cache asks VllmConfig for compile_factors, "
+            "where the pin exposes compute_hash. Returning that legacy hash as a "
+            "single factor keeps the key deterministic on the pinned runtime."
+        ),
+        remove_when="the pin is >= 0.34, where VllmConfig.compile_factors is native.",
+        omni_refs=("vllm_omni/config/model.py",),
+    ),
+    ShimEntry(
+        module="vllm.v1.kv_cache_interface",
+        names=("get_block_table_width",),
+        kind=ADAPTER,
+        adapter="kv_cache_interface",
+        applies_to="<0.34",
+        reason=(
+            "vLLM 0.34 moved get_block_table_width from worker.block_table into "
+            "kv_cache_interface. The implementation and signature are unchanged, "
+            "so the adapter forwards the exact alignment calculation."
+        ),
+        remove_when="the pin is >= 0.34, where kv_cache_interface defines the helper.",
+        omni_refs=("vllm_omni/diffusion/diffusion_kv/model_runner_backend.py",),
+    ),
+    ShimEntry(
+        module="vllm.v1.worker.gpu.spec_decode.draft_logits",
+        names=("DraftLogitsCache",),
+        kind=BACKPORT,
+        backport="draft_logits",
+        applies_to="<0.34",
+        reason=(
+            "The v0.34 MiniCPM-o Talker imports DraftLogitsCache for its rejection "
+            "sampler annotation, but the 0.32 pin has no matching module. The "
+            "Talker delegates actual verification to the pinned RejectionSampler, "
+            "so the backport is a type-only guard that fails explicitly if someone "
+            "tries to construct it on an unsupported speculative path."
+        ),
+        remove_when="the pin is >= 0.34, where the draft_logits module is native.",
+        omni_refs=("vllm_omni/model_executor/models/minicpmo_4_5/minicpmo_4_5_omni_tts.py",),
+    ),
     ShimEntry(
         module="vllm.entrypoints.common.cli_args",
         names=(
@@ -229,7 +302,8 @@ ENTRIES: tuple[ShimEntry, ...] = (
             "module, so the aliasing does not reach the consumer. The v1 model runner "
             "is unaffected because it does not use a builder at all: it fills the "
             "ranges with an inline loop that filters only audio, so img2img is "
-            "admitted. Only the v2 runner's model state binds this module's builder."
+            "admitted. The current Omni main defaults to the v2 runner, so this "
+            "limitation applies to the default img2img deployment."
         ),
         remove_when="the pin is >= 0.33, which keeps the builder in the module Omni patches.",
         unsupported=(

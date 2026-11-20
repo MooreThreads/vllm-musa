@@ -75,8 +75,8 @@ this document follows all three:
 
 | Omni tree | vLLM | vllm imports | unshimmed | module attributes | missing |
 |---|---|---|---|---|---|
-| `main` e937f1c9e | 0.33.0 | 4336 | 0 | 181 | 0 |
-| `main` e937f1c9e | 0.32.0 (the pin) | 4336 | 8 | 181 | 1 |
+| `main` 9a2ae280e6 | 0.34.0 | 4307 | 0 | 174 | 0 |
+| `main` 9a2ae280e6 | 0.32.0 (the pin) | 4307 | 0 | 174 | 0 |
 | `01c3f711a` (0.32-era) | 0.32.0 | 4132 | 0 | 177 | 0 |
 
 Omni main against 0.33 is clean and the 0.32-era Omni against 0.32 is clean, so

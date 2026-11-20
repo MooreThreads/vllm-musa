@@ -89,6 +89,10 @@ RUN set -eux; \
         --omni-root /vllm-workspace/vllm-omni \
         --report /opt/vllm-omni-compat-preflight.json
 
+# vLLM-Omni's media and guardrail dependencies import cv2. Some MUSA base
+# images contain both OpenCV distributions, whose wheels write the same cv2/
+# directory. Restore the base-pinned headless wheel last, while leaving the GUI
+# distribution installed for packages that declare it, so cv2 never needs libGL.
 # The MUSA foundation is a contract, not a suggestion: torch, torch_musa, vllm,
 # vllm-musa, MATE, numpy and the rest were built and validated together. Freezing
 # everything the base installed as a pip constraint lets Omni *add* packages
@@ -112,6 +116,21 @@ RUN set -eux; \
     if [ "${PLAT}" != "${SITE}" ]; then set -- "$@" --path "${PLAT}"; fi; \
     python -m pip list "$@" --exclude-editable --format=freeze \
         | grep -vE '^(-e|#)' > /opt/vllm-omni-foundation.txt; \
+    OPENCV_HEADLESS="$(awk -F== '$1 == "opencv-python-headless" {print $2}' \
+        /opt/vllm-omni-foundation.txt)"; \
+    if [ -z "${OPENCV_HEADLESS}" ]; then \
+        OPENCV_HEADLESS="$(awk -F== '$1 == "opencv-python" {print $2}' \
+            /opt/vllm-omni-foundation.txt)"; \
+    fi; \
+    if [ -n "${OPENCV_HEADLESS}" ]; then \
+        python -m pip install --no-deps --force-reinstall \
+            ${PYPI_INDEX_URL:+--index-url ${PYPI_INDEX_URL}} \
+            "opencv-python-headless==${OPENCV_HEADLESS}"; \
+    else \
+        echo "opencv-python is absent from the pinned MUSA foundation" >&2; \
+        exit 1; \
+    fi; \
+    python -c "import cv2; info=cv2.getBuildInformation(); gui=next((line.strip() for line in info.splitlines() if line.strip().startswith('GUI:')), ''); print('cv2', cv2.__version__, gui); assert gui.endswith('NONE'), gui"; \
     wc -l /opt/vllm-omni-foundation.txt
 
 # The Omni source arrives as a git export with no .git, so setuptools_scm
