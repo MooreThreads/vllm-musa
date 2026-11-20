@@ -116,6 +116,11 @@ RUN set -eux; \
     if [ "${PLAT}" != "${SITE}" ]; then set -- "$@" --path "${PLAT}"; fi; \
     python -m pip list "$@" --exclude-editable --format=freeze \
         | grep -vE '^(-e|#)' > /opt/vllm-omni-foundation.txt; \
+    python -m pip install --no-deps \
+        ${PYPI_INDEX_URL:+--index-url ${PYPI_INDEX_URL}} \
+        'numpy>=1.26.4,<2'; \
+    python -m pip list "$@" --exclude-editable --format=freeze \
+        | grep -vE '^(-e|#)' > /opt/vllm-omni-foundation.txt; \
     OPENCV_HEADLESS="$(awk -F== '$1 == "opencv-python-headless" {print $2}' \
         /opt/vllm-omni-foundation.txt)"; \
     if [ -z "${OPENCV_HEADLESS}" ]; then \
