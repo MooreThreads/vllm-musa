@@ -15,7 +15,8 @@ name: Cookbook site
 # carries this workflow, so the guard sits on the job instead and compares the
 # pushed ref with the repository's current default branch. Feature-branch pushes
 # skip the job; pull requests build (and fail on broken links) without
-# publishing.
+# publishing. Every pull request builds, not only cookbook ones, because `build`
+# is required: a filtered trigger would block unrelated pull requests.
 
 on:
   push:
@@ -23,11 +24,10 @@ on:
       - '.github/workflows/cookbook-site.yml'
       - 'docs/cookbook/**'
       - 'tools/cookbook-site/**'
+  # No paths filter: `build` is a required check on the default branch, so every
+  # pull request has to report it. A filtered trigger would leave unrelated
+  # pull requests waiting forever for a check that never starts.
   pull_request:
-    paths:
-      - '.github/workflows/cookbook-site.yml'
-      - 'docs/cookbook/**'
-      - 'tools/cookbook-site/**'
   workflow_dispatch:
 
 permissions:
