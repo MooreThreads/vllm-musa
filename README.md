@@ -7,7 +7,7 @@
 <p align="center">
   <a href="README_CN.md">中文</a> ·
   <a href="https://github.com/MooreThreads/vllm-musa/issues">Issues</a> ·
-  <a href="docs/cookbook/README.md">Serving recipes</a> ·
+  <a href="https://moorethreads.github.io/vllm-musa/">Serving recipes</a> ·
   <a href="docs/installation.md">Documentation</a>
 </p>
 
@@ -86,11 +86,12 @@ in the [Docker guide](docker/README.md).
 
 The OpenAI-compatible endpoint is available at `http://localhost:8000/v1`.
 For recommended tensor-parallel, scheduler, and speculative-decoding settings,
-use the [serving cookbook](docs/cookbook/README.md).
+browse the [serving recipes](https://moorethreads.github.io/vllm-musa/); the
+page sources live in [`docs/cookbook/`](docs/cookbook/README.md).
 
 ## Documentation
 
-- [Serving cookbook](docs/cookbook/README.md)
+- [Serving recipes](https://moorethreads.github.io/vllm-musa/) ([sources](docs/cookbook/README.md))
 - [Installation](docs/installation.md)
 - [Python and OpenAI-compatible usage](docs/usage.md)
 - [Configuration](docs/configuration.md)
