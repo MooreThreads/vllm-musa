@@ -896,6 +896,16 @@ def render_recipe(
         source_url = (
             f"{meta.repo_url}/blob/{meta.ref}/docs/cookbook/{recipe.source_path}"
         )
+    edit_url = (
+        f"{meta.repo_url}/edit/{meta.ref or meta.commit}/docs/cookbook/{recipe.source_path}"
+        if meta.ref or meta.commit
+        else ""
+    )
+    edit_link = (
+        f'<a href="{esc(edit_url)}" target="_blank" rel="noopener">Edit this page ↗</a>'
+        if edit_url
+        else ""
+    )
     json_url = rel_link(page, f"api/recipes/{recipe.vendor}/{recipe.slug}.json")
     has_command = recipe.primary_block >= 0
     body_html = decorate_html(
@@ -938,6 +948,7 @@ def render_recipe(
       </div>
       <div class="aside-links">
         <a href="{esc(source_url)}" target="_blank" rel="noopener">View markdown source ↗</a>
+        {edit_link}
         <a href="{esc(json_url)}">Recipe JSON</a>
         <a href="{esc(rel_link(page, "index.html"))}#catalog">All recipes</a>
       </div>
