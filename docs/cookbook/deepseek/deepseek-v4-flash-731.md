@@ -23,6 +23,7 @@ tokens. This recipe covers two deployment shapes:
 | Setting | Single node | 1P1D prefill | 1P1D decode |
 |---|---|---|---|
 | Hardware | 8x S5000 | 8x S5000 | 8x S5000 |
+| Precision | FP8 | FP8 | FP8 |
 | Tensor parallelism | TP8 | TP8 | TP8 |
 | Attention backend | FlashMLA | FlashMLA | FlashMLA |
 | KV cache | FP8 | FP8 | FP8 |

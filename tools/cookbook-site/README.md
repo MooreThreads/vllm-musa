@@ -58,7 +58,7 @@ Nothing is hand-maintained; the page structure is the schema.
 
 | Field | Source |
 |---|---|
-| title, vendor, slug | `# H1`, parent directory, file name |
+| title, vendor, slug | `# H1`, parent directory, file name (lowercase) |
 | summary | first paragraph of `## Overview` |
 | category / spec / precision / topology | rows of the `## At a glance` table, with a fallback to the file name, title and overview text |
 | GPUs | `Hardware` row, multiplying `N nodes` by `Mx` when both are given |
@@ -102,9 +102,13 @@ Re-publish without changing content — after a bad run, or to refresh the site:
 $ gh workflow run cookbook-site.yml -R MooreThreads/vllm-musa
 ```
 
-The build is the gate: a recipe without an `# H1`, an unreadable `## At a
-glance` table, or an internal link that resolves to nothing fails the run
-(`::error::` annotations) instead of publishing a broken page.
+The build is the gate, and it runs on the pull request that adds a recipe. It
+fails (`::error::` annotations) when a recipe has no `# H1`, no `## Overview`, no
+`## At a glance` table, no block that launches a server, a file name that is not
+lowercase, when the index in `docs/cookbook/README.md` does not link it (or
+links to a recipe that is gone), or when a generated page points at an internal
+link that does not resolve. Nothing is published when the build exits non-zero,
+so a broken recipe never reaches the site.
 
 ## Scope
 
