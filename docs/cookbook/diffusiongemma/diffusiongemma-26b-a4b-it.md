@@ -17,6 +17,7 @@ so one `vllm serve` process exposes both `/v1/chat/completions` and `/v1/systemo
 | Image | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev` |
 | Checkpoint | `google/diffusiongemma-26B-A4B-it` (BF16) |
 | Hardware | 1x S5000 (TP1), MUSA 5.2.0, driver `5.2.0-server` |
+| Precision | BF16 |
 | Speculative decoding | Off |
 | Diffusion canvas | 256 tokens, 48 denoising steps (values from the checkpoint) |
 | Maximum context | 8,192 tokens (recipe value; the canvas is 256) |
