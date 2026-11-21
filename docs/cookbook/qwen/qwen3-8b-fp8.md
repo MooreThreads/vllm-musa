@@ -1,12 +1,5 @@
 # Qwen3-8B-FP8
 
-## Overview
-
-FP8 dense-model recipe for a single S5000 GPU.
-
-> [!TIP]
-> Use TP1 and keep speculative decoding disabled for this checkpoint.
-
 ## At a glance
 
 | Setting | Value |
