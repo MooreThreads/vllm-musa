@@ -29,7 +29,8 @@ ARG GET_PIP_URL
 ARG PIP_BOOTSTRAP_INDEX_URL
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 RUN sed -i 's@http://archive.ubuntu.com/ubuntu/@http://mirrors.aliyun.com/ubuntu/@g' /etc/apt/sources.list
 
@@ -357,7 +358,7 @@ COPY . /vllm-workspace
 RUN python docker/check_musa_arch_env.py
 RUN python -m pip install \
         -e . --no-build-isolation -v && \
-    python -m pip install numpy==1.26
+    python -m pip install numpy==1.26.4
 
 RUN python -m pip install \
         --no-cache-dir \

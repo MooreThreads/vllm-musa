@@ -53,6 +53,11 @@ musa_custom_ops = "vllm_musa:register_custom_ops"
 Homepage = "https://github.com/MooreThreads/vllm-musa"
 Repository = "https://github.com/MooreThreads/vllm-musa"
 
+[tool.setuptools]
+# Top-level module, not a vllm_musa submodule: the Omni compat .pth must be
+# loadable without executing vllm_musa/__init__.py, which imports torch.
+py-modules = ["vllm_musa_omni_compat_pth"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["vllm_musa*"]

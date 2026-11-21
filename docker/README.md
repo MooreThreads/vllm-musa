@@ -56,6 +56,40 @@ To build the same serving target from source, run from the repository root:
 bash docker/build_image.sh
 ```
 
+## Build a vLLM-Omni image
+
+Use [`docs/omni_compat.md`](../docs/omni_compat.md) for the compatibility
+contract and use `docker/build_omni_image.sh` for the actual derived-image
+build. `docker/build_image.sh` builds the vLLM-MUSA base image only.
+
+The Omni build must start from a vLLM-MUSA image whose Python, torch, MUSA,
+and pinned vLLM versions are known. Resolve and record the image digest before
+building. Export Omni from a clean local checkout when reproducibility matters.
+
+```bash
+VLLM_MUSA_IMAGE=sh-harbor.mthreads.com/mcctest/vllm:<musa-tag>
+VLLM_OMNI_CLONE=/path/to/vllm-omni
+OMNI_REF=<omni-commit-or-ref>
+
+bash docker/build_omni_image.sh \
+  --base "${VLLM_MUSA_IMAGE}" \
+  --omni-clone "${VLLM_OMNI_CLONE}" \
+  --omni-ref "${OMNI_REF}" \
+  --tag "vllm-omni-musa:${OMNI_REF//\//-}"
+```
+
+The script records the vLLM-MUSA and Omni revisions, stages an immutable Omni
+archive, copies the compatibility shim into the base image, and runs the import
+audit plus installed-tree shim verification during the build. The build uses
+driverless verification. A MUSA-enabled Docker host is required for the final
+hardware import check and model smoke. The resulting image inherits
+`VLLM_WORKER_MULTIPROC_METHOD=spawn` from the vLLM-MUSA base.
+
+After the build, record the image digest and run the model-specific smoke from
+the corresponding Omni documentation. For the current Qwen-Image diffusion
+path, the image-generation request is the required semantic check. A successful
+Docker build or server startup alone is not a model smoke.
+
 With the defaults this produces:
 
 ```

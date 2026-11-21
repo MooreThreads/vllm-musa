@@ -96,6 +96,7 @@ use the [serving cookbook](docs/cookbook/README.md).
 - [Configuration](docs/configuration.md)
 - [Development](docs/development.md)
 - [MUSA developer guide](docs/mdm-developer-guide.md)
+- [Running vLLM-Omni on a pinned vLLM](docs/omni_compat.md)
 
 ## Supported release
 
