@@ -81,9 +81,28 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+      - name: Check the published catalog
+        # Confirms the live site names this commit. A Pages setting that rejects
+        # the deploy (for example a missing environment branch policy) fails the
+        # job here instead of leaving the site silently at the previous build.
+        run: |
+          set -euo pipefail
+          url="${{ steps.deployment.outputs.page_url }}api/recipes.json"
+          for attempt in $(seq 1 12); do
+            deployed=$(curl -fsS --max-time 10 "${url}" | jq -r '.source.commit' 2>/dev/null || true)
+            if [ "${deployed}" = "${GITHUB_SHA}" ]; then
+              echo "published catalog reports ${deployed}"
+              exit 0
+            fi
+            echo "attempt ${attempt}: published commit is '${deployed:-unavailable}', waiting"
+            sleep 5
+          done
+          echo "::error::the published catalog does not report ${GITHUB_SHA}"
+          exit 1
