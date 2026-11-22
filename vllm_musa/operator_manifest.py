@@ -46,6 +46,10 @@ OPERATOR_RECORDS: tuple[OperatorRecord, ...] = (
     OperatorRecord("activation", "vllm_aot_jit", "vllm.custom_op", "vllm_musa", "vllm_musa.model_executor.layers.activation", ("vllm_musa/model_executor/layers/activation.py",), ("tests/jit_kernel/test_csrc_jit_kernels.py",), "vllm.reference"),
     OperatorRecord("mm_encoder_attention", "mate_adapter", "vllm.attention", "mate", "vllm_musa.model_executor.layers.attention.mm_encoder_attention", ("vllm_musa/model_executor/layers/attention/mm_encoder_attention.py",), ("tests/test_attention_backend_capabilities.py",), "vllm.reference"),
     OperatorRecord("musa_router_gemm", "mate_adapter", "vllm.moe", "mate", "vllm_musa.model_executor.layers.fused_moe.router.musa_router_gemm", ("vllm_musa/model_executor/layers/fused_moe/router/musa_router_gemm.py",), ("tests/test_musa_router_gemm.py",), "vllm.reference"),
+    OperatorRecord("flash_attention_backend", "mate_adapter", "vllm.attention", "mate", "vllm_musa.v1.attention.backends.flash_attn", ("vllm_musa/v1/attention/backends/flash_attn.py",), ("tests/test_attention_backend_capabilities.py",), "vllm.triton", preload=False),
+    OperatorRecord("sparse_mla_prefill", "mate_adapter", "vllm.attention", "mate", "vllm_musa.v1.attention.ops.sparse_mla_mate", ("vllm_musa/v1/attention/ops/sparse_mla_mate.py",), ("tests/test_flashmla_sparse_direct_out.py",), "vllm.triton", preload=False),
+    OperatorRecord("causal_conv1d", "model_private", "vllm.layer", "vllm_musa", "vllm_musa.jit_kernel.tilelang.causal_conv1d", ("vllm_musa/jit_kernel/tilelang/causal_conv1d.py",), ("tests/test_causal_conv1d_address_width_source.py",), "vllm.reference", preload=False),
+    OperatorRecord("deep_gemm_contig_preprocess", "model_private", "vllm.layer", "vllm_musa", "vllm_musa.jit_kernel.tilelang.deep_gemm_contig_preprocess", ("vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py",), ("tests/test_gdn_fused_zba_compile.py",), "vllm.reference", preload=False),
 )
 
 
@@ -73,3 +77,25 @@ def validate_records(root: Path, records: Iterable[OperatorRecord] = OPERATOR_RE
         if not record.provider or not record.contract or not record.fallback:
             errors.append(f"{record.name}: provider, contract, and fallback are required")
     return errors
+
+
+def operator_report(
+    root: Path, records: Iterable[OperatorRecord] = OPERATOR_RECORDS
+) -> tuple[dict[str, object], ...]:
+    """Return a dependency-free diagnostic report for source and CI tooling."""
+    report: list[dict[str, object]] = []
+    for record in records:
+        report.append(
+            {
+                "name": record.name,
+                "category": record.category,
+                "contract": record.contract,
+                "provider": record.provider,
+                "registration_module": record.registration_module,
+                "preload": record.preload,
+                "source_present": all((root / path).is_file() for path in record.source),
+                "tests_present": all((root / path).is_file() for path in record.tests),
+                "fallback": record.fallback,
+            }
+        )
+    return tuple(report)

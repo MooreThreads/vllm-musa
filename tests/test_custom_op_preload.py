@@ -2,7 +2,11 @@ import ast
 from pathlib import Path
 
 from vllm_musa.custom_op_modules import CUSTOM_OP_MODULES
-from vllm_musa.operator_manifest import OPERATOR_RECORDS, validate_records
+from vllm_musa.operator_manifest import (
+    OPERATOR_RECORDS,
+    operator_report,
+    validate_records,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = ROOT / "vllm_musa"
@@ -59,7 +63,7 @@ def test_operator_manifest_is_complete() -> None:
 
 
 def test_operator_manifest_matches_preload() -> None:
-    assert {record.registration_module for record in OPERATOR_RECORDS} >= set(CUSTOM_OP_MODULES)
+    assert {record.registration_module for record in OPERATOR_RECORDS if record.preload} == set(CUSTOM_OP_MODULES)
 
 
 def test_operator_manifest_rejects_invalid_category() -> None:
@@ -100,3 +104,10 @@ def test_operator_manifest_rejects_duplicate_names_and_modules() -> None:
     errors = validate_records(ROOT, (record, record))
     assert any("duplicate operator name" in error for error in errors)
     assert any("duplicate registration module" in error for error in errors)
+
+
+def test_operator_report_is_dependency_free_and_complete() -> None:
+    report = operator_report(ROOT)
+    assert len(report) == len(OPERATOR_RECORDS)
+    assert all(row["source_present"] and row["tests_present"] for row in report)
+    assert {row["category"] for row in report} >= {"mate_adapter", "model_private"}
