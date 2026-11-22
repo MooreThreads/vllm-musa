@@ -60,3 +60,43 @@ def test_operator_manifest_is_complete() -> None:
 
 def test_operator_manifest_matches_preload() -> None:
     assert {record.registration_module for record in OPERATOR_RECORDS} >= set(CUSTOM_OP_MODULES)
+
+
+def test_operator_manifest_rejects_invalid_category() -> None:
+    record = OPERATOR_RECORDS[0]
+    invalid = record.__class__(
+        name=record.name,
+        category="unknown",
+        contract=record.contract,
+        provider=record.provider,
+        registration_module=record.registration_module,
+        source=record.source,
+        tests=record.tests,
+        fallback=record.fallback,
+    )
+    errors = validate_records(ROOT, (invalid,))
+    assert any("invalid category" in error for error in errors)
+
+
+def test_operator_manifest_rejects_missing_paths() -> None:
+    record = OPERATOR_RECORDS[0]
+    invalid = record.__class__(
+        name=record.name,
+        category=record.category,
+        contract=record.contract,
+        provider=record.provider,
+        registration_module=record.registration_module,
+        source=("missing/source.py",),
+        tests=("missing/test.py",),
+        fallback=record.fallback,
+    )
+    errors = validate_records(ROOT, (invalid,))
+    assert "custom_all_reduce: missing path missing/source.py" in errors
+    assert "custom_all_reduce: missing path missing/test.py" in errors
+
+
+def test_operator_manifest_rejects_duplicate_names_and_modules() -> None:
+    record = OPERATOR_RECORDS[0]
+    errors = validate_records(ROOT, (record, record))
+    assert any("duplicate operator name" in error for error in errors)
+    assert any("duplicate registration module" in error for error in errors)
