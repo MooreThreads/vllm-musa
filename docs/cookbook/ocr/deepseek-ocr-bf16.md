@@ -32,7 +32,7 @@ BF16 vision-language OCR recipe for a single S5000 GPU.
 | Item | Value |
 |---|---|
 | Checkpoint | [`deepseek-ai/DeepSeek-OCR`](https://modelscope.cn/models/deepseek-ai/DeepSeek-OCR) (ModelScope) @ 99e7e2063f5efd86e50e69c41d37f53b1438caad |
-| vLLM-MUSA | vLLM 0.32.0 @ 5df63a7203cdb9328d824a27b682e77c7b9928be, vllm-musa 0.1.32 |
+| vLLM-MUSA | vLLM 0.32.0 @ 5df63a7, vllm-musa 0.1.32 |
 | MUSA driver | 5.2.0 |
 | Hardware | 1x S5000 |
 | Served request | OmniBench |

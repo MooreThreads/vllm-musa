@@ -38,7 +38,7 @@ extraction pipeline.
 | Item | Value |
 |---|---|
 | Checkpoint | [`opendatalab/MinerU2.5-Pro-2605-1.2B`](https://modelscope.cn/models/opendatalab/MinerU2.5-Pro-2605-1.2B) (ModelScope) @ a479e052d985bddc3d3fd7a9c9a4dac1edb94797 |
-| vLLM-MUSA | vLLM 0.32.0 @ 5df63a7203cdb9328d824a27b682e77c7b9928be, vllm-musa 0.1.32 |
+| vLLM-MUSA | vLLM 0.32.0 @ 5df63a7, vllm-musa 0.1.32 |
 | MUSA driver | 5.2.0 |
 | Hardware | 1x S5000 |
 | Served request | OmniBench |
