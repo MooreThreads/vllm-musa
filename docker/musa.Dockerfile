@@ -358,7 +358,7 @@ COPY . /vllm-workspace
 RUN python docker/check_musa_arch_env.py
 RUN python -m pip install \
         -e . --no-build-isolation -v && \
-    python -m pip install numpy==1.26.4
+    python -m pip install 'numpy<2'
 
 RUN python -m pip install \
         --no-cache-dir \

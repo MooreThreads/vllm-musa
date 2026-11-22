@@ -45,3 +45,12 @@ def test_runtime_target_does_not_copy_the_editable_source_checkout():
 
     assert "COPY . /vllm-workspace" not in runtime
     assert "third_party/vllm/vllm" not in runtime
+
+
+def test_numpy_runtime_constraint_allows_the_supported_numpy_1_series():
+    requirements = (Path(__file__).parents[1] / "requirements" / "common.txt").read_text()
+    dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
+
+    assert "numpy<2" in requirements
+    assert "numpy==1.26.4" not in requirements
+    assert "python -m pip install 'numpy<2'" in dockerfile
