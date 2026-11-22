@@ -419,7 +419,9 @@ RUN mkdir -p /tmp/vllm-wheel && \
         source_dir="/vllm-workspace/third_party/vllm/${package}"; \
         [[ "$package" == "vllm_musa" ]] && source_dir="/vllm-workspace/vllm_musa"; \
         mkdir -p "$source_dir"; \
-        find /usr/local/lib/python3.12/site-packages /vllm-workspace/vllm \
+        find /usr/local/lib/python3.12/site-packages \
+            /vllm-workspace/third_party/vllm \
+            /vllm-workspace/vllm \
             -type f -path "*/${package}/*.so" -exec cp -f {} "$source_dir/" \; \
             2>/dev/null || true; \
     done && \
