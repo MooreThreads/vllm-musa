@@ -52,6 +52,8 @@ jobs:
           python tools/musa_sync.py check-series
       - name: Check operator integration manifest
         run: python -m pytest -q tests/test_custom_op_preload.py
+      - name: Report operator integration manifest
+        run: python tools/operator_manifest.py
       - name: Check patch contracts in runtime test modules
         run: |
           python -m pytest -q tests/test_deepseek_v4_sparse_indexer_topk.py -k 'test_radix_topk_lives or test_radix_topk_short_rows or test_series_routes'

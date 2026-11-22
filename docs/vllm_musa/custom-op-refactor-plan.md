@@ -52,7 +52,7 @@ all-purpose MUSA kernel repository in this PR.
 
 1. Inventory current registrations, providers, adapters, call sites, source/build entries, and tests.
 2. Add schema and validator with representative records.
-3. Generate preload and diagnostics, preserving current entry-point behavior.
+3. Generate preload and diagnostics, preserving current entry-point behavior. The dependency-free `tools/operator_manifest.py` command is the source/CI diagnostic entry point.
 4. Add attention adapter boundaries and source contracts.
 5. Migrate categories incrementally and add CI gates.
 6. Run source, package, MUSA correctness, model, and performance gates separately.
