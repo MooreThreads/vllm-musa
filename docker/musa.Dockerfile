@@ -407,11 +407,44 @@ RUN mkdir -p /tmp/vllm-rs-artifacts && \
         echo "Skipping vllm-rs build because BUILD_VLLM_RS=0"; \
     fi
 
+# Turn the patched, compiled source tree into one self-contained wheel. The
+# Rust artifacts are copied into the vendored vLLM package before the wheel is
+# built, so the runtime stage does not need the source checkout.
+FROM vllm_rs_build AS vllm_wheel
+
+RUN mkdir -p /tmp/vllm-wheel && \
+    if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
+        install -Dm755 /tmp/vllm-rs-artifacts/vllm-rs \
+            /vllm-workspace/third_party/vllm/vllm/vllm-rs && \
+        install -Dm755 /tmp/vllm-rs-artifacts/_rust_tool_parser.abi3.so \
+            /vllm-workspace/third_party/vllm/vllm/_rust_tool_parser.abi3.so; \
+    fi && \
+    python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel
+
 # Install the prebuilt MUSA wheel after torch/vllm-musa so Mooncake integrations
 # can import the installed accelerator stack. The wheel provides both the
 # Transfer Engine and the Store bindings, so the stage check imports both.
 # Device visibility remains unset; the final image enables it below.
-FROM vllm_musa_installed AS mooncake
+FROM vllm_musa_deps AS vllm_runtime
+
+ARG PYPI_INDEX_URL
+
+COPY --from=vllm_musa_installed /vllm-workspace/requirements/vllm_runtime_transitive.txt \
+     /tmp/vllm-runtime-requirements.txt
+COPY --from=vllm_wheel /tmp/vllm-wheel/ /tmp/vllm-wheel/
+
+RUN python -m pip install \
+        --no-cache-dir \
+        --index-url "${PYPI_INDEX_URL}" \
+        -r /tmp/vllm-runtime-requirements.txt && \
+    python -m pip install \
+        --no-cache-dir \
+        --no-deps \
+        /tmp/vllm-wheel/*.whl && \
+    python docker/verify_installed_dependencies.py && \
+    rm -rf /tmp/vllm-wheel /tmp/vllm-runtime-requirements.txt
+
+FROM vllm_runtime AS mooncake
 
 ARG MOONCAKE_VERSION=0.3.14
 ARG PYPI_INDEX_URL
@@ -430,28 +463,15 @@ ARG MOONCAKE_VERSION=0.3.14
 
 ENV MTHREADS_VISIBLE_DEVICES=all
 
-# Match the upstream vLLM runtime-image workspace contract.
+# Match the upstream vLLM runtime-image workspace contract. Python packages
+# are installed in site-packages, so this directory contains no editable
+# source checkout in the production image.
 WORKDIR /vllm-workspace
 
-COPY --from=vllm_rs_build /tmp/vllm-rs-artifacts/ /tmp/vllm-rs-artifacts/
-
-RUN test "$(cat /tmp/vllm-rs-artifacts/build-mode)" = "${BUILD_VLLM_RS}" && \
+RUN python -c 'import importlib.util; assert importlib.util.find_spec("vllm"); assert importlib.util.find_spec("vllm_musa"); print("PASS packaged vLLM-MUSA imports")' && \
     if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
-        install -Dm755 /tmp/vllm-rs-artifacts/vllm-rs \
-            /vllm-workspace/third_party/vllm/vllm/vllm-rs && \
-        install -Dm755 /tmp/vllm-rs-artifacts/_rust_tool_parser.abi3.so \
-            /vllm-workspace/third_party/vllm/vllm/_rust_tool_parser.abi3.so && \
-        VLLM_USE_RUST_FRONTEND=1 python -c 'from pathlib import Path; from vllm import envs; path = Path(envs.VLLM_RUST_FRONTEND_PATH); assert path.is_file(), f"missing vllm-rs binary: {path}"; print(f"PASS vllm-rs path={path}")'; \
-    elif [[ "${BUILD_VLLM_RS}" == "0" ]]; then \
-        rm -f \
-            /vllm-workspace/third_party/vllm/vllm/vllm-rs \
-            /vllm-workspace/third_party/vllm/vllm/_rust_tool_parser.abi3.so && \
-        echo "Skipping vllm-rs artifact install because BUILD_VLLM_RS=0"; \
-    else \
-        echo "Unsupported BUILD_VLLM_RS=${BUILD_VLLM_RS}" >&2; \
-        exit 1; \
-    fi && \
-    rm -rf /tmp/vllm-rs-artifacts
+        VLLM_USE_RUST_FRONTEND=1 python -c 'from pathlib import Path; from vllm import envs; path = Path(envs.VLLM_RUST_FRONTEND_PATH); assert path.is_file(), f"missing vllm-rs binary: {path}"; print(f"PASS packaged vllm-rs path={path}")'; \
+    fi
 
 RUN rm -rf \
         /root/.cache/pip \
@@ -473,3 +493,10 @@ CMD ["/bin/bash"]
 FROM final AS vllm-openai
 
 ENTRYPOINT ["vllm", "serve"]
+
+# Source-bearing target for CI, local debugging, and packaging tests.
+FROM vllm_musa_installed AS test
+
+WORKDIR /vllm-workspace
+
+CMD ["/bin/bash"]
