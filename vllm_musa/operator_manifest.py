@@ -23,6 +23,7 @@ class OperatorRecord:
     source: tuple[str, ...]
     tests: tuple[str, ...]
     fallback: str
+    capabilities: tuple[str, ...] = ("eager",)
     preload: bool = True
 
 
@@ -340,6 +341,8 @@ def validate_records(
             errors.append(
                 f"{record.name}: provider, contract, and fallback are required"
             )
+        if not record.capabilities:
+            errors.append(f"{record.name}: at least one capability is required")
         build_sources = BUILD_SOURCES.get(record.name, ())
         if not build_sources:
             errors.append(f"{record.name}: build source mapping is required")
@@ -368,6 +371,7 @@ def operator_report(
                 ),
                 "tests_present": all((root / path).is_file() for path in record.tests),
                 "fallback": record.fallback,
+                "capabilities": record.capabilities,
                 "build_sources": BUILD_SOURCES.get(record.name, ()),
             }
         )

@@ -158,5 +158,6 @@ def test_operator_manifest_cli_is_dependency_free() -> None:
     )
     payload = json.loads(result.stdout)
     assert payload["errors"] == []
+    assert all(row["capabilities"] for row in payload["operators"])
     assert len(payload["operators"]) == len(OPERATOR_RECORDS)
     assert "torch" not in result.stderr.lower()
