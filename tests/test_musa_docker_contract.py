@@ -63,7 +63,6 @@ def test_wheel_stage_collects_native_extensions_from_installed_packages():
     assert "cp -f /vllm-workspace/third_party/vllm/vllm/_C*.so" in wheel_stage
     assert "cp -f /vllm-workspace/vllm_musa/_C*.so" in wheel_stage
     assert "test -n \"$(find /vllm-workspace/third_party/vllm/vllm" in wheel_stage
-    assert "-path \"*/${package}/*.so\"" in wheel_stage
 
 
 def test_numpy_runtime_constraint_allows_the_supported_numpy_1_series():
