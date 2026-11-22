@@ -63,3 +63,20 @@ def test_runtime_metadata_constraint_is_numpy_one_series():
 
     assert "numpy<2" in requirements
     assert "numpy==1.26.4" not in requirements
+
+
+def test_bundle_can_reuse_prebuilt_vllm_extensions(monkeypatch, tmp_path):
+    source = tmp_path / "vllm"
+    source.mkdir()
+    (source / "__init__.py").write_text(
+        "\n".join("importlib.metadata.version('vllm')" for _ in range(5))
+    )
+    (source / "_version.py").write_text("__version__ = '0.32.0'\n")
+    (source / "_C.so").write_bytes(b"prebuilt")
+    destination = tmp_path / "bundled"
+
+    monkeypatch.setenv("VLLM_MUSA_REUSE_PREBUILT", "1")
+    result = bundle_vllm_package(source, destination)
+
+    assert result.files == 3
+    assert (destination / "_C.so").is_file()

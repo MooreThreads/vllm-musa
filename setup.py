@@ -381,7 +381,10 @@ class _CustomBuildExt(BuildExtension):
     _third_party_prepared = False
 
     def build_extensions(self):
-        super().build_extensions()
+        if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") != "1":
+            super().build_extensions()
+        else:
+            print("Reusing native extensions from the prepared source tree")
         package_dirs = {root / "vllm_musa"}
         if self.build_lib and (Path(self.build_lib) / "vllm_musa").is_dir():
             package_dirs.add(Path(self.build_lib) / "vllm_musa")

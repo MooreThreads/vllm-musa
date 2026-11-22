@@ -419,7 +419,8 @@ RUN mkdir -p /tmp/vllm-wheel && \
         install -Dm755 /tmp/vllm-rs-artifacts/_rust_tool_parser.abi3.so \
             /vllm-workspace/third_party/vllm/vllm/_rust_tool_parser.abi3.so; \
     fi && \
-    python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel
+    VLLM_MUSA_REUSE_PREBUILT=1 \
+        python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel
 
 # Install the prebuilt MUSA wheel after torch/vllm-musa so Mooncake integrations
 # can import the installed accelerator stack. The wheel provides both the

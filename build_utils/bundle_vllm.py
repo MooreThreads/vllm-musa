@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -25,7 +26,7 @@ class BundleResult:
     metadata_rewrites: int
 
 
-def _copy_ignore(source: Path):
+def _copy_ignore(source: Path, include_prebuilt: bool):
     def ignore(directory: str, names: list[str]) -> set[str]:
         directory_path = Path(directory)
         ignored = {
@@ -33,7 +34,7 @@ def _copy_ignore(source: Path):
             for name in names
             if name == "__pycache__" or name.endswith((".pyc", ".pyo"))
         }
-        if directory_path.resolve() == source.resolve():
+        if not include_prebuilt and directory_path.resolve() == source.resolve():
             ignored.update(
                 name
                 for name in names
@@ -77,7 +78,8 @@ def bundle_vllm_package(source: Path, destination: Path) -> BundleResult:
         raise RuntimeError(f"Generated vLLM version module is missing: {source}")
 
     shutil.rmtree(destination, ignore_errors=True)
-    shutil.copytree(source, destination, ignore=_copy_ignore(source))
+    include_prebuilt = os.environ.get("VLLM_MUSA_REUSE_PREBUILT") == "1"
+    shutil.copytree(source, destination, ignore=_copy_ignore(source, include_prebuilt))
     metadata_rewrites = _rewrite_distribution_metadata(destination)
     files = sum(path.is_file() for path in destination.rglob("*"))
     return BundleResult(files=files, metadata_rewrites=metadata_rewrites)
