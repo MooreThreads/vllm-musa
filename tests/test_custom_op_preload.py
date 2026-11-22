@@ -11,6 +11,25 @@ from vllm_musa.operator_manifest import (
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = ROOT / "vllm_musa"
 
+EXPECTED_PRELOAD_MODULES = (
+    "vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce",
+    "vllm_musa.fused_allreduce_rmsnorm_ops",
+    "vllm_musa.jit_kernel.csrc.fp8_block_gemv",
+    "vllm_musa.jit_kernel.csrc.moe",
+    "vllm_musa.jit_kernel.csrc.norm",
+    "vllm_musa.jit_kernel.csrc.quant",
+    "vllm_musa.jit_kernel.csrc.rope",
+    "vllm_musa.jit_kernel.csrc.sqrtsoftplus_topk",
+    "vllm_musa.jit_kernel.csrc.topk",
+    "vllm_musa.jit_kernel.tilelang.gdn_fused_proj",
+    "vllm_musa.jit_kernel.tilelang.layernorm_gated",
+    "vllm_musa.kernels.qwen3_qk_rope_kv",
+    "vllm_musa.model_executor.kernels.linear.scaled_mm.deep_gemm",
+    "vllm_musa.model_executor.layers.activation",
+    "vllm_musa.model_executor.layers.attention.mm_encoder_attention",
+    "vllm_musa.model_executor.layers.fused_moe.router.musa_router_gemm",
+)
+
 
 def _module_name(path: Path) -> str:
     parts = list(path.relative_to(ROOT).with_suffix("").parts)
@@ -53,6 +72,10 @@ def test_custom_op_manifest_covers_all_custom_op_modules() -> None:
 
 def test_custom_op_manifest_has_no_duplicates() -> None:
     assert len(CUSTOM_OP_MODULES) == len(set(CUSTOM_OP_MODULES))
+
+
+def test_custom_op_manifest_preserves_preload_order() -> None:
+    assert CUSTOM_OP_MODULES == EXPECTED_PRELOAD_MODULES
 
 
 def test_operator_manifest_is_complete() -> None:

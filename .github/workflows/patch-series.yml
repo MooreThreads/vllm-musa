@@ -10,8 +10,7 @@ on:
       - 'vllm_musa/patches/**'
       - 'vllm_musa/kernels/sparse_mqa*.py'
       - 'vllm_musa/optimization_contract/policy.py'
-      - 'vllm_musa/operator_manifest.py'
-      - 'vllm_musa/custom_op_modules.py'
+      - 'vllm_musa/**'
       - 'csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu'
       - 'tests/**'
   push:
@@ -26,8 +25,7 @@ on:
       - 'vllm_musa/patches/**'
       - 'vllm_musa/kernels/sparse_mqa*.py'
       - 'vllm_musa/optimization_contract/policy.py'
-      - 'vllm_musa/operator_manifest.py'
-      - 'vllm_musa/custom_op_modules.py'
+      - 'vllm_musa/**'
       - 'csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu'
       - 'tests/**'
 
