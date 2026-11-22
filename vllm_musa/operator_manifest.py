@@ -51,6 +51,8 @@ OPERATOR_RECORDS: tuple[OperatorRecord, ...] = (
     OperatorRecord("sparse_mla_prefill", "mate_adapter", "vllm.attention", "mate", "vllm_musa.v1.attention.ops.sparse_mla_mate", ("vllm_musa/v1/attention/ops/sparse_mla_mate.py",), ("tests/test_flashmla_sparse_direct_out.py",), "vllm.triton", preload=False),
     OperatorRecord("causal_conv1d", "model_private", "vllm.layer", "vllm_musa", "vllm_musa.jit_kernel.tilelang.causal_conv1d", ("vllm_musa/jit_kernel/tilelang/causal_conv1d.py",), ("tests/test_causal_conv1d_address_width_source.py",), "vllm.reference", preload=False),
     OperatorRecord("deep_gemm_contig_preprocess", "model_private", "vllm.layer", "vllm_musa", "vllm_musa.jit_kernel.tilelang.deep_gemm_contig_preprocess", ("vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py",), ("tests/test_gdn_fused_zba_compile.py",), "vllm.reference", preload=False),
+    OperatorRecord("musa_ops_library", "musa_native", "torch.library", "vllm_musa", "vllm_musa._custom_ops", ("csrc/musa/torch_bindings.cpp",), ("tests/test_musa_jit_custom_all_reduce_graph.py",), "vllm.reference", preload=False),
+    OperatorRecord("vllm_ir_gated_qkv", "vllm_ir", "vllm.ir", "vllm_musa", "vllm_musa.patches.series.0076", ("vllm_musa/patches/series/0076-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch",), ("tests/test_manifest.py",), "vllm.reference", preload=False),
 )
 
 
@@ -78,6 +80,8 @@ BUILD_SOURCES: dict[str, tuple[str, ...]] = {
     "mm_encoder_attention": ("requirements/musa_private.txt",),
     "flash_attention_backend": ("requirements/musa_private.txt",),
     "sparse_mla_prefill": ("requirements/musa_private.txt",),
+    "musa_ops_library": ("csrc/musa/torch_bindings.cpp",),
+    "vllm_ir_gated_qkv": ("vllm_musa/patches/series/0076-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch",),
 }
 
 

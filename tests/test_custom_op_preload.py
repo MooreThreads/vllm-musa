@@ -115,4 +115,4 @@ def test_operator_report_is_dependency_free_and_complete() -> None:
         and row["build_sources"]
         for row in report
     )
-    assert {row["category"] for row in report} >= {"mate_adapter", "model_private"}
+    assert {row["category"] for row in report} >= {"mate_adapter", "model_private", "vllm_ir", "musa_native"}
