@@ -409,7 +409,9 @@ RUN mkdir -p /tmp/vllm-rs-artifacts && \
 
 # Turn the patched, compiled source tree into one self-contained wheel. The
 # Rust artifacts are copied into the vendored vLLM package before the wheel is
-# built, so the runtime stage does not need the source checkout.
+# built, so the runtime stage does not need the source checkout. The source
+# stage has already built the four native extension modules. The build hook
+# reuses those files instead of compiling them a second time.
 FROM vllm_rs_build AS vllm_wheel
 
 RUN mkdir -p /tmp/vllm-wheel && \
