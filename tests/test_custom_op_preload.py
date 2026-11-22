@@ -2,7 +2,7 @@ import ast
 from pathlib import Path
 
 from vllm_musa.custom_op_modules import CUSTOM_OP_MODULES
-
+from vllm_musa.operator_manifest import OPERATOR_RECORDS, validate_records
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = ROOT / "vllm_musa"
@@ -51,3 +51,12 @@ def test_custom_op_manifest_covers_all_custom_op_modules() -> None:
 
 def test_custom_op_manifest_has_no_duplicates() -> None:
     assert len(CUSTOM_OP_MODULES) == len(set(CUSTOM_OP_MODULES))
+
+
+def test_operator_manifest_is_complete() -> None:
+    errors = validate_records(ROOT, OPERATOR_RECORDS)
+    assert errors == []
+
+
+def test_operator_manifest_matches_preload() -> None:
+    assert {record.registration_module for record in OPERATOR_RECORDS} >= set(CUSTOM_OP_MODULES)
