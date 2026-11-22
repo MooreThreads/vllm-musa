@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -56,3 +57,10 @@ def test_bundle_vllm_rejects_missing_generated_version(
 
     with pytest.raises(RuntimeError, match="version module is missing"):
         bundle_vllm_package(fake_vllm, tmp_path / "wheel" / "vllm")
+
+
+def test_runtime_metadata_constraint_is_numpy_one_series():
+    requirements = (Path(__file__).parents[1] / "requirements" / "common.txt").read_text()
+
+    assert "numpy<2" in requirements
+    assert "numpy==1.26.4" not in requirements

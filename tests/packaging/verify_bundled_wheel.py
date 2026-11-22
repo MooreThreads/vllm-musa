@@ -9,6 +9,7 @@ import argparse
 import re
 from pathlib import Path
 from zipfile import ZipFile
+from email.parser import Parser
 
 REQUIRED_FILES = {
     "vllm/__init__.py",
@@ -69,6 +70,13 @@ def main() -> None:
         assert len(dist_info) == 1, dist_info
         (dist_info_dir,) = dist_info
         assert dist_info_dir.startswith("vllm_musa-"), dist_info_dir
+
+        metadata = Parser().parsestr(
+            archive.read(f"{dist_info_dir}/METADATA").decode()
+        )
+        numpy_requirements = metadata.get_all("Requires-Dist", [])
+        assert "numpy<2" in numpy_requirements
+        assert "numpy==1.26.4" not in numpy_requirements
 
         top_level = archive.read(f"{dist_info_dir}/top_level.txt").decode()
         assert set(top_level.split()) == {"vllm", "vllm_musa"}

@@ -11,6 +11,8 @@ import importlib.metadata
 import json
 from pathlib import Path
 
+from packaging.version import Version
+
 
 def _direct_url(distribution_name: str) -> dict:
     distribution = importlib.metadata.distribution(distribution_name)
@@ -22,6 +24,9 @@ def verify_bundled() -> None:
     import vllm
 
     import vllm_musa
+    import numpy
+
+    assert Version(numpy.__version__) < Version("2")
 
     assert importlib.metadata.version("vllm-musa")
     try:
