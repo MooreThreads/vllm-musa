@@ -23,7 +23,6 @@ class OperatorRecord:
     source: tuple[str, ...]
     tests: tuple[str, ...]
     fallback: str
-    build_sources: tuple[str, ...] = ()
     preload: bool = True
 
 
@@ -251,7 +250,7 @@ OPERATOR_RECORDS: tuple[OperatorRecord, ...] = (
         "vllm_ir",
         "vllm.ir",
         "vllm_musa",
-        "vllm_musa.patches.series.0076",
+        "vllm.ir.ops.gated_qkv",
         ("vllm_musa/patches/series/0076-MUSA-add-gated-QKV-RMSNorm-MRoPE-IR.patch",),
         ("tests/test_manifest.py",),
         "vllm.reference",
@@ -338,7 +337,7 @@ def validate_records(
             errors.append(
                 f"{record.name}: provider, contract, and fallback are required"
             )
-        build_sources = BUILD_SOURCES.get(record.name, record.build_sources)
+        build_sources = BUILD_SOURCES.get(record.name, ())
         if not build_sources:
             errors.append(f"{record.name}: build source mapping is required")
         for relative in build_sources:
@@ -366,7 +365,7 @@ def operator_report(
                 ),
                 "tests_present": all((root / path).is_file() for path in record.tests),
                 "fallback": record.fallback,
-                "build_sources": BUILD_SOURCES.get(record.name, record.build_sources),
+                "build_sources": BUILD_SOURCES.get(record.name, ()),
             }
         )
     return tuple(report)
