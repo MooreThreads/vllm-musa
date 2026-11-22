@@ -5,7 +5,7 @@
 Start the server with the no-repeat n-gram processor enabled:
 
     vllm serve MODEL --logits-processors \
-        vllm.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState
+        vllm_musa.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState
 """
 
 import argparse

@@ -23,7 +23,7 @@ from vllm.v1.worker.gpu.sample.logits_processor import (
 from vllm.v1.worker.gpu.sample.sampler import Sampler
 from vllm.v1.worker.gpu.states import RequestState
 
-from vllm.v1.worker.gpu.sample.no_repeat_ngram import NoRepeatNGramState
+from vllm_musa.v1.worker.gpu.sample.no_repeat_ngram import NoRepeatNGramState
 
 DEVICE = torch.device(current_platform.device_type)
 VOCAB_SIZE = 128
