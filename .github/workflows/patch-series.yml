@@ -10,6 +10,8 @@ on:
       - 'vllm_musa/patches/**'
       - 'vllm_musa/kernels/sparse_mqa*.py'
       - 'vllm_musa/optimization_contract/policy.py'
+      - 'vllm_musa/operator_manifest.py'
+      - 'vllm_musa/custom_op_modules.py'
       - 'csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu'
       - 'tests/**'
   push:
@@ -24,6 +26,8 @@ on:
       - 'vllm_musa/patches/**'
       - 'vllm_musa/kernels/sparse_mqa*.py'
       - 'vllm_musa/optimization_contract/policy.py'
+      - 'vllm_musa/operator_manifest.py'
+      - 'vllm_musa/custom_op_modules.py'
       - 'csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu'
       - 'tests/**'
 
@@ -48,6 +52,8 @@ jobs:
           python -m pytest -q tests/test_patch_metadata.py tests/test_musa_sync.py tests/test_musa_sync_upstream.py tests/test_manifest.py tests/test_manifest_completeness.py tests/test_ordered_series_lineage.py tests/test_git_proxy.py tests/test_musa_docker_contract.py
           python tools/musa_sync.py report --metadata
           python tools/musa_sync.py check-series
+      - name: Check operator integration manifest
+        run: python -m pytest -q tests/test_custom_op_preload.py
       - name: Check patch contracts in runtime test modules
         run: |
           python -m pytest -q tests/test_deepseek_v4_sparse_indexer_topk.py -k 'test_radix_topk_lives or test_radix_topk_short_rows or test_series_routes'
