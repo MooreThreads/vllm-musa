@@ -415,6 +415,13 @@ RUN mkdir -p /tmp/vllm-rs-artifacts && \
 FROM vllm_rs_build AS vllm_wheel
 
 RUN mkdir -p /tmp/vllm-wheel && \
+    for package in vllm vllm_musa; do \
+        source_dir="/vllm-workspace/third_party/vllm/${package}"; \
+        [[ "$package" == "vllm_musa" ]] && source_dir="/vllm-workspace/vllm_musa"; \
+        mkdir -p "$source_dir"; \
+        find /usr/local/lib/python3.12/site-packages -type f \
+            -path "*/${package}/*.so" -exec cp -f {} "$source_dir/" \; 2>/dev/null || true; \
+    done && \
     if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
         install -Dm755 /tmp/vllm-rs-artifacts/vllm-rs \
             /vllm-workspace/third_party/vllm/vllm/vllm-rs && \

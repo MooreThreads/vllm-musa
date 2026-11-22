@@ -23,6 +23,20 @@ the upstream vLLM runtime-image contract. A default build produces the
 `vllm-openai` target with `ENTRYPOINT ["vllm", "serve"]`; the `final` target
 retains `CMD ["/bin/bash"]` for tests and interactive use.
 
+The wheel's public dependency set excludes hardware-private packages. Install
+the default package from a public index, then opt into the MUSA extra through
+the matching private index:
+
+```bash
+python -m pip install vllm-musa
+python -m pip install --extra-index-url "${MUSA_PIP_INDEX_URL}" \
+  'vllm-musa[musa]'
+```
+
+The production image installs the pinned MUSA stack before installing the wheel
+with `--no-deps`, which prevents pip from substituting a CUDA or CPU torch
+build.
+
 ## Prerequisites
 
 - **Docker** on the build host.

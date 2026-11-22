@@ -55,6 +55,15 @@ def test_runtime_dependency_verifier_receives_requirement_files_without_source()
     assert "VLLM_MUSA_REQUIREMENTS_ROOT=/tmp/vllm-runtime-requirements" in dockerfile
 
 
+def test_wheel_stage_collects_native_extensions_from_installed_packages():
+    dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
+
+    wheel_stage = dockerfile.split("FROM vllm_rs_build AS vllm_wheel", 1)[1]
+    wheel_stage = wheel_stage.split("# Install the prebuilt MUSA wheel", 1)[0]
+    assert "find /usr/local/lib/python3.12/site-packages" in wheel_stage
+    assert "-path \"*/${package}/*.so\"" in wheel_stage
+
+
 def test_numpy_runtime_constraint_allows_the_supported_numpy_1_series():
     requirements = (Path(__file__).parents[1] / "requirements" / "common.txt").read_text()
     dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
