@@ -301,6 +301,9 @@ BUILD_SOURCES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Runtime source/build mappings are intentionally separate from the record
+# table. This keeps the registry readable while making each mapping auditable.
+
 
 def preload_modules(
     records: Iterable[OperatorRecord] = OPERATOR_RECORDS,
