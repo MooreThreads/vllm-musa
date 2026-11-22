@@ -32,7 +32,7 @@ providers, IR lowerings, capability selection, and model/layer assembly.
 
 ### Upper Bound
 
-Manifest-driven registration, generated preload/diagnostics, attention adapters,
+Manifest-driven registration, generated preload/diagnostics, bidirectional registration-module provenance, attention adapters,
 category-specific tests and CI checks, followed by migration of existing entries.
 
 ### Lower Bound
@@ -51,11 +51,12 @@ all-purpose MUSA kernel repository in this PR.
 ## Dependencies and Sequence
 
 1. Inventory current registrations, providers, adapters, call sites, source/build entries, and tests.
-2. Add schema and validator with representative records.
-3. Generate preload and diagnostics, preserving current entry-point behavior. The dependency-free `tools/operator_manifest.py` command is the source/CI diagnostic entry point.
-4. Add attention adapter boundaries and source contracts.
-5. Migrate categories incrementally and add CI gates.
-6. Run source, package, MUSA correctness, model, and performance gates separately.
+2. Validate registration modules in both directions so a manifest record cannot point at a missing module.
+3. Add schema and validator with representative records.
+4. Generate preload and diagnostics, preserving current entry-point behavior. The dependency-free `tools/operator_manifest.py` command is the source/CI diagnostic entry point.
+5. Add attention adapter boundaries and source contracts.
+6. Migrate categories incrementally and add CI gates.
+7. Run source, package, MUSA correctness, model, and performance gates separately.
 
 ## Deferred
 
