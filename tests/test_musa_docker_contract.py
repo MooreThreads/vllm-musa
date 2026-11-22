@@ -47,6 +47,14 @@ def test_runtime_target_does_not_copy_the_editable_source_checkout():
     assert "third_party/vllm/vllm" not in runtime
 
 
+def test_runtime_dependency_verifier_receives_requirement_files_without_source():
+    dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
+
+    assert "/tmp/vllm-runtime-requirements/common.txt" in dockerfile
+    assert "/tmp/vllm-runtime-requirements/musa_private.txt" in dockerfile
+    assert "VLLM_MUSA_REQUIREMENTS_ROOT=/tmp/vllm-runtime-requirements" in dockerfile
+
+
 def test_numpy_runtime_constraint_allows_the_supported_numpy_1_series():
     requirements = (Path(__file__).parents[1] / "requirements" / "common.txt").read_text()
     dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()

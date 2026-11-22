@@ -431,6 +431,10 @@ ARG PYPI_INDEX_URL
 
 COPY --from=vllm_musa_installed /vllm-workspace/requirements/vllm_runtime_transitive.txt \
      /tmp/vllm-runtime-requirements.txt
+COPY --from=vllm_musa_installed /vllm-workspace/requirements/common.txt \
+     /tmp/vllm-runtime-requirements/common.txt
+COPY --from=vllm_musa_installed /vllm-workspace/requirements/musa_private.txt \
+     /tmp/vllm-runtime-requirements/musa_private.txt
 COPY --from=vllm_wheel /tmp/vllm-wheel/ /tmp/vllm-wheel/
 COPY docker/verify_installed_dependencies.py /tmp/verify_installed_dependencies.py
 
@@ -442,8 +446,10 @@ RUN python -m pip install \
         --no-cache-dir \
         --no-deps \
         /tmp/vllm-wheel/*.whl && \
-    python /tmp/verify_installed_dependencies.py && \
-    rm -rf /tmp/vllm-wheel /tmp/vllm-runtime-requirements.txt
+    VLLM_MUSA_REQUIREMENTS_ROOT=/tmp/vllm-runtime-requirements \
+        python /tmp/verify_installed_dependencies.py && \
+    rm -rf /tmp/vllm-wheel /tmp/vllm-runtime-requirements \
+        /tmp/vllm-runtime-requirements.txt
 
 FROM vllm_runtime AS mooncake
 

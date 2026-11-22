@@ -9,11 +9,14 @@ declares as a core requirement and is therefore read back from its metadata.
 from __future__ import annotations
 
 import importlib
+import os
 import re
 from importlib.metadata import requires, version
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(
+    os.environ.get("VLLM_MUSA_REQUIREMENTS_ROOT", Path(__file__).resolve().parents[1])
+)
 REQUIREMENT_FILES = (
     ROOT / "requirements/musa_private.txt",
     ROOT / "requirements/common.txt",
