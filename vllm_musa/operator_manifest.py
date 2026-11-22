@@ -23,6 +23,7 @@ class OperatorRecord:
     source: tuple[str, ...]
     tests: tuple[str, ...]
     fallback: str
+    build_sources: tuple[str, ...] = ()
     preload: bool = True
 
 
@@ -53,6 +54,33 @@ OPERATOR_RECORDS: tuple[OperatorRecord, ...] = (
 )
 
 
+# Build/JIT provenance is separate from the Python registration module.  A
+# record is not complete until its implementation can be traced to one of
+# these source or dependency entries.
+BUILD_SOURCES: dict[str, tuple[str, ...]] = {
+    "custom_all_reduce": ("vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu",),
+    "fp8_block_gemv": ("vllm_musa/jit_kernel/csrc/gemv/fp8_block_gemv.mu",),
+    "moe_jit": ("vllm_musa/jit_kernel/csrc/moe/act_and_mul.mu", "vllm_musa/jit_kernel/csrc/moe/moe_sum_reduce.mu"),
+    "norm_jit": ("vllm_musa/jit_kernel/csrc/norm/rmsnorm.mu", "vllm_musa/jit_kernel/csrc/norm/qk_mrope.mu"),
+    "quant_jit": ("vllm_musa/jit_kernel/csrc/quant/per_token_group_quant_8bit_v2.mu",),
+    "rope_jit": ("vllm_musa/jit_kernel/csrc/rope/rotary_embedding.mu",),
+    "sqrtsoftplus_topk": ("vllm_musa/jit_kernel/csrc/topk/sqrtsoftplus_topk.mu",),
+    "topk": ("vllm_musa/jit_kernel/csrc/topk/topk_gating.mu",),
+    "fused_allreduce_rmsnorm": ("vllm_musa/fused_allreduce_rmsnorm_ops.py",),
+    "activation": ("vllm_musa/model_executor/layers/activation.py",),
+    "qwen3_qk_rope_kv": ("vllm_musa/kernels/qwen3_qk_rope_kv.py",),
+    "gdn_fused_proj": ("vllm_musa/jit_kernel/tilelang/gdn_fused_proj.py",),
+    "layernorm_gated": ("vllm_musa/jit_kernel/tilelang/layernorm_gated.py",),
+    "causal_conv1d": ("vllm_musa/jit_kernel/tilelang/causal_conv1d.py",),
+    "deep_gemm_contig_preprocess": ("vllm_musa/jit_kernel/tilelang/deep_gemm_contig_preprocess.py",),
+    "deep_gemm": ("requirements/musa_private.txt",),
+    "musa_router_gemm": ("requirements/musa_private.txt",),
+    "mm_encoder_attention": ("requirements/musa_private.txt",),
+    "flash_attention_backend": ("requirements/musa_private.txt",),
+    "sparse_mla_prefill": ("requirements/musa_private.txt",),
+}
+
+
 def preload_modules(records: Iterable[OperatorRecord] = OPERATOR_RECORDS) -> tuple[str, ...]:
     return tuple(record.registration_module for record in records if record.preload)
 
@@ -76,6 +104,12 @@ def validate_records(root: Path, records: Iterable[OperatorRecord] = OPERATOR_RE
                 errors.append(f"{record.name}: missing path {relative}")
         if not record.provider or not record.contract or not record.fallback:
             errors.append(f"{record.name}: provider, contract, and fallback are required")
+        build_sources = BUILD_SOURCES.get(record.name, record.build_sources)
+        if not build_sources:
+            errors.append(f"{record.name}: build source mapping is required")
+        for relative in build_sources:
+            if not (root / relative).is_file():
+                errors.append(f"{record.name}: missing build source {relative}")
     return errors
 
 
@@ -96,6 +130,7 @@ def operator_report(
                 "source_present": all((root / path).is_file() for path in record.source),
                 "tests_present": all((root / path).is_file() for path in record.tests),
                 "fallback": record.fallback,
+                "build_sources": BUILD_SOURCES.get(record.name, record.build_sources),
             }
         )
     return tuple(report)

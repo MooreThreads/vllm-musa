@@ -109,5 +109,10 @@ def test_operator_manifest_rejects_duplicate_names_and_modules() -> None:
 def test_operator_report_is_dependency_free_and_complete() -> None:
     report = operator_report(ROOT)
     assert len(report) == len(OPERATOR_RECORDS)
-    assert all(row["source_present"] and row["tests_present"] for row in report)
+    assert all(
+        row["source_present"]
+        and row["tests_present"]
+        and row["build_sources"]
+        for row in report
+    )
     assert {row["category"] for row in report} >= {"mate_adapter", "model_private"}
