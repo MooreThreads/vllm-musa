@@ -80,6 +80,25 @@ def _read_requirements(filename, seen=None):
     return requirements
 
 
+def _has_prebuilt_extensions() -> bool:
+    """Return whether every extension output required by a wheel is present."""
+    if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") != "1":
+        return False
+    extension_paths = (
+        root / _VLLM_REPO.source_dir / "vllm" / "_C.so",
+        root / _VLLM_REPO.source_dir / "vllm" / "_C_stable_libtorch.so",
+        root / _VLLM_REPO.source_dir / "vllm" / "_moe_C.so",
+        root / "vllm_musa" / "_C.so",
+    )
+    missing = [path for path in extension_paths if not path.is_file()]
+    if missing:
+        raise RuntimeError(
+            "VLLM_MUSA_REUSE_PREBUILT=1 requires prepared extension outputs, "
+            f"missing: {', '.join(str(path) for path in missing)}"
+        )
+    return True
+
+
 configure_compiler_cache(root)
 
 # Detect editable install (pip install -e .) or develop mode
@@ -381,7 +400,7 @@ class _CustomBuildExt(BuildExtension):
     _third_party_prepared = False
 
     def build_extensions(self):
-        if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") != "1":
+        if not _has_prebuilt_extensions():
             super().build_extensions()
         else:
             print("Reusing native extensions from the prepared source tree")
