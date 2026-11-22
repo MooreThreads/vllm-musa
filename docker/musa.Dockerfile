@@ -416,11 +416,6 @@ FROM vllm_rs_build AS vllm_wheel
 
 RUN mkdir -p /tmp/vllm-wheel && \
     mkdir -p /vllm-workspace/third_party/vllm/vllm /vllm-workspace/vllm_musa && \
-    cp -f /vllm-workspace/third_party/vllm/vllm/_C*.so \
-        /vllm-workspace/third_party/vllm/vllm/ && \
-    cp -f /vllm-workspace/third_party/vllm/vllm/_moe_C*.so \
-        /vllm-workspace/third_party/vllm/vllm/ && \
-    cp -f /vllm-workspace/vllm_musa/_C*.so /vllm-workspace/vllm_musa/ && \
     test -n "$(find /vllm-workspace/third_party/vllm/vllm -maxdepth 1 -name '_C*.so' -print -quit)" && \
     test -n "$(find /vllm-workspace/vllm_musa -maxdepth 1 -name '_C*.so' -print -quit)" && \
     if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
