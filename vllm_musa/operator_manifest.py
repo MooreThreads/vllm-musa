@@ -330,6 +330,14 @@ def validate_records(
         modules.add(record.registration_module)
         if record.category not in CATEGORIES:
             errors.append(f"{record.name}: invalid category {record.category!r}")
+        if record.registration_module.startswith("vllm_musa."):
+            module_parts = record.registration_module.split(".")[1:]
+            module_path = root / "vllm_musa" / Path(*module_parts)
+            candidates = (module_path.with_suffix(".py"), module_path / "__init__.py")
+            if not any(candidate.is_file() for candidate in candidates):
+                errors.append(
+                    f"{record.name}: missing registration module {record.registration_module}"
+                )
         if not record.source:
             errors.append(f"{record.name}: at least one source path is required")
         if not record.tests:

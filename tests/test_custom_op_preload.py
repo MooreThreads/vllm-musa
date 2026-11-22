@@ -105,6 +105,22 @@ def test_operator_manifest_rejects_invalid_category() -> None:
     assert any("invalid category" in error for error in errors)
 
 
+def test_operator_manifest_rejects_missing_registration_module() -> None:
+    record = OPERATOR_RECORDS[0]
+    invalid = record.__class__(
+        name=record.name,
+        category=record.category,
+        contract=record.contract,
+        provider=record.provider,
+        registration_module="vllm_musa.missing_registration",
+        source=record.source,
+        tests=record.tests,
+        fallback=record.fallback,
+    )
+    errors = validate_records(ROOT, (invalid,))
+    assert any("missing registration module" in error for error in errors)
+
+
 def test_operator_manifest_rejects_missing_paths() -> None:
     record = OPERATOR_RECORDS[0]
     invalid = record.__class__(
