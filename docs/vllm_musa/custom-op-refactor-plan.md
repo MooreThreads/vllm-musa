@@ -9,7 +9,7 @@ providers, IR lowerings, capability selection, and model/layer assembly.
 
 ## Acceptance Criteria
 
-- AC-1: Every integrated operator/backend has one machine-readable record naming its vLLM contract, provider, adapter, registration module, source/build entry, capability, fallback, owner, and tests.
+- AC-1: Every integrated operator/backend has one machine-readable record naming its vLLM contract, provider, registration module, source/build entry, capability, fallback, owner, and tests. The record also carries the adapter or extension/JIT module and minimum package-version constraints when applicable.
   - Positive: inventory validation reports no missing required fields or duplicate contract/provider records.
   - Negative: a record with a missing provider, source, or test is rejected.
 - AC-2: Preload and registration are generated from the explicit manifest while preserving AOT compile-cache preload ordering.

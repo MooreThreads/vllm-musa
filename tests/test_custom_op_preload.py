@@ -35,9 +35,7 @@ def _registers_custom_op(path: Path) -> bool:
         name = (
             func.id
             if isinstance(func, ast.Name)
-            else func.attr
-            if isinstance(func, ast.Attribute)
-            else None
+            else func.attr if isinstance(func, ast.Attribute) else None
         )
         if name in registration_names:
             return True
@@ -63,7 +61,9 @@ def test_operator_manifest_is_complete() -> None:
 
 
 def test_operator_manifest_matches_preload() -> None:
-    assert {record.registration_module for record in OPERATOR_RECORDS if record.preload} == set(CUSTOM_OP_MODULES)
+    assert {
+        record.registration_module for record in OPERATOR_RECORDS if record.preload
+    } == set(CUSTOM_OP_MODULES)
 
 
 def test_operator_manifest_rejects_invalid_category() -> None:
@@ -110,9 +110,12 @@ def test_operator_report_is_dependency_free_and_complete() -> None:
     report = operator_report(ROOT)
     assert len(report) == len(OPERATOR_RECORDS)
     assert all(
-        row["source_present"]
-        and row["tests_present"]
-        and row["build_sources"]
+        row["source_present"] and row["tests_present"] and row["build_sources"]
         for row in report
     )
-    assert {row["category"] for row in report} >= {"mate_adapter", "model_private", "vllm_ir", "musa_native"}
+    assert {row["category"] for row in report} >= {
+        "mate_adapter",
+        "model_private",
+        "vllm_ir",
+        "musa_native",
+    }

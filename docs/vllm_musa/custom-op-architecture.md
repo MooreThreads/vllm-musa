@@ -7,7 +7,8 @@ contracts, MUSA providers, model and layer integrations, and runtime
 capability selection. It is not a second general-purpose MUSA kernel library.
 
 MATE owns reusable MUSA kernel providers, including attention, FlashAttention,
-FlashInfer, Marlin, and DeepGEMM families. vLLM-MUSA owns the adapters that
+FlashInfer, FlashMLA, and DeepGEMM families. The vLLM-MUSA Triton W4A16
+path remains a vLLM-MUSA integration and is not attributed to MATE. vLLM-MUSA owns the adapters that
 translate vLLM contracts and metadata to those providers.
 
 ## Ownership boundaries
@@ -15,7 +16,7 @@ translate vLLM contracts and metadata to those providers.
 | Layer | Owner | Examples |
 | --- | --- | --- |
 | vLLM contract | upstream vLLM | custom AOT/JIT schemas, generic IR, layer/backend interfaces |
-| Reusable MUSA provider | MATE | attention, FA/FlashInfer, Marlin, DeepGEMM |
+| Reusable MUSA provider | MATE | attention, FA/FlashInfer, FlashMLA, DeepGEMM |
 | vLLM-MUSA provider | vLLM-MUSA | non-attention MUSA AOT/JIT ops, MUSA IR lowerings, native sampler/norm/cache ops |
 | vLLM adapter | vLLM-MUSA | provider selection, layout conversion, capability checks, fallback, compile/cudagraph integration |
 | Model/layer assembly | vLLM-MUSA | model-specific layers, DeepSeek/Qwen/GLM assembly, model private fused paths |

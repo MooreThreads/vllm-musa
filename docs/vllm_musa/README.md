@@ -98,3 +98,9 @@ never overrides an explicitly set `MC_TE_FILTERS`.
 ### `_custom_ops.py` – Python Wrappers for C++ Ops
 
 Thin Python wrappers around the native operators registered in `csrc/` (e.g., `musa_fused_gemv_moe`, fused gemv moe variants).
+
+## Operator integration refactor
+
+- [Operator ownership and integration model](custom-op-architecture.md)
+- [v0.32 operator inventory](operator-inventory.md)
+- [Refactor plan and acceptance criteria](custom-op-refactor-plan.md)
