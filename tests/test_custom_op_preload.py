@@ -142,3 +142,21 @@ def test_operator_report_is_dependency_free_and_complete() -> None:
         "vllm_ir",
         "musa_native",
     }
+
+
+def test_operator_manifest_cli_is_dependency_free() -> None:
+    import json
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "tools/operator_manifest.py"), "--json"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["errors"] == []
+    assert len(payload["operators"]) == len(OPERATOR_RECORDS)
+    assert "torch" not in result.stderr.lower()
