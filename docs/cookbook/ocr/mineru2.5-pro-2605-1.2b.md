@@ -125,8 +125,7 @@ asyncio.run(request())
   generated history within this recipe's context. This window is an adapter
   setting, not an additional official MinerU model parameter. Increase it if
   you increase the context limit.
-- Keep MinerU's own NGram field and sampling defaults. Do not copy the
-  DeepSeek-OCR N=30, window=90 or table-token whitelist into MinerU requests.
+- Keep MinerU's own NGram field and sampling defaults.
 - MUSA selects `FLASH_ATTN` for ViT and `MMEncoderAttention` automatically.
   Do not add the language-model `--attention-config` option to select it.
 - The image processor uses the checkpoint's own defaults. Do not add a pixel
