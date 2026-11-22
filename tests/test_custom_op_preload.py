@@ -177,3 +177,15 @@ def test_operator_manifest_cli_is_dependency_free() -> None:
     assert all(row["capabilities"] for row in payload["operators"])
     assert len(payload["operators"]) == len(OPERATOR_RECORDS)
     assert "torch" not in result.stderr.lower()
+
+
+def test_preload_report_is_compatible_and_structured(monkeypatch) -> None:
+    import vllm_musa.custom_op_modules as module
+
+    loaded = []
+    monkeypatch.setattr(module, "CUSTOM_OP_MODULES", ("example.module",))
+    monkeypatch.setattr(module, "import_module", lambda name: loaded.append(name))
+    report = module.preload_custom_op_modules()
+    assert report.loaded == ("example.module",)
+    assert report.failed == ()
+    assert loaded == ["example.module"]
