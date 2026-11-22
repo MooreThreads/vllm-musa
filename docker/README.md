@@ -331,3 +331,21 @@ MUSA torch pins.
 
 For the reasoning behind the pip-index split and the runtime shims, see the
 comments in `docker/musa.Dockerfile`.
+
+## Installing the wheel outside the image
+
+The default `vllm-musa` wheel contains only public Python dependencies. The
+MUSA-only stack is exposed through the optional `musa` extra because packages
+such as `torch_musa`, MATE, and FlashInfer are available only from the matching
+private index:
+
+```bash
+python -m pip install vllm-musa
+python -m pip install --extra-index-url "${MUSA_PIP_INDEX_URL}" \
+  'vllm-musa[musa]'
+```
+
+The production image follows the safer deployment form. It installs the
+pinned private stack first, then installs the vLLM-MUSA wheel with `--no-deps`.
+This prevents pip from replacing MUSA torch packages with public CUDA or CPU
+wheels.
