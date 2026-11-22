@@ -85,12 +85,12 @@ def _has_prebuilt_extensions() -> bool:
     if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") != "1":
         return False
     extension_paths = (
-        root / _VLLM_REPO.source_dir / "vllm" / "_C.so",
-        root / _VLLM_REPO.source_dir / "vllm" / "_C_stable_libtorch.so",
-        root / _VLLM_REPO.source_dir / "vllm" / "_moe_C.so",
-        root / "vllm_musa" / "_C.so",
+        root / _VLLM_REPO.source_dir / "vllm" / "_C*.so",
+        root / _VLLM_REPO.source_dir / "vllm" / "_C_stable_libtorch*.so",
+        root / _VLLM_REPO.source_dir / "vllm" / "_moe_C*.so",
+        root / "vllm_musa" / "_C*.so",
     )
-    missing = [path for path in extension_paths if not path.is_file()]
+    missing = [pattern for pattern in extension_paths if not list(pattern.parent.glob(pattern.name))]
     if missing:
         raise RuntimeError(
             "VLLM_MUSA_REUSE_PREBUILT=1 requires prepared extension outputs, "
@@ -404,6 +404,22 @@ class _CustomBuildExt(BuildExtension):
             super().build_extensions()
         else:
             print("Reusing native extensions from the prepared source tree")
+            for source_dir, target_dir, patterns in (
+                (
+                    root / _VLLM_REPO.source_dir / "vllm",
+                    Path(self.build_lib) / "vllm",
+                    ("_C*.so", "_C_stable_libtorch*.so", "_moe_C*.so"),
+                ),
+                (
+                    root / "vllm_musa",
+                    Path(self.build_lib) / "vllm_musa",
+                    ("_C*.so",),
+                ),
+            ):
+                target_dir.mkdir(parents=True, exist_ok=True)
+                for pattern in patterns:
+                    for source in source_dir.glob(pattern):
+                        shutil.copy2(source, target_dir / source.name)
         package_dirs = {root / "vllm_musa"}
         if self.build_lib and (Path(self.build_lib) / "vllm_musa").is_dir():
             package_dirs.add(Path(self.build_lib) / "vllm_musa")
