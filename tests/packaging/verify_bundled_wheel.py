@@ -83,6 +83,9 @@ def main() -> None:
             if Requirement(requirement).name == "numpy"
         )
         assert str(numpy_requirement.specifier) == "<2"
+        metadata_text = archive.read(f"{dist_info_dir}/METADATA").decode()
+        assert "Requires-Dist: torch_musa" not in metadata_text
+        assert "Provides-Extra: musa" in metadata_text
 
         top_level = archive.read(f"{dist_info_dir}/top_level.txt").decode()
         assert set(top_level.split()) == {"vllm", "vllm_musa"}

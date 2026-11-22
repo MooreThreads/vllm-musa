@@ -708,10 +708,13 @@ setup(
         "build_py": _CustomBuildPy,
     },
     include_package_data=False,
-    # Runtime dependencies live in requirements/musa.txt so Docker and package
-    # metadata share one source. MUSA-private pins, including torch/torch_musa,
-    # are kept in requirements/musa_private.txt.
-    install_requires=_read_requirements("musa.txt"),
+    # Keep the default wheel installable from public indexes. Hardware-private
+    # wheels are an explicit extra because torch_musa, MATE, and FlashInfer
+    # must come from the matching MUSA index.
+    install_requires=_read_requirements("common.txt"),
+    extras_require={
+        "musa": _read_requirements("musa_private.txt"),
+    },
 )
 
 # Place built vllm.* extensions into the editable vLLM checkout.
