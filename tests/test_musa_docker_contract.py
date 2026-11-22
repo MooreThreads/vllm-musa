@@ -60,10 +60,9 @@ def test_wheel_stage_collects_native_extensions_from_installed_packages():
 
     wheel_stage = dockerfile.split("FROM vllm_rs_build AS vllm_wheel", 1)[1]
     wheel_stage = wheel_stage.split("# Install the prebuilt MUSA wheel", 1)[0]
-    assert (
-        "find /usr/local/lib/python3.12/site-packages" in wheel_stage
-        and "/vllm-workspace/third_party/vllm" in wheel_stage
-    )
+    assert "cp -f /vllm-workspace/third_party/vllm/vllm/_C*.so" in wheel_stage
+    assert "cp -f /vllm-workspace/vllm_musa/_C*.so" in wheel_stage
+    assert "test -n \"$(find /vllm-workspace/third_party/vllm/vllm" in wheel_stage
     assert "-path \"*/${package}/*.so\"" in wheel_stage
 
 
