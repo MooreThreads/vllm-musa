@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import argparse
 import re
+from email.parser import Parser
 from pathlib import Path
 from zipfile import ZipFile
-from email.parser import Parser
+
+from packaging.requirements import Requirement
 
 REQUIRED_FILES = {
     "vllm/__init__.py",
@@ -75,8 +77,12 @@ def main() -> None:
             archive.read(f"{dist_info_dir}/METADATA").decode()
         )
         numpy_requirements = metadata.get_all("Requires-Dist", [])
-        assert "numpy<2" in numpy_requirements
-        assert "numpy==1.26.4" not in numpy_requirements
+        numpy_requirement = next(
+            Requirement(requirement)
+            for requirement in numpy_requirements
+            if Requirement(requirement).name == "numpy"
+        )
+        assert str(numpy_requirement.specifier) == "<2"
 
         top_level = archive.read(f"{dist_info_dir}/top_level.txt").decode()
         assert set(top_level.split()) == {"vllm", "vllm_musa"}

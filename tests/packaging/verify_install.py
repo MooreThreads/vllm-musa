@@ -21,10 +21,10 @@ def _direct_url(distribution_name: str) -> dict:
 
 
 def verify_bundled() -> None:
+    import numpy
     import vllm
 
     import vllm_musa
-    import numpy
 
     assert Version(numpy.__version__) < Version("2")
 
