@@ -4,13 +4,13 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
- CMakeLists.txt                           |  5 ++++
- cmake/external_projects/deepselect.cmake | 41 +++++++++++++++++++++++++++++---
- setup.py                                 |  4 +++-
+ CMakeLists.txt                           |  5 +++
+ cmake/external_projects/deepselect.cmake | 41 ++++++++++++++++++++++--
+ setup.py                                 |  4 ++-
  3 files changed, 46 insertions(+), 4 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a71d7e..29d018d 100644
+index 3a71d7e1e5..29d018da33 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -95,6 +95,11 @@ endif()
@@ -26,7 +26,7 @@ index 3a71d7e..29d018d 100644
  
  # Ensure the 'nvcc' command is in the PATH
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592..20e2710 100644
+index e2a5592e61..20e2710483 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
 @@ -5,7 +5,7 @@ include(FetchContent)
@@ -94,7 +94,7 @@ index e2a5592..20e2710 100644
  set(DEEPSELECT_SUPPORT_ARCHS)
  if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.9)
 diff --git a/setup.py b/setup.py
-index 37bfc3e..43b7d21 100644
+index 37bfc3e41b..43b7d21f88 100644
 --- a/setup.py
 +++ b/setup.py
 @@ -1652,7 +1652,9 @@ for rust_extension_path in get_precompiled_rust_extension_paths():

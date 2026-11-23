@@ -4,11 +4,11 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: register an out-of-tree DeepSelect top-k backend
 
 ---
- vllm/model_executor/layers/indexer_topk.py | 41 ++++++++++++++++++++----------
+ vllm/model_executor/layers/indexer_topk.py | 41 ++++++++++++++--------
  1 file changed, 27 insertions(+), 14 deletions(-)
 
 diff --git a/vllm/model_executor/layers/indexer_topk.py b/vllm/model_executor/layers/indexer_topk.py
-index 02c4280..70e02bd 100644
+index 02c4280ea0..70e02bdbb8 100644
 --- a/vllm/model_executor/layers/indexer_topk.py
 +++ b/vllm/model_executor/layers/indexer_topk.py
 @@ -43,14 +43,17 @@ def get_deep_select_stride_requirement() -> tuple[int, int]:
