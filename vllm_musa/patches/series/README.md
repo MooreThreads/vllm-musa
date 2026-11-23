@@ -406,10 +406,11 @@ This backport includes minimum pin-ABI conflict adaptation and is not verbatim
 upstream; generic PP transport adaptation remains the independent MUSA `0216`
 entry.
 
-The series carries upstream commit
-`b1dcae362bba63cf718173600f730c43548ed71` (#57540), carrying the native GPU
-no-repeat NGram processor,
-as
+The series carries two upstream commits from PR #57540:
+`b1dcae362bba63cf718173600f730c435d48ed71`, which adds native GPU no-repeat
+NGram masking, and `f81df53c577e16da6c04669476b8014fdb155130`, which refactors
+that implementation into the custom logits-processor plugin path. They are
+carried as
 `upstream/0002-MUSA-carry-OCR-no-repeat-ngram-runtime-support-57540.patch`.
 This entry also carries the DeepSeek-OCR `LOG2E` Triton constexpr compatibility
 fix. The OCR Cookbook recipes are maintained separately as vLLM-MUSA
