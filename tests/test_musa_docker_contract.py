@@ -52,6 +52,27 @@ def test_runtime_workspace_copies_the_upstream_vllm_payload():
     assert "/vllm-workspace/third_party/vllm/vllm/collect_env.py" not in dockerfile
 
 
+def test_collect_env_reports_musa_distribution_and_provider_inventory():
+    source = (Path(__file__).parents[1] / "vllm_musa" / "collect_env.py").read_text()
+
+    assert '"vllm-musa"' in source
+    assert '"mate-mubin"' in source
+    assert '"flash-attn-3"' in source
+    assert '"flash-mla"' in source
+    assert '"deep-gemm"' in source
+    assert '"flashinfer-python"' in source
+    assert '"deep-ep"' in source
+    assert '"tilelang-musa"' in source
+    assert '"mooncake-transfer-engine-musa"' in source
+    assert "get_provider_imports" in source
+    assert "get_native_extensions" in source
+    assert "importlib import metadata" in source
+    assert "from vllm.envs import environment_variables" not in source
+    assert "vLLM Version" not in source
+    assert "get_vllm_version" not in source
+    assert "vLLM import package path" in source
+
+
 def test_source_tree_uses_the_upstream_examples_and_benchmarks_layout():
     root = Path(__file__).parents[1]
 
