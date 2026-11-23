@@ -360,7 +360,7 @@ Candidate-only scoring is selected whenever its width is smaller than the dense
 window, and eligible prefill query rows are sharded across TP ranks. These
 decisions do not require environment-variable overrides.
 
-Currently **217 patches** and **1 upstream entries** in `upstream/`.
+Currently **217 patches** and **2 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
@@ -405,6 +405,18 @@ top-k across PP boundaries, as
 This backport includes minimum pin-ABI conflict adaptation and is not verbatim
 upstream; generic PP transport adaptation remains the independent MUSA `0216`
 entry.
+
+The series carries upstream commits
+`b1dcae362bba63cf718173600f730c435d48ed71` and
+`f81df53c577e16da6c04669476b8014fdb155130` (#57540), carrying native GPU
+no-repeat NGram masking and its custom logits-processor plugin path, as
+`upstream/0002-MUSA-carry-OCR-NGram-masking-and-LOG2E-constexpr-fix.patch`.
+
+The same entry carries upstream commit
+`4d679ebea96bc42a0fb313f5f27490be71e9b425` (#62858), making `LOG2E` a Triton
+constexpr in the DeepEncoder attention kernel.
+The OCR Cookbook recipes are maintained separately as vLLM-MUSA documentation;
+they are not part of the upstream patch entry.
 
 An upstream entry is a `git cherry-pick -x` of its upstream commit: the
 message keeps the upstream subject, whose `(#N)` names the pull request, and
