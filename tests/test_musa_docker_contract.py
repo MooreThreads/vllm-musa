@@ -69,4 +69,4 @@ def test_numpy_runtime_constraint_allows_the_supported_numpy_1_series():
 
     assert "numpy<2" in requirements
     assert "numpy==1.26.4" not in requirements
-    assert "python -m pip install 'numpy<2'" in dockerfile
+    assert "python -m pip install 'numpy<2'" not in dockerfile

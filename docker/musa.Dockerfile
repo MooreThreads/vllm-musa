@@ -343,8 +343,8 @@ FROM vllm_musa_deps AS vllm_musa_installed
 
 # setup.py's develop_dynamic_library() installs the vendored vLLM with
 # --no-deps to avoid replacing the MUSA torch stack. Route the explicit vLLM
-# runtime dependency install and the numpy re-pin below through the same public
-# index as the deps stage. PYPI_INDEX_URL comes from docker/build_image.sh.
+# runtime dependency install through the same public index as the deps stage.
+# NumPy is already constrained by requirements/common.txt above.
 ARG PYPI_INDEX_URL
 # The vendored vLLM/FlashInfer fetch goes through a GitHub mirror by default.
 # An empty value keeps that default; pass 0 to fetch from github.com directly.
@@ -357,8 +357,7 @@ COPY . /vllm-workspace
 # torchada's table, each spelled for its reader.
 RUN python docker/check_musa_arch_env.py
 RUN python -m pip install \
-        -e . --no-build-isolation -v && \
-    python -m pip install 'numpy<2'
+        -e . --no-build-isolation -v
 
 RUN python -m pip install \
         --no-cache-dir \
