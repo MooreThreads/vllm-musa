@@ -199,6 +199,8 @@ def _indexer_selection_helpers(
         return call
 
     namespace = {
+        "torch": SimpleNamespace(int32="int32"),
+        "get_deep_select_stride_requirement": lambda: (32, 32),
         "deep_select_topk": record("deep_select"),
         "is_deep_select_supported": lambda logits, topk: supported,
         "_musa_sparse_indexer_is_current_stream_capturing": lambda: capturing,
@@ -239,6 +241,15 @@ class _IndexerTensorMetadata:
 
     def stride(self, axis: int) -> int:
         return math.prod(self.shape[axis + 1 :])
+
+    def storage_offset(self) -> int:
+        return 0
+
+    def element_size(self) -> int:
+        return {"int32": 4, "int64": 8}[self.dtype]
+
+    def is_contiguous(self) -> bool:
+        return True
 
     def reshape(self, *shape):
         assert shape == (-1,)
@@ -304,6 +315,7 @@ def test_paged_triton_writes_consumer_supported_logits_dtype(
 
     namespace.update(
         torch=SimpleNamespace(
+            int32="int32",
             float8_e4m3fn="float8_e4m3fn",
             uint8="uint8",
             float32="float32",
@@ -363,13 +375,19 @@ def test_window_dispatch_preserves_legacy_fallback(
     backend: str, starts_at_zero: bool, topk: int, expected: str
 ) -> None:
     namespace, calls = _indexer_selection_helpers()
-    logits, starts, ends, output = (object() for _ in range(4))
+    logits = _IndexerTensorMetadata((2, 4096), "bfloat16")
+    starts = ends = _IndexerTensorMetadata((2,), "int32")
+    output = _IndexerTensorMetadata((2, topk), "int64")
     namespace["_musa_select_indexer_topk_windows"](
         logits, starts, ends, output, topk, starts_at_zero, backend
     )
     if expected == "deep_select":
         assert calls == [
-            (expected, (logits, topk), {"end": ends, "output_idx": output})
+            (
+                expected,
+                (logits, topk),
+                {"end": ends, "output_idx": output, "indices_dtype": output.dtype},
+            )
         ]
     elif expected == "windows":
         assert calls == [(expected, (logits, starts, ends, output, topk), {})]
@@ -377,12 +395,17 @@ def test_window_dispatch_preserves_legacy_fallback(
         assert calls == [(expected, (logits, ends, output, topk), {})]
 
 
+@pytest.mark.parametrize("input_supported, output_padding", [(False, 0), (True, 1)])
 @pytest.mark.parametrize("topk, expected", [(512, "staged"), (1024, "decode")])
 def test_unsupported_deep_select_layout_uses_native_topk(
-    topk: int, expected: str
+    topk: int, expected: str, input_supported: bool, output_padding: int
 ) -> None:
-    namespace, calls = _indexer_selection_helpers(capturing=True, supported=False)
-    logits, starts, ends, output = (object() for _ in range(4))
+    namespace, calls = _indexer_selection_helpers(
+        capturing=True, supported=input_supported
+    )
+    logits = _IndexerTensorMetadata((2, 4096), "bfloat16")
+    starts = ends = _IndexerTensorMetadata((2,), "int32")
+    output = _IndexerTensorMetadata((2, topk + output_padding), "int32")
     namespace["_musa_select_indexer_topk_windows"](
         logits, starts, ends, output, topk, True, "deep_select"
     )
