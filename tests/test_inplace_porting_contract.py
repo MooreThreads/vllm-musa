@@ -173,6 +173,7 @@ def test_musa_image_runtime_dependency_contract():
     runtime_requirements = (
         (ROOT / "requirements" / "vllm_runtime_transitive.txt").read_text().splitlines()
     )
+    assert "mcp>=2,<3" in runtime_requirements
     dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
     verifier = (ROOT / "docker" / "verify_installed_dependencies.py").read_text()
 

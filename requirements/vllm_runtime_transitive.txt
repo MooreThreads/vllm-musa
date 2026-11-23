@@ -25,5 +25,6 @@ opentelemetry-exporter-otlp-proto-grpc
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-semantic-conventions
 mcp-types>=2,<3
+mcp>=2,<3
 soundfile
 av
