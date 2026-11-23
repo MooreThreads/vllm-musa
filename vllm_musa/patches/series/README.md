@@ -412,9 +412,8 @@ no-repeat NGram processor and its custom-logits-processor loader integration,
 as
 `upstream/0002-MUSA-carry-OCR-no-repeat-ngram-runtime-support.patch`.
 This entry also carries the DeepSeek-OCR `LOG2E` Triton constexpr compatibility
-fix and intentionally excludes the PR's tests and benchmarks. The OCR Cookbook
-recipes are maintained separately as vLLM-MUSA documentation; they are not
-part of the upstream patch entry.
+fix. The OCR Cookbook recipes are maintained separately as vLLM-MUSA
+documentation; they are not part of the upstream patch entry.
 
 An upstream entry is a `git cherry-pick -x` of its upstream commit: the
 message keeps the upstream subject, whose `(#N)` names the pull request, and
