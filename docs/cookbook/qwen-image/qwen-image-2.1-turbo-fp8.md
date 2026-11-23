@@ -14,6 +14,7 @@ FP8 on the DiT linears. This is the fastest of the four profiles in this section
 
 | Setting | Value |
 |---|---|
+| Image | vLLM-Omni image built by `docker/build_omni_image.sh` |
 | Hardware | 1x S5000 |
 | Precision | FP8 |
 | Quantization | Online per-tensor FP8 on the DiT linears, from the BF16 checkpoint |
@@ -66,17 +67,17 @@ curl -s -X POST http://localhost:8000/v1/images/generations \
 
 - **Two independent changes at once.** Against the base BF16 reference this
   recipe changes both the checkpoint and the numerics, so its output is not
-  comparable to that reference image. The FP8 fidelity sweep in
-  [the FP8 recipe](qwen-image-2.1-fp8.md) ran on the base checkpoint; the Turbo
-  checkpoint's own quality bar is discussed in
-  [the Turbo BF16 recipe](qwen-image-2.1-turbo-bf16.md). Neither was re-measured
-  for the combination.
+  comparable to that reference image. The FP8 fidelity caveat in
+  [the FP8 recipe](qwen-image-2.1-fp8.md) applies to the base checkpoint, and the
+  Turbo checkpoint's own quality bar is discussed in
+  [the Turbo BF16 recipe](qwen-image-2.1-turbo-bf16.md). Neither covers the
+  combination.
 - FP8 is worth proportionally less here than at 20 steps: with fewer denoising
   steps, the fixed per-request work that FP8 does not touch — text encoding and
   VAE decode — is a larger share of the wall.
-- `fp8_per_block` does not start on this platform; use `fp8` as shown. See
-  [the FP8 recipe](qwen-image-2.1-fp8.md) for that and for the `ignored_layers`
-  glob caveat.
+- `fp8_per_block` does not start on the revision this recipe pins; use `fp8` as
+  shown. See [the FP8 recipe](qwen-image-2.1-fp8.md) for that and for the
+  `ignored_layers` glob caveat.
 - The checkpoint is released under the Qwen Research License. Read it before
   deploying.
 - Everything in [the BF16 recipe](qwen-image-2.1-bf16.md)'s configuration notes

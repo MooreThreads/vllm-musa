@@ -123,8 +123,17 @@ image build.
 | Qwen-Image-2.1-Turbo | FP8 | 8 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-turbo-fp8.md) |
 
 These differ from every other recipe here: the server takes `--omni`, requests go
-to `/v1/images/generations`, and the image is built by
-`docker/build_omni_image.sh` rather than pulled as a `vllm-openai` tag.
+to `/v1/images/generations`, and the image is built rather than pulled as a
+`vllm-openai` tag. All four run in the same image, built once from a pinned
+vLLM-MUSA v0.32 base:
+
+```bash
+export VLLM_MUSA_IMAGE=<your pinned vLLM-MUSA v0.32 image>
+bash docker/build_omni_image.sh --omni-ref 31c8986250d
+```
+
+That is the vLLM-Omni revision the recipes were validated on; the tag follows the
+ref, so the command above builds `vllm-omni-musa:31c8986250d`.
 
 ## Verify a server
 

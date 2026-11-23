@@ -20,8 +20,7 @@ Back to the [full serving cookbook](../README.md).
 - **BF16** is the reference. Use it when the output must match what the
   checkpoint produces elsewhere.
 - **FP8** quantizes the DiT's linears at load time from the same BF16 checkpoint
-  and serves it faster. It changes the image: over a 14-prompt sweep some outputs
-  were indistinguishable from BF16 and about half moved enough to see. Use it for
+  and serves it faster. It changes the image, sometimes visibly. Use it for
   throughput, not when a pinned prompt and seed must keep reproducing a known
   image.
 - **Turbo** is a different, distilled checkpoint that carries its own 8-step
@@ -29,9 +28,8 @@ Back to the [full serving cookbook](../README.md).
   an approximation of the base model's.
 - The two stack: Turbo plus FP8 is the fastest of the four.
 
-Latency depends on resolution, step count, guidance and host, so these pages
-document configuration rather than published numbers. Measure your own prompt
-set and request shape before committing to a profile.
+Latency depends on resolution, step count, guidance and host; measure your own
+prompt set and request shape before committing to a profile.
 
 Both checkpoints are released under the Qwen Research License. Read it before
 deploying either one; neither is under a permissive licence.
@@ -43,13 +41,14 @@ v0.32 base:
 
 ```bash
 export VLLM_MUSA_IMAGE=<your pinned vLLM-MUSA v0.32 image>
-bash docker/build_omni_image.sh --omni-ref origin/main
+bash docker/build_omni_image.sh --omni-ref 31c8986250d
 ```
 
-The default tag is `vllm-omni-musa:<omni-sha>`. Pin `--omni-ref` to a known
-revision for a reproducible image; vLLM-Omni tracks its own main and is usually
-newer than the vLLM commit this branch pins. `docs/omni_compat.md` describes the
-shim that absorbs that drift and how to check it.
+That is the vLLM-Omni revision the four recipes were validated on, and the tag
+follows the ref: `vllm-omni-musa:31c8986250d`. `--tag` overrides it, and
+`--omni-ref origin/main` tracks Omni's main instead, which is usually newer than
+the vLLM commit this branch pins; `docs/omni_compat.md` describes the shim that
+absorbs that drift and how to check it.
 
 ## Verify a server
 

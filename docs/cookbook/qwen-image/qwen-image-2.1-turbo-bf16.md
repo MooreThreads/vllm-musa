@@ -4,18 +4,18 @@
 
 Qwen-Image-2.1-Turbo is a distilled checkpoint that carries its own 8-entry
 `sample_sigmas` schedule in `model_index.json`. It reaches an image in 8
-denoising steps instead of 20, which is where the latency goes — the per-step
-cost is unchanged.
+denoising steps instead of 20. The saving is the step count: the per-step cost is
+unchanged.
 
 > [!TIP]
-> This is the largest single win in this section. Its output is its own, not an
-> approximation of the base model's, so treat it as a different model rather than
-> a faster setting.
+> Treat Turbo as a different model rather than a faster setting: its output is
+> its own, not an approximation of the base model's.
 
 ## At a glance
 
 | Setting | Value |
 |---|---|
+| Image | vLLM-Omni image built by `docker/build_omni_image.sh` |
 | Hardware | 1x S5000 |
 | Precision | BF16 |
 | Tensor parallelism | TP1 |

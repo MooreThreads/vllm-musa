@@ -8,12 +8,13 @@ the BF16 recipe; the image changes.
 
 > [!TIP]
 > Use this profile for throughput. Do not use it where a pinned prompt and seed
-> must keep reproducing a known image — see the fidelity note below.
+> must keep reproducing a known image — see the configuration notes below.
 
 ## At a glance
 
 | Setting | Value |
 |---|---|
+| Image | vLLM-Omni image built by `docker/build_omni_image.sh` |
 | Hardware | 1x S5000 |
 | Precision | FP8 |
 | Quantization | Online per-tensor FP8 on the DiT linears, from the BF16 checkpoint |
@@ -34,7 +35,6 @@ the BF16 recipe; the image changes.
 | MUSA driver | 5.2.0 |
 | Hardware | 1x S5000, TP1 |
 | Served request | 1024x1024, batch 1, seed 42, `true_cfg_scale` 1.0, 20 steps |
-| Fidelity | 14-prompt PSNR/SSIM sweep against the BF16 image |
 
 ## Launching the server
 
@@ -71,16 +71,18 @@ curl -s -X POST http://localhost:8000/v1/images/generations \
   see, and at the tail the composition itself changes. Judge it on your own prompt
   set before deploying, and keep the BF16 recipe for any request whose exact
   output is part of the contract.
-- **Use `fp8`, not `fp8_per_block`.** The block-scaled method fails at engine
-  start on this platform with
+- **Use `fp8`, not `fp8_per_block`.** On the vLLM-Omni revision in the Validation
+  table, the block-scaled method fails at engine start with
   `AssertionError: <built-in function getitem> is not an OpOverload` raised from
   the Inductor lowering, so there is no working block-128 configuration to serve.
-- **`ignored_layers` needs a glob.** On the vLLM-Omni revision above, patterns are
-  matched against the full layer prefix, so a bare module name such as `img_mlp`
-  matches nothing and is silently ignored; the working form is `"*img_mlp*"`. On
-  this model it is a poor trade in any case: keeping the image-stream MLPs in BF16
-  improves fidelity on average but gives back almost all of the speed, and does
-  not fix the worst prompts.
+- **`ignored_layers` needs a glob.** On that same revision, patterns are matched
+  against the full layer prefix, so a bare module name such as `img_mlp` matches
+  nothing and is silently ignored; the working form is `"*img_mlp*"`. On this
+  model it is a poor trade in any case: keeping the image-stream MLPs in BF16
+  improves fidelity but gives back most of the FP8 speed-up, and does not fix the
+  worst prompts.
+- The checkpoint is released under the Qwen Research License. Read it before
+  deploying; it is not one of the permissive licences.
 - Everything in the BF16 recipe's configuration notes applies here too, including
   the mandatory `TORCHINDUCTOR_COMPILE_THREADS=1` and the inert
   `enable_cuda_graph_decode` flag.

@@ -15,6 +15,7 @@ this section.
 
 | Setting | Value |
 |---|---|
+| Image | vLLM-Omni image built by `docker/build_omni_image.sh` |
 | Hardware | 1x S5000 |
 | Precision | BF16 |
 | Tensor parallelism | TP1 |
@@ -78,11 +79,13 @@ curl -s -X POST http://localhost:8000/v1/images/generations \
   second transformer evaluation per step, so the cost per image goes up.
 - `enable_cuda_graph_decode` defaults to on and has **no effect on this
   platform**: the capture path is gated to CUDA devices, so the flag is inert.
-  Leaving it at the default is correct — forcing the capture path on was measured
-  slower per image, because graph replay costs more per step than eager execution
-  here and each request pays a capture.
-- The first start compiles the pipeline, so the server takes a few minutes to
-  accept requests, longer on a cold Inductor cache. The first request after that
-  is slower than the steady state.
+  Leaving it at the default is correct — forcing the capture path on is slower per
+  image, because graph replay costs more per step than eager execution here and
+  each request pays a capture.
+- The first start compiles the pipeline, so the server does not accept requests
+  immediately; a cold Inductor cache makes it longer. The first request after
+  that is slower than the steady state.
+- The checkpoint is released under the Qwen Research License. Read it before
+  deploying; it is not one of the permissive licences.
 
 Return to the [Qwen-Image recipe index](README.md).
