@@ -4,13 +4,13 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
- CMakeLists.txt                           |  5 +++++
- cmake/external_projects/deepselect.cmake | 77 +++++++++++++++++++++++-
- setup.py                                 |  3 +
- 3 files changed, 84 insertions(+), 1 deletion(-)
+ CMakeLists.txt                           |  5 ++++
+ cmake/external_projects/deepselect.cmake | 41 +++++++++++++++++++++++++++++---
+ setup.py                                 |  4 +++-
+ 3 files changed, 46 insertions(+), 4 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a71d7e1e5..ace6e7404a 100644
+index 3a71d7e..29d018d 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -95,6 +95,11 @@ endif()
@@ -26,7 +26,7 @@ index 3a71d7e1e5..ace6e7404a 100644
  
  # Ensure the 'nvcc' command is in the PATH
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e61..e14f3c4635 100644
+index e2a5592..20e2710 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
 @@ -5,7 +5,7 @@ include(FetchContent)
@@ -38,88 +38,54 @@ index e2a5592e61..e14f3c4635 100644
  endif()
  
  if(DEEPSELECT_SRC_DIR)
-@@ -15,6 +15,19 @@ if(DEEPSELECT_SRC_DIR)
-         CONFIGURE_COMMAND ""
+@@ -16,10 +16,18 @@ if(DEEPSELECT_SRC_DIR)
          BUILD_COMMAND ""
    )
-+elseif(VLLM_TARGET_DEVICE STREQUAL "empty")
-+  set(DEEPSELECT_GIT_REPOSITORY https://github.com/MooreThreads/DeepSelect.git)
-+  set(DEEPSELECT_GIT_TAG 2464c80eade254ef04d19182e93249010e4957d7)
-+  FetchContent_Declare(
-+        deepselect
-+        GIT_REPOSITORY ${DEEPSELECT_GIT_REPOSITORY}
-+        GIT_TAG ${DEEPSELECT_GIT_TAG}
-+        GIT_SUBMODULES csrc/3rdparty/mutlass
-+        GIT_SUBMODULES_RECURSE TRUE
-+        GIT_PROGRESS TRUE
-+        CONFIGURE_COMMAND ""
-+        BUILD_COMMAND ""
-+  )
  else()
++  set(deepselect_repo https://github.com/vllm-project/DeepSelect.git)
++  set(deepselect_rev d96d33afe1fab0d6066da49cdc91e64c2bee65ea)
++  if(VLLM_TARGET_DEVICE STREQUAL "empty")
++    set(deepselect_repo https://github.com/MooreThreads/DeepSelect.git)
++    set(deepselect_rev 2464c80eade254ef04d19182e93249010e4957d7)
++    set(deepselect_submodules GIT_SUBMODULES csrc/3rdparty/mutlass)
++  endif()
    FetchContent_Declare(
          deepselect
-@@ -29,6 +42,68 @@ endif()
+-        GIT_REPOSITORY https://github.com/vllm-project/DeepSelect.git
+-        GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea
++        GIT_REPOSITORY ${deepselect_repo}
++        GIT_TAG ${deepselect_rev}
++        ${deepselect_submodules}
+         GIT_PROGRESS TRUE
+         CONFIGURE_COMMAND ""
+         BUILD_COMMAND ""
+@@ -29,6 +37,33 @@ endif()
  FetchContent_MakeAvailable(deepselect)
  message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
  
 +if(VLLM_TARGET_DEVICE STREQUAL "empty")
-+  set(DeepSelect_MUSA_SOURCE "${deepselect_SOURCE_DIR}/csrc/musa_api.mu")
-+  if(NOT EXISTS "${DeepSelect_MUSA_SOURCE}")
-+    message(FATAL_ERROR "DeepSelect MUSA source missing: ${DeepSelect_MUSA_SOURCE}")
-+  endif()
-+  if(NOT EXISTS "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include/mute/tensor.hpp")
-+    message(FATAL_ERROR "DeepSelect MUTLASS submodule is missing; initialize csrc/3rdparty/mutlass")
-+  endif()
-+
-+  find_program(DEEPSELECT_MCC mcc HINTS "$ENV{MUSA_HOME}/bin" /usr/local/musa/bin REQUIRED)
-+  run_python(DEEPSELECT_MUSA_INCLUDES
-+    "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).include_dirs))"
-+    "Failed to locate DeepSelect MUSA headers")
-+  run_python(DEEPSELECT_MUSA_LIBRARY_DIRS
-+    "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).library_dirs))"
-+    "Failed to locate DeepSelect MUSA libraries")
-+  run_python(DEEPSELECT_MUSA_LIBRARIES
-+    "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).libraries))"
-+    "Failed to determine DeepSelect MUSA link libraries")
-+  run_python(DEEPSELECT_MUSA_ABI_FLAGS
-+    "import torch; from torch.utils.cpp_extension import _get_pybind11_abi_build_flags; print(';'.join(_get_pybind11_abi_build_flags() + ['-D_GLIBCXX_USE_CXX11_ABI=' + str(int(torch._C._GLIBCXX_USE_CXX11_ABI))]))"
-+    "Failed to determine DeepSelect PyTorch ABI")
-+
-+  set(DeepSelect_MUSA_INCLUDES
-+    ${DEEPSELECT_MUSA_INCLUDES} ${Python_INCLUDE_DIRS}
-+    "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include")
-+  set(DeepSelect_MUSA_FLAGS
-+    -x musa --offload-arch=mp_31 -O3 -fPIC -std=c++17
-+    -ffast-math -Wno-error=address-of-temporary -fmusa-flush-denormals-to-zero
-+    -fno-signed-zeros -mllvm -mtgpu-opt-level=1
-+    -mllvm -mtgpu-load-store-opt=1 -mllvm -mtgpu-fold-global-ldst=1
-+    -DUSE_MUSA -DTORCH_API_INCLUDE_EXTENSION_H
-+    -DTORCH_EXTENSION_NAME=_deepselect_C ${DEEPSELECT_MUSA_ABI_FLAGS})
-+  foreach(include_dir IN LISTS DeepSelect_MUSA_INCLUDES)
-+    list(APPEND DeepSelect_MUSA_FLAGS "-I${include_dir}")
++  find_path(MUSA_CMAKE_DIR Modules/CMakeDetermineMUSACompiler.cmake
++    HINTS "$ENV{MUSA_HOME}/cmake" /usr/local/musa/cmake REQUIRED)
++  list(PREPEND CMAKE_MODULE_PATH "${MUSA_CMAKE_DIR}/Modules" "${MUSA_CMAKE_DIR}")
++  enable_language(MUSA)
++  set(CMAKE_INCLUDE_SYSTEM_FLAG_MUSA "-isystem ")
++  foreach(attr IN ITEMS include_dirs library_dirs libraries)
++    run_python(deepselect_${attr}
++      "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).${attr}))"
++      "Cannot determine DeepSelect MUSA ${attr}")
 +  endforeach()
-+
-+  set(DeepSelect_MUSA_OBJECT
-+      "${CMAKE_CURRENT_BINARY_DIR}/deepselect-musa/musa_api.mu.o")
-+  add_custom_command(
-+    OUTPUT "${DeepSelect_MUSA_OBJECT}"
-+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/deepselect-musa"
-+    COMMAND "${DEEPSELECT_MCC}" ${DeepSelect_MUSA_FLAGS}
-+      -MMD -MF "${DeepSelect_MUSA_OBJECT}.d"
-+      -c "${DeepSelect_MUSA_SOURCE}" -o "${DeepSelect_MUSA_OBJECT}"
-+    DEPENDS "${DeepSelect_MUSA_SOURCE}" "${CMAKE_CURRENT_LIST_FILE}"
-+    DEPFILE "${DeepSelect_MUSA_OBJECT}.d"
-+    VERBATIM)
-+  define_extension_target(
-+    _deepselect_C
-+    DESTINATION vllm
-+    LANGUAGE CXX
-+    SOURCES "${DeepSelect_MUSA_OBJECT}"
-+    LIBRARIES ${DEEPSELECT_MUSA_LIBRARIES}
-+    WITH_SOABI)
-+  target_link_directories(_deepselect_C PRIVATE ${DEEPSELECT_MUSA_LIBRARY_DIRS})
-+  set_target_properties(_deepselect_C PROPERTIES
-+    LINKER_LANGUAGE CXX
++  define_extension_target(_deepselect_C
++    DESTINATION vllm LANGUAGE MUSA WITH_SOABI
++    SOURCES "${deepselect_SOURCE_DIR}/csrc/musa_api.mu"
++    INCLUDE_DIRECTORIES ${deepselect_include_dirs} "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include"
++    COMPILE_FLAGS --offload-arch=mp_31 -O3 -std=c++17 -Wno-error=address-of-temporary
++      -ffast-math -fmusa-flush-denormals-to-zero -fno-signed-zeros
++      "SHELL:-mllvm -mtgpu-opt-level=1" "SHELL:-mllvm -mtgpu-load-store-opt=1"
++      "SHELL:-mllvm -mtgpu-fold-global-ldst=1"
++    LIBRARIES ${deepselect_libraries})
++  target_compile_definitions(_deepselect_C PRIVATE USE_MUSA TORCH_API_INCLUDE_EXTENSION_H)
++  target_link_directories(_deepselect_C PRIVATE ${deepselect_library_dirs})
++  set_target_properties(_deepselect_C PROPERTIES LINKER_LANGUAGE CXX
 +    INSTALL_RPATH "$ORIGIN/../torch/lib;$ORIGIN/../torch_musa/lib")
 +  return()
 +endif()
@@ -128,13 +94,14 @@ index e2a5592e61..e14f3c4635 100644
  set(DEEPSELECT_SUPPORT_ARCHS)
  if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.9)
 diff --git a/setup.py b/setup.py
-index 37bfc3e41b..2d104f0818 100644
+index 37bfc3e..43b7d21 100644
 --- a/setup.py
 +++ b/setup.py
-@@ -1653,6 +1653,9 @@ for rust_extension_path in get_precompiled_rust_extension_paths():
+@@ -1652,7 +1652,9 @@ for rust_extension_path in get_precompiled_rust_extension_paths():
+     add_vllm_package_data(rust_extension_path.name)
  
  if _no_device():
-     ext_modules = []
+-    ext_modules = []
 +    deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
 +    deepselect_extension.py_limited_api = False
 +    ext_modules = [deepselect_extension]
