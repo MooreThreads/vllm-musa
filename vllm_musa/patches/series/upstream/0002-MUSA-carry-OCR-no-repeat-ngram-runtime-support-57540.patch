@@ -5,10 +5,15 @@ Subject: [PATCH] MUSA: carry OCR no-repeat ngram runtime support (#57540)
 
 Carry runtime portions from two upstream PRs. PR #57540 contributes `b1dcae362bba63cf718173600f730c435d48ed71`, which adds native GPU no-repeat ngram masking, and `f81df53c577e16da6c04669476b8014fdb155130`, which refactors it into the custom logits-processor plugin path. PR #62858 contributes `4d679ebea96bc42a0fb313f5f27490be71e9b425`, which makes `LOG2E` a Triton constexpr in the DeepEncoder attention kernel.
 
-Signed-off-by: jasonlee <lijiaxiang@neoway.com>
+PR #57540 `b1dcae362bba63cf718173600f730c435d48ed71` trailers:
 Co-authored-by: OpenAI Codex <codex@openai.com>
+Signed-off-by: jasonlee <lijiaxiang@neoway.com>
+
+PR #57540 `f81df53c577e16da6c04669476b8014fdb155130` trailers:
 Co-authored-by: Codex <codex@openai.com>
 Signed-off-by: jasonlee <lijiaxiang@neoway.com>
+
+PR #62858 `4d679ebea96bc42a0fb313f5f27490be71e9b425` trailers:
 Assisted-by: Claude Code (Claude Opus 5.5)
 Signed-off-by: usmanmateen <74776275+usmanmateen@users.noreply.github.com>
 
