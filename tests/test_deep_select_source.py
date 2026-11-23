@@ -552,7 +552,6 @@ def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
     assert "musa_api.mu" in added
 
 
-
 @pytest.mark.parametrize(
     "configured",
     [{}, {"VLLM_TARGET_DEVICE": "empty", "MTGPU_TARGET": "mp_22"}],
