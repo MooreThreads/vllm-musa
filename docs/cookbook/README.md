@@ -156,4 +156,4 @@ $ python3 -m http.server -d _site 8000
 ```
 
 Build options and the complete list of checks are in
-[tools/cookbook-site/README.md](https://github.com/MooreThreads/vllm-musa/blob/v0.32.0-dev/tools/cookbook-site/README.md).
+[tools/cookbook-site/README.md](https://github.com/MooreThreads/vllm-musa/blob/HEAD/tools/cookbook-site/README.md).
