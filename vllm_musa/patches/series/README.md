@@ -410,7 +410,7 @@ The series carries upstream commits
 `b1dcae362bba63cf718173600f730c435d48ed71` and
 `f81df53c577e16da6c04669476b8014fdb155130` (#57540), carrying native GPU
 no-repeat NGram masking and its custom logits-processor plugin path, as
-`upstream/0002-MUSA-carry-OCR-no-repeat-ngram-runtime-support-57540.patch`.
+`upstream/0002-MUSA-carry-OCR-NGram-masking-and-LOG2E-constexpr-fix.patch`.
 
 The same entry carries upstream commit
 `4d679ebea96bc42a0fb313f5f27490be71e9b425` (#62858), making `LOG2E` a Triton

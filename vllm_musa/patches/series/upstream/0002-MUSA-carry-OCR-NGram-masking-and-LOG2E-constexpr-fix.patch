@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Fri, 20 Nov 2026 18:26:24 +0800
-Subject: [PATCH] MUSA: carry OCR no-repeat ngram runtime support (#57540)
- (#62858)
+Subject: [PATCH] MUSA: carry OCR NGram masking and LOG2E constexpr fixes
+ (#57540) (#62858)
 
 Signed-off-by: jasonlee <lijiaxiang@neoway.com>
 Co-authored-by: OpenAI Codex <codex@openai.com>
