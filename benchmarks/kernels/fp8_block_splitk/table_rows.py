@@ -19,13 +19,30 @@ Default rows are never written; a proposal is copied into the table by hand.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-TABLE = REPO / "vllm_musa" / "tuning" / "fp8_block_splitk.json"
+
+
+def _table_path() -> Path:
+    """Find the tuning table in an installed wheel or a source checkout."""
+    spec = importlib.util.find_spec("vllm_musa")
+    if spec is not None and spec.submodule_search_locations:
+        installed = (
+            Path(next(iter(spec.submodule_search_locations)))
+            / "tuning"
+            / "fp8_block_splitk.json"
+        )
+        if installed.is_file():
+            return installed
+    return REPO / "vllm_musa" / "tuning" / "fp8_block_splitk.json"
+
+
+TABLE = _table_path()
 
 CONFIG_GAIN = 0.03
 EDGE_ROWS = 4
@@ -311,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         const=TABLE,
         type=Path,
-        help=f"merge the rows into this table (default {TABLE.relative_to(REPO)})",
+        help=f"merge the rows into this table (default {TABLE})",
     )
     args = parser.parse_args(argv)
     reports = [json.loads(p.read_text()) for p in args.results]

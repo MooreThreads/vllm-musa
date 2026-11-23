@@ -208,7 +208,13 @@ def repo_provenance() -> dict[str, Any]:
 
 def package_versions() -> dict[str, str | None]:
     versions: dict[str, str | None] = {}
-    for package in ("torch", "torch_musa", "torchada", "mate", "vllm", "vllm-musa"):
+    for package in (
+        "torch",
+        "torch_musa",
+        "torchada",
+        "mate",
+        "vllm-musa",
+    ):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
