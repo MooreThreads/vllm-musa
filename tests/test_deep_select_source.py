@@ -59,8 +59,8 @@ def test_series_patch_keeps_the_cuda_capability_check() -> None:
         "self._is_cuda and not current_platform.is_device_capability_family(100)"
         in added
     )
-    assert "self._is_musa = current_platform.is_musa()" in added
-    assert "current_platform.is_out_of_tree()" not in added
+    assert "self._is_musa = (" in added
+    assert "current_platform.is_out_of_tree() and current_platform.is_musa()" in added
     assert "if not self._is_cuda and not self._is_musa:" in added
 
 
@@ -548,7 +548,7 @@ def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
     )
     added = _added_lines(source_patch)
     assert "https://github.com/MooreThreads/DeepSelect.git" in added
-    assert "2464c80eade254ef04d19182e93249010e4957d7" in added
+    assert "95c6884ac33e0d6ed9eb7b6282f4cc4a9a735f94" in added
     assert "musa_api.mu" in added
 
 
@@ -618,21 +618,39 @@ def test_vllm_build_does_not_add_musa_platform_or_compiler_detection() -> None:
         assert forbidden not in added
 
 
-@pytest.mark.parametrize("empty", [False, True])
-def test_vllm_empty_mode_always_builds_vllm_deepselect_extension(empty: bool) -> None:
+@pytest.mark.parametrize(
+    ("empty", "source_env", "cmake_args"),
+    [
+        (False, "", ""),
+        (True, "", ""),
+        (True, "/prepared/DeepSelect", ""),
+        (True, "", "-DDEEPSELECT_SRC_DIR=/prepared/DeepSelect"),
+    ],
+)
+def test_vllm_empty_mode_builds_deepselect_only_when_configured(
+    empty: bool, source_env: str, cmake_args: str
+) -> None:
     setup_patch = BUILD_PATCH.read_text().split("diff --git a/setup.py", 1)[1]
     source = "if _no_device():\n    ext_modules = []\n" + _added_lines(setup_patch)
     extensions = [SimpleNamespace(name="existing")]
+    environment = {
+        "DEEPSELECT_SRC_DIR": source_env,
+        "CMAKE_ARGS": cmake_args,
+    }
     namespace = {
         "_no_device": lambda: empty,
         "CMakeExtension": lambda **kwargs: SimpleNamespace(**kwargs),
         "ext_modules": extensions,
+        "os": SimpleNamespace(environ=environment),
     }
     exec(compile(source, str(BUILD_PATCH), "exec"), namespace)
     result = namespace["ext_modules"]
-    if empty:
+    configured = bool(source_env or cmake_args)
+    if empty and configured:
         assert [extension.name for extension in result] == ["vllm._deepselect_C"]
         assert result[0].py_limited_api is False
+    elif empty:
+        assert result == []
     else:
         assert result is extensions
 

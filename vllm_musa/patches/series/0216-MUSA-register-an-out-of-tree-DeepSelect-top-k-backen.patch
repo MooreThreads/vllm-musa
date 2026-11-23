@@ -4,11 +4,11 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: register an out-of-tree DeepSelect top-k backend
 
 ---
- vllm/model_executor/layers/indexer_topk.py | 41 ++++++++++++++--------
- 1 file changed, 27 insertions(+), 14 deletions(-)
+ vllm/model_executor/layers/indexer_topk.py | 41 ++++++++++++++++++++----------
+ 1 file changed, 28 insertions(+), 13 deletions(-)
 
 diff --git a/vllm/model_executor/layers/indexer_topk.py b/vllm/model_executor/layers/indexer_topk.py
-index 02c4280ea0..70e02bdbb8 100644
+index 02c4280ea0..26674bb274 100644
 --- a/vllm/model_executor/layers/indexer_topk.py
 +++ b/vllm/model_executor/layers/indexer_topk.py
 @@ -43,14 +43,17 @@ def get_deep_select_stride_requirement() -> tuple[int, int]:
@@ -86,18 +86,18 @@ index 02c4280ea0..70e02bdbb8 100644
  
  
  # ---------------------------------------------------------------------------
-@@ -153,9 +168,7 @@ class SparseIndexerTopk(torch.nn.Module):
+@@ -153,8 +168,8 @@ class SparseIndexerTopk(torch.nn.Module):
              )
          self._backend = backend
          self._is_cuda = current_platform.is_cuda()
 -        self._has_deep_select = self._is_cuda and (
 -            current_platform.is_device_capability_family(100)
--        )
-+        self._is_musa = current_platform.is_musa()
++        self._is_musa = (
++            current_platform.is_out_of_tree() and current_platform.is_musa()
+         )
          self._has_flashinfer_topk = has_flashinfer()
          self._cooperative_capable = self._is_cuda and (
-             current_platform.has_device_capability(90)
-@@ -190,9 +203,9 @@ class SparseIndexerTopk(torch.nn.Module):
+@@ -190,9 +205,9 @@ class SparseIndexerTopk(torch.nn.Module):
                      f"topk_tokens must be in (512, 1024, 2048), got {topk_tokens}"
                  )
          elif self._backend == "deep_select":

@@ -5,9 +5,9 @@ Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
  CMakeLists.txt                           |  2 ++
- cmake/external_projects/deepselect.cmake | 26 +++++++++++++++++++++---
- setup.py                                 |  4 +++-
- 3 files changed, 28 insertions(+), 4 deletions(-)
+ cmake/external_projects/deepselect.cmake | 43 +++++++++++++++++++++++++++++---
+ setup.py                                 | 11 ++++++--
+ 3 files changed, 51 insertions(+), 5 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 3a71d7e1e5..cc7298a4cf 100644
@@ -23,7 +23,7 @@ index 3a71d7e1e5..cc7298a4cf 100644
          return()
      endif()
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e61..5a864b8607 100644
+index e2a5592e61..ec4795e171 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
 @@ -5,7 +5,7 @@ include(FetchContent)
@@ -35,7 +35,7 @@ index e2a5592e61..5a864b8607 100644
  endif()
  
  if(DEEPSELECT_SRC_DIR)
-@@ -16,10 +16,18 @@ if(DEEPSELECT_SRC_DIR)
+@@ -16,10 +16,16 @@ if(DEEPSELECT_SRC_DIR)
          BUILD_COMMAND ""
    )
  else()
@@ -43,8 +43,7 @@ index e2a5592e61..5a864b8607 100644
 +  set(deepselect_rev d96d33afe1fab0d6066da49cdc91e64c2bee65ea)
 +  if(VLLM_TARGET_DEVICE STREQUAL "empty")
 +    set(deepselect_repo https://github.com/MooreThreads/DeepSelect.git)
-+    set(deepselect_rev 2464c80eade254ef04d19182e93249010e4957d7)
-+    set(deepselect_submodules GIT_SUBMODULES csrc/3rdparty/mutlass)
++    set(deepselect_rev 95c6884ac33e0d6ed9eb7b6282f4cc4a9a735f94)
 +  endif()
    FetchContent_Declare(
          deepselect
@@ -52,23 +51,41 @@ index e2a5592e61..5a864b8607 100644
 -        GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea
 +        GIT_REPOSITORY ${deepselect_repo}
 +        GIT_TAG ${deepselect_rev}
-+        ${deepselect_submodules}
          GIT_PROGRESS TRUE
          CONFIGURE_COMMAND ""
          BUILD_COMMAND ""
-@@ -29,6 +37,18 @@ endif()
+@@ -29,6 +35,37 @@ endif()
  FetchContent_MakeAvailable(deepselect)
  message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
  
-+if(VLLM_TARGET_DEVICE STREQUAL "empty")
++if(VLLM_TARGET_DEVICE STREQUAL "empty" AND DEEPSELECT_SRC_DIR)
 +  find_path(MUSA_CMAKE_DIR Modules/CMakeDetermineMUSACompiler.cmake
 +    HINTS "$ENV{MUSA_HOME}/cmake" /usr/local/musa/cmake REQUIRED)
 +  list(PREPEND CMAKE_MODULE_PATH "${MUSA_CMAKE_DIR}/Modules" "${MUSA_CMAKE_DIR}")
 +  enable_language(MUSA)
++  set(CMAKE_INCLUDE_SYSTEM_FLAG_MUSA "-isystem ")
++  run_python(DEEPSELECT_MUSA_INCLUDES
++    "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).include_dirs))"
++    "Failed to locate DeepSelect MUSA headers")
++  run_python(DEEPSELECT_MUSA_LIBRARY_DIRS
++    "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).library_dirs))"
++    "Failed to locate DeepSelect MUSA libraries")
++  run_python(DEEPSELECT_MUSA_LIBRARIES
++    "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).libraries))"
++    "Failed to determine DeepSelect MUSA link libraries")
 +  define_extension_target(_deepselect_C
 +    DESTINATION vllm LANGUAGE MUSA WITH_SOABI
 +    SOURCES "${deepselect_SOURCE_DIR}/csrc/musa_api.mu"
-+    INCLUDE_DIRECTORIES "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include")
++    INCLUDE_DIRECTORIES
++      "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include"
++      "${Python_INCLUDE_DIRS}"
++      "${TORCH_INCLUDE_DIRS}"
++      ${DEEPSELECT_MUSA_INCLUDES}
++    COMPILE_FLAGS --offload-arch=mp_31 -std=c++17
++    LIBRARIES ${DEEPSELECT_MUSA_LIBRARIES})
++  target_link_directories(_deepselect_C PRIVATE ${DEEPSELECT_MUSA_LIBRARY_DIRS})
++  set_target_properties(_deepselect_C PROPERTIES
++    INSTALL_RPATH "$ORIGIN/../torch/lib;$ORIGIN/../torch_musa/lib")
 +  return()
 +endif()
 +
@@ -76,14 +93,21 @@ index e2a5592e61..5a864b8607 100644
  set(DEEPSELECT_SUPPORT_ARCHS)
  if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.9)
 diff --git a/setup.py b/setup.py
-index 37bfc3e41b..43b7d21f88 100644
+index 37bfc3e41b..9597a7cd8e 100644
 --- a/setup.py
 +++ b/setup.py
-@@ -1652,7 +1652,9 @@ for rust_extension_path in get_precompiled_rust_extension_paths():
+@@ -1651,8 +1651,15 @@ if PRECOMPILED_RUST_FRONTEND_PATH.exists():
+ for rust_extension_path in get_precompiled_rust_extension_paths():
      add_vllm_package_data(rust_extension_path.name)
  
- if _no_device():
+-if _no_device():
 -    ext_modules = []
++_deepselect_source_requested = bool(os.environ.get("DEEPSELECT_SRC_DIR")) or any(
++    argument.startswith("-DDEEPSELECT_SRC_DIR=")
++    for argument in os.environ.get("CMAKE_ARGS", "").split()
++)
++
++if _no_device() and _deepselect_source_requested:
 +    deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
 +    deepselect_extension.py_limited_api = False
 +    ext_modules = [deepselect_extension]

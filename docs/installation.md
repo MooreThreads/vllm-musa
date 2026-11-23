@@ -109,14 +109,12 @@ not substitute a public CUDA wheel with the same package name.
 
 ### Optional DeepSelect backend
 
-The MUSA install builds `vllm._deepselect_C` from the pinned MooreThreads/DeepSelect
-sources. Select it at serving time with `--sparse-indexer-topk-backend deep_select`.
+The MUSA install can build `vllm._deepselect_C` from a DeepSelect checkout.
+Select it at serving time with `--sparse-indexer-topk-backend deep_select`.
 
-While the adapter in [MooreThreads/DeepSelect#2](https://github.com/MooreThreads/DeepSelect/pull/2)
-awaits an organization branch or tag, set `DEEPSELECT_SRC_DIR` to a checkout
-containing `csrc/musa_api.mu` and its initialized `csrc/3rdparty/mutlass`
-submodule. The default Git fetch requires the pinned commit on an advertised
-branch or tag.
+Until [MooreThreads/DeepSelect#2](https://github.com/MooreThreads/DeepSelect/pull/2)
+is merged, set `DEEPSELECT_SRC_DIR` to the adapted checkout containing
+`csrc/musa_api.mu` and its initialized `csrc/3rdparty/mutlass` submodule.
 
 ```bash
 DEEPSELECT_SRC_DIR=/path/to/musa-deepselect pip install -e . --no-build-isolation -v
