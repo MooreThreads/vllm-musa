@@ -406,13 +406,15 @@ This backport includes minimum pin-ABI conflict adaptation and is not verbatim
 upstream; generic PP transport adaptation remains the independent MUSA `0216`
 entry.
 
-The series carries the runtime portion of upstream commit
-`b1dcae362bba63cf718173600f730c435d48ed71` (#57540), carrying the native GPU
-no-repeat NGram processor,
-as
-`upstream/0002-MUSA-carry-OCR-no-repeat-ngram-runtime-support-57540.patch`.
-This entry also carries the DeepSeek-OCR `LOG2E` Triton constexpr compatibility
-fix. The OCR Cookbook recipes are maintained separately as vLLM-MUSA
+The series carries the runtime portions of the two upstream commits used by
+PR #57540: `b1dcae362bba63cf718173600f730c435d48ed71` adds the native GPU
+no-repeat NGram processor, and `f81df53c577e16da6c04669476b8014fdb155130`
+loads that processor through the custom logits-processor plugin path. They are
+carried as
+`upstream/0002-MUSA-carry-OCR-no-repeat-ngram-runtime-support-57540.patch`,
+along with the DeepSeek-OCR `LOG2E` Triton constexpr compatibility fix. The
+upstream PR tests and benchmarks remain excluded from this runtime-only entry.
+The OCR Cookbook recipes are maintained separately as vLLM-MUSA
 documentation; they are not part of the upstream patch entry.
 
 An upstream entry is a `git cherry-pick -x` of its upstream commit: the
