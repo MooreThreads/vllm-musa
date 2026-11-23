@@ -112,8 +112,7 @@ The recipe uses the checkpoint's own canvas (256 tokens, 48 steps) and the
 ## Qwen-Image
 
 Text-to-image recipes served through vLLM-Omni. See the
-[Qwen-Image cookbook index](qwen-image/README.md) for the four profiles and the
-image build.
+[Qwen-Image cookbook index](qwen-image/README.md) for the four model recipes.
 
 | Model | Precision | Steps | Hardware | Recipe |
 |---|---|---|---|---|
