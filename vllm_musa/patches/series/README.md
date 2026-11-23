@@ -406,21 +406,15 @@ This backport includes minimum pin-ABI conflict adaptation and is not verbatim
 upstream; generic PP transport adaptation remains the independent MUSA `0216`
 entry.
 
-The series carries runtime changes from two upstream PRs in one entry. PR
-#57540 contributes `b1dcae362bba63cf718173600f730c435d48ed71`, which adds native
-GPU no-repeat NGram masking, and `f81df53c577e16da6c04669476b8014fdb155130`,
-which refactors that implementation into the custom logits-processor plugin
-path. PR #62858 contributes `4d679ebea96bc42a0fb313f5f27490be71e9b425`, which
-makes `LOG2E` a Triton constexpr in the DeepEncoder attention kernel. They are
-carried as
+The series carries upstream commits
+`b1dcae362bba63cf718173600f730c435d48ed71` and
+`f81df53c577e16da6c04669476b8014fdb155130` (#57540), carrying native GPU
+no-repeat NGram masking and its custom logits-processor plugin path, plus
+`4d679ebea96bc42a0fb313f5f27490be71e9b425` (#62858), carrying the DeepEncoder
+`LOG2E` Triton constexpr fix, as
 `upstream/0002-MUSA-carry-OCR-no-repeat-ngram-runtime-support-57540.patch`.
-Its mailbox preserves the upstream author trailers in separate groups,
-following the `upstream/0001` format: PR #57540 keeps the trailers for each of
-its two commits (`jasonlee <lijiaxiang@neoway.com>` with the corresponding
-Codex co-author), while PR #62858 keeps the separate
-`usmanmateen <74776275+usmanmateen@users.noreply.github.com>` trailer group.
-The OCR Cookbook recipes are maintained separately as vLLM-MUSA
-documentation; they are not part of the upstream patch entry.
+The OCR Cookbook recipes are maintained separately as vLLM-MUSA documentation;
+they are not part of the upstream patch entry.
 
 An upstream entry is a `git cherry-pick -x` of its upstream commit: the
 message keeps the upstream subject, whose `(#N)` names the pull request, and
