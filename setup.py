@@ -85,16 +85,22 @@ def _has_prebuilt_extensions() -> bool:
     if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") != "1":
         return False
     extension_patterns = (
-        ("vllm", "_C*.so"),
-        ("vllm", "_C_stable_libtorch*.so"),
-        ("vllm", "_moe_C*.so"),
-        ("vllm_musa", "_C*.so"),
+        ("vllm", ("_C.so", "_C.cpython-*.so")),
+        ("vllm", ("_C_stable_libtorch*.so",)),
+        ("vllm", ("_moe_C*.so",)),
+        ("vllm_musa", ("_C.so", "_C.cpython-*.so")),
     )
     candidate_dirs = (root / _VLLM_REPO.source_dir, root)
     missing = [
-        f"{package}/{pattern}"
-        for package, pattern in extension_patterns
-        if not any(list((candidate / package).glob(pattern)) for candidate in candidate_dirs)
+        f"{package}/{patterns[0]}"
+        for package, patterns in extension_patterns
+        if not any(
+            any(
+                list((candidate / package).glob(pattern))
+                for pattern in patterns
+            )
+            for candidate in candidate_dirs
+        )
     ]
     if missing:
         raise RuntimeError(
@@ -413,12 +419,12 @@ class _CustomBuildExt(BuildExtension):
                 (
                     "vllm",
                     Path(self.build_lib) / "vllm",
-                    ("_C*.so", "_C_stable_libtorch*.so", "_moe_C*.so"),
+                    ("_C.so", "_C.cpython-*.so", "_C_stable_libtorch*.so", "_moe_C*.so"),
                 ),
                 (
                     "vllm_musa",
                     Path(self.build_lib) / "vllm_musa",
-                    ("_C*.so",),
+                    ("_C.so", "_C.cpython-*.so"),
                 ),
             ):
                 target_dir.mkdir(parents=True, exist_ok=True)
