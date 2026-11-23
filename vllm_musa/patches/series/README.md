@@ -407,10 +407,10 @@ upstream; generic PP transport adaptation remains the independent MUSA `0216`
 entry.
 
 The series carries upstream commit
-`b1dcae362bba63cf718173600f730c43548ed71` (#57540), carrying the native GPU
-no-repeat NGram processor and its custom-logits-processor loader integration,
+`b1dcae362bba63cf718173600f730c435d48ed71` (#57540), carrying the native GPU
+no-repeat NGram processor,
 as
-`upstream/0002-MUSA-carry-OCR-no-repeat-ngram-runtime-support.patch`.
+`upstream/0002-MUSA-carry-OCR-no-repeat-ngram-runtime-support-57540.patch`.
 This entry also carries the DeepSeek-OCR `LOG2E` Triton constexpr compatibility
 fix. The OCR Cookbook recipes are maintained separately as vLLM-MUSA
 documentation; they are not part of the upstream patch entry.
