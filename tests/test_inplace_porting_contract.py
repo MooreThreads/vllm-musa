@@ -209,13 +209,8 @@ def test_musa_image_runtime_dependency_contract():
     assert import_statement in verifier
     assert verifier.index(import_statement) < verifier.index(version_statement)
     assert "if dist_name in EXACT_VERSION_DISTS and installed != pinned:" in verifier
-    assert (
-        "if (\n"
-        "        dist_name not in EXACT_VERSION_DISTS\n"
-        "        and pinned\n"
-        "        and not installed.startswith(pinned)\n"
-        "    ):"
-    ) in verifier
+    assert "if dist_name not in EXACT_VERSION_DISTS and pinned:" in verifier
+    assert 'if pinned == "<2":' in verifier
     assert '("triton", "triton", requirement_prefix("triton"))' in verifier
     assert '("uvloop", "uvloop", "")' in verifier
     assert '("pycountry", "pycountry", "")' in verifier
@@ -244,7 +239,7 @@ def test_musa_image_stage_and_optional_component_contract():
         "FROM devel AS vllm_musa_deps",
         "FROM vllm_musa_deps AS vllm_musa_installed",
         "FROM vllm_musa_installed AS vllm_rs_build",
-        "FROM vllm_musa_installed AS mooncake",
+        "FROM vllm_runtime AS mooncake",
         "FROM mooncake AS final",
         "FROM final AS vllm-openai",
     )
@@ -278,7 +273,7 @@ def test_musa_image_stage_and_optional_component_contract():
     )
     assert arch_check < native_build
 
-    mooncake_stage = dockerfile.split("FROM vllm_musa_installed AS mooncake", 1)[
+    mooncake_stage = dockerfile.split("FROM vllm_runtime AS mooncake", 1)[
         1
     ].split("FROM mooncake AS final", 1)[0]
     assert "MTHREADS_VISIBLE_DEVICES" not in mooncake_stage
@@ -353,10 +348,18 @@ def test_mooncake_uses_the_pinned_upstream_connector():
 
 def test_mooncake_example_uses_current_proxy_and_scoped_cleanup():
     script = (
-        ROOT / "example" / "disaggregated_serving" / "disaggregated_serving.sh"
+        ROOT
+        / "examples"
+        / "disaggregated"
+        / "disaggregated_serving"
+        / "disaggregated_serving.sh"
     ).read_text()
 
-    assert "third_party/vllm/examples/disaggregated/mooncake_connector" in script
+    assert (
+        'PROXY_RELATIVE_PATH="examples/disaggregated/mooncake_connector/'
+        'mooncake_connector_proxy.py"'
+    ) in script
+    assert 'third_party/vllm/${PROXY_RELATIVE_PATH}' in script
     assert "mooncake_connector_proxy.py" in script
     assert "VLLM_MOONCAKE_BOOTSTRAP_PORT" in script
     assert "VLLM_ENFORCE_EAGER" in script
@@ -371,7 +374,11 @@ def test_mooncake_example_uses_current_proxy_and_scoped_cleanup():
 
 def test_mooncake_rdma_container_contract_is_explicit():
     example_readme = (
-        ROOT / "example" / "disaggregated_serving" / "README.md"
+        ROOT
+        / "examples"
+        / "disaggregated"
+        / "disaggregated_serving"
+        / "README.md"
     ).read_text()
     for token in (
         "--detach",

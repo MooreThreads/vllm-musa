@@ -62,7 +62,6 @@ def main() -> None:
 
         if args.require_rust:
             assert "vllm/vllm-rs" in names
-            assert "vllm/_rust_tool_parser.abi3.so" in names
 
         dist_info = {
             name.split("/", 1)[0]

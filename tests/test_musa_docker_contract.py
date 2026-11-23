@@ -33,18 +33,52 @@ def test_production_and_source_targets_are_explicitly_separate():
     assert "FROM mooncake AS final" in dockerfile
     assert "FROM final AS vllm-openai" in dockerfile
     assert "FROM vllm_musa_installed AS test" in dockerfile
-    assert dockerfile.index("FROM vllm_musa_installed AS test") > dockerfile.index(
-        "FROM final AS vllm-openai"
+    assert dockerfile.index("FROM vllm_musa_installed AS test") < dockerfile.index(
+        "FROM mooncake AS final"
     )
+    assert dockerfile.rstrip().endswith('ENTRYPOINT ["vllm", "serve"]')
+
+
+def test_runtime_workspace_copies_the_upstream_vllm_payload():
+    dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
+
+    assert "/vllm-workspace/third_party/vllm/examples" in dockerfile
+    assert "/vllm-workspace/third_party/vllm/benchmarks" in dockerfile
+    assert "/vllm-runtime-workspace/examples" in dockerfile
+    assert "/vllm-runtime-workspace/benchmarks" in dockerfile
+    assert "/vllm-workspace/torch_lib_versions.txt" in dockerfile
+    assert "/vllm-workspace/collect_env.py" in dockerfile
+    assert "/vllm-workspace/vllm_musa/collect_env.py" in dockerfile
+    assert "/vllm-workspace/third_party/vllm/vllm/collect_env.py" not in dockerfile
+
+
+def test_source_tree_uses_the_upstream_examples_and_benchmarks_layout():
+    root = Path(__file__).parents[1]
+
+    assert (root / "examples" / "generate").is_dir()
+    assert (root / "examples" / "disaggregated" / "disaggregated_serving").is_dir()
+    assert not (root / "example").exists()
+    assert (root / "benchmarks" / "kernels" / "fp8_block_splitk").is_dir()
+    assert (root / "benchmarks" / "kernels" / "fused_moe").is_dir()
+    assert not (root / "benchmarks" / "fp8_block_splitk").exists()
+    assert not (root / "benchmarks" / "fused_moe").exists()
+
+
+def test_vllm_rs_uses_the_pinned_vllm_build_script_path():
+    dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
+
+    assert "bash tools/build_rust.sh" in dockerfile
+    assert "bash build_rust.sh" not in dockerfile
+    assert "tools/install_protoc.sh" not in dockerfile
+    assert "_rust_tool_parser.abi3.so" not in dockerfile
 
 
 def test_runtime_target_does_not_copy_the_editable_source_checkout():
     dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
     runtime = dockerfile.split("FROM vllm_musa_deps AS vllm_runtime", 1)[1]
-    runtime = runtime.split("FROM vllm_musa_installed AS test", 1)[0]
+    runtime = runtime.split("FROM vllm_runtime AS mooncake", 1)[0]
 
     assert "COPY . /vllm-workspace" not in runtime
-    assert "third_party/vllm/vllm" not in runtime
 
 
 def test_runtime_dependency_verifier_receives_requirement_files_without_source():

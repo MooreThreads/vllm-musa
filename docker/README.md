@@ -13,7 +13,7 @@ The resulting image contains:
   `torch_c_dlpack_ext`),
 - `torchada` and the other common runtime dependencies from the public index,
 - `vllm-musa` and the vendored upstream vLLM, built from source,
-- `vllm-rs` and its Python tool-parser extension when `BUILD_VLLM_RS=1`,
+- the `vllm-rs` executable when `BUILD_VLLM_RS=1`,
 - `mooncake-transfer-engine-musa`,
 - `pytest`, so the repository's pytest-based validation can run directly in the
   image.
@@ -199,7 +199,7 @@ docker run --rm --entrypoint /bin/bash vllm-musa:test \
 | `MUSA_PIP_INDEX_URL` | `https://dl.mthreads.com/repo/api/pypi/pypi/simple` | Moore Threads index for the MUSA/MT wheels. |
 | `VLLM_MUSA_GIT_PROXY` | `https://gh-proxy.org/` | Mirror for the vLLM/FlashInfer fetch that `setup.py` performs while building the image. Empty keeps the default; `0` fetches from github.com directly. |
 | `MOONCAKE_VERSION` | `0.3.14` | Exact `mooncake-transfer-engine-musa` version installed from `PYPI_INDEX_URL`. The wheel provides both the Transfer Engine and the Store bindings. |
-| `BUILD_VLLM_RS` | `1` | `1`: build and install `vllm-rs` plus `_rust_tool_parser`; `0`: omit both and skip Rust/protoc setup. |
+| `BUILD_VLLM_RS` | `1` | `1`: build and install the `vllm-rs` executable; `0`: omit it and skip the Rust toolchain setup. |
 | `IMAGE_REPOSITORY` | `vllm-musa` | Image repository name. |
 | `IMAGE_FLAVOR` | `ubuntu22.04_py<py>_musa_runtime_<ver>_pytorch_release_<torch>` | Tag flavor; `<torch>` is derived from `requirements/musa_private.txt` and sanitized for Docker tags. |
 | `IMAGE_TAG` | `${IMAGE_REPOSITORY}:${IMAGE_FLAVOR}` | Full image tag. |
@@ -292,7 +292,7 @@ On a MUSA GPU you should see `musa available: True`.
 
 Mooncake over RoCE also requires host networking and explicit RDMA device
 access. See the
-[container and RDMA prerequisites](../example/disaggregated_serving/README.md#container-and-rdma-prerequisites)
+[container and RDMA prerequisites](../examples/disaggregated/disaggregated_serving/README.md#container-and-rdma-prerequisites)
 for the documented container shape and host-runtime prerequisite.
 
 ## How it works (build stages)
@@ -313,8 +313,8 @@ for the documented container shape and host-runtime prerequisite.
    internal index only, so pip never pulls the unrelated public (CUDA) builds.
 5. **vllm_musa_installed** — copies the source, builds `vllm-musa` + vendored
    vLLM, re-pins numpy, installs runtime dependencies, and runs import checks.
-6. **vllm_rs_build** — optionally builds Rust artifacts (`BUILD_VLLM_RS`) without
-   carrying Rust/protoc into the final image.
+6. **vllm_rs_build** — optionally builds the `vllm-rs` executable
+   (`BUILD_VLLM_RS`) without carrying the Rust toolchain into the final image.
 7. **mooncake** — installs the pinned `mooncake-transfer-engine-musa` wheel on
    top of the torch/vLLM stack.
 8. **final** — installs optional Rust artifacts, enables MUSA device visibility,

@@ -19,8 +19,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-PROXY_SCRIPT="${REPO_ROOT}/third_party/vllm/examples/disaggregated/mooncake_connector/mooncake_connector_proxy.py"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+PROXY_RELATIVE_PATH="examples/disaggregated/mooncake_connector/mooncake_connector_proxy.py"
+PROXY_SCRIPT="${REPO_ROOT}/${PROXY_RELATIVE_PATH}"
+if [[ ! -f "${PROXY_SCRIPT}" ]]; then
+    PROXY_SCRIPT="${REPO_ROOT}/third_party/vllm/${PROXY_RELATIVE_PATH}"
+fi
 
 # Model and devices. MUSA_VISIBLE_DEVICES lists two cards: prefill runs on
 # the first, decode on the second.

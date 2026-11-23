@@ -48,7 +48,6 @@ def verify_bundled() -> None:
     rust_frontend = Path(vllm.__file__).with_name("vllm-rs")
     if rust_frontend.exists():
         assert rust_frontend.stat().st_mode & 0o111
-        importlib.import_module("vllm._rust_tool_parser")
 
     entry_points = importlib.metadata.entry_points()
     for group, names in {

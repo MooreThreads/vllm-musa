@@ -23,7 +23,7 @@ the Mooncake KV-transfer connectors.
 ### Quick Start
 
 ```bash
-cd example/disaggregated_serving
+cd examples/disaggregated/disaggregated_serving
 # Default model: Qwen/Qwen3-8B
 bash disaggregated_serving.sh
 
@@ -129,14 +129,14 @@ and stop every process they started on exit, including on Ctrl-C.
 
 ```bash
 # Single instance on card 5 (default model: /home/dist/models/Qwen3-8B-FP8)
-MUSA_VISIBLE_DEVICES=5 bash example/disaggregated_serving/mooncake_store_serving.sh
+MUSA_VISIBLE_DEVICES=5 bash examples/disaggregated/disaggregated_serving/mooncake_store_serving.sh
 
 # 1P1D: prefill on card 5, decode on card 6
-MUSA_VISIBLE_DEVICES=5,6 bash example/disaggregated_serving/mooncake_store_pd_serving.sh
+MUSA_VISIBLE_DEVICES=5,6 bash examples/disaggregated/disaggregated_serving/mooncake_store_pd_serving.sh
 
 # Other model or SSD directory
 OFFLOAD_STORAGE_PATH=/data/mooncake_cache/ MUSA_VISIBLE_DEVICES=5 \
-  bash example/disaggregated_serving/mooncake_store_serving.sh /path/to/model
+  bash examples/disaggregated/disaggregated_serving/mooncake_store_serving.sh /path/to/model
 ```
 
 The scripts can be run from any directory. Each ends with `PASS ... logs=<dir>`;

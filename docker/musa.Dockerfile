@@ -370,14 +370,29 @@ RUN python -m pip install \
 
 RUN python docker/verify_installed_dependencies.py
 
+# Build the runtime workspace payload once, with a deterministic merge of the
+# pinned upstream examples/benchmarks and the MUSA-specific additions. Keeping
+# this merge in the source-bearing stage avoids relying on Docker's directory
+# COPY merge semantics in the final image.
+RUN rm -rf /tmp/vllm-runtime-workspace && \
+    mkdir -p /tmp/vllm-runtime-workspace/examples \
+        /tmp/vllm-runtime-workspace/benchmarks && \
+    cp -a /vllm-workspace/third_party/vllm/examples/. \
+        /tmp/vllm-runtime-workspace/examples/ && \
+    cp -a /vllm-workspace/examples/. \
+        /tmp/vllm-runtime-workspace/examples/ && \
+    cp -a /vllm-workspace/third_party/vllm/benchmarks/. \
+        /tmp/vllm-runtime-workspace/benchmarks/ && \
+    cp -a /vllm-workspace/benchmarks/. \
+        /tmp/vllm-runtime-workspace/benchmarks/
+
 # Build vllm-rs from the vLLM tree cloned and patched by vllm-musa setup.py,
-# while keeping Rust/protoc tooling out of the runtime image.
+# while keeping the Rust toolchain out of the runtime image.
 FROM vllm_musa_installed AS vllm_rs_build
 
 ARG BUILD_VLLM_RS=1
 
 RUN if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
-        /vllm-workspace/third_party/vllm/tools/install_protoc.sh && \
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
             sh -s -- -y --profile minimal --default-toolchain none; \
     elif [[ "${BUILD_VLLM_RS}" == "0" ]]; then \
@@ -398,10 +413,8 @@ RUN mkdir -p /tmp/vllm-rs-artifacts && \
     printf '%s\n' "${BUILD_VLLM_RS}" > /tmp/vllm-rs-artifacts/build-mode && \
     if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
         cd /vllm-workspace/third_party/vllm && \
-        bash build_rust.sh && \
-        install -Dm755 vllm/vllm-rs /tmp/vllm-rs-artifacts/vllm-rs && \
-        install -Dm755 vllm/_rust_tool_parser.abi3.so \
-            /tmp/vllm-rs-artifacts/_rust_tool_parser.abi3.so; \
+        bash tools/build_rust.sh && \
+        install -Dm755 vllm/vllm-rs /tmp/vllm-rs-artifacts/vllm-rs; \
     else \
         echo "Skipping vllm-rs build because BUILD_VLLM_RS=0"; \
     fi
@@ -419,9 +432,7 @@ RUN mkdir -p /tmp/vllm-wheel && \
     test -n "$(find /vllm-workspace/vllm_musa -maxdepth 1 -name '_C*.so' -print -quit)" && \
     if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
         install -Dm755 /tmp/vllm-rs-artifacts/vllm-rs \
-            /vllm-workspace/third_party/vllm/vllm/vllm-rs && \
-        install -Dm755 /tmp/vllm-rs-artifacts/_rust_tool_parser.abi3.so \
-            /vllm-workspace/third_party/vllm/vllm/_rust_tool_parser.abi3.so; \
+            /vllm-workspace/third_party/vllm/vllm/vllm-rs; \
     fi && \
     VLLM_MUSA_REUSE_PREBUILT=1 \
         python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel
@@ -455,6 +466,27 @@ RUN python -m pip install \
         python /tmp/verify_installed_dependencies.py && \
     rm -rf /tmp/vllm-wheel /tmp/vllm-runtime-requirements \
         /tmp/vllm-runtime-requirements.txt
+
+# Keep the upstream vLLM runtime workspace contract. The examples and
+# benchmarks are copied from the same pinned source tree used to build the
+# bundled wheel. The MUSA collect_env entry point is used for the root helper
+# so diagnostics include MUSA driver and SDK information.
+COPY --from=vllm_musa_installed /tmp/vllm-runtime-workspace/examples \
+     /vllm-workspace/examples
+COPY --from=vllm_musa_installed /tmp/vllm-runtime-workspace/benchmarks \
+     /vllm-workspace/benchmarks
+COPY --from=vllm_musa_installed /vllm-workspace/vllm_musa/collect_env.py \
+     /vllm-workspace/collect_env.py
+RUN python -c 'import importlib.metadata as m; from pathlib import Path; names=("torch", "torchvision", "torchaudio"); available={d.metadata["Name"].lower() for d in m.distributions()}; lines=[f"{name}=={m.version(name)}" for name in names if name in available]; Path("/vllm-workspace/torch_lib_versions.txt").write_text("\\n".join(lines)+"\\n")'
+
+# Keep the source-bearing target available for CI and debugging without making
+# it the implicit target of `docker build`. Docker uses the last stage as its
+# default, so the serving target must remain last.
+FROM vllm_musa_installed AS test
+
+WORKDIR /vllm-workspace
+
+CMD ["/bin/bash"]
 
 FROM vllm_runtime AS mooncake
 
@@ -505,10 +537,3 @@ CMD ["/bin/bash"]
 FROM final AS vllm-openai
 
 ENTRYPOINT ["vllm", "serve"]
-
-# Source-bearing target for CI, local debugging, and packaging tests.
-FROM vllm_musa_installed AS test
-
-WORKDIR /vllm-workspace
-
-CMD ["/bin/bash"]

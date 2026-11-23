@@ -16,7 +16,7 @@
 | `pyproject.toml` | Package metadata and build configuration |
 | `third_party/` | Pinned upstream source and dependency revisions |
 | `build_utils/` | Build helpers and patch application utilities |
-| `example/` | Small runnable examples |
+| `examples/` | Small runnable examples |
 
 ## Project background
 
