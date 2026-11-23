@@ -187,5 +187,37 @@ def test_preload_report_is_compatible_and_structured(monkeypatch) -> None:
     monkeypatch.setattr(module, "import_module", lambda name: loaded.append(name))
     report = module.preload_custom_op_modules()
     assert report.loaded == ("example.module",)
-    assert report.failed == ()
     assert loaded == ["example.module"]
+
+
+def test_preload_failure_identifies_module_and_preserves_original_error(
+    monkeypatch,
+    caplog,
+) -> None:
+    import pytest
+
+    import vllm_musa.custom_op_modules as module
+
+    attempted = []
+    failure = ModuleNotFoundError("missing provider", name="provider")
+
+    def import_module(name):
+        attempted.append(name)
+        if name == "example.broken":
+            raise failure
+
+    monkeypatch.setattr(
+        module, "CUSTOM_OP_MODULES", ("example.first", "example.broken", "example.last")
+    )
+    monkeypatch.setattr(module, "import_module", import_module)
+
+    with pytest.raises(ModuleNotFoundError) as caught:
+        module.preload_custom_op_modules()
+
+    assert caught.value is failure
+    assert failure.name == "provider"
+    assert (
+        "vLLM-MUSA operator preload failed while importing example.broken"
+        in caplog.text
+    )
+    assert attempted == ["example.first", "example.broken"]
