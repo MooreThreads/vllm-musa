@@ -109,6 +109,31 @@ The recipe uses the checkpoint's own canvas (256 tokens, 48 steps) and the
 `/v1/systemone` endpoint that vLLM v0.32 ships, so one server answers both
 `/v1/chat/completions` and structured reads.
 
+## Qwen-Image
+
+Text-to-image recipes served through vLLM-Omni. See the
+[Qwen-Image cookbook index](qwen-image/README.md) for the four model recipes.
+
+| Model | Precision | Steps | Hardware | Recipe |
+|---|---|---|---|---|
+| Qwen-Image-2.1 | BF16 | 20 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-bf16.md) |
+| Qwen-Image-2.1 | FP8 | 20 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-fp8.md) |
+| Qwen-Image-2.1-Turbo | BF16 | 8 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-turbo-bf16.md) |
+| Qwen-Image-2.1-Turbo | FP8 | 8 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-turbo-fp8.md) |
+
+These differ from every other recipe here: the server takes `--omni`, requests go
+to `/v1/images/generations`, and the image is built rather than pulled as a
+`vllm-openai` tag. All four run in the same image, built once from a pinned
+vLLM-MUSA v0.32 base:
+
+```bash
+export VLLM_MUSA_IMAGE=<your pinned vLLM-MUSA v0.32 image>
+bash docker/build_omni_image.sh --omni-ref 31c8986250d
+```
+
+That is the vLLM-Omni revision the recipes were validated on; the tag follows the
+ref, so the command above builds `vllm-omni-musa:31c8986250d`.
+
 ## Verify a server
 
 The recipes expose an OpenAI-compatible endpoint on port 8000.
