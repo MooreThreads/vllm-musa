@@ -18,8 +18,6 @@ index 3a71d7e1e5..51aeab1e8d 100644
  # Update cmake's `CMAKE_PREFIX_PATH` with torch location.
  #
 +if(VLLM_TARGET_DEVICE STREQUAL "empty")
-+  append_cmake_prefix_path("torch" "torch.utils.cmake_prefix_path")
-+  find_package(Torch REQUIRED)
 +  include(cmake/external_projects/deepselect.cmake)
 +  return()
 +endif()
