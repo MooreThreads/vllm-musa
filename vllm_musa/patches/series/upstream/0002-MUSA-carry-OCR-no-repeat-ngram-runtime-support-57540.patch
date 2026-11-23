@@ -12,7 +12,7 @@ Carry the runtime pieces needed by the OCR recipes in one upstream series entry:
 (cherry picked from commit bf8eba845818a898b5abc295e018d3d0860c19e6)
 ---
  vllm/model_executor/models/deepencoder.py    |   2 +
- vllm/v1/worker/gpu/sample/no_repeat_ngram.py | 242 ++++++++++++++++++
+ vllm/v1/worker/gpu/sample/no_repeat_ngram.py | 242 +++++++++++++++++++
  2 files changed, 244 insertions(+)
  create mode 100644 vllm/v1/worker/gpu/sample/no_repeat_ngram.py
 
