@@ -28,3 +28,55 @@ mcp-types>=2,<3
 mcp>=2,<3
 soundfile
 av
+# Pinned upstream vLLM v0.32 runtime dependencies. Keep this list in sync
+# with third_party/vllm/requirements/common.txt while retaining numpy<2 for
+# the MUSA stack.
+aiohttp
+anthropic
+blake3
+cachetools
+cbor2
+cloudpickle
+compressed-tensors==0.17.0
+depyf==0.20.0
+filelock
+ijson
+jsonschema
+lark==1.2.2
+llguidance
+lm-format-enforcer==0.11.3
+msgspec
+mistral_common[image]>=1.11.6
+ninja
+oss-harmony>=0.0.11
+outlines_core==0.2.14
+partial-json-parser
+pillow
+prometheus-fastapi-instrumentator
+prometheus_client
+protobuf>=5.29.6,!=6.30.*,!=6.31.*,!=6.32.*,!=6.33.0.*,!=6.33.1.*,!=6.33.2.*,!=6.33.3.*
+psutil
+py-cpuinfo
+pybase64
+pydantic
+pyyaml
+pyzmq>=25.0.0
+regex
+requests>=2.33.0
+safetensors>=0.6.2
+sentencepiece
+setproctitle
+starlette>=1.0.1
+tiktoken>=0.6.0
+tqdm
+typing_extensions>=4.10
+watchfiles
+xgrammar==0.2.8
+model-hosting-container-standards >= 0.1.14, < 1.0.0
+opentelemetry-sdk >= 1.27.0
+opentelemetry-api >= 1.27.0
+opentelemetry-exporter-otlp >= 1.27.0
+opentelemetry-semantic-conventions-ai >= 0.4.1
+python-json-logger
+six>=1.16.0
+setuptools>=78.1.1,<81.0.0
