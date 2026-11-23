@@ -78,6 +78,7 @@ DEFAULT_HARDWARE = "Moore Threads S5000 (MUSA)"
 
 VENDOR_LABELS = {
     "qwen": "Qwen",
+    "qwen-image": "Qwen-Image",
     "deepseek": "DeepSeek",
     "glm": "GLM",
     "nemotron": "NVIDIA Nemotron",
@@ -92,6 +93,7 @@ VENDOR_LABELS = {
 
 VENDOR_BLURB = {
     "qwen": "Dense, MoE and vision-language Qwen checkpoints on one to eight S5000 GPUs.",
+    "qwen-image": "Text-to-image diffusion served through vLLM-Omni on a single S5000.",
     "deepseek": "MLA/MoE DeepSeek deployments, including multi-node and PD-disaggregated profiles.",
     "glm": "GLM serving topologies with PP2, full-decode graphs and thinking-mode templates.",
     "nemotron": "Hybrid Mamba-2/attention Nemotron profiles tuned for per-token decode latency.",
