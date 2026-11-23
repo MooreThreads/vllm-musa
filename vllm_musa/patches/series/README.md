@@ -406,7 +406,7 @@ This backport includes minimum pin-ABI conflict adaptation and is not verbatim
 upstream; generic PP transport adaptation remains the independent MUSA `0216`
 entry.
 
-The series carries upstream commit
+The series carries the runtime portion of upstream commit
 `b1dcae362bba63cf718173600f730c435d48ed71` (#57540), carrying the native GPU
 no-repeat NGram processor,
 as
