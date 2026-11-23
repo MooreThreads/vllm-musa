@@ -352,6 +352,7 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0217-MUSA-route-explicit-DeepSelect-through-DSV4-indexer.patch` | MUSA DeepSelect | route supported indexer windows to DeepSelect with BF16 Triton logits and native fallback |
 | `0218-MUSA-build-DeepSelect-through-vLLM-extension-target.patch` | MUSA DeepSelect | build DeepSelect through the vLLM extension target |
 | `0219-Return-BF16-MQA-logits-from-MATE-sparse-indexers.patch` | MUSA sparse indexer | produce BF16 MATE logits with dtype-aware prefill tiling |
+| `0220-MUSA-update-DeepSelect-source-pin.patch` | MUSA DeepSelect | pin the vLLM extension build to the Joey DeepSelect registration commit |
 
 For non-speculative DSV4.1 on Model Runner V2 (DP1, no microbatching),
 the optimization contract fixes the context cutoff at `32768` tokens. All-short batches
