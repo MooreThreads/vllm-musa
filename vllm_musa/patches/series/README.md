@@ -409,10 +409,12 @@ entry.
 The series carries upstream commits
 `b1dcae362bba63cf718173600f730c435d48ed71` and
 `f81df53c577e16da6c04669476b8014fdb155130` (#57540), carrying native GPU
-no-repeat NGram masking and its custom logits-processor plugin path, plus
-`4d679ebea96bc42a0fb313f5f27490be71e9b425` (#62858), carrying the DeepEncoder
-`LOG2E` Triton constexpr fix, as
+no-repeat NGram masking and its custom logits-processor plugin path, as
 `upstream/0002-MUSA-carry-OCR-no-repeat-ngram-runtime-support-57540.patch`.
+
+The same entry carries upstream commit
+`4d679ebea96bc42a0fb313f5f27490be71e9b425` (#62858), making `LOG2E` a Triton
+constexpr in the DeepEncoder attention kernel.
 The OCR Cookbook recipes are maintained separately as vLLM-MUSA documentation;
 they are not part of the upstream patch entry.
 
