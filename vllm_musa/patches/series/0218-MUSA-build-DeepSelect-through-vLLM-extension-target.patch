@@ -4,20 +4,22 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
- CMakeLists.txt                           |  5 +++
- cmake/external_projects/deepselect.cmake | 41 ++++++++++++++++++++++--
- setup.py                                 |  4 ++-
- 3 files changed, 46 insertions(+), 4 deletions(-)
+ CMakeLists.txt                           |  7 +++++++
+ cmake/external_projects/deepselect.cmake | 26 +++++++++++++++++++++---
+ setup.py                                 |  4 +++-
+ 3 files changed, 33 insertions(+), 4 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a71d7e1e5..29d018da33 100644
+index 3a71d7e1e5..51aeab1e8d 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -95,6 +95,11 @@ endif()
+@@ -95,6 +95,13 @@ endif()
  #
  # Update cmake's `CMAKE_PREFIX_PATH` with torch location.
  #
 +if(VLLM_TARGET_DEVICE STREQUAL "empty")
++  append_cmake_prefix_path("torch" "torch.utils.cmake_prefix_path")
++  find_package(Torch REQUIRED)
 +  include(cmake/external_projects/deepselect.cmake)
 +  return()
 +endif()
@@ -26,7 +28,7 @@ index 3a71d7e1e5..29d018da33 100644
  
  # Ensure the 'nvcc' command is in the PATH
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e61..20e2710483 100644
+index e2a5592e61..5a864b8607 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
 @@ -5,7 +5,7 @@ include(FetchContent)
@@ -59,7 +61,7 @@ index e2a5592e61..20e2710483 100644
          GIT_PROGRESS TRUE
          CONFIGURE_COMMAND ""
          BUILD_COMMAND ""
-@@ -29,6 +37,33 @@ endif()
+@@ -29,6 +37,18 @@ endif()
  FetchContent_MakeAvailable(deepselect)
  message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
  
@@ -68,25 +70,10 @@ index e2a5592e61..20e2710483 100644
 +    HINTS "$ENV{MUSA_HOME}/cmake" /usr/local/musa/cmake REQUIRED)
 +  list(PREPEND CMAKE_MODULE_PATH "${MUSA_CMAKE_DIR}/Modules" "${MUSA_CMAKE_DIR}")
 +  enable_language(MUSA)
-+  set(CMAKE_INCLUDE_SYSTEM_FLAG_MUSA "-isystem ")
-+  foreach(attr IN ITEMS include_dirs library_dirs libraries)
-+    run_python(deepselect_${attr}
-+      "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).${attr}))"
-+      "Cannot determine DeepSelect MUSA ${attr}")
-+  endforeach()
 +  define_extension_target(_deepselect_C
 +    DESTINATION vllm LANGUAGE MUSA WITH_SOABI
 +    SOURCES "${deepselect_SOURCE_DIR}/csrc/musa_api.mu"
-+    INCLUDE_DIRECTORIES ${deepselect_include_dirs} "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include"
-+    COMPILE_FLAGS --offload-arch=mp_31 -O3 -std=c++17 -Wno-error=address-of-temporary
-+      -ffast-math -fmusa-flush-denormals-to-zero -fno-signed-zeros
-+      "SHELL:-mllvm -mtgpu-opt-level=1" "SHELL:-mllvm -mtgpu-load-store-opt=1"
-+      "SHELL:-mllvm -mtgpu-fold-global-ldst=1"
-+    LIBRARIES ${deepselect_libraries})
-+  target_compile_definitions(_deepselect_C PRIVATE USE_MUSA TORCH_API_INCLUDE_EXTENSION_H)
-+  target_link_directories(_deepselect_C PRIVATE ${deepselect_library_dirs})
-+  set_target_properties(_deepselect_C PROPERTIES LINKER_LANGUAGE CXX
-+    INSTALL_RPATH "$ORIGIN/../torch/lib;$ORIGIN/../torch_musa/lib")
++    INCLUDE_DIRECTORIES "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include")
 +  return()
 +endif()
 +
