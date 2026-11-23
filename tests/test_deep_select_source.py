@@ -43,9 +43,8 @@ def test_series_patch_retains_native_extension_import_detection() -> None:
         SERIES / "0216-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
     ).read_text(encoding="utf-8")
     assert "elif not _HAS_DEEP_SELECT_C:" in source
-    assert "vllm._deepselect_C operators are unavailable" in source
-    assert 'hasattr(torch.ops.deep_select, "topk")' in source
-    assert 'torch.ops.deep_select, "get_alignment_requirement"' in source
+    assert "vllm._deepselect_C could not be imported" in source
+    assert 'hasattr(torch.ops.deep_select, "topk")' not in source
     assert "_deep_select_op_available" not in source
 
 
@@ -103,7 +102,7 @@ def _deep_select_validation_helpers(family: int, extension_available: bool) -> d
         ("cuda", 90, True, "SM100a/SM103a"),
         ("cpu", 0, True, "CUDA or MUSA"),
         ("rocm", 0, True, "CUDA or MUSA"),
-        ("musa", 0, False, "operators are unavailable"),
+        ("musa", 0, False, "could not be imported"),
     ],
 )
 def test_deep_select_validation_separates_platform_and_extension(
@@ -525,8 +524,9 @@ def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
         .split("diff --git", 1)[0]
     )
     added = _added_lines(source_patch)
-    assert "https://github.com/Joey-gvwal/DeepSelect.git" in added
-    assert "a42720c1c51b6a79dfc452038c1c6761bfca781a" in added
+    assert "https://github.com/MooreThreads/DeepSelect.git" in added
+    assert "2464c80eade254ef04d19182e93249010e4957d7" in added
+    assert "musa_api.mu" in added
 
 
 

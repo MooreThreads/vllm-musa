@@ -4,25 +4,14 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: register an out-of-tree DeepSelect top-k backend
 
 ---
- vllm/model_executor/layers/indexer_topk.py | 47 ++++++++++++++--------
- 1 file changed, 31 insertions(+), 16 deletions(-)
+ vllm/model_executor/layers/indexer_topk.py | 41 ++++++++++++++++++++----------
+ 1 file changed, 27 insertions(+), 14 deletions(-)
 
 diff --git a/vllm/model_executor/layers/indexer_topk.py b/vllm/model_executor/layers/indexer_topk.py
-index 02c4280ea0..eaaf59476c 100644
+index 02c4280..70e02bd 100644
 --- a/vllm/model_executor/layers/indexer_topk.py
 +++ b/vllm/model_executor/layers/indexer_topk.py
-@@ -30,7 +30,9 @@ IDX_OOB_FILL_VALUE = -1
- try:
-     import vllm._deepselect_C  # noqa: F401  (registers torch.ops.deep_select)
- 
--    _HAS_DEEP_SELECT_C = True
-+    _HAS_DEEP_SELECT_C = hasattr(torch.ops.deep_select, "topk") and hasattr(
-+        torch.ops.deep_select, "get_alignment_requirement"
-+    )
- except ImportError:
-     _HAS_DEEP_SELECT_C = False
- 
-@@ -43,14 +45,17 @@ def get_deep_select_stride_requirement() -> tuple[int, int]:
+@@ -43,14 +43,17 @@ def get_deep_select_stride_requirement() -> tuple[int, int]:
  
  def is_deep_select_supported(input: torch.Tensor, topk: int) -> bool:
      """Whether the kernel accepts this input (dtype/stride/topk constraints)."""
@@ -43,7 +32,7 @@ index 02c4280ea0..eaaf59476c 100644
          == 0
      )
  
-@@ -80,8 +85,8 @@ def deep_select_topk(
+@@ -80,8 +83,8 @@ def deep_select_topk(
  
      Args:
          input: (num_rows, vocab_size), bf16 or fp32. stride(1) must be 1 and
@@ -54,7 +43,7 @@ index 02c4280ea0..eaaf59476c 100644
          end: Optional (num_rows,) int32 tensor with the exclusive right
              boundary of each row. Rows with `end[i] < topk` get their
              remaining indices filled with -1.
-@@ -93,10 +98,14 @@ def deep_select_topk(
+@@ -93,10 +96,14 @@ def deep_select_topk(
          The (num_rows, topk) indices tensor.
  
      """
@@ -71,7 +60,7 @@ index 02c4280ea0..eaaf59476c 100644
      )
  
      num_rows = input.shape[0]
-@@ -105,8 +114,16 @@ def deep_select_topk(
+@@ -105,8 +112,16 @@ def deep_select_topk(
              num_rows, topk, input.device, indices_dtype
          )
      else:
@@ -88,7 +77,7 @@ index 02c4280ea0..eaaf59476c 100644
  
      torch.ops.deep_select.topk(
          input,
-@@ -125,7 +142,7 @@ def deep_select_topk(
+@@ -125,7 +140,7 @@ def deep_select_topk(
          # logits from uninitialized KV cache; the reference topk kernels do
          # not trap on NaN, and trapping would abort CUDA graph capture.
      )
@@ -97,7 +86,7 @@ index 02c4280ea0..eaaf59476c 100644
  
  
  # ---------------------------------------------------------------------------
-@@ -153,9 +170,7 @@ class SparseIndexerTopk(torch.nn.Module):
+@@ -153,9 +168,7 @@ class SparseIndexerTopk(torch.nn.Module):
              )
          self._backend = backend
          self._is_cuda = current_platform.is_cuda()
@@ -108,7 +97,7 @@ index 02c4280ea0..eaaf59476c 100644
          self._has_flashinfer_topk = has_flashinfer()
          self._cooperative_capable = self._is_cuda and (
              current_platform.has_device_capability(90)
-@@ -190,12 +205,12 @@ class SparseIndexerTopk(torch.nn.Module):
+@@ -190,9 +203,9 @@ class SparseIndexerTopk(torch.nn.Module):
                      f"topk_tokens must be in (512, 1024, 2048), got {topk_tokens}"
                  )
          elif self._backend == "deep_select":
@@ -120,8 +109,4 @@ index 02c4280ea0..eaaf59476c 100644
 +            elif self._is_cuda and not current_platform.is_device_capability_family(100):
                  failures.append("requires SM100a/SM103a (10.x device family)")
              elif not _HAS_DEEP_SELECT_C:
--                failures.append("vllm._deepselect_C could not be imported")
-+                failures.append("vllm._deepselect_C operators are unavailable")
-             elif not is_deep_select_supported(logits, topk_tokens):
-                 failures.append(
-                     f"inputs violate DeepSelect's constraints: dtype={logits.dtype},"
+                 failures.append("vllm._deepselect_C could not be imported")

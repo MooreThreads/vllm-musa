@@ -109,18 +109,15 @@ not substitute a public CUDA wheel with the same package name.
 
 ### Optional DeepSelect backend
 
-DeepSelect is opt-in. Supply a MUSA-adapted checkout containing
-`cmake/vllm_musa_toolchain.cmake` and `cmake/vllm_musa.cmake` when installing:
+The MUSA install builds `vllm._deepselect_C` from the pinned MooreThreads/DeepSelect
+sources. Select it at serving time with `--sparse-indexer-topk-backend deep_select`.
+
+To use a local MUSA-adapted checkout, initialize its `csrc/3rdparty/mutlass`
+submodule and set the source directory during installation:
 
 ```bash
 DEEPSELECT_SRC_DIR=/path/to/musa-deepselect pip install -e . --no-build-isolation -v
 ```
-
-This builds `vllm._deepselect_C`; no separate DeepSelect package is needed.
-Use the `DEEPSELECT_SRC_DIR` environment variable, not just `CMAKE_ARGS=-D...`.
-Restart serving with
-`--sparse-indexer-topk-backend deep_select`.
-Without the source override, the default install does not build DeepSelect.
 
 ## Device visibility
 

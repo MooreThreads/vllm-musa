@@ -4,36 +4,16 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
- CMakeLists.txt                           | 11 ++++
+ CMakeLists.txt                           |  5 +++++
  cmake/external_projects/deepselect.cmake | 77 +++++++++++++++++++++++-
  setup.py                                 |  3 +
- 3 files changed, 90 insertions(+), 1 deletion(-)
+ 3 files changed, 84 insertions(+), 1 deletion(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 3a71d7e1e5..ace6e7404a 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -11,6 +11,9 @@ cmake_minimum_required(VERSION 3.26)
- # If you want to only build one target, make sure to install it manually:
- # cmake --build . --target _C
- # cmake --install . --component _C
-+if(DEFINED ENV{DEEPSELECT_SRC_DIR})
-+  set(DEEPSELECT_SRC_DIR "$ENV{DEEPSELECT_SRC_DIR}")
-+endif()
- project(vllm_extensions LANGUAGES CXX)
- 
- set(CMAKE_CXX_STANDARD 20)
-@@ -47,6 +50,9 @@ install(CODE "set(CMAKE_INSTALL_LOCAL_ONLY TRUE)" ALL_COMPONENTS)
- # first match will be selected.  These should be kept in sync with setup.py.
- #
- set(PYTHON_SUPPORTED_VERSIONS "3.11" "3.12" "3.13" "3.14")
-+if(VLLM_TARGET_DEVICE STREQUAL "empty")
-+  list(APPEND PYTHON_SUPPORTED_VERSIONS "3.10")
-+endif()
- 
- # Supported AMD GPU architectures.
- set(HIP_SUPPORTED_ARCHS "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1250;gfx1030;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201")
-@@ -95,6 +101,11 @@ endif()
+@@ -95,6 +95,11 @@ endif()
  #
  # Update cmake's `CMAKE_PREFIX_PATH` with torch location.
  #
@@ -63,8 +43,8 @@ index e2a5592e61..e14f3c4635 100644
          BUILD_COMMAND ""
    )
 +elseif(VLLM_TARGET_DEVICE STREQUAL "empty")
-+  set(DEEPSELECT_GIT_REPOSITORY https://github.com/Joey-gvwal/DeepSelect.git)
-+  set(DEEPSELECT_GIT_TAG a42720c1c51b6a79dfc452038c1c6761bfca781a)
++  set(DEEPSELECT_GIT_REPOSITORY https://github.com/MooreThreads/DeepSelect.git)
++  set(DEEPSELECT_GIT_TAG 2464c80eade254ef04d19182e93249010e4957d7)
 +  FetchContent_Declare(
 +        deepselect
 +        GIT_REPOSITORY ${DEEPSELECT_GIT_REPOSITORY}
@@ -109,7 +89,7 @@ index e2a5592e61..e14f3c4635 100644
 +    ${DEEPSELECT_MUSA_INCLUDES} ${Python_INCLUDE_DIRS}
 +    "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include")
 +  set(DeepSelect_MUSA_FLAGS
-+    -x musa -O3 -fPIC -std=c++17
++    -x musa --offload-arch=mp_31 -O3 -fPIC -std=c++17
 +    -ffast-math -Wno-error=address-of-temporary -fmusa-flush-denormals-to-zero
 +    -fno-signed-zeros -mllvm -mtgpu-opt-level=1
 +    -mllvm -mtgpu-load-store-opt=1 -mllvm -mtgpu-fold-global-ldst=1
