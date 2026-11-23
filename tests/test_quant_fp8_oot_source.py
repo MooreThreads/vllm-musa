@@ -7,7 +7,9 @@ from pathlib import Path
 
 def test_quant_fp8_oot_group_quant_uses_musa_helper():
     repo_root = Path(__file__).resolve().parents[1]
-    model_executor_init = repo_root / "vllm_musa" / "model_executor" / "__init__.py"
+    model_executor_registration = (
+        repo_root / "vllm_musa" / "model_executor" / "registration.py"
+    )
     quant_fp8_oot = (
         repo_root
         / "vllm_musa"
@@ -17,13 +19,10 @@ def test_quant_fp8_oot_group_quant_uses_musa_helper():
         / "input_quant_fp8.py"
     )
 
-    init_source = model_executor_init.read_text()
+    init_source = model_executor_registration.read_text()
     source = quant_fp8_oot.read_text()
 
-    assert (
-        "import vllm_musa.model_executor.layers.quantization.input_quant_fp8"
-        in init_source
-    )
+    assert "vllm_musa.model_executor.layers.quantization.input_quant_fp8" in init_source
     assert "@QuantFP8.register_oot" in source
     assert "class MusaQuantFP8(QuantFP8)" in source
     assert (
