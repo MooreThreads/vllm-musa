@@ -7,7 +7,7 @@
 <p align="center">
   <a href="README.md">英文版</a> ·
   <a href="https://github.com/MooreThreads/vllm-musa/issues">问题反馈</a> ·
-  <a href="docs/cookbook/README.md">服务配置示例（英文）</a> ·
+  <a href="https://moorethreads.github.io/vllm-musa/">服务配置示例（英文）</a> ·
   <a href="docs/installation-cn.md">文档</a>
 </p>
 
@@ -81,11 +81,12 @@ vllm serve /path/to/model \
 
 OpenAI 兼容接口地址为 `http://localhost:8000/v1`。
 推荐的张量并行、调度器和推测解码参数请参阅
-[服务配置示例（英文）](docs/cookbook/README.md)。
+[服务配置示例（英文）](https://moorethreads.github.io/vllm-musa/)，源文件在
+[`docs/cookbook/`](docs/cookbook/README.md)。
 
 ## 文档
 
-- [服务配置示例（英文）](docs/cookbook/README.md)
+- [服务配置示例（英文）](https://moorethreads.github.io/vllm-musa/)（[源文件](docs/cookbook/README.md)）
 - [安装](docs/installation-cn.md)
 - [Python 与 OpenAI 兼容接口用法](docs/usage-cn.md)
 - [配置（英文）](docs/configuration.md)

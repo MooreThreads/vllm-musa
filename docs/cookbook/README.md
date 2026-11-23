@@ -124,3 +124,36 @@ response = client.chat.completions.create(
 )
 print(response.choices[0].message.content)
 ```
+
+## Adding a recipe
+
+One Markdown file per recipe at `<vendor>/<slug>.md` (lowercase, usually
+`<model>-<precision>`), plus a row in the tables above — a file that no table
+links is not reachable from this page.
+
+A recipe carries four things, and the build fails without them:
+
+- `# <model title>` — also the card title and the page `<title>`;
+- `## Overview` — the first sentence becomes the card summary;
+- `## At a glance` — a two-column table whose rows become the sidebar and the
+  catalog filters (`Precision`, `Hardware`, `Tensor parallelism`,
+  `Speculative decoding`, `Architecture`, ...);
+- `## Launching the server` with a fenced block that starts the server —
+  `vllm serve ...`, or `docker run ...` for the container-based profiles. The
+  block that actually launches is what the copy button hands out.
+
+The pull request that adds the file runs the same build the site uses and fails
+on a missing section, a table it cannot read, a recipe the index does not link,
+or an internal link that resolves to nothing. Merging publishes
+<https://moorethreads.github.io/vllm-musa/> from the default branch, with the
+footer naming the commit it was built from.
+
+Preview the page locally:
+
+```console
+$ python tools/cookbook-site/build_site.py --source docs/cookbook --out _site
+$ python3 -m http.server -d _site 8000
+```
+
+Build options and the complete list of checks are in
+[tools/cookbook-site/README.md](https://github.com/MooreThreads/vllm-musa/blob/HEAD/tools/cookbook-site/README.md).

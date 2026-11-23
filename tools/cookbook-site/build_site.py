@@ -313,7 +313,11 @@ def primary_block_index(sections: list[Section]) -> int:
             order += 1
     if not ranked:
         return -1
-    return min(ranked)[3]
+    best = min(ranked)
+    # ``launches`` is 0 only for a block that starts a server; if the best block
+    # is anything else (a curl example, exports), no block is a launch command
+    # and the page must not offer one.
+    return best[3] if best[0] == 0 else -1
 
 
 def parse_recipe(root: Path, path: Path) -> Recipe:
@@ -896,6 +900,16 @@ def render_recipe(
         source_url = (
             f"{meta.repo_url}/blob/{meta.ref}/docs/cookbook/{recipe.source_path}"
         )
+    edit_url = (
+        f"{meta.repo_url}/edit/{meta.ref or meta.commit}/docs/cookbook/{recipe.source_path}"
+        if meta.ref or meta.commit
+        else ""
+    )
+    edit_link = (
+        f'<a href="{esc(edit_url)}" target="_blank" rel="noopener">Edit this page ↗</a>'
+        if edit_url
+        else ""
+    )
     json_url = rel_link(page, f"api/recipes/{recipe.vendor}/{recipe.slug}.json")
     has_command = recipe.primary_block >= 0
     body_html = decorate_html(
@@ -938,6 +952,7 @@ def render_recipe(
       </div>
       <div class="aside-links">
         <a href="{esc(source_url)}" target="_blank" rel="noopener">View markdown source ↗</a>
+        {edit_link}
         <a href="{esc(json_url)}">Recipe JSON</a>
         <a href="{esc(rel_link(page, "index.html"))}#catalog">All recipes</a>
       </div>
@@ -1189,6 +1204,49 @@ def load_from_git(repo: Path, ref: str) -> tuple[Path, str]:
 CODE_SAMPLE_RE = re.compile(r"<pre>.*?</pre>", re.S)
 
 
+INDEX_LINK_RE = re.compile(r"\]\(([A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.md)(?:#[^)\s]*)?\)")
+
+
+def structure_problems(root: Path, recipes: list[Recipe]) -> list[tuple[str, str]]:
+    """Cookbook problems that still render, but as a page nobody can trust.
+
+    The link check in verify() only sees the generated site; these run before
+    anything is written, so a pull request that adds a recipe without an
+    overview, a table or a launch block fails while the diff is still open.
+    """
+    problems: list[tuple[str, str]] = []
+    for recipe in recipes:
+        if "overview" not in {title.lower() for title in recipe.sections}:
+            problems.append((recipe.source_path, "missing a '## Overview' section"))
+        if not recipe.at_a_glance:
+            problems.append((recipe.source_path, "missing an '## At a glance' table"))
+        if recipe.primary_block < 0:
+            problems.append(
+                (
+                    recipe.source_path,
+                    "no fenced block launches a server ('vllm serve' or 'docker run')",
+                )
+            )
+        if recipe.slug != recipe.slug.lower() or " " in recipe.slug:
+            problems.append((recipe.source_path, "file name must be lowercase ASCII"))
+
+    index = root / "README.md"
+    if index.is_file():
+        linked = {
+            link
+            for link in INDEX_LINK_RE.findall(index.read_text(encoding="utf-8"))
+            if not link.endswith("/README.md")  # vendor sub-indexes are not recipes
+        }
+        listed = {recipe.source_path for recipe in recipes}
+        for missing in sorted(listed - linked):
+            problems.append(("README.md", f"the index does not link to '{missing}'"))
+        for dead in sorted(linked - listed):
+            problems.append(
+                ("README.md", f"the index links to '{dead}', which is not a recipe")
+            )
+    return problems
+
+
 def verify(out: Path) -> list[str]:
     problems: list[str] = []
     for page in out.rglob("*.html"):
@@ -1308,6 +1366,13 @@ def main(argv: list[str] | None = None) -> int:
     recipes = [parse_recipe(root, path) for path in sources]
     if not recipes:
         sys.exit(f"error: no recipes found under {root}")
+
+    structure = structure_problems(root, recipes)
+    if structure:
+        prefix = f"{args.source.as_posix()}/" if args.source else ""
+        for source, message in structure:
+            print(f"::error file={prefix}{source}::{message}")
+        sys.exit(f"error: {len(structure)} cookbook structure problem(s)")
 
     order = {vendor: i for i, vendor in enumerate(VENDOR_LABELS)}
     recipes.sort(key=lambda r: (order.get(r.vendor, 99), r.vendor, r.title.lower()))

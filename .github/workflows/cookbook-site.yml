@@ -15,7 +15,8 @@ name: Cookbook site
 # carries this workflow, so the guard sits on the job instead and compares the
 # pushed ref with the repository's current default branch. Feature-branch pushes
 # skip the job; pull requests build (and fail on broken links) without
-# publishing.
+# publishing. Every pull request builds, not only cookbook ones, because `build`
+# is required: a filtered trigger would block unrelated pull requests.
 
 on:
   push:
@@ -23,11 +24,10 @@ on:
       - '.github/workflows/cookbook-site.yml'
       - 'docs/cookbook/**'
       - 'tools/cookbook-site/**'
+  # No paths filter: `build` is a required check on the default branch, so every
+  # pull request has to report it. A filtered trigger would leave unrelated
+  # pull requests waiting forever for a check that never starts.
   pull_request:
-    paths:
-      - '.github/workflows/cookbook-site.yml'
-      - 'docs/cookbook/**'
-      - 'tools/cookbook-site/**'
   workflow_dispatch:
 
 permissions:
@@ -81,9 +81,30 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+      - name: Check the published catalog
+        # Confirms the live site names this commit. A Pages setting that rejects
+        # the deploy (for example a missing environment branch policy) fails the
+        # job here instead of leaving the site silently at the previous build.
+        run: |
+          set -euo pipefail
+          # The Pages edge caches JSON for ten minutes; a unique query string
+          # misses that entry and reads the deployment that just went live.
+          url="${{ steps.deployment.outputs.page_url }}api/recipes.json?deploy=${GITHUB_SHA}"
+          for attempt in $(seq 1 12); do
+            deployed=$(curl -fsS --max-time 10 "${url}" | jq -r '.source.commit' 2>/dev/null || true)
+            if [ "${deployed}" = "${GITHUB_SHA}" ]; then
+              echo "published catalog reports ${deployed}"
+              exit 0
+            fi
+            echo "attempt ${attempt}: published commit is '${deployed:-unavailable}', waiting"
+            sleep 5
+          done
+          echo "::error::the published catalog does not report ${GITHUB_SHA}"
+          exit 1
