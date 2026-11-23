@@ -448,9 +448,9 @@ ARG PYPI_INDEX_URL
 COPY --from=vllm_musa_installed /vllm-workspace/requirements/vllm_runtime_transitive.txt \
      /tmp/vllm-runtime-requirements.txt
 COPY --from=vllm_musa_installed /vllm-workspace/requirements/common.txt \
-     /tmp/vllm-runtime-requirements/common.txt
+     /tmp/vllm-runtime-requirements/requirements/common.txt
 COPY --from=vllm_musa_installed /vllm-workspace/requirements/musa_private.txt \
-     /tmp/vllm-runtime-requirements/musa_private.txt
+     /tmp/vllm-runtime-requirements/requirements/musa_private.txt
 COPY --from=vllm_wheel /tmp/vllm-wheel/ /tmp/vllm-wheel/
 COPY docker/verify_installed_dependencies.py /tmp/verify_installed_dependencies.py
 

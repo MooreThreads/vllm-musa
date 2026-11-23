@@ -105,8 +105,8 @@ def test_runtime_target_does_not_copy_the_editable_source_checkout():
 def test_runtime_dependency_verifier_receives_requirement_files_without_source():
     dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
 
-    assert "/tmp/vllm-runtime-requirements/common.txt" in dockerfile
-    assert "/tmp/vllm-runtime-requirements/musa_private.txt" in dockerfile
+    assert "/tmp/vllm-runtime-requirements/requirements/common.txt" in dockerfile
+    assert "/tmp/vllm-runtime-requirements/requirements/musa_private.txt" in dockerfile
     assert "VLLM_MUSA_REQUIREMENTS_ROOT=/tmp/vllm-runtime-requirements" in dockerfile
 
 
