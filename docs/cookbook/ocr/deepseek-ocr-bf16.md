@@ -24,7 +24,7 @@ BF16 vision-language OCR recipe for a single S5000 GPU.
 ## Prerequisites
 
 - vLLM-MUSA with vLLM v0.32.0 and
-  `vllm.v1.worker.gpu.sample.no_repeat_ngram.NoRepeatNGramState` available.
+  `vllm.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState` available.
 - Model Runner V2. This processor does not support speculative decoding.
 
 ## Validation

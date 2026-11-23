@@ -28,7 +28,7 @@ extraction pipeline.
 ## Prerequisites
 
 - vLLM-MUSA with vLLM v0.32.0 and
-  `vllm.v1.worker.gpu.sample.no_repeat_ngram.NoRepeatNGramState` available.
+  `vllm.v1.worker.gpu.sample.no_repeat_ngram:NoRepeatNGramState` available.
 - Model Runner V2 with speculative decoding off.
 - The MinerU2.5-Pro-2605-1.2B checkpoint available at `MODEL_PATH`.
 - `mineru-vl-utils` installed wherever the MinerU client runs.
