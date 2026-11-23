@@ -414,7 +414,12 @@ path. PR #62858 contributes `4d679ebea96bc42a0fb313f5f27490be71e9b425`, which
 makes `LOG2E` a Triton constexpr in the DeepEncoder attention kernel. They are
 carried as
 `upstream/0002-MUSA-carry-OCR-no-repeat-ngram-runtime-support-57540.patch`.
-The OCR Cookbook recipes are maintained separately as vLLM-MUSA
+Its mailbox preserves the upstream author trailers, including
+`jasonlee <lijiaxiang@neoway.com>`, `OpenAI Codex <codex@openai.com>`,
+`Codex <codex@openai.com>`, and
+`usmanmateen <74776275+usmanmateen@users.noreply.github.com>`, following
+the `upstream/0001` format. The OCR Cookbook recipes are maintained
+separately as vLLM-MUSA
 documentation; they are not part of the upstream patch entry.
 
 An upstream entry is a `git cherry-pick -x` of its upstream commit: the
