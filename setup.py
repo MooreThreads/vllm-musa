@@ -84,13 +84,18 @@ def _has_prebuilt_extensions() -> bool:
     """Return whether every extension output required by a wheel is present."""
     if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") != "1":
         return False
-    extension_paths = (
-        root / _VLLM_REPO.source_dir / "vllm" / "_C*.so",
-        root / _VLLM_REPO.source_dir / "vllm" / "_C_stable_libtorch*.so",
-        root / _VLLM_REPO.source_dir / "vllm" / "_moe_C*.so",
-        root / "vllm_musa" / "_C*.so",
+    extension_patterns = (
+        ("vllm", "_C*.so"),
+        ("vllm", "_C_stable_libtorch*.so"),
+        ("vllm", "_moe_C*.so"),
+        ("vllm_musa", "_C*.so"),
     )
-    missing = [pattern for pattern in extension_paths if not list(pattern.parent.glob(pattern.name))]
+    candidate_dirs = (root / _VLLM_REPO.source_dir, root)
+    missing = [
+        f"{package}/{pattern}"
+        for package, pattern in extension_patterns
+        if not any(list((candidate / package).glob(pattern)) for candidate in candidate_dirs)
+    ]
     if missing:
         raise RuntimeError(
             "VLLM_MUSA_REUSE_PREBUILT=1 requires prepared extension outputs, "
@@ -404,21 +409,27 @@ class _CustomBuildExt(BuildExtension):
             super().build_extensions()
         else:
             print("Reusing native extensions from the prepared source tree")
-            for source_dir, target_dir, patterns in (
+            for package, target_dir, patterns in (
                 (
-                    root / _VLLM_REPO.source_dir / "vllm",
+                    "vllm",
                     Path(self.build_lib) / "vllm",
                     ("_C*.so", "_C_stable_libtorch*.so", "_moe_C*.so"),
                 ),
                 (
-                    root / "vllm_musa",
+                    "vllm_musa",
                     Path(self.build_lib) / "vllm_musa",
                     ("_C*.so",),
                 ),
             ):
                 target_dir.mkdir(parents=True, exist_ok=True)
                 for pattern in patterns:
-                    for source in source_dir.glob(pattern):
+                    sources = []
+                    for candidate in (
+                        root / _VLLM_REPO.source_dir / package,
+                        root / package,
+                    ):
+                        sources.extend(candidate.glob(pattern))
+                    for source in sorted(set(sources)):
                         shutil.copy2(source, target_dir / source.name)
         package_dirs = {root / "vllm_musa"}
         if self.build_lib and (Path(self.build_lib) / "vllm_musa").is_dir():
