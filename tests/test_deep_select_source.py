@@ -548,7 +548,7 @@ def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
     )
     added = _added_lines(source_patch)
     assert "https://github.com/MooreThreads/DeepSelect.git" in added
-    assert "set(deepselect_rev main)" in added
+    assert "95c6884ac33e0d6ed9eb7b6282f4cc4a9a735f94" in added
     assert "musa_api.mu" in added
 
 
@@ -630,11 +630,7 @@ def test_vllm_empty_mode_builds_deepselect_only_when_configured(
     empty: bool, source_env: str, cmake_args: str
 ) -> None:
     setup_patch = BUILD_PATCH.read_text().split("diff --git a/setup.py", 1)[1]
-    source = _added_lines(setup_patch).replace(
-        "    if _deepselect_source_requested:",
-        "if _no_device():\n    ext_modules = []\n    if _deepselect_source_requested:",
-        1,
-    )
+    source = "if _no_device():\n    ext_modules = []\n" + _added_lines(setup_patch)
     extensions = [SimpleNamespace(name="existing")]
     environment = {
         "DEEPSELECT_SRC_DIR": source_env,
