@@ -85,8 +85,14 @@ RUN apt-get update && \
 RUN if [[ "${PYTHON_VERSION}" != "3.12" ]]; then \
         echo "This image supports only PYTHON_VERSION=3.12 (got ${PYTHON_VERSION})" >&2; \
         exit 1; \
+    elif python3 -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' \
+        >/dev/null 2>&1 && command -v pip >/dev/null 2>&1; then \
+        echo "Keeping Python 3.12 from BASE_IMAGE"; \
     fi && \
-    if [[ -n "${DEADSNAKES_MIRROR_URL}" ]]; then \
+    if python3 -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' \
+        >/dev/null 2>&1 && command -v pip >/dev/null 2>&1; then \
+        true; \
+    elif [[ -n "${DEADSNAKES_MIRROR_URL}" ]]; then \
         if [[ -z "${DEADSNAKES_GPGKEY_URL}" ]]; then \
             echo "DEADSNAKES_GPGKEY_URL is required with DEADSNAKES_MIRROR_URL" >&2; \
             exit 1; \
