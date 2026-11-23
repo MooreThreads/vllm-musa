@@ -41,6 +41,7 @@ dev = [
 ]
 
 [project.scripts]
+vllm = "vllm.entrypoints.cli.main:main"
 vllm_collect_env = "vllm_musa:collect_env"
 
 [project.entry-points."vllm.platform_plugins"]
