@@ -15,10 +15,10 @@ same deployment shape:
 
 ## Model source
 
-There is currently no public FP8 checkpoint address. The MoE FP8 weights were
-converted from the
+The MoE FP8 weights are not published; build them from the
 [DeepSeek-V4.1-Flash-1017 ModelScope model](https://modelscope.cn/models/deepseek-ai/DeepSeek-V4.1-Flash-1017)
-with its `DeepSeek-V4.1-Flash-1017/inference/convert.py` script.
+with `inference/convert.py --expert-dtype fp8`. Any other `--expert-dtype`
+leaves FP4 experts that the commands below load under FP8 weight names.
 
 ## At a glance
 
