@@ -4,26 +4,29 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
- CMakeLists.txt                           |  2 ++
- cmake/external_projects/deepselect.cmake | 30 +++++++++++++++++++++++++++---
- setup.py                                 |  9 +++++++++
- 3 files changed, 38 insertions(+), 3 deletions(-)
+CMakeLists.txt                           |  5 ++++
+ cmake/external_projects/deepselect.cmake | 45 +++++++++++++++++++++++++++++---
+ setup.py                                 |  9 +++++++
+ 3 files changed, 56 insertions(+), 3 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a71d7e1e5..cc7298a4cf 100644
+index 3a71d7e1e5..29d018da33 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -170,6 +170,8 @@ if (NOT VLLM_TARGET_DEVICE STREQUAL "cuda" AND
-     NOT VLLM_TARGET_DEVICE STREQUAL "rocm")
-     if (VLLM_TARGET_DEVICE STREQUAL "cpu")
-         include(${CMAKE_CURRENT_LIST_DIR}/cmake/cpu_extension.cmake)
-+    elseif (VLLM_TARGET_DEVICE STREQUAL "empty")
-+        include(cmake/external_projects/deepselect.cmake)
-     else()
-         return()
-     endif()
+@@ -95,6 +95,11 @@ endif()
+ #
+ # Update cmake's `CMAKE_PREFIX_PATH` with torch location.
+ #
++if(VLLM_TARGET_DEVICE STREQUAL "empty")
++  include(cmake/external_projects/deepselect.cmake)
++  return()
++endif()
++
+ append_cmake_prefix_path("torch" "torch.utils.cmake_prefix_path")
+
+ # Ensure the 'nvcc' command is in the PATH
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e61..9ed05c2508 100644
+index e2a5592e61..9c86dfba0a 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
 @@ -5,7 +5,11 @@ include(FetchContent)
@@ -37,7 +40,7 @@ index e2a5592e61..9ed05c2508 100644
 +if(VLLM_TARGET_DEVICE STREQUAL "empty" AND NOT DEEPSELECT_SRC_DIR)
 +  return()
  endif()
- 
+
  if(DEEPSELECT_SRC_DIR)
 @@ -16,10 +20,18 @@ if(DEEPSELECT_SRC_DIR)
          BUILD_COMMAND ""
@@ -60,19 +63,34 @@ index e2a5592e61..9ed05c2508 100644
          GIT_PROGRESS TRUE
          CONFIGURE_COMMAND ""
          BUILD_COMMAND ""
-@@ -29,6 +41,18 @@ endif()
+@@ -29,6 +41,33 @@ endif()
  FetchContent_MakeAvailable(deepselect)
  message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
- 
+
 +if(VLLM_TARGET_DEVICE STREQUAL "empty")
 +  find_path(MUSA_CMAKE_DIR Modules/CMakeDetermineMUSACompiler.cmake
 +    HINTS "$ENV{MUSA_HOME}/cmake" /usr/local/musa/cmake REQUIRED)
 +  list(PREPEND CMAKE_MODULE_PATH "${MUSA_CMAKE_DIR}/Modules" "${MUSA_CMAKE_DIR}")
 +  enable_language(MUSA)
++  set(CMAKE_INCLUDE_SYSTEM_FLAG_MUSA "-isystem ")
++  foreach(attr IN ITEMS include_dirs library_dirs libraries)
++    run_python(deepselect_${attr}
++      "from torch_musa.utils.musa_extension import MUSAExtension; print(';'.join(MUSAExtension('_deepselect_C', []).${attr}))"
++      "Cannot determine DeepSelect MUSA ${attr}")
++  endforeach()
 +  define_extension_target(_deepselect_C
 +    DESTINATION vllm LANGUAGE MUSA WITH_SOABI
 +    SOURCES "${deepselect_SOURCE_DIR}/csrc/musa_api.mu"
-+    INCLUDE_DIRECTORIES "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include")
++    INCLUDE_DIRECTORIES ${deepselect_include_dirs} "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include"
++    COMPILE_FLAGS --offload-arch=mp_31 -O3 -std=c++17 -Wno-error=address-of-temporary
++      -ffast-math -fmusa-flush-denormals-to-zero -fno-signed-zeros
++      "SHELL:-mllvm -mtgpu-opt-level=1" "SHELL:-mllvm -mtgpu-load-store-opt=1"
++      "SHELL:-mllvm -mtgpu-fold-global-ldst=1"
++    LIBRARIES ${deepselect_libraries})
++  target_compile_definitions(_deepselect_C PRIVATE USE_MUSA TORCH_API_INCLUDE_EXTENSION_H)
++  target_link_directories(_deepselect_C PRIVATE ${deepselect_library_dirs})
++  set_target_properties(_deepselect_C PROPERTIES LINKER_LANGUAGE CXX
++    INSTALL_RPATH "$ORIGIN/../torch/lib;$ORIGIN/../torch_musa/lib")
 +  return()
 +endif()
 +
@@ -86,7 +104,7 @@ index 37bfc3e41b..4db4bf89a3 100644
 @@ -1651,8 +1651,17 @@ if PRECOMPILED_RUST_FRONTEND_PATH.exists():
  for rust_extension_path in get_precompiled_rust_extension_paths():
      add_vllm_package_data(rust_extension_path.name)
- 
+
 +_deepselect_source_requested = bool(os.environ.get("DEEPSELECT_SRC_DIR")) or any(
 +    argument.startswith("-DDEEPSELECT_SRC_DIR=")
 +    for argument in os.environ.get("CMAKE_ARGS", "").split()
@@ -98,6 +116,6 @@ index 37bfc3e41b..4db4bf89a3 100644
 +        deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
 +        deepselect_extension.py_limited_api = False
 +        ext_modules = [deepselect_extension]
- 
+
  if not ext_modules:
      cmdclass = {}
