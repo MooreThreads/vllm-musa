@@ -313,7 +313,11 @@ def primary_block_index(sections: list[Section]) -> int:
             order += 1
     if not ranked:
         return -1
-    return min(ranked)[3]
+    best = min(ranked)
+    # ``launches`` is 0 only for a block that starts a server; if the best block
+    # is anything else (a curl example, exports), no block is a launch command
+    # and the page must not offer one.
+    return best[3] if best[0] == 0 else -1
 
 
 def parse_recipe(root: Path, path: Path) -> Recipe:
@@ -1200,7 +1204,7 @@ def load_from_git(repo: Path, ref: str) -> tuple[Path, str]:
 CODE_SAMPLE_RE = re.compile(r"<pre>.*?</pre>", re.S)
 
 
-INDEX_LINK_RE = re.compile(r"\]\(([A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.md)\)")
+INDEX_LINK_RE = re.compile(r"\]\(([A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.md)(?:#[^)\s]*)?\)")
 
 
 def structure_problems(root: Path, recipes: list[Recipe]) -> list[tuple[str, str]]:
