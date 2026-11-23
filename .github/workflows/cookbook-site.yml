@@ -94,7 +94,9 @@ jobs:
         # job here instead of leaving the site silently at the previous build.
         run: |
           set -euo pipefail
-          url="${{ steps.deployment.outputs.page_url }}api/recipes.json"
+          # The Pages edge caches JSON for ten minutes; a unique query string
+          # misses that entry and reads the deployment that just went live.
+          url="${{ steps.deployment.outputs.page_url }}api/recipes.json?deploy=${GITHUB_SHA}"
           for attempt in $(seq 1 12); do
             deployed=$(curl -fsS --max-time 10 "${url}" | jq -r '.source.commit' 2>/dev/null || true)
             if [ "${deployed}" = "${GITHUB_SHA}" ]; then
