@@ -8,31 +8,30 @@ they differ from the rest of the cookbook in three ways: the server needs the
 
 Back to the [full serving cookbook](../README.md).
 
-| Model | Precision | Steps | Hardware | Median latency | Recipe |
-|---|---|---|---|---|---|
-| Qwen-Image-2.1 | BF16 | 20 | 1x S5000, TP1 | 4.20 s | [Open recipe](qwen-image-2.1-bf16.md) |
-| Qwen-Image-2.1 | FP8 | 20 | 1x S5000, TP1 | 3.42 s | [Open recipe](qwen-image-2.1-fp8.md) |
-| Qwen-Image-2.1-Turbo | BF16 | 8 | 1x S5000, TP1 | 1.87 s | [Open recipe](qwen-image-2.1-turbo-bf16.md) |
-| Qwen-Image-2.1-Turbo | FP8 | 8 | 1x S5000, TP1 | 1.58 s | [Open recipe](qwen-image-2.1-turbo-fp8.md) |
-
-Latencies are one 1024x1024 image, batch 1, `seed` fixed, `true_cfg_scale` 1.0,
-warm server, median of five requests on one S5000. They were measured on the same
-card in one window, so the ratios between them are comparable; absolute seconds
-depend on the host.
+| Model | Precision | Steps | Hardware | Recipe |
+|---|---|---|---|---|
+| Qwen-Image-2.1 | BF16 | 20 | 1x S5000, TP1 | [Open recipe](qwen-image-2.1-bf16.md) |
+| Qwen-Image-2.1 | FP8 | 20 | 1x S5000, TP1 | [Open recipe](qwen-image-2.1-fp8.md) |
+| Qwen-Image-2.1-Turbo | BF16 | 8 | 1x S5000, TP1 | [Open recipe](qwen-image-2.1-turbo-bf16.md) |
+| Qwen-Image-2.1-Turbo | FP8 | 8 | 1x S5000, TP1 | [Open recipe](qwen-image-2.1-turbo-fp8.md) |
 
 ## Choosing a recipe
 
 - **BF16** is the reference. Use it when the output must match what the
   checkpoint produces elsewhere.
-- **FP8** quantizes the DiT's linears at load time from the same BF16 checkpoint,
-  for about 18% less latency. It changes the image: over a 14-prompt sweep the
-  median PSNR against BF16 was 31.34 dB and half the prompts fell below 30 dB.
-  Use it for throughput, not when a pinned prompt and seed must keep reproducing
-  a known image.
+- **FP8** quantizes the DiT's linears at load time from the same BF16 checkpoint
+  and serves it faster. It changes the image: over a 14-prompt sweep some outputs
+  were indistinguishable from BF16 and about half moved enough to see. Use it for
+  throughput, not when a pinned prompt and seed must keep reproducing a known
+  image.
 - **Turbo** is a different, distilled checkpoint that carries its own 8-step
   schedule. It is the largest win available here and its output is its own, not
   an approximation of the base model's.
-- The two stack: Turbo plus FP8 is the fastest configuration measured.
+- The two stack: Turbo plus FP8 is the fastest of the four.
+
+Latency depends on resolution, step count, guidance and host, so these pages
+document configuration rather than published numbers. Measure your own prompt
+set and request shape before committing to a profile.
 
 Both checkpoints are released under the Qwen Research License. Read it before
 deploying either one; neither is under a permissive licence.

@@ -4,8 +4,7 @@
 
 The distilled Turbo checkpoint with the DiT's linear layers quantized to FP8 at
 load time. The two levers are independent and stack: 8 steps instead of 20, and
-about 16% off what remains. This is the fastest configuration measured in this
-section.
+FP8 on the DiT linears. This is the fastest of the four profiles in this section.
 
 > [!TIP]
 > Fastest, and the furthest from the base model's output. Use it when throughput
@@ -16,14 +15,13 @@ section.
 | Setting | Value |
 |---|---|
 | Hardware | 1x S5000 |
-| Precision | FP8 (online, per-tensor; BF16 checkpoint quantized at load) |
+| Precision | FP8 |
+| Quantization | Online per-tensor FP8 on the DiT linears, from the BF16 checkpoint |
 | Tensor parallelism | TP1 |
 | Denoising steps | 8, from the checkpoint's own `sample_sigmas` |
 | Resolution | 1024x1024 |
 | Guidance | `true_cfg_scale` 1.0 |
 | Endpoint | `POST /v1/images/generations` |
-| Median latency | 1.58 s per image, warm — **62.3% below base BF16**, 15.7% below Turbo BF16 |
-| Cold start | about 137 s on a warm Inductor cache |
 
 ## Validation
 
@@ -36,7 +34,6 @@ section.
 | MUSA driver | 5.2.0 |
 | Hardware | 1x S5000, TP1 |
 | Served request | 1024x1024, batch 1, seed 42, `true_cfg_scale` 1.0, 8 steps |
-| Result | median **1.5812 s** over five warm requests, spread 0.67%, against 1.8749 s Turbo BF16 and 4.1956 s base BF16 in the same window |
 
 ## Launching the server
 
@@ -69,9 +66,9 @@ curl -s -X POST http://localhost:8000/v1/images/generations \
 
 - **Two independent changes at once.** Against the base BF16 reference this
   recipe changes both the checkpoint and the numerics, so its output is not
-  comparable to that reference image. The FP8 fidelity figures in
-  [the FP8 recipe](qwen-image-2.1-fp8.md) were measured on the base checkpoint;
-  the Turbo checkpoint's own quality bar is discussed in
+  comparable to that reference image. The FP8 fidelity sweep in
+  [the FP8 recipe](qwen-image-2.1-fp8.md) ran on the base checkpoint; the Turbo
+  checkpoint's own quality bar is discussed in
   [the Turbo BF16 recipe](qwen-image-2.1-turbo-bf16.md). Neither was re-measured
   for the combination.
 - FP8 is worth proportionally less here than at 20 steps: with fewer denoising

@@ -115,17 +115,16 @@ Text-to-image recipes served through vLLM-Omni. See the
 [Qwen-Image cookbook index](qwen-image/README.md) for the four profiles and the
 image build.
 
-| Model | Precision | Steps | Hardware | Median latency | Recipe |
-|---|---|---|---|---|---|
-| Qwen-Image-2.1 | BF16 | 20 | 1x S5000, TP1 | 4.20 s | [Open recipe](qwen-image/qwen-image-2.1-bf16.md) |
-| Qwen-Image-2.1 | FP8 | 20 | 1x S5000, TP1 | 3.42 s | [Open recipe](qwen-image/qwen-image-2.1-fp8.md) |
-| Qwen-Image-2.1-Turbo | BF16 | 8 | 1x S5000, TP1 | 1.87 s | [Open recipe](qwen-image/qwen-image-2.1-turbo-bf16.md) |
-| Qwen-Image-2.1-Turbo | FP8 | 8 | 1x S5000, TP1 | 1.58 s | [Open recipe](qwen-image/qwen-image-2.1-turbo-fp8.md) |
+| Model | Precision | Steps | Hardware | Recipe |
+|---|---|---|---|---|
+| Qwen-Image-2.1 | BF16 | 20 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-bf16.md) |
+| Qwen-Image-2.1 | FP8 | 20 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-fp8.md) |
+| Qwen-Image-2.1-Turbo | BF16 | 8 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-turbo-bf16.md) |
+| Qwen-Image-2.1-Turbo | FP8 | 8 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-turbo-fp8.md) |
 
 These differ from every other recipe here: the server takes `--omni`, requests go
 to `/v1/images/generations`, and the image is built by
-`docker/build_omni_image.sh` rather than pulled as a `vllm-openai` tag. Latencies
-are one 1024x1024 image, batch 1, warm, median of five.
+`docker/build_omni_image.sh` rather than pulled as a `vllm-openai` tag.
 
 ## Verify a server
 

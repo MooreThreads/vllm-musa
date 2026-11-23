@@ -3,13 +3,13 @@
 ## Overview
 
 Text-to-image recipe for the base Qwen-Image-2.1 checkpoint at its native BF16
-precision. This is the reference configuration: the other three recipes in this
-section are measured against it.
+precision. This is the reference configuration for the other three recipes in
+this section.
 
 > [!TIP]
 > Use this profile when the output must match what the checkpoint produces
 > elsewhere. The FP8 recipe in this section trades a visible fidelity cost for
-> about 18% less latency.
+> lower latency.
 
 ## At a glance
 
@@ -22,8 +22,6 @@ section are measured against it.
 | Resolution | 1024x1024 |
 | Guidance | `true_cfg_scale` 1.0 |
 | Endpoint | `POST /v1/images/generations` |
-| Median latency | 4.20 s per image, warm |
-| Cold start | about 132 s on a warm Inductor cache |
 
 ## Validation
 
@@ -36,7 +34,6 @@ section are measured against it.
 | MUSA driver | 5.2.0 |
 | Hardware | 1x S5000, TP1 |
 | Served request | 1024x1024, batch 1, seed 42, `true_cfg_scale` 1.0, 20 steps |
-| Result | median **4.1956 s** over five warm requests, spread 0.24% |
 
 ## Launching the server
 
@@ -78,13 +75,14 @@ curl -s -X POST http://localhost:8000/v1/images/generations \
 - 20 steps is this recipe's choice. The checkpoint's scheduler declares no step
   count, so the number is yours to pick; latency is close to linear in it.
 - `true_cfg_scale` 1.0 disables classifier-free guidance. Higher values add a
-  second transformer evaluation per step, so the latency above no longer applies.
+  second transformer evaluation per step, so the cost per image goes up.
 - `enable_cuda_graph_decode` defaults to on and has **no effect on this
   platform**: the capture path is gated to CUDA devices, so the flag is inert.
   Leaving it at the default is correct — forcing the capture path on was measured
-  at about 28% slower per image, because graph replay costs more per step than
-  eager execution here and each request pays a capture.
-- The first request after startup is slower than the steady state; the median
-  above excludes one warm-up request.
+  slower per image, because graph replay costs more per step than eager execution
+  here and each request pays a capture.
+- The first start compiles the pipeline, so the server takes a few minutes to
+  accept requests, longer on a cold Inductor cache. The first request after that
+  is slower than the steady state.
 
 Return to the [Qwen-Image recipe index](README.md).

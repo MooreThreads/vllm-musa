@@ -23,8 +23,6 @@ cost is unchanged.
 | Resolution | 1024x1024 |
 | Guidance | `true_cfg_scale` 1.0 |
 | Endpoint | `POST /v1/images/generations` |
-| Median latency | 1.87 s per image, warm — **55.3% below base BF16** |
-| Cold start | about 147 s on a warm Inductor cache |
 
 ## Validation
 
@@ -37,7 +35,6 @@ cost is unchanged.
 | MUSA driver | 5.2.0 |
 | Hardware | 1x S5000, TP1 |
 | Served request | 1024x1024, batch 1, seed 42, `true_cfg_scale` 1.0, 8 steps |
-| Result | median **1.8749 s** over five warm requests, spread 0.81%, against 4.1956 s base BF16 in the same window |
 | Step source | an explicit `num_inference_steps: 8` and omitting the field produced a byte-identical PNG |
 
 ## Launching the server
@@ -72,9 +69,9 @@ curl -s -X POST http://localhost:8000/v1/images/generations \
   `num_inference_steps: 8` is accepted and produced a byte-identical image to
   omitting the field, so the field is redundant here; sending a *different*
   number departs from the grid the checkpoint was distilled for.
-- **Turbo is not scored against the base model.** PSNR between a Turbo image and
-  a base-model image measures the distillation, not quality: dropping the base
-  model from 20 to 8 steps already costs 19.6 dB on its own, and Turbo at 8 steps
+- **Turbo is not scored against the base model.** Comparing a Turbo image to a
+  base-model image measures the distillation, not quality: dropping the base model
+  from 20 to 8 steps already changes its output on its own, and Turbo at 8 steps
   differs from base-at-8-steps by more still. Evaluate Turbo on prompt adherence
   and preference against your own bar.
 - The per-step cost is not lower than the base model's; Turbo buys *fewer* steps.
