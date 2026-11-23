@@ -106,22 +106,27 @@ RUN if [[ "${PYTHON_VERSION}" != "3.12" ]]; then \
         env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
             add-apt-repository -y ppa:deadsnakes/ppa; \
     fi && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python${PYTHON_VERSION} \
-        python${PYTHON_VERSION}-dev && \
+    if python3 -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' \
+        >/dev/null 2>&1 && command -v pip >/dev/null 2>&1; then \
+        true; \
+    else \
+        apt-get update && \
+        apt-get install -y --no-install-recommends \
+            python${PYTHON_VERSION} \
+            python${PYTHON_VERSION}-dev && \
     update-alternatives --install /usr/bin/python3 python3 \
-        /usr/bin/python${PYTHON_VERSION} 100 && \
-    update-alternatives --set python3 /usr/bin/python${PYTHON_VERSION} && \
-    ln -sfn /usr/bin/python${PYTHON_VERSION}-config /usr/bin/python3-config && \
-    rm -f /usr/lib/python${PYTHON_VERSION}/EXTERNALLY-MANAGED && \
-    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 10 \
-        "${GET_PIP_URL}" -o /tmp/get-pip.py && \
-    /usr/bin/python${PYTHON_VERSION} /tmp/get-pip.py \
-        --index-url "${PIP_BOOTSTRAP_INDEX_URL}" && \
-    rm -f /tmp/get-pip.py && \
-    ln -sfn /usr/local/bin/pip${PYTHON_VERSION} /usr/local/bin/pip && \
-    ln -sfn /usr/local/bin/pip${PYTHON_VERSION} /usr/local/bin/pip3 && \
+            /usr/bin/python${PYTHON_VERSION} 100 && \
+        update-alternatives --set python3 /usr/bin/python${PYTHON_VERSION} && \
+        ln -sfn /usr/bin/python${PYTHON_VERSION}-config /usr/bin/python3-config && \
+        rm -f /usr/lib/python${PYTHON_VERSION}/EXTERNALLY-MANAGED && \
+        curl -fsSL --retry 5 --retry-all-errors --connect-timeout 10 \
+            "${GET_PIP_URL}" -o /tmp/get-pip.py && \
+        /usr/bin/python${PYTHON_VERSION} /tmp/get-pip.py \
+            --index-url "${PIP_BOOTSTRAP_INDEX_URL}" && \
+        rm -f /tmp/get-pip.py && \
+        ln -sfn /usr/local/bin/pip${PYTHON_VERSION} /usr/local/bin/pip && \
+        ln -sfn /usr/local/bin/pip${PYTHON_VERSION} /usr/local/bin/pip3; \
+    fi && \
     python --version && \
     python3 --version && \
     pip --version && \
@@ -440,7 +445,7 @@ RUN mkdir -p /tmp/vllm-wheel && \
         install -Dm755 /tmp/vllm-rs-artifacts/vllm-rs \
             /vllm-workspace/third_party/vllm/vllm/vllm-rs; \
     fi && \
-    VLLM_MUSA_REUSE_PREBUILT=1 \
+    SKIP_THIRD_PARTY=1 VLLM_MUSA_REUSE_PREBUILT=1 \
         python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel
 
 # Install the prebuilt MUSA wheel after torch/vllm-musa so Mooncake integrations
@@ -483,7 +488,7 @@ COPY --from=vllm_musa_installed /tmp/vllm-runtime-workspace/benchmarks \
      /vllm-workspace/benchmarks
 COPY --from=vllm_musa_installed /vllm-workspace/vllm_musa/collect_env.py \
      /vllm-workspace/collect_env.py
-RUN python -c 'import importlib.metadata as m; from pathlib import Path; names=("torch", "torchvision", "torchaudio"); available={d.metadata["Name"].lower() for d in m.distributions()}; lines=[f"{name}=={m.version(name)}" for name in names if name in available]; Path("/vllm-workspace/torch_lib_versions.txt").write_text("\\n".join(lines)+"\\n")'
+RUN python -c 'import importlib.metadata as m; from pathlib import Path; names=("torch", "torchvision", "torchaudio"); available={d.metadata["Name"].lower() for d in m.distributions()}; lines=[f"{name}=={m.version(name)}" for name in names if name in available]; Path("/vllm-workspace/torch_lib_versions.txt").write_text(chr(10).join(lines)+chr(10))'
 
 # Keep the source-bearing target available for CI and debugging without making
 # it the implicit target of `docker build`. Docker uses the last stage as its

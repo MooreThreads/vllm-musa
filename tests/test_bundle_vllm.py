@@ -68,8 +68,10 @@ def test_runtime_metadata_constraint_is_numpy_one_series():
 def test_hardware_private_requirements_are_an_explicit_extra():
     setup = (Path(__file__).parents[1] / "setup.py").read_text()
 
-    assert 'install_requires=_read_requirements("common.txt")' in setup
-    assert '"musa": _read_requirements("musa_private.txt")' in setup
+    assert '"common.txt"' in setup
+    assert 'musa = {file = ["requirements/musa_private.txt"]}' in (
+        Path(__file__).parents[1] / "pyproject.toml"
+    ).read_text()
 
 
 def test_bundle_can_reuse_prebuilt_vllm_extensions(monkeypatch, tmp_path):

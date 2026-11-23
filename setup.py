@@ -722,10 +722,10 @@ setup(
     # Keep the default wheel installable from public indexes. Hardware-private
     # wheels are an explicit extra because torch_musa, MATE, and FlashInfer
     # must come from the matching MUSA index.
-    install_requires=_read_requirements("common.txt"),
-    extras_require={
-        "musa": _read_requirements("musa_private.txt"),
-    },
+    install_requires=(
+        _read_requirements("common.txt")
+        + _read_requirements("vllm_runtime_transitive.txt")
+    ),
 )
 
 # Place built vllm.* extensions into the editable vLLM checkout.

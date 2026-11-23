@@ -73,6 +73,17 @@ def test_collect_env_reports_musa_distribution_and_provider_inventory():
     assert "vLLM import package path" in source
 
 
+def test_packaging_metadata_keeps_musa_extra_and_lora_resolvers():
+    pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text()
+    setup = (Path(__file__).parents[1] / "setup.py").read_text()
+
+    assert 'dynamic = ["dependencies", "optional-dependencies"]' in pyproject
+    assert 'musa = {file = ["requirements/musa_private.txt"]}' in pyproject
+    assert 'lora_filesystem_resolver =' in pyproject
+    assert 'lora_hf_hub_resolver =' in pyproject
+    assert '"vllm_runtime_transitive.txt"' in setup
+
+
 def test_source_tree_uses_the_upstream_examples_and_benchmarks_layout():
     root = Path(__file__).parents[1]
 

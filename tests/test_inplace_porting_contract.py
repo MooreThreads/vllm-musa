@@ -96,7 +96,7 @@ def test_supported_musa_stack_contract_cases_are_explicit():
 
 
 def test_torchada_floor_is_consistent():
-    assert 'dynamic = ["dependencies"]' in (ROOT / "pyproject.toml").read_text()
+    assert '"dependencies"' in (ROOT / "pyproject.toml").read_text()
     private_requirements, common_requirements, expected = _declared_musa_stack()
     assert set(expected["private"]).issubset(private_requirements)
     assert expected["torchada"] in common_requirements

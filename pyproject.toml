@@ -25,20 +25,11 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dynamic = ["dependencies"]
+dynamic = ["dependencies", "optional-dependencies"]
 
-[project.optional-dependencies]
-dev = [
-    "pytest",
-    "pytest-asyncio",
-    "pytest-cov",
-    "ruff",
-    "mypy",
-    "isort",
-    "black",
-    "build",
-    "twine",
-]
+[tool.setuptools.dynamic.optional-dependencies]
+dev = {file = ["requirements/dev.txt"]}
+musa = {file = ["requirements/musa_private.txt"]}
 
 [project.scripts]
 vllm = "vllm.entrypoints.cli.main:main"
@@ -49,6 +40,8 @@ musa = "vllm_musa:musa_platform_plugin"
 
 [project.entry-points."vllm.general_plugins"]
 musa_custom_ops = "vllm_musa:register_custom_ops"
+lora_filesystem_resolver = "vllm.plugins.lora_resolvers.filesystem_resolver:register_filesystem_resolver"
+lora_hf_hub_resolver = "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_hub_resolver"
 
 [project.urls]
 Homepage = "https://github.com/MooreThreads/vllm-musa"
