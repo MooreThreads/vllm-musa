@@ -8,7 +8,6 @@ Carry the runtime portions of two upstream commits from PR #57540: `b1dcae362bba
 (cherry picked from commit b1dcae362bba63cf718173600f730c435d48ed71)
 
 (cherry picked from commit f81df53c577e16da6c04669476b8014fdb155130)
-
 ---
  vllm/model_executor/models/deepencoder.py    |   2 +
  vllm/v1/worker/gpu/sample/no_repeat_ngram.py | 242 +++++++++++++++++++
