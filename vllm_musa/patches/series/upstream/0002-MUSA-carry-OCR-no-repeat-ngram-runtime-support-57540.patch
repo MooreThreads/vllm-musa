@@ -1,11 +1,11 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Fri, 20 Nov 2026 18:26:24 +0800
-Subject: [PATCH] MUSA: carry OCR no-repeat ngram runtime support
+Subject: [PATCH] MUSA: carry OCR no-repeat ngram runtime support (#57540)
 
-Carry the runtime pieces needed by the OCR recipes in one upstream series entry: the native GPU no-repeat ngram processor, its custom logits processor loader integration, and the DeepSeek-OCR LOG2E Triton constexpr compatibility fix. The upstream PR tests and benchmarks remain excluded from this carried patch.
+Carry the runtime pieces needed by the OCR recipes in one upstream series entry: the native GPU no-repeat ngram processor and the DeepSeek-OCR LOG2E Triton constexpr compatibility fix.
 
-(cherry picked from commit b1dcae362bba63cf718173600f730c43548ed71)
+(cherry picked from commit b1dcae362bba63cf718173600f730c435d48ed71)
 
 (cherry picked from commit f81df53c577e16da6c04669476b8014fdb155130)
 
