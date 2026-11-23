@@ -131,3 +131,5 @@ through [GitHub Issues](https://github.com/MooreThreads/vllm-musa/issues).
 ## License
 
 vLLM-MUSA is released under the [Apache License 2.0](LICENSE).
+
+<!-- required-check probe -->
