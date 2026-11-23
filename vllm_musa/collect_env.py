@@ -64,20 +64,15 @@ SystemEnv = namedtuple(
 )
 
 DEFAULT_PIP_PATTERNS = {
-    "musa",
-    "mthreads",
     "torch",
+    "torch-musa",
+    "torchvision",
+    "torchaudio",
     "vllm-musa",
     "numpy",
-    "mypy",
-    "flake8",
     "triton",
-    "optree",
-    "onnx",
-    "mccl",
-    "transformers",
-    "zmq",
     "torchada",
+    "mthreads-ml-py",
     "mate",
     "mate-mubin",
     "flash-attn-3",
@@ -86,11 +81,16 @@ DEFAULT_PIP_PATTERNS = {
     "flashinfer-python",
     "sageattention",
     "deep-ep",
+    "tilelang-musa",
     "apache-tvm-ffi",
     "torch-c-dlpack-ext",
     "mooncake-transfer-engine-musa",
     "fmha-sm100",
     "flash-kda",
+    "huggingface-hub",
+    "tokenizers",
+    "openai",
+    "transformers",
 }
 
 MUSA_PROVIDER_IMPORTS = {
@@ -355,26 +355,7 @@ def get_runtime_provenance():
 
 def get_environment_variables():
     """Collect variables that commonly change MUSA backend selection."""
-    import os
-
-    prefixes = ("MUSA", "VLLM", "TORCH", "CUDA")
-    names = {
-        "CUDA_VISIBLE_DEVICES",
-        "LD_LIBRARY_PATH",
-        "PATH",
-        "PYTHONPATH",
-    }
-    names.update(
-        name
-        for name in os.environ
-        if name.startswith(prefixes)
-        and not any(secret in name.upper() for secret in ("TOKEN", "PASSWORD", "SECRET", "KEY"))
-    )
-    return "\n".join(
-        f"{name}={os.environ[name]}"
-        for name in sorted(names)
-        if name in os.environ
-    ) or "No relevant environment variables set"
+    return get_env_vars() or "No relevant environment variables set"
 
 
 def get_patch_report():
@@ -506,6 +487,9 @@ def get_pip_packages(run_lambda, patterns=None):
     """Return `pip list` output."""
     if patterns is None:
         patterns = DEFAULT_PIP_PATTERNS
+    from packaging.utils import canonicalize_name
+
+    normalized_patterns = {canonicalize_name(name) for name in patterns}
 
     def run_with_pip():
         try:
@@ -527,15 +511,15 @@ def get_pip_packages(run_lambda, patterns=None):
                 f"{dist.metadata['Name']}=={dist.version}"
                 for dist in metadata.distributions()
                 if dist.metadata.get("Name")
-                and any(
-                    name.lower() in dist.metadata["Name"].lower()
-                    for name in patterns
-                )
+                and canonicalize_name(dist.metadata["Name"]) in normalized_patterns
             )
 
         out = run_and_read_all(run_lambda, cmd)
         return "\n".join(
-            line for line in out.splitlines() if any(name in line for name in patterns)
+            line
+            for line in out.splitlines()
+            if canonicalize_name(line.split("==", 1)[0].strip())
+            in normalized_patterns
         )
 
     pip_version = "pip3" if sys.version[0] == "3" else "pip"
@@ -554,22 +538,30 @@ def is_xnnpack_available():
 
 def get_env_vars():
     env_vars = ""
-    secret_terms = ("secret", "token", "api", "access", "password")
-    report_prefix = (
-        "TORCH",
-        "MCCL",
-        "PYTORCH",
-        "MUBLAS",
-        "MUDNN",
-        "OMP_",
-        "MKL_",
-        "MUSA",
-        "MTHREADS",
-    )
+    allowed_names = {
+        "CUDA_VISIBLE_DEVICES",
+        "MUSA_VISIBLE_DEVICES",
+        "MTHREADS_VISIBLE_DEVICES",
+        "TORCH_COMPILE_DEBUG",
+        "TORCHDYNAMO_DISABLE",
+        "TORCH_LOGS",
+        "TORCH_SHOW_CPP_STACKTRACES",
+        "PYTORCH_MUSA_ALLOC_CONF",
+        "PYTORCH_NO_CUDA_MEMORY_CACHING",
+        "VLLM_ATTENTION_BACKEND",
+        "VLLM_MUSA_REUSE_PREBUILT",
+        "VLLM_USE_V1",
+        "VLLM_WORKER_MULTIPROC_METHOD",
+        "MCCL_DEBUG",
+        "MCCL_SOCKET_IFNAME",
+        "MUSA_HOME",
+        "MUSA_PATH",
+        "MUSA_TOOLKIT_PATH",
+        "LD_LIBRARY_PATH",
+        "PATH",
+    }
     for k, v in os.environ.items():
-        if any(term in k.lower() for term in secret_terms):
-            continue
-        if k.startswith(report_prefix):
+        if k in allowed_names:
             env_vars = env_vars + "{}={}".format(k, v) + "\n"
 
     return env_vars
