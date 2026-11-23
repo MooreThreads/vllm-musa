@@ -116,7 +116,7 @@ asyncio.run(request())
 
 - The HTTP client calls MinerU's two-step extraction method. A direct VLM
   completion does not run the complete pipeline.
-- MinerU's [official client defaults](https://github.com/opendatalab/mineru-vl-utils/blob/c3b3446901697a1c9e3b98ea6186ccf08834441f/mineru_vl_utils/mineru_client.py#L36-L46)
+- MinerU's [official client defaults](https://github.com/opendatalab/mineru-vl-utils/blob/main/mineru_vl_utils/mineru_client.py#L36-L46)
   use `no_repeat_ngram_size=100`. Its original processor retains generated
   history in a cache. The shared V2 processor defaults to a 100-token search
   window, so the example explicitly sends `window_size=8192` to cover all

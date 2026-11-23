@@ -57,8 +57,7 @@ vllm serve /models/DeepSeek-OCR \
 
 ## Send an image
 
-Load the processor once at server startup, then enable it for each request.
-The model's [official example](https://github.com/deepseek-ai/DeepSeek-OCR/blob/09eaf526153e7a01ed16c9dea8c96282aaea29c0/README.md#L151-L155)
+The model's [official example](https://github.com/deepseek-ai/DeepSeek-OCR/blob/main/README.md#L151-L155)
 uses N=30, a 90-token window, and the table-token whitelist below.
 
 ```python
