@@ -4,27 +4,24 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
- CMakeLists.txt                           |  7 +++++++
+ CMakeLists.txt                           |  2 ++
  cmake/external_projects/deepselect.cmake | 26 +++++++++++++++++++++---
  setup.py                                 |  4 +++-
- 3 files changed, 33 insertions(+), 4 deletions(-)
+ 3 files changed, 28 insertions(+), 4 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a71d7e1e5..51aeab1e8d 100644
+index 3a71d7e1e5..95825bb3dc 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -95,6 +95,13 @@ endif()
- #
- # Update cmake's `CMAKE_PREFIX_PATH` with torch location.
- #
-+if(VLLM_TARGET_DEVICE STREQUAL "empty")
-+  include(cmake/external_projects/deepselect.cmake)
-+  return()
-+endif()
-+
- append_cmake_prefix_path("torch" "torch.utils.cmake_prefix_path")
- 
- # Ensure the 'nvcc' command is in the PATH
+@@ -170,6 +170,8 @@ if (NOT VLLM_TARGET_DEVICE STREQUAL "cuda" AND
+     NOT VLLM_TARGET_DEVICE STREQUAL "rocm")
+     if (VLLM_TARGET_DEVICE STREQUAL "cpu")
+         include(${CMAKE_CURRENT_LIST_DIR}/cmake/cpu_extension.cmake)
++    elseif (VLLM_TARGET_DEVICE STREQUAL "empty")
++        include(${CMAKE_CURRENT_LIST_DIR}/cmake/external_projects/deepselect.cmake)
+     else()
+         return()
+     endif()
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
 index e2a5592e61..5a864b8607 100644
 --- a/cmake/external_projects/deepselect.cmake
