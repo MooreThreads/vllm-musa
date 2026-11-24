@@ -243,26 +243,11 @@ GPU):
 bash docker/build_image.sh --target vllm_musa_deps
 ```
 
-## Building on a MUSA host
+## GPU access during the build
 
-The `final` stage's verify step imports every MUSA package, including `tilelang`
-and `flash_mla`, which require `torch.musa.is_available()` to be `True` at import
-time. That is only satisfied when the build step can see the GPU — i.e. when the
-**MUSA container runtime is the host's default docker runtime**, so `docker build`
-`RUN` steps get the device. On a CPU-only builder the build otherwise completes
-and then fails at the verify step with
-`ImportError: cannot import name 'GPUEvent' from 'tilelang.utils.device'`.
-
-Two build-time details make this work on such a host:
-
-- **Build stages disable device injection.** The final image enables device
-  visibility after its build-time checks. An `apt` step can fail with
-  `Invalid cross-device link` if the MUSA runtime bind-mounts driver libraries
-  into a build container.
-- **Runtime compatibility shims.** When intentionally overriding the runtime to
-  an older 5.1 line, the devel stage can add a `libmupti.so.1` soname link and
-  a `libmusolver` OpenBLAS dependency so `import torch` works. Both are guarded
-  and no-op on the default 5.2 runtime.
+The build uses the MUSA SDK and disables device injection. Build-time checks
+verify versions for packages that initialize a MUSA device at import time.
+The final image enables device visibility after these checks.
 
 ## Verify the built image
 
