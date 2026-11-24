@@ -171,6 +171,17 @@ def _splitk_tile_n(num_tokens: int) -> int:
     return 32 if num_tokens >= 25 else 64
 
 
+def hc_down_silu_splitk_enabled() -> bool:
+    """Opt-in for the M=16..48 split-K path.
+
+    The 128-in/256-out serving A/B on 8x S5000 measured -4.6% TPOT at M=1,
+    +0.3% at M=4, +0.1% at M=8, +2.6% at M=16, -1.0% at M=32 and +0.1% at
+    M=48, so the split-K range is neutral-to-negative in production and stays
+    behind this switch until it wins end-to-end.
+    """
+    return os.environ.get("VLLM_MUSA_HC_DOWN_SILU_SPLITK", "0") != "0"
+
+
 def _splitk_usable(num_tokens: int, k: int) -> bool:
     if not _SPLITK_MIN_M <= num_tokens <= MAX_MUSA_FUSED_M:
         return False
@@ -330,7 +341,10 @@ def supports_hc_down_silu(
         and 1 <= x.shape[0] <= MAX_MUSA_FUSED_M
         and (
             x.shape[0] <= _FMA_MAX_M
-            or _splitk_usable(x.shape[0], x.shape[1])
+            or (
+                hc_down_silu_splitk_enabled()
+                and _splitk_usable(x.shape[0], x.shape[1])
+            )
         )
         and x.shape[1] % 8 == 0
         and x.shape[1] == weight.shape[1]
