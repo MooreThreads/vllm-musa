@@ -166,10 +166,7 @@ def _register_modules() -> None:
     from vllm_musa.v1.sample.qwen_sample_input_views import (
         install_qwen_sample_input_views,
     )
-    from vllm_musa.v1.worker import (
-        qwen_fused_next_input_ids,
-        qwen_identity_logits_view,
-    )
+    from vllm_musa.v1.worker import qwen_fused_next_input_ids, qwen_identity_logits_view
 
     install_qwen_sample_input_views()
     qwen_fused_next_input_ids.install_hooks()

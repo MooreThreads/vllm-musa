@@ -12,10 +12,10 @@ from vllm.model_executor.layers.fused_moe.router.fused_topk_router import (
     fused_topk,
 )
 
+from vllm_musa.jit_kernel.extend_topk_shared import extend_topk_with_shared
 from vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router import (
     _musa_jit_fused_topk,
 )
-from vllm_musa.jit_kernel.extend_topk_shared import extend_topk_with_shared
 
 
 def _compute_routing(

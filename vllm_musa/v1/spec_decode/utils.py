@@ -70,7 +70,6 @@ def eagle_prepare_next_token_padded_kernel(
 
 import torch
 
-
 # reproduction fix (2026-05-17): the upstream
 # `update_num_computed_tokens_for_batch_change` is wrapped with
 # `@torch.compile(dynamic=True, backend=current_platform.simple_compile_backend)`,

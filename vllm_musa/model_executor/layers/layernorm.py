@@ -158,9 +158,7 @@ class MusaRMSNormGated(RMSNormGated):
             and z.is_contiguous()
         ):
             try:
-                from vllm_musa.jit_kernel.tilelang.layernorm_gated import (
-                    rms_norm_gated,
-                )
+                from vllm_musa.jit_kernel.tilelang.layernorm_gated import rms_norm_gated
 
                 return rms_norm_gated(
                     x=x,

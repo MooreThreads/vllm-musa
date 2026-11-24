@@ -18,7 +18,6 @@ from vllm.v1.attention.ops import triton_turboquant_store as _turboquant_store
 
 from vllm_musa.v1.attention.backends import fa_utils as _musa_fa_utils
 
-
 _HOOKS_INSTALLED = False
 
 
@@ -43,9 +42,6 @@ def install_hooks() -> None:
         _musa_fa_utils.is_flash_attn_varlen_func_available()
     )
     _HOOKS_INSTALLED = True
-
-
-install_hooks()
 
 
 class MUSATurboQuantAttentionImpl(_turboquant_attn.TurboQuantAttentionImpl):

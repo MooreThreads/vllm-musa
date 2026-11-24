@@ -19,7 +19,12 @@ import vllm_musa.model_executor.layers.linear  # noqa: E402,F401
 import vllm_musa.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn  # noqa: F401
 import vllm_musa.model_executor.layers.quantization.input_quant_fp8  # noqa: F401
 import vllm_musa.model_executor.layers.rotary_embedding.base  # noqa: F401
+
 # isort: on
+
+from vllm.logger import init_logger
+
+logger = init_logger(__name__)
 
 _ADAPTERS_REGISTERED = False
 
@@ -28,6 +33,7 @@ def register_model_executor_adapters() -> None:
     """Install idempotent compatibility hooks for model-executor modules."""
     global _ADAPTERS_REGISTERED
     if _ADAPTERS_REGISTERED:
+        logger.debug("vllm_musa.model_executor adapters already registered; skipping")
         return
 
     from vllm_musa.model_executor.layers.fused_moe import fused_moe
@@ -40,11 +46,16 @@ def register_model_executor_adapters() -> None:
     from vllm_musa.model_executor.layers.quantization.utils import fp8_utils
     from vllm_musa.model_executor.warmup import deep_gemm_warmup
 
-    fused_moe.install_hooks()
-    fused_topk_bias_router.install_hooks()
-    fused_topk_router.install_hooks()
-    grouped_topk_router.install_hooks()
-    fp8.install_hooks()
-    fp8_utils.install_hooks()
-    deep_gemm_warmup.install_hooks()
+    adapters = (
+        ("fused_moe", fused_moe),
+        ("fused_topk_bias_router", fused_topk_bias_router),
+        ("fused_topk_router", fused_topk_router),
+        ("grouped_topk_router", grouped_topk_router),
+        ("quantization.fp8", fp8),
+        ("quantization.fp8_utils", fp8_utils),
+        ("warmup.deep_gemm_warmup", deep_gemm_warmup),
+    )
+    for name, module in adapters:
+        module.install_hooks()
+        logger.debug("Installed model_executor adapter hooks: %s", name)
     _ADAPTERS_REGISTERED = True

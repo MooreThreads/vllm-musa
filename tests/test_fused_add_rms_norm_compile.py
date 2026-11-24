@@ -6,9 +6,9 @@ import pytest
 
 pytest.importorskip("torchada")
 import torch
-
 from vllm import ir
-from vllm_musa.kernels.musa_ops import _fused_add_rms_norm_supports_args
+
+from vllm_musa.ir.musa_ops import _fused_add_rms_norm_supports_args
 
 pytestmark = pytest.mark.skipif(
     not hasattr(torch, "musa") or not torch.musa.is_available(),

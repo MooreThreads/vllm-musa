@@ -9,14 +9,8 @@ from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.v1.worker.gpu.sample.sampler import Sampler
 
-from vllm_musa.optimization_contract import (
-    OptimizationFeature,
-    prefers_optimization,
-)
-from vllm_musa.v1.sample.topk_topp_sampler import (
-    _is_qwen_sampler_vocab,
-    is_musa_tensor,
-)
+from vllm_musa.optimization_contract import OptimizationFeature, prefers_optimization
+from vllm_musa.v1.sample.topk_topp_sampler import _is_qwen_sampler_vocab, is_musa_tensor
 
 logger = init_logger(__name__)
 

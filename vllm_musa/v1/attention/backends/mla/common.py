@@ -54,6 +54,7 @@ logger = init_logger(__name__)
 M = TypeVar("M", bound=MLACommonMetadata)
 A = TypeVar("A")
 
+
 class MUSAMLAPrefillBackend(MLAPrefillBackend):
     """MLA prefill backend for MATE FlashAttention.
 
@@ -585,10 +586,12 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         attn_metadata: MLACommonMetadata,
         k_scale: torch.Tensor,
         dcp_world_size: int,
-        fused_mla_kv_concat_fn: Callable[
-            [torch.Tensor, torch.Tensor, bool], tuple[torch.Tensor, torch.Tensor]
-        ]
-        | None = None,
+        fused_mla_kv_concat_fn: (
+            Callable[
+                [torch.Tensor, torch.Tensor, bool], tuple[torch.Tensor, torch.Tensor]
+            ]
+            | None
+        ) = None,
     ):
         assert k_scale is None, "DCP not support scaled kvcache now."
         assert attn_metadata.prefill is not None

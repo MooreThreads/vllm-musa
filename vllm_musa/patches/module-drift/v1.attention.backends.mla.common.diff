@@ -1,6 +1,6 @@
 --- upstream
 +++ musa
-@@ -1,3281 +1,209 @@
+@@ -1,3281 +1,210 @@
  # SPDX-License-Identifier: Apache-2.0
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 -"""# MLA Common Components
@@ -368,6 +368,7 @@
 -    Detection is based on output dtype and which scale tensors are present.
 +M = TypeVar("M", bound=MLACommonMetadata)
 +A = TypeVar("A")
++
 +
 +class MUSAMLAPrefillBackend(MLAPrefillBackend):
 +    """MLA prefill backend for MATE FlashAttention.
@@ -3450,7 +3451,7 @@
 
      def __init__(
          self,
-@@ -3297,31 +225,32 @@
+@@ -3297,31 +226,32 @@
          qk_head_dim: int,
          v_head_dim: int,
          kv_b_proj: ColumnParallelLinear,
@@ -3498,7 +3499,7 @@
 
          # Use flashinfer's optimized concat_mla_k kernel when available.
          # The kernel is optimized for DeepSeek V3 dimensions:
-@@ -3333,9 +262,495 @@
+@@ -3333,9 +263,497 @@
              and (self.qk_rope_head_dim == 64)
          )
 
@@ -3826,10 +3827,12 @@
 +        attn_metadata: MLACommonMetadata,
 +        k_scale: torch.Tensor,
 +        dcp_world_size: int,
-+        fused_mla_kv_concat_fn: Callable[
-+            [torch.Tensor, torch.Tensor, bool], tuple[torch.Tensor, torch.Tensor]
-+        ]
-+        | None = None,
++        fused_mla_kv_concat_fn: (
++            Callable[
++                [torch.Tensor, torch.Tensor, bool], tuple[torch.Tensor, torch.Tensor]
++            ]
++            | None
++        ) = None,
 +    ):
 +        assert k_scale is None, "DCP not support scaled kvcache now."
 +        assert attn_metadata.prefill is not None
@@ -3995,18 +3998,29 @@
 
      @abstractmethod
      def forward_mqa(
-@@ -3346,3 +761,14 @@
+@@ -3346,3 +764,25 @@
          layer: AttentionLayer,
      ) -> tuple[torch.Tensor, torch.Tensor | None]:
          raise NotImplementedError
 +
 +
-+import vllm.model_executor.layers.attention.mla_attention
-+import vllm.v1.attention.backends.mla.prefill
-+import vllm.v1.attention.backends.mla.prefill.selector
++_HOOKS_INSTALLED = False
 +
-+vllm.model_executor.layers.attention.mla_attention.MLAAttention._v_up_proj = _v_up_proj
-+vllm.model_executor.layers.attention.mla_attention.MLACommonImpl = MLACommonImpl
-+_install_prefill_backend_hook(vllm.model_executor.layers.attention.mla_attention)
-+_install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill)
-+_install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill.selector)
++
++def install_hooks() -> None:
++    """Install MUSA MLA attention overrides and prefill backend hooks (idempotent)."""
++    global _HOOKS_INSTALLED
++    if _HOOKS_INSTALLED:
++        return
++    import vllm.model_executor.layers.attention.mla_attention
++    import vllm.v1.attention.backends.mla.prefill
++    import vllm.v1.attention.backends.mla.prefill.selector
++
++    vllm.model_executor.layers.attention.mla_attention.MLAAttention._v_up_proj = (
++        _v_up_proj
++    )
++    vllm.model_executor.layers.attention.mla_attention.MLACommonImpl = MLACommonImpl
++    _install_prefill_backend_hook(vllm.model_executor.layers.attention.mla_attention)
++    _install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill)
++    _install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill.selector)
++    _HOOKS_INSTALLED = True

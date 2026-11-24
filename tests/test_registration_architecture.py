@@ -51,6 +51,7 @@ MODEL_EXECUTOR_ADAPTER_MODULES = (
 V1_ADAPTER_MODULES = (
     "vllm_musa/v1/attention/backends/mla/common.py",
     "vllm_musa/v1/attention/backends/mla/flashmla_sparse.py",
+    "vllm_musa/v1/attention/backends/turboquant.py",
     "vllm_musa/v1/executor/multiproc_executor.py",
     "vllm_musa/v1/sample/topk_topp_sampler.py",
     "vllm_musa/v1/sample/uniform_sample_counts.py",
@@ -118,9 +119,11 @@ def test_ir_providers_are_separated_from_standalone_kernels() -> None:
 
     assert "import vllm_musa.ir" in platform_src
     assert "from . import gated_qkv, musa_ops" in ir_init_src
-    # vllm_musa/kernels/__init__.py must not eagerly register IR providers.
+    # vllm_musa/kernels/ must not hold IR provider modules or re-export shims.
     assert "musa_ops" not in kernels_init_src
     assert "gated_qkv" not in kernels_init_src
+    assert not (REPO_ROOT / "vllm_musa" / "kernels" / "musa_ops.py").exists()
+    assert not (REPO_ROOT / "vllm_musa" / "kernels" / "gated_qkv.py").exists()
 
 
 def test_rmsnorm_oot_layer_delegates_non_residual_path_to_ir() -> None:
@@ -181,18 +184,16 @@ def test_compat_adapter_uses_explicit_idempotent_install_hooks(rel_path: str) ->
     path = REPO_ROOT / rel_path
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel_path)
 
-    func_names = {
-        stmt.name for stmt in tree.body if isinstance(stmt, ast.FunctionDef)
-    }
+    func_names = {stmt.name for stmt in tree.body if isinstance(stmt, ast.FunctionDef)}
     assert "install_hooks" in func_names, f"{rel_path} must define install_hooks()"
 
     # No top-level attribute mutation (monkey-patch) or top-level install_hooks() call.
     for stmt in tree.body:
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
-                assert not isinstance(target, ast.Attribute), (
-                    f"{rel_path}:{stmt.lineno} mutates {ast.unparse(target)} at import time"
-                )
+                assert not isinstance(
+                    target, ast.Attribute
+                ), f"{rel_path}:{stmt.lineno} mutates {ast.unparse(target)} at import time"
         elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
             callee = ast.unparse(stmt.value.func)
             assert not callee.endswith(
@@ -210,20 +211,21 @@ def test_all_compat_adapters_are_wired_into_package_registrars() -> None:
 
     for rel_path in MODEL_EXECUTOR_ADAPTER_MODULES:
         mod_stem = Path(rel_path).stem
-        assert f"{mod_stem}.install_hooks()" in me_src, (
-            f"{rel_path} is not wired into register_model_executor_adapters()"
-        )
+        assert (
+            f", {mod_stem})" in me_src
+        ), f"{rel_path} is not wired into register_model_executor_adapters()"
 
-    v1_expected_calls = (
-        "mla_common.install_hooks()",
-        "flashmla_sparse.install_hooks()",
-        "multiproc_executor.install_hooks()",
-        "topk_topp_sampler.install_hooks()",
-        "uniform_sample_counts.install_hooks()",
-        "spec_decode_utils.install_hooks()",
+    v1_expected_entries = (
+        '("mla.common", mla_common)',
+        '("mla.flashmla_sparse", flashmla_sparse)',
+        '("turboquant", turboquant)',
+        '("multiproc_executor", multiproc_executor)',
+        '("topk_topp_sampler", topk_topp_sampler)',
+        '("uniform_sample_counts", uniform_sample_counts)',
+        '("spec_decode.utils", spec_decode_utils)',
     )
-    for call in v1_expected_calls:
-        assert call in v1_src, f"{call} is not wired into register_v1_adapters()"
+    for entry in v1_expected_entries:
+        assert entry in v1_src, f"{entry} is not wired into register_v1_adapters()"
 
 
 def test_general_plugin_registrars_are_idempotent(
@@ -363,6 +365,28 @@ current_platform.import_ir_kernels()
 assert IrOp.registry["rms_norm"].impls["musa"].supported is True
 assert IrOp.registry["fused_add_rms_norm"].impls["musa"].supported is True
 assert IrOp.registry["gated_qkv_rms_norm_rope"].impls["musa_inductor"].supported is True
+# 4. All 14 compat adapters must have been installed by load_general_plugins().
+for mod_name in (
+    "vllm_musa.model_executor.layers.fused_moe.fused_moe",
+    "vllm_musa.model_executor.layers.fused_moe.router.fused_topk_bias_router",
+    "vllm_musa.model_executor.layers.fused_moe.router.fused_topk_router",
+    "vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router",
+    "vllm_musa.model_executor.layers.quantization.fp8",
+    "vllm_musa.model_executor.layers.quantization.utils.fp8_utils",
+    "vllm_musa.model_executor.warmup.deep_gemm_warmup",
+    "vllm_musa.v1.attention.backends.mla.common",
+    "vllm_musa.v1.attention.backends.mla.flashmla_sparse",
+    "vllm_musa.v1.attention.backends.turboquant",
+    "vllm_musa.v1.executor.multiproc_executor",
+    "vllm_musa.v1.sample.uniform_sample_counts",
+    "vllm_musa.v1.spec_decode.utils",
+):
+    mod = __import__(mod_name, fromlist=["_HOOKS_INSTALLED"])
+    assert getattr(mod, "_HOOKS_INSTALLED", False) is True, (
+        f"{mod_name}._HOOKS_INSTALLED is not True"
+    )
+import vllm.v1.sample.ops.topk_topp_sampler as _vllm_topk_mod
+assert getattr(_vllm_topk_mod.TopKTopPSampler, "_musa_sampling_hooks_installed", False) is True
 print("PASS_RUNTIME_PLUGIN_STARTUP")
 """
     )
@@ -399,7 +423,9 @@ def test_runtime_rmsnorm_oot_layer_dispatches_through_ir_on_musa() -> None:
     w_fp32 = layer.weight.data.float()
 
     with ir.ops.rms_norm.set_priority(["musa", "native"]):
-        assert ir.ops.rms_norm.dispatch(x_bf16, layer.weight.data, 1e-6).provider == "musa"
+        assert (
+            ir.ops.rms_norm.dispatch(x_bf16, layer.weight.data, 1e-6).provider == "musa"
+        )
         assert ir.ops.rms_norm.dispatch(x_fp32, w_fp32, 1e-6).provider == "native"
         out_musa = layer(x_bf16)
 

@@ -3,9 +3,7 @@
 import os
 
 import torch
-from vllm.model_executor.layers.quantization.utils.quant_utils import (
-    get_fp8_min_max,
-)
+from vllm.model_executor.layers.quantization.utils.quant_utils import get_fp8_min_max
 from vllm.platforms import current_platform
 from vllm.utils.deep_gemm import get_tma_aligned_size, is_deep_gemm_e8m0_used
 

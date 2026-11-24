@@ -20,9 +20,7 @@ from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_b
 from vllm_musa.v1.attention.ops.flashmla import (
     flash_mla_sparse_fwd as _musa_flash_mla_sparse_fwd,
 )
-from vllm_musa.v1.attention.ops.flashmla import (
-    is_flashmla_sparse_supported,
-)
+from vllm_musa.v1.attention.ops.flashmla import is_flashmla_sparse_supported
 
 logger = init_logger(__name__)
 # MUSA: the upstream sparse backend imports FlashMLA ops from the core module,
@@ -122,15 +120,11 @@ def _musa_backend_sparse_fwd(
         is_glm_dsa, q, kv, indices, d_v, attn_sink, topk_length
     ):
         logger.info_once("Using GLM DSA MATE sparse-MLA adapter.")
-        from vllm_musa.v1.attention.ops.sparse_mla_mate import (
-            sparse_mla_fwd_bf16,
-        )
+        from vllm_musa.v1.attention.ops.sparse_mla_mate import sparse_mla_fwd_bf16
     elif _can_use_tilelang_sparse_prefill(q, kv, indices, d_v, attn_sink, topk_length):
         # Preserve the pre-existing generic TileLang route for non-GLM MLA
         # models; it has a different implementation contract from MATE v32.
-        from vllm_musa.v1.attention.ops.sparse_mla_tilelang import (
-            sparse_mla_fwd_bf16,
-        )
+        from vllm_musa.v1.attention.ops.sparse_mla_tilelang import sparse_mla_fwd_bf16
 
     if sparse_mla_fwd_bf16 is not None:
         # This monkeypatch is private to FlashMLASparseImpl._bf16_flash_mla_kernel,
