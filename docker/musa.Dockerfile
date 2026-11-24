@@ -381,22 +381,6 @@ RUN python -m pip install \
 
 RUN python docker/verify_installed_dependencies.py && python -m pip check
 
-# Build the runtime workspace payload once, with a deterministic merge of the
-# pinned upstream examples/benchmarks and the MUSA-specific additions. Keeping
-# this merge in the source-bearing stage avoids relying on Docker's directory
-# COPY merge semantics in the final image.
-RUN rm -rf /tmp/vllm-runtime-workspace && \
-    mkdir -p /tmp/vllm-runtime-workspace/examples \
-        /tmp/vllm-runtime-workspace/benchmarks && \
-    cp -a /vllm-workspace/third_party/vllm/examples/. \
-        /tmp/vllm-runtime-workspace/examples/ && \
-    cp -a /vllm-workspace/examples/. \
-        /tmp/vllm-runtime-workspace/examples/ && \
-    cp -a /vllm-workspace/third_party/vllm/benchmarks/. \
-        /tmp/vllm-runtime-workspace/benchmarks/ && \
-    cp -a /vllm-workspace/benchmarks/. \
-        /tmp/vllm-runtime-workspace/benchmarks/
-
 # Build vllm-rs from the vLLM tree cloned and patched by vllm-musa setup.py,
 # while keeping the Rust toolchain out of the runtime image.
 FROM vllm_musa_installed AS vllm_rs_build
@@ -469,14 +453,10 @@ RUN python -m pip install \
         python /tmp/verify_installed_dependencies.py && \
     rm -rf /tmp/vllm-wheel /tmp/vllm-runtime-requirements
 
-# Keep the upstream vLLM runtime workspace contract. The examples and
-# benchmarks are copied from the same pinned source tree used to build the
-# bundled wheel. The MUSA collect_env entry point is used for the root helper
-# so diagnostics include MUSA driver and SDK information.
-COPY --from=vllm_musa_installed /tmp/vllm-runtime-workspace/examples \
-     /vllm-workspace/examples
-COPY --from=vllm_musa_installed /tmp/vllm-runtime-workspace/benchmarks \
-     /vllm-workspace/benchmarks
+# Use the upstream runtime layout for the examples and benchmarks maintained
+# in this repository. The root helper includes MUSA driver and SDK diagnostics.
+COPY examples/ /vllm-workspace/examples/
+COPY benchmarks/ /vllm-workspace/benchmarks/
 COPY --from=vllm_musa_installed /vllm-workspace/vllm_musa/collect_env.py \
      /vllm-workspace/collect_env.py
 RUN python -c 'import importlib.metadata as m; from pathlib import Path; names=("torch", "torchvision", "torchaudio"); available={d.metadata["Name"].lower() for d in m.distributions()}; lines=[f"{name}=={m.version(name)}" for name in names if name in available]; Path("/vllm-workspace/torch_lib_versions.txt").write_text(chr(10).join(lines)+chr(10))'

@@ -39,13 +39,13 @@ def test_production_and_source_targets_are_explicitly_separate():
     assert dockerfile.rstrip().endswith('ENTRYPOINT ["vllm", "serve"]')
 
 
-def test_runtime_workspace_copies_the_upstream_vllm_payload():
+def test_runtime_workspace_copies_the_musa_examples_and_benchmarks():
     dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
 
-    assert "/vllm-workspace/third_party/vllm/examples" in dockerfile
-    assert "/vllm-workspace/third_party/vllm/benchmarks" in dockerfile
-    assert "/vllm-runtime-workspace/examples" in dockerfile
-    assert "/vllm-runtime-workspace/benchmarks" in dockerfile
+    assert "COPY examples/ /vllm-workspace/examples/" in dockerfile
+    assert "COPY benchmarks/ /vllm-workspace/benchmarks/" in dockerfile
+    assert "/third_party/vllm/examples" not in dockerfile
+    assert "/third_party/vllm/benchmarks" not in dockerfile
     assert "/vllm-workspace/torch_lib_versions.txt" in dockerfile
     assert "/vllm-workspace/collect_env.py" in dockerfile
     assert "/vllm-workspace/vllm_musa/collect_env.py" in dockerfile

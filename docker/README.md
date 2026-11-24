@@ -19,10 +19,10 @@ The resulting image contains:
   image.
 
 The default `vllm-openai` target starts `vllm serve` in `/vllm-workspace`.
-This directory contains `examples/`, `benchmarks/`, `collect_env.py`, and
-`torch_lib_versions.txt`, matching the upstream vLLM runtime layout. The
-`final` target opens a shell with the same runtime layout. Use the `test`
-target for an editable checkout under `/vllm-workspace`.
+The directory follows the upstream vLLM runtime layout, with the MUSA
+repository's `examples/` and `benchmarks/` alongside `collect_env.py` and
+`torch_lib_versions.txt`. The `final` target opens a shell with the same layout.
+Use the `test` target for an editable checkout under `/vllm-workspace`.
 
 ## Prerequisites
 
