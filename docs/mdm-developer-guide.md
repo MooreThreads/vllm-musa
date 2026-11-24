@@ -57,8 +57,7 @@ pip install -r requirements/build.txt -r requirements/musa.txt
 # developer install — vllm-musa and the patched upstream vLLM editable:
 pip install -e . --no-build-isolation -v
 
-# source-tree wheel install — vllm-musa wheel and patched upstream vLLM
-# are installed without editable source paths:
+# source-tree wheel install — vllm-musa bundles patched upstream vLLM:
 pip install . --no-build-isolation -v
 ```
 
