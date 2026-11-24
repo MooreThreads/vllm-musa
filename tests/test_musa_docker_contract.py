@@ -44,12 +44,37 @@ def test_runtime_workspace_copies_the_musa_examples_and_benchmarks():
 
     assert "COPY examples/ /vllm-workspace/examples/" in dockerfile
     assert "COPY benchmarks/ /vllm-workspace/benchmarks/" in dockerfile
-    assert "/third_party/vllm/examples" not in dockerfile
+    assert "/third_party/vllm/examples" not in dockerfile.replace(
+        "/third_party/vllm/examples/disaggregated/mooncake_connector/"
+        "mooncake_connector_proxy.py",
+        "",
+    )
     assert "/third_party/vllm/benchmarks" not in dockerfile
     assert "/vllm-workspace/torch_lib_versions.txt" in dockerfile
     assert "/vllm-workspace/collect_env.py" in dockerfile
     assert "/vllm-workspace/vllm_musa/collect_env.py" in dockerfile
     assert "/vllm-workspace/third_party/vllm/vllm/collect_env.py" not in dockerfile
+
+
+def test_runtime_image_ships_the_proxy_used_by_both_mooncake_examples():
+    root = Path(__file__).parents[1]
+    dockerfile = (root / "docker" / "musa.Dockerfile").read_text()
+    runtime = dockerfile.split("FROM vllm_musa_deps AS vllm_runtime", 1)[1]
+    runtime = runtime.split("FROM vllm_musa_installed AS test", 1)[0]
+    relative_path = (
+        "examples/disaggregated/mooncake_connector/mooncake_connector_proxy.py"
+    )
+    assert (
+        "COPY --from=vllm_musa_installed "
+        f"/vllm-workspace/third_party/vllm/{relative_path} "
+        f"/vllm-workspace/{relative_path}"
+    ) in " ".join(runtime.replace("\\\n", "").split())
+    serving_examples = root / "examples/disaggregated/disaggregated_serving"
+    for script in ("disaggregated_serving.sh", "mooncake_store_pd_serving.sh"):
+        assert (
+            f'PROXY_RELATIVE_PATH="{relative_path}"'
+            in (serving_examples / script).read_text()
+        )
 
 
 def test_collect_env_reports_musa_distribution_and_provider_inventory():
@@ -79,8 +104,8 @@ def test_packaging_metadata_keeps_musa_extra_and_lora_resolvers():
 
     assert 'dynamic = ["dependencies", "optional-dependencies"]' in pyproject
     assert 'musa = {file = ["requirements/musa_private.txt"]}' in pyproject
-    assert 'lora_filesystem_resolver =' in pyproject
-    assert 'lora_hf_hub_resolver =' in pyproject
+    assert "lora_filesystem_resolver =" in pyproject
+    assert "lora_hf_hub_resolver =" in pyproject
     assert '"vllm_runtime_transitive.txt"' in setup
 
 
@@ -116,7 +141,9 @@ def test_runtime_target_does_not_copy_the_editable_source_checkout():
 def test_runtime_dependency_verifier_receives_requirement_files_without_source():
     dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
 
-    assert "COPY requirements/ /tmp/vllm-runtime-requirements/requirements/" in dockerfile
+    assert (
+        "COPY requirements/ /tmp/vllm-runtime-requirements/requirements/" in dockerfile
+    )
     assert "/tmp/vllm-runtime-requirements/requirements/musa_private.txt" in dockerfile
     assert "VLLM_MUSA_REQUIREMENTS_ROOT=/tmp/vllm-runtime-requirements" in dockerfile
 
@@ -126,11 +153,13 @@ def test_wheel_stage_collects_native_extensions_from_installed_packages():
 
     wheel_stage = dockerfile.split("FROM vllm_rs_build AS vllm_wheel", 1)[1]
     wheel_stage = wheel_stage.split("# Install the prebuilt MUSA wheel", 1)[0]
-    assert "test -n \"$(find /vllm-workspace/third_party/vllm/vllm" in wheel_stage
+    assert 'test -n "$(find /vllm-workspace/third_party/vllm/vllm' in wheel_stage
 
 
 def test_numpy_runtime_constraint_allows_the_supported_numpy_1_series():
-    requirements = (Path(__file__).parents[1] / "requirements" / "common.txt").read_text()
+    requirements = (
+        Path(__file__).parents[1] / "requirements" / "common.txt"
+    ).read_text()
     dockerfile = (Path(__file__).parents[1] / "docker" / "musa.Dockerfile").read_text()
 
     assert "numpy<2" in requirements

@@ -179,6 +179,10 @@ each refuses to start while any of its ports is in use.
 
 **How 1P1D moves KV**
 
+The runtime image includes the Mooncake proxy from the pinned vLLM revision.
+When running from a source checkout, the scripts use the proxy under
+`third_party/vllm`.
+
 `mooncake_connector_proxy.py` tags each request with a `transfer_id` and the
 prefill bootstrap address. Prefill computes the prompt and keeps its blocks;
 decode pulls them over RDMA through `MooncakeConnector`, which `MultiConnector`

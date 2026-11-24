@@ -456,6 +456,10 @@ RUN python -m pip install \
 # Use the upstream runtime layout for the examples and benchmarks maintained
 # in this repository. The root helper includes MUSA driver and SDK diagnostics.
 COPY examples/ /vllm-workspace/examples/
+# Both Mooncake launchers use this proxy from the pinned upstream checkout.
+COPY --from=vllm_musa_installed \
+     /vllm-workspace/third_party/vllm/examples/disaggregated/mooncake_connector/mooncake_connector_proxy.py \
+     /vllm-workspace/examples/disaggregated/mooncake_connector/mooncake_connector_proxy.py
 COPY benchmarks/ /vllm-workspace/benchmarks/
 COPY --from=vllm_musa_installed /vllm-workspace/vllm_musa/collect_env.py \
      /vllm-workspace/collect_env.py
