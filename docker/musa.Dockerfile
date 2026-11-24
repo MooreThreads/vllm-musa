@@ -13,6 +13,9 @@ ARG PIP_BOOTSTRAP_INDEX_URL=https://pypi.org/simple
 FROM ${BASE_IMAGE} AS base
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENTRYPOINT []
+# Derived serving images can enable device injection by default.
+ENV MTHREADS_VISIBLE_DEVICES=void
 
 ARG PYTHON_VERSION
 ARG DEADSNAKES_MIRROR_URL
@@ -48,6 +51,7 @@ RUN apt-get update && \
         git-lfs \
         gnupg \
         infiniband-diags \
+        libcairo2-dev \
         libcurl4-openssl-dev \
         libdrm2 \
         libibverbs-dev \
@@ -313,8 +317,13 @@ ARG MUSA_PIP_INDEX_URL
 ENV PIP_CACHE_DIR=/root/.cache/pip \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-COPY requirements/ /vllm-workspace/requirements/
-WORKDIR /vllm-workspace
+# A prebuilt serving image can carry an editable checkout and overlapping
+# distribution records. Uninstall both before copying the current sources.
+RUN cd /tmp && python -m pip uninstall -y vllm vllm-musa && \
+    rm -rf /vllm-workspace
+
+COPY requirements/ /tmp/vllm-runtime-requirements/requirements/
+WORKDIR /tmp/vllm-runtime-requirements
 
 # 1. MUSA/MT wheels from the internal index only, FIRST and --no-deps (their
 #    ordinary deps come in steps 2-3). MUSA torch must land before the public
@@ -327,13 +336,14 @@ RUN python -m pip install \
         -r requirements/musa_private.txt
 
 # 2. Ordinary third-party wheels from public PyPI: build tools, common.txt, and
-#    musa.txt's direct pins (transformers). Step 1 already satisfies `torch`.
+#    musa.txt's direct pins (transformers). Pycairo satisfies apt's PyGObject.
 RUN musa_public_extras="$(grep -vE '^[[:space:]]*(#|-r[[:space:]]|--|$)' requirements/musa.txt || true)" && \
     python -m pip install \
         --index-url "${PYPI_INDEX_URL}" \
         -r requirements/build.txt \
         -r requirements/common.txt \
         -r requirements/test.txt \
+        pycairo \
         ${musa_public_extras}
 
 # 3. Fill in the MUSA wheels' ordinary deps (sympy, networkx, ...) from public
@@ -352,10 +362,8 @@ RUN python /tmp/vllm-musa-mate-patch/apply_mate_dynamo_bool_patch.py && \
 
 FROM vllm_musa_deps AS vllm_musa_installed
 
-# setup.py's develop_dynamic_library() installs the vendored vLLM with
-# --no-deps to avoid replacing the MUSA torch stack. Route the explicit vLLM
-# runtime dependency install through the same public index as the deps stage.
-# NumPy is already constrained by requirements/common.txt above.
+# setup.py installs the vendored vLLM editable with --no-deps. The outer
+# vllm-musa distribution supplies the shared runtime requirements.
 ARG PYPI_INDEX_URL
 # The vendored vLLM/FlashInfer fetch goes through a GitHub mirror by default.
 # An empty value keeps that default; pass 0 to fetch from github.com directly.
@@ -363,23 +371,15 @@ ARG VLLM_MUSA_GIT_PROXY
 ENV PIP_INDEX_URL=${PYPI_INDEX_URL}
 ENV VLLM_MUSA_GIT_PROXY=${VLLM_MUSA_GIT_PROXY}
 
+WORKDIR /vllm-workspace
 COPY . /vllm-workspace
 # Before the native build: the arch variables above must name one arch from
 # torchada's table, each spelled for its reader.
 RUN python docker/check_musa_arch_env.py
 RUN python -m pip install \
-        -e . --no-build-isolation -v
+        -e . --no-build-isolation -c requirements/musa_private.txt -v
 
-RUN python -m pip install \
-        --no-cache-dir \
-        --no-deps \
-        --constraint requirements/common.txt \
-        -r third_party/vllm/requirements/common.txt && \
-    python -m pip install \
-        --no-cache-dir \
-        -r requirements/vllm_runtime_transitive.txt
-
-RUN python docker/verify_installed_dependencies.py
+RUN python docker/verify_installed_dependencies.py && python -m pip check
 
 # Build the runtime workspace payload once, with a deterministic merge of the
 # pinned upstream examples/benchmarks and the MUSA-specific additions. Keeping
@@ -456,27 +456,18 @@ FROM vllm_musa_deps AS vllm_runtime
 
 ARG PYPI_INDEX_URL
 
-COPY --from=vllm_musa_installed /vllm-workspace/requirements/vllm_runtime_transitive.txt \
-     /tmp/vllm-runtime-requirements.txt
-COPY --from=vllm_musa_installed /vllm-workspace/requirements/common.txt \
-     /tmp/vllm-runtime-requirements/requirements/common.txt
-COPY --from=vllm_musa_installed /vllm-workspace/requirements/musa_private.txt \
-     /tmp/vllm-runtime-requirements/requirements/musa_private.txt
+WORKDIR /vllm-workspace
 COPY --from=vllm_wheel /tmp/vllm-wheel/ /tmp/vllm-wheel/
 COPY docker/verify_installed_dependencies.py /tmp/verify_installed_dependencies.py
 
 RUN python -m pip install \
         --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
-        -r /tmp/vllm-runtime-requirements.txt && \
-    python -m pip install \
-        --no-cache-dir \
-        --no-deps \
+        -c /tmp/vllm-runtime-requirements/requirements/musa_private.txt \
         /tmp/vllm-wheel/*.whl && \
     VLLM_MUSA_REQUIREMENTS_ROOT=/tmp/vllm-runtime-requirements \
         python /tmp/verify_installed_dependencies.py && \
-    rm -rf /tmp/vllm-wheel /tmp/vllm-runtime-requirements \
-        /tmp/vllm-runtime-requirements.txt
+    rm -rf /tmp/vllm-wheel /tmp/vllm-runtime-requirements
 
 # Keep the upstream vLLM runtime workspace contract. The examples and
 # benchmarks are copied from the same pinned source tree used to build the
@@ -516,14 +507,15 @@ FROM mooncake AS final
 ARG BUILD_VLLM_RS=1
 ARG MOONCAKE_VERSION=0.3.14
 
-ENV MTHREADS_VISIBLE_DEVICES=all
-
 # Match the upstream vLLM runtime-image workspace contract. Python packages
 # are installed in site-packages, so this directory contains no editable
 # source checkout in the production image.
 WORKDIR /vllm-workspace
 
-RUN python -c 'import importlib.util; assert importlib.util.find_spec("vllm"); assert importlib.util.find_spec("vllm_musa"); print("PASS packaged vLLM-MUSA imports")' && \
+COPY tests/packaging/verify_install.py /tmp/verify_vllm_install.py
+RUN python -m pip check && \
+    python /tmp/verify_vllm_install.py --mode bundled && \
+    rm /tmp/verify_vllm_install.py && \
     if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
         VLLM_USE_RUST_FRONTEND=1 python -c 'from pathlib import Path; from vllm import envs; path = Path(envs.VLLM_RUST_FRONTEND_PATH); assert path.is_file(), f"missing vllm-rs binary: {path}"; print(f"PASS packaged vllm-rs path={path}")'; \
     fi
@@ -543,6 +535,7 @@ LABEL org.opencontainers.image.source="https://github.com/MooreThreads/vllm-musa
       com.mthreads.vllm.version="${VLLM_TAG}" \
       com.mthreads.vllm-musa.mooncake-version="${MOONCAKE_VERSION}"
 
+ENV MTHREADS_VISIBLE_DEVICES=all
 CMD ["/bin/bash"]
 
 FROM final AS vllm-openai

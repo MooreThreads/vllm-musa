@@ -1,7 +1,7 @@
 aiohappyeyeballs
 aiosignal
 async-timeout
-fastapi[standard]
+fastapi[standard]>=0.133.0,<0.137.0
 frozenlist
 multidict
 propcache
@@ -31,34 +31,36 @@ av
 # Pinned upstream vLLM v0.32 runtime dependencies. Keep this list in sync
 # with third_party/vllm/requirements/common.txt while retaining numpy<2 for
 # the MUSA stack.
-aiohttp
-anthropic
+aiohttp>=3.14.3
+anthropic>=0.71.0
 blake3
 cachetools
 cbor2
 cloudpickle
 compressed-tensors==0.17.0
 depyf==0.20.0
-filelock
+filelock>=3.20.3
 ijson
-jsonschema
+jsonschema>=4.23.0
 lark==1.2.2
-llguidance
+llguidance>=1.7.0,<1.8.0
 lm-format-enforcer==0.11.3
 msgspec
 mistral_common[image]>=1.11.6
+# Newer OpenCV wheels require NumPy 2 on Python 3.12.
+opencv-python-headless>=4.11,<4.12
 ninja
 oss-harmony>=0.0.11
 outlines_core==0.2.14
 partial-json-parser
-pillow
-prometheus-fastapi-instrumentator
-prometheus_client
-protobuf>=5.29.6,!=6.30.*,!=6.31.*,!=6.32.*,!=6.33.0.*,!=6.33.1.*,!=6.33.2.*,!=6.33.3.*
+pillow>=12.3.0
+prometheus-fastapi-instrumentator>=8.0.0
+prometheus_client>=0.18.0
+protobuf>=5.29.6,!=6.30.*,!=6.31.*,!=6.32.*,!=6.33.0.*,!=6.33.1.*,!=6.33.2.*,!=6.33.3.*,!=6.33.4.*
 psutil
 py-cpuinfo
 pybase64
-pydantic
+pydantic>=2.12.0
 pyyaml
 pyzmq>=25.0.0
 regex

@@ -21,11 +21,13 @@ sys.path.insert(0, str(root))
 
 from setuptools import setup  # noqa: E402
 from setuptools.command.build_py import build_py  # noqa: E402
-from setuptools_scm import get_version  # noqa: E402
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension  # noqa: E402
 
 from build_utils.build_info import write_build_info  # noqa: E402
-from build_utils.bundle_vllm import bundle_vllm_package  # noqa: E402
+from build_utils.bundle_vllm import (  # noqa: E402
+    bundle_vllm_package,
+    find_prebuilt_extensions,
+)
 from build_utils.ccache import configure_compiler_cache  # noqa: E402
 from build_utils.git_proxy import (  # noqa: E402
     PROXY_ENV,
@@ -80,34 +82,10 @@ def _read_requirements(filename, seen=None):
     return requirements
 
 
-def _has_prebuilt_extensions() -> bool:
-    """Return whether every extension output required by a wheel is present."""
-    if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") != "1":
-        return False
-    extension_patterns = (
-        ("vllm", ("_C.so", "_C.cpython-*.so")),
-        ("vllm", ("_C_stable_libtorch*.so",)),
-        ("vllm", ("_moe_C*.so",)),
-        ("vllm_musa", ("_C.so", "_C.cpython-*.so")),
+def _runtime_requirements() -> list[str]:
+    return _read_requirements("common.txt") + _read_requirements(
+        "vllm_runtime_transitive.txt"
     )
-    candidate_dirs = (root / _VLLM_REPO.source_dir, root)
-    missing = [
-        f"{package}/{patterns[0]}"
-        for package, patterns in extension_patterns
-        if not any(
-            any(
-                list((candidate / package).glob(pattern))
-                for pattern in patterns
-            )
-            for candidate in candidate_dirs
-        )
-    ]
-    if missing:
-        raise RuntimeError(
-            "VLLM_MUSA_REUSE_PREBUILT=1 requires prepared extension outputs, "
-            f"missing: {', '.join(str(path) for path in missing)}"
-        )
-    return True
 
 
 configure_compiler_cache(root)
@@ -411,32 +389,22 @@ class _CustomBuildExt(BuildExtension):
     _third_party_prepared = False
 
     def build_extensions(self):
-        if not _has_prebuilt_extensions():
-            super().build_extensions()
-        else:
+        if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") == "1":
+            build_lib = Path(self.build_lib)
+            extension_paths = [
+                Path(self.get_ext_fullpath(extension.name)).relative_to(build_lib)
+                for extension in self.extensions
+            ]
+            sources = find_prebuilt_extensions(
+                extension_paths, (root / _VLLM_REPO.source_dir, root)
+            )
             print("Reusing native extensions from the prepared source tree")
-            for package, target_dir, patterns in (
-                (
-                    "vllm",
-                    Path(self.build_lib) / "vllm",
-                    ("_C.so", "_C.cpython-*.so", "_C_stable_libtorch*.so", "_moe_C*.so"),
-                ),
-                (
-                    "vllm_musa",
-                    Path(self.build_lib) / "vllm_musa",
-                    ("_C.so", "_C.cpython-*.so"),
-                ),
-            ):
-                target_dir.mkdir(parents=True, exist_ok=True)
-                for pattern in patterns:
-                    sources = []
-                    for candidate in (
-                        root / _VLLM_REPO.source_dir / package,
-                        root / package,
-                    ):
-                        sources.extend(candidate.glob(pattern))
-                    for source in sorted(set(sources)):
-                        shutil.copy2(source, target_dir / source.name)
+            for extension_path, source in sources.items():
+                output = build_lib / extension_path
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, output)
+        else:
+            super().build_extensions()
         package_dirs = {root / "vllm_musa"}
         if self.build_lib and (Path(self.build_lib) / "vllm_musa").is_dir():
             package_dirs.add(Path(self.build_lib) / "vllm_musa")
@@ -572,6 +540,13 @@ class _CustomBuildExt(BuildExtension):
     def _install_vllm(repo_path):
         """Install the cloned + patched vLLM (editable) against the existing torch."""
         source_dir = Path(repo_path)
+        subprocess.check_call(
+            [sys.executable, "tools/use_existing_torch.py"], cwd=source_dir
+        )
+        # Keep the editable distribution on the same dependency policy as the wheel.
+        (source_dir / "requirements" / "common.txt").write_text(
+            "\n".join(_runtime_requirements()) + "\n", encoding="utf-8"
+        )
 
         env = os.environ.copy()
         env["VLLM_TARGET_DEVICE"] = "empty"
@@ -601,43 +576,17 @@ class _CustomBuildExt(BuildExtension):
             "-v",
         ]
 
-        steps = [
-            {
-                "name": "Install vllm use existing torch",
-                "cmd": f"cd {source_dir} && python tools/use_existing_torch.py",
-                "shell": True,
-                "env": None,
-            },
-            {
-                "name": "Install vllm build requirements",
-                "cmd": [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "-r",
-                    str(source_dir / "requirements" / "build" / "cuda.txt"),
-                ],
-                "shell": False,
-                "env": None,
-            },
-            {
-                "name": "Install vllm (editable)",
-                "cmd": vllm_install_cmd,
-                "shell": False,
-                "env": env,
-            },
-        ]
-
-        for step in steps:
-            print(f"{step['name']}")
-
-            if step["shell"]:
-                print(f"Command: {step['cmd']}")
-                subprocess.check_call(step["cmd"], shell=True, env=step["env"])
-            else:
-                print(f"Command: {' '.join(step['cmd'])}")
-                subprocess.check_call(step["cmd"], env=step["env"])
+        subprocess.check_call(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                str(source_dir / "requirements" / "build" / "cuda.txt"),
+            ]
+        )
+        subprocess.check_call(vllm_install_cmd, env=env)
 
     @staticmethod
     def _apply_musa_patch_series(repo_path):
@@ -665,8 +614,11 @@ class _CustomBuildExt(BuildExtension):
         if cls._third_party_prepared:
             return
 
-        if os.environ.get("SKIP_THIRD_PARTY", "0") == "1":
-            print("Skipping third-party repositories cloning (SKIP_THIRD_PARTY=1)")
+        if (
+            os.environ.get("SKIP_THIRD_PARTY") == "1"
+            or os.environ.get("VLLM_MUSA_REUSE_PREBUILT") == "1"
+        ):
+            print("Using prepared third-party source trees")
         else:
             proxy = resolve_proxy()
             via = f" through {proxy}" if proxy else ""
@@ -707,11 +659,11 @@ class _CustomBuildPy(build_py):
 
         _CustomBuildExt.prepare_third_party()
         repo = root / _VLLM_REPO.source_dir
-        get_version(root=str(repo), write_to="vllm/_version.py")
-
         source = repo / "vllm"
         destination = Path(self.build_lib) / "vllm"
-        result = bundle_vllm_package(source, destination)
+        result = bundle_vllm_package(
+            source, destination, tag=_PINS["VLLM_TAG"], revision=_PINS["VLLM_COMMIT"]
+        )
         print(
             "Bundled patched vLLM package: "
             f"files={result.files} metadata_rewrites={result.metadata_rewrites}"
@@ -728,10 +680,7 @@ setup(
     # Keep the default wheel installable from public indexes. Hardware-private
     # wheels are an explicit extra because torch_musa, MATE, and FlashInfer
     # must come from the matching MUSA index.
-    install_requires=(
-        _read_requirements("common.txt")
-        + _read_requirements("vllm_runtime_transitive.txt")
-    ),
+    install_requires=_runtime_requirements(),
 )
 
 # Place built vllm.* extensions into the editable vLLM checkout.
