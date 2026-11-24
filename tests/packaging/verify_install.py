@@ -65,8 +65,10 @@ def verify_bundled() -> None:
     assert dist.read_text("RECORD") is not None, "vllm-musa wheel RECORD is missing"
     recorded = {file.as_posix() for file in dist.files or ()}
     module_files = _module_files()
-    missing = set(module_files.values()) - recorded
+    jit_header = "vllm_musa/jit_kernel/tilelang/_atomic_helper.h"
+    missing = (set(module_files.values()) | {jit_header}) - recorded
     assert not missing, f"vllm-musa wheel RECORD is missing {sorted(missing)}"
+    assert Path(dist.locate_file(jit_header)).is_file(), jit_header
     _import_verified_modules(
         {name: Path(dist.locate_file(file)) for name, file in module_files.items()}
     )

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 from configparser import ConfigParser
 from email.parser import Parser
@@ -25,6 +26,7 @@ REQUIRED_FILES = {
     "vllm/entrypoints/serve/instrumentator/static/swagger-ui-bundle.js",
     "vllm/utils/numa_wrapper.sh",
     "vllm_musa/__init__.py",
+    "vllm_musa/jit_kernel/tilelang/_atomic_helper.h",
     "vllm_musa_omni_compat_pth.py",
 }
 
@@ -110,6 +112,9 @@ def main() -> None:
         assert len(dist_info) == 1, dist_info
         (dist_info_dir,) = dist_info
         assert dist_info_dir.startswith("vllm_musa-"), dist_info_dir
+        record = archive.read(f"{dist_info_dir}/RECORD").decode()
+        recorded = {path for path, _, _ in csv.reader(record.splitlines())}
+        assert REQUIRED_FILES <= recorded, sorted(REQUIRED_FILES - recorded)
 
         metadata = Parser().parsestr(archive.read(f"{dist_info_dir}/METADATA").decode())
         assert canonicalize_name(metadata["Name"]) == "vllm-musa"
