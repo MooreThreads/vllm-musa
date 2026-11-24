@@ -69,11 +69,6 @@ def eagle_prepare_next_token_padded_kernel(
 
 
 import torch
-import vllm.v1.spec_decode.utils
-
-vllm.v1.spec_decode.utils.eagle_prepare_next_token_padded_kernel = (
-    eagle_prepare_next_token_padded_kernel
-)
 
 
 # reproduction fix (2026-05-17): the upstream
@@ -119,6 +114,20 @@ def _musa_update_num_computed_tokens_for_batch_change(
     )
 
 
-vllm.v1.spec_decode.utils.update_num_computed_tokens_for_batch_change = (
-    _musa_update_num_computed_tokens_for_batch_change
-)
+_HOOKS_INSTALLED = False
+
+
+def install_hooks() -> None:
+    """Install MUSA spec-decode kernel and batch-change overrides (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    import vllm.v1.spec_decode.utils as _upstream_spec_utils
+
+    _upstream_spec_utils.eagle_prepare_next_token_padded_kernel = (
+        eagle_prepare_next_token_padded_kernel
+    )
+    _upstream_spec_utils.update_num_computed_tokens_for_batch_change = (
+        _musa_update_num_computed_tokens_for_batch_change
+    )
+    _HOOKS_INSTALLED = True

@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import torch
-import torch.nn as nn
 from vllm.config import get_current_vllm_config_or_none
 from vllm.model_executor.layers.layernorm import GemmaRMSNorm, RMSNorm, RMSNormGated
 
@@ -92,12 +91,12 @@ class MusaRMSNorm(RMSNorm):
             # measured JIT kernel, the broad C-extension kernel, or native.
             return self.forward_native(x, residual)
 
-        weight = self.weight.data
-        eps = self.variance_epsilon
-        if _can_use_musa_jit_rmsnorm(x, weight):
-            return musa_jit_norm.rmsnorm(x, weight, eps)
-
-        return nn.functional.rms_norm(x, (self.hidden_size,), weight, eps)
+        # Delegate standard RMSNorm (non-residual) and generic residual
+        # fused-add RMSNorm to upstream forward_native -> vllm.ir.ops.{rms_norm,
+        # fused_add_rms_norm}. MUSA's IR provider in vllm_musa/ir/musa_ops.py
+        # owns kernel selection (JIT vs C-ext vs native) and honors both eager
+        # and Inductor IR priority.
+        return self.forward_native(x, residual)
 
 
 @GemmaRMSNorm.register_oot

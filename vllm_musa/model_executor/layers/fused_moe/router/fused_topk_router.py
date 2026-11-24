@@ -91,4 +91,13 @@ def _compute_routing(
     return topk_weights, topk_ids
 
 
-FusedTopKRouter._compute_routing = _compute_routing
+_HOOKS_INSTALLED = False
+
+
+def install_hooks() -> None:
+    """Install MUSA routing override for ``FusedTopKRouter`` (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    FusedTopKRouter._compute_routing = _compute_routing
+    _HOOKS_INSTALLED = True

@@ -304,8 +304,17 @@ def silu_mul_per_token_group_quant_fp8_musa(
     return output, output_s
 
 
-import vllm.model_executor.layers.quantization.utils.fp8_utils
+_HOOKS_INSTALLED = False
 
-vllm.model_executor.layers.quantization.utils.fp8_utils.deepgemm_post_process_fp8_weight_block = (
-    deepgemm_post_process_fp8_weight_block
-)
+
+def install_hooks() -> None:
+    """Install MUSA ``deepgemm_post_process_fp8_weight_block`` override (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    import vllm.model_executor.layers.quantization.utils.fp8_utils as _upstream_fp8_utils
+
+    _upstream_fp8_utils.deepgemm_post_process_fp8_weight_block = (
+        deepgemm_post_process_fp8_weight_block
+    )
+    _HOOKS_INSTALLED = True

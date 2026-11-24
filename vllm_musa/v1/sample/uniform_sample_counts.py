@@ -94,10 +94,15 @@ def select_qwen_uniform_sample_counts(
     return num_sampled_tokens, buffers[2][:num_reqs]
 
 
+_HOOKS_INSTALLED = False
+
+
 def install_hooks() -> None:
+    """Install MUSA uniform decode sample-count hook on ``Sampler`` (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
     Sampler._musa_select_num_sampled_and_rejected = (  # type: ignore[attr-defined]
         select_qwen_uniform_sample_counts
     )
-
-
-install_hooks()
+    _HOOKS_INSTALLED = True

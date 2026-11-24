@@ -291,7 +291,16 @@ def apply(
         )
 
 
-vllm_fp8.Fp8MoEMethod.maybe_roundup_sizes = maybe_roundup_sizes
-vllm_fp8.Fp8MoEMethod.create_weights = create_weights
-vllm_fp8.Fp8MoEMethod.process_weights_after_loading = process_weights_after_loading
-vllm_fp8.Fp8MoEMethod.apply = apply
+_HOOKS_INSTALLED = False
+
+
+def install_hooks() -> None:
+    """Install MUSA overrides on ``Fp8MoEMethod`` (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    vllm_fp8.Fp8MoEMethod.maybe_roundup_sizes = maybe_roundup_sizes
+    vllm_fp8.Fp8MoEMethod.create_weights = create_weights
+    vllm_fp8.Fp8MoEMethod.process_weights_after_loading = process_weights_after_loading
+    vllm_fp8.Fp8MoEMethod.apply = apply
+    _HOOKS_INSTALLED = True

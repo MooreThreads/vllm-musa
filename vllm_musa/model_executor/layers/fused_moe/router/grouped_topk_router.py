@@ -469,8 +469,15 @@ def grouped_topk(
     )
 
 
-import vllm.model_executor.layers.fused_moe.router.grouped_topk_router
+_HOOKS_INSTALLED = False
 
-vllm.model_executor.layers.fused_moe.router.grouped_topk_router.GroupedTopKRouter._compute_routing = (
-    _compute_routing
-)
+
+def install_hooks() -> None:
+    """Install MUSA routing override for ``GroupedTopKRouter`` (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    import vllm.model_executor.layers.fused_moe.router.grouped_topk_router as _upstream
+
+    _upstream.GroupedTopKRouter._compute_routing = _compute_routing
+    _HOOKS_INSTALLED = True

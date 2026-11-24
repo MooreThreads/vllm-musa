@@ -19,19 +19,33 @@ from vllm.v1.attention.ops import triton_turboquant_store as _turboquant_store
 from vllm_musa.v1.attention.backends import fa_utils as _musa_fa_utils
 
 
+_HOOKS_INSTALLED = False
+
+
 def _musa_use_fp8_e4b15(device: int = 0) -> int:
     # XXX (MUSA): The e4b15 dtype is supported in later Triton versions, please refer to JIRA#79331
     return 0
 
 
-_turboquant_decode._use_fp8_e4b15 = _musa_use_fp8_e4b15
-_turboquant_store._use_fp8_e4b15 = _musa_use_fp8_e4b15
-_turboquant_attn._use_fp8_e4b15 = _musa_use_fp8_e4b15
-_turboquant_attn.get_flash_attn_version = _musa_fa_utils.get_flash_attn_version
-_turboquant_attn.is_flash_attn_varlen_func_available = (
-    _musa_fa_utils.is_flash_attn_varlen_func_available
-)
-_turboquant_attn._HAS_FLASH_ATTN = _musa_fa_utils.is_flash_attn_varlen_func_available()
+def install_hooks() -> None:
+    """Install MUSA TurboQuant Triton/FA compatibility hooks (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    _turboquant_decode._use_fp8_e4b15 = _musa_use_fp8_e4b15
+    _turboquant_store._use_fp8_e4b15 = _musa_use_fp8_e4b15
+    _turboquant_attn._use_fp8_e4b15 = _musa_use_fp8_e4b15
+    _turboquant_attn.get_flash_attn_version = _musa_fa_utils.get_flash_attn_version
+    _turboquant_attn.is_flash_attn_varlen_func_available = (
+        _musa_fa_utils.is_flash_attn_varlen_func_available
+    )
+    _turboquant_attn._HAS_FLASH_ATTN = (
+        _musa_fa_utils.is_flash_attn_varlen_func_available()
+    )
+    _HOOKS_INSTALLED = True
+
+
+install_hooks()
 
 
 class MUSATurboQuantAttentionImpl(_turboquant_attn.TurboQuantAttentionImpl):

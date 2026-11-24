@@ -763,12 +763,23 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         raise NotImplementedError
 
 
-import vllm.model_executor.layers.attention.mla_attention
-import vllm.v1.attention.backends.mla.prefill
-import vllm.v1.attention.backends.mla.prefill.selector
+_HOOKS_INSTALLED = False
 
-vllm.model_executor.layers.attention.mla_attention.MLAAttention._v_up_proj = _v_up_proj
-vllm.model_executor.layers.attention.mla_attention.MLACommonImpl = MLACommonImpl
-_install_prefill_backend_hook(vllm.model_executor.layers.attention.mla_attention)
-_install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill)
-_install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill.selector)
+
+def install_hooks() -> None:
+    """Install MUSA MLA attention overrides and prefill backend hooks (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    import vllm.model_executor.layers.attention.mla_attention
+    import vllm.v1.attention.backends.mla.prefill
+    import vllm.v1.attention.backends.mla.prefill.selector
+
+    vllm.model_executor.layers.attention.mla_attention.MLAAttention._v_up_proj = (
+        _v_up_proj
+    )
+    vllm.model_executor.layers.attention.mla_attention.MLACommonImpl = MLACommonImpl
+    _install_prefill_backend_hook(vllm.model_executor.layers.attention.mla_attention)
+    _install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill)
+    _install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill.selector)
+    _HOOKS_INSTALLED = True

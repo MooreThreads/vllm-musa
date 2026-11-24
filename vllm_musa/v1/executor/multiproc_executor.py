@@ -69,6 +69,15 @@ def _ensure_worker_termination(worker_procs: list[Any]) -> None:
     # ========================== END ==========================
 
 
-vllm_multiproc_executor.MultiprocExecutor._ensure_worker_termination = staticmethod(
-    _ensure_worker_termination
-)
+_HOOKS_INSTALLED = False
+
+
+def install_hooks() -> None:
+    """Install MUSA ``MultiprocExecutor._ensure_worker_termination`` hook (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    vllm_multiproc_executor.MultiprocExecutor._ensure_worker_termination = staticmethod(
+        _ensure_worker_termination
+    )
+    _HOOKS_INSTALLED = True

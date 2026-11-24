@@ -1,13 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""MUSA-specific kernel providers for vllm.ir ops.
+"""Standalone MUSA / Triton kernel helpers.
 
-Imported from vllm_musa.platform.MUSAPlatformBase.import_ir_kernels()
-after super().import_ir_kernels() so upstream providers (native /
-vllm_c / oink / aiter / xpu_kernels) register first; MUSA providers
-appear alongside.
+vLLM IR providers now live in :mod:`vllm_musa.ir` (loaded by
+``MUSAPlatformBase.import_ir_kernels()``) so importing a standalone kernel
+helper from ``vllm_musa.kernels.<name>`` does not trigger IR provider
+registration as an unintended side effect.
 """
-
-from . import gated_qkv, musa_ops  # noqa: F401
-
-__all__ = ["gated_qkv", "musa_ops"]

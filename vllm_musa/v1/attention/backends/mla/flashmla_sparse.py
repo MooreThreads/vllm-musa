@@ -160,10 +160,19 @@ def _musa_backend_sparse_fwd(
     )
 
 
-_core_sparse.get_mla_metadata = _musa_get_mla_metadata
-_core_sparse.flash_mla_sparse_fwd = _musa_backend_sparse_fwd
-_core_sparse.flash_mla_with_kvcache = _musa_mla_kvcache
-_core_sparse.FlashMLASchedMeta = _musa_sched_meta
+_HOOKS_INSTALLED = False
+
+
+def install_hooks() -> None:
+    """Rebind core sparse FlashMLA ops to MUSA ``flash_mla`` equivalents (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    _core_sparse.get_mla_metadata = _musa_get_mla_metadata
+    _core_sparse.flash_mla_sparse_fwd = _musa_backend_sparse_fwd
+    _core_sparse.flash_mla_with_kvcache = _musa_mla_kvcache
+    _core_sparse.FlashMLASchedMeta = _musa_sched_meta
+    _HOOKS_INSTALLED = True
 
 
 @register_backend(AttentionBackendEnum.FLASHMLA_SPARSE)

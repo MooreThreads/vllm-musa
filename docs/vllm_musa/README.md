@@ -7,8 +7,11 @@ Python package that plugs into vLLM's platform and general plugin system to enab
 | Entry Point | Function | Purpose |
 |---|---|---|
 | `vllm.platform_plugins` | `musa_platform_plugin` | Registers `MUSAPlatform` when MUSA hardware is detected |
-| `vllm.general_plugins` | `register_custom_ops` | Applies source patches, registers OOT ops, distributed connectors, and attention backends |
+| `vllm.general_plugins` | `register_out_of_tree` | Idempotently registers runtime patches, OOT layers, adapters, and custom-op preloads |
+| `vllm.general_plugins` | `register_attn_backends` | Idempotently registers MUSA attention backend overrides |
 | Console script | `collect_env` | Prints MUSA environment info (`vllm_collect_env`) |
+
+For developer guidance on adding IR providers, OOT layers, Torch custom ops, and attention backends, see [Registering vLLM Extensions on MUSA](registration.md).
 
 ## Module Overview
 

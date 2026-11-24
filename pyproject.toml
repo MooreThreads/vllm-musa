@@ -47,7 +47,8 @@ vllm_collect_env = "vllm_musa:collect_env"
 musa = "vllm_musa:musa_platform_plugin"
 
 [project.entry-points."vllm.general_plugins"]
-musa_custom_ops = "vllm_musa:register_custom_ops"
+musa_out_of_tree = "vllm_musa:register_out_of_tree"
+musa_attn_backends = "vllm_musa:register_attn_backends"
 
 [project.urls]
 Homepage = "https://github.com/MooreThreads/vllm-musa"
