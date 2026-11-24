@@ -348,10 +348,10 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0215-MUSA-pad-the-QSA-BLOCK_M-8-wmma-tile-to-16.patch` | v0.32 new/updated | pad the QSA `block_m == 8` tile to 16 so group sizes 5-8 leave the unimplemented MUSA `mthreads_wmma` layout, while 1/2/4 keep their current tiles |
 | `0216-MUSA-carry-shared-indexer-top-k-through-generic-PP.patch` | v0.32 new/updated | carry shared indexer top-k through generic pipeline-parallel transport |
 | `0217-MUSA-bind-draft-token-D2H-copies-per-step.patch` | v0.32 new/updated | retain drafts per request and give each D2H copy its own stream/event, so a non-structured batch cannot erase live drafts and a later step's wait cannot delay an earlier copy; retrieve non-deferred structured-output drafts before the grammar bitmask |
-| `0216-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch` | MUSA DeepSelect | accept the native DeepSelect extension on MUSA |
-| `0217-MUSA-route-explicit-DeepSelect-through-DSV4-indexer.patch` | MUSA DeepSelect | route supported indexer windows to DeepSelect with BF16 Triton logits and native fallback |
-| `0218-MUSA-build-DeepSelect-through-vLLM-extension-target.patch` | MUSA DeepSelect | build DeepSelect through the vLLM extension target |
-| `0219-Return-BF16-MQA-logits-from-MATE-sparse-indexers.patch` | MUSA sparse indexer | produce BF16 MATE logits with dtype-aware prefill tiling |
+| `0218-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch` | MUSA DeepSelect | accept the native DeepSelect extension on MUSA |
+| `0219-MUSA-route-explicit-DeepSelect-through-DSV4-indexer.patch` | MUSA DeepSelect | route supported indexer windows to DeepSelect with BF16 Triton logits and native fallback |
+| `0220-MUSA-build-DeepSelect-through-vLLM-extension-target.patch` | MUSA DeepSelect | build DeepSelect through the vLLM extension target |
+| `0221-Return-BF16-MQA-logits-from-MATE-sparse-indexers.patch` | MUSA sparse indexer | produce BF16 MATE logits with dtype-aware prefill tiling |
 
 For non-speculative DSV4.1 on Model Runner V2 (DP1, no microbatching),
 the optimization contract fixes the context cutoff at `32768` tokens. All-short batches

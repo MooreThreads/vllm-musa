@@ -18,11 +18,11 @@ from build_utils.git_proxy import PROXY_ENV, resolve_proxy
 
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
-BUILD_PATCH = SERIES / "0218-MUSA-build-DeepSelect-through-vLLM-extension-target.patch"
+BUILD_PATCH = SERIES / "0220-MUSA-build-DeepSelect-through-vLLM-extension-target.patch"
 PLUGIN = ROOT / "vllm_musa" / "__init__.py"
 PINS = ROOT / "third_party" / "PINS"
 INDEXER_PATCH = (
-    SERIES / "0217-MUSA-route-explicit-DeepSelect-through-DSV4-indexer.patch"
+    SERIES / "0219-MUSA-route-explicit-DeepSelect-through-DSV4-indexer.patch"
 )
 
 
@@ -42,7 +42,7 @@ def _added_lines(text: str) -> str:
 
 def test_series_patch_retains_native_extension_import_detection() -> None:
     source = (
-        SERIES / "0216-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
+        SERIES / "0218-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
     ).read_text(encoding="utf-8")
     assert "elif not _HAS_DEEP_SELECT_C:" in source
     assert "vllm._deepselect_C could not be imported" in source
@@ -67,7 +67,7 @@ def test_series_patch_keeps_the_cuda_capability_check() -> None:
 
 
 def _deep_select_validation_helpers(family: int, extension_available: bool) -> dict:
-    patch = SERIES / "0216-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
+    patch = SERIES / "0218-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
     source_path = ROOT / "third_party/vllm/vllm/model_executor/layers/indexer_topk.py"
     if not source_path.exists():
         pytest.skip("Applied vLLM source is required")
