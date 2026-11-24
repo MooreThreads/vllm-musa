@@ -4,9 +4,9 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
- CMakeLists.txt                           |  5 ++++
- cmake/external_projects/deepselect.cmake | 50 +++++++++++++++++++++++++++++++++---
- setup.py                                 |  9 +++++++
+ CMakeLists.txt                           |  5 +++
+ cmake/external_projects/deepselect.cmake | 50 ++++++++++++++++++++++--
+ setup.py                                 |  9 +++++
  3 files changed, 61 insertions(+), 3 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -23,10 +23,10 @@ index 3a71d7e1e5..29d018da33 100644
 +endif()
 +
  append_cmake_prefix_path("torch" "torch.utils.cmake_prefix_path")
-
+ 
  # Ensure the 'nvcc' command is in the PATH
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e61..54e74d4120 100644
+index e2a5592e61..a1eeb10241 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
 @@ -5,7 +5,12 @@ include(FetchContent)
@@ -41,7 +41,7 @@ index e2a5592e61..54e74d4120 100644
 +   AND NOT "$ENV{VLLM_MUSA_BUILD_DEEPSELECT}" STREQUAL "1")
 +  return()
  endif()
-
+ 
  if(DEEPSELECT_SRC_DIR)
 @@ -16,10 +21,22 @@ if(DEEPSELECT_SRC_DIR)
          BUILD_COMMAND ""
@@ -71,7 +71,7 @@ index e2a5592e61..54e74d4120 100644
 @@ -29,6 +46,33 @@ endif()
  FetchContent_MakeAvailable(deepselect)
  message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
-
+ 
 +if(VLLM_TARGET_DEVICE STREQUAL "empty")
 +  find_path(MUSA_CMAKE_DIR Modules/CMakeDetermineMUSACompiler.cmake
 +    HINTS "$ENV{MUSA_HOME}/cmake" /usr/local/musa/cmake REQUIRED)
@@ -109,7 +109,7 @@ index 37bfc3e41b..ccae557aeb 100644
 @@ -1651,8 +1651,17 @@ if PRECOMPILED_RUST_FRONTEND_PATH.exists():
  for rust_extension_path in get_precompiled_rust_extension_paths():
      add_vllm_package_data(rust_extension_path.name)
-
+ 
 +_deepselect_source_requested = bool(os.environ.get("DEEPSELECT_SRC_DIR")) or any(
 +    argument.startswith("-DDEEPSELECT_SRC_DIR=")
 +    for argument in os.environ.get("CMAKE_ARGS", "").split()
@@ -121,6 +121,6 @@ index 37bfc3e41b..ccae557aeb 100644
 +        deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
 +        deepselect_extension.py_limited_api = False
 +        ext_modules = [deepselect_extension]
-
+ 
  if not ext_modules:
      cmdclass = {}
