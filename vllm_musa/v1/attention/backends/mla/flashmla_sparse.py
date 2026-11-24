@@ -20,7 +20,9 @@ from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_b
 from vllm_musa.v1.attention.ops.flashmla import (
     flash_mla_sparse_fwd as _musa_flash_mla_sparse_fwd,
 )
-from vllm_musa.v1.attention.ops.flashmla import is_flashmla_sparse_supported
+from vllm_musa.v1.attention.ops.flashmla import (
+    is_flashmla_sparse_supported,
+)
 
 logger = init_logger(__name__)
 # MUSA: the upstream sparse backend imports FlashMLA ops from the core module,

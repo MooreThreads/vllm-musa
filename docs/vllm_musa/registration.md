@@ -14,7 +14,8 @@ monkey-patches.
 | `vllm.general_plugins` | `musa_custom_ops` | `vllm_musa:register_custom_ops` | Backward-compatible idempotent alias for existing `VLLM_PLUGINS=musa,musa_custom_ops` recipes and scripts. |
 
 `vllm_musa.register_custom_ops()` remains as an idempotent compatibility alias
-that invokes both general plugin entry points.
+that invokes the other two general plugin entry points (`musa_out_of_tree` and
+`musa_attn_backends`).
 
 ## Where to add a new extension
 

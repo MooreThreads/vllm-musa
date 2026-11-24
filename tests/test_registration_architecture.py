@@ -326,8 +326,7 @@ def test_runtime_plugin_startup_idempotency_and_preload_order() -> None:
     AOT kernel loading, and repeat-initialization idempotency in a fresh process.
     """
     _require_musa_device()
-    result = _run_isolated(
-        """
+    result = _run_isolated("""
 import sys
 import vllm_musa
 from vllm.ir.op import IrOp
@@ -388,8 +387,7 @@ for mod_name in (
 import vllm.v1.sample.ops.topk_topp_sampler as _vllm_topk_mod
 assert getattr(_vllm_topk_mod.TopKTopPSampler, "_musa_sampling_hooks_installed", False) is True
 print("PASS_RUNTIME_PLUGIN_STARTUP")
-"""
-    )
+""")
     assert result.returncode == 0, result.stderr[-2000:]
     assert "PASS_RUNTIME_PLUGIN_STARTUP" in result.stdout
 
