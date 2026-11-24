@@ -52,7 +52,7 @@ requirements entrypoints before installing `vllm-musa`.
 
 ```bash
 # required before pip install . / pip install -e .
-pip install -r requirements/build.txt -r requirements/musa.txt
+pip install -r requirements/build.txt -r requirements/musa_private.txt
 
 # developer install — vllm-musa and the patched upstream vLLM editable:
 pip install -e . --no-build-isolation -v

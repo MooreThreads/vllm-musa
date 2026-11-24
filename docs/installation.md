@@ -92,6 +92,10 @@ For an editable install:
 pip install -e . --no-build-isolation -v
 ```
 
+This is the source-development workflow. It creates editable installs for the
+MUSA package and the patched upstream checkout under `third_party/vllm`.
+Production images install the bundled `vllm-musa` wheel instead.
+
 Verify that the plugin can be imported:
 
 ```bash

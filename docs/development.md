@@ -44,6 +44,10 @@ first: `setup.py` imports `torchada.arch` at build time.
 pip install -e . --no-build-isolation -v
 ```
 
+This editable install is for source development. The production Docker targets
+use the bundled `vllm-musa` wheel, while the Docker `test` target retains the
+editable checkout for debugging and tests.
+
 ## Tests and checks
 
 ```bash

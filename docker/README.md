@@ -12,7 +12,7 @@ The resulting image contains:
   `flash_mla`, `deep-gemm`, `tilelang_musa`, `apache-tvm-ffi`,
   `torch_c_dlpack_ext`),
 - `torchada` and the other common runtime dependencies from the public index,
-- `vllm-musa` and the vendored upstream vLLM, built from source,
+- a bundled `vllm-musa` wheel containing the `vllm` and `vllm_musa` import packages,
 - the `vllm-rs` executable when `BUILD_VLLM_RS=1`,
 - `mooncake-transfer-engine-musa`,
 - `pytest`, so the repository's pytest-based validation can run directly in the
@@ -23,6 +23,8 @@ The directory follows the upstream vLLM runtime layout, with the MUSA
 repository's `examples/` and `benchmarks/` alongside `collect_env.py` and
 `torch_lib_versions.txt`. The `final` target opens a shell with the same layout.
 Use the `test` target for an editable checkout under `/vllm-workspace`.
+The production-style `final` and `vllm-openai` targets install the bundled
+wheel and do not retain the upstream source checkout.
 
 ## Prerequisites
 
