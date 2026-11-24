@@ -36,9 +36,9 @@ def _import_verified_modules(paths: dict[str, Path]) -> None:
         spec = importlib.util.find_spec(name)
         assert spec is not None and spec.origin is not None, f"cannot locate {name}"
         actual = Path(spec.origin).resolve()
-        assert actual == expected.resolve(), (
-            f"{name}: expected {expected}, found {actual}"
-        )
+        assert (
+            actual == expected.resolve()
+        ), f"{name}: expected {expected}, found {actual}"
         importlib.import_module(name)
 
 

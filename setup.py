@@ -620,7 +620,9 @@ class _CustomBuildExt(BuildExtension):
             # on the final tree is not a valid substitute for preparing it once.
             for repo in (_VLLM_REPO, _FLASHINFER_REPO):
                 if not repo.source_dir.is_dir():
-                    raise RuntimeError(f"missing prepared source tree: {repo.source_dir}")
+                    raise RuntimeError(
+                        f"missing prepared source tree: {repo.source_dir}"
+                    )
             cls._third_party_prepared = True
             return
         if os.environ.get("SKIP_THIRD_PARTY") == "1":

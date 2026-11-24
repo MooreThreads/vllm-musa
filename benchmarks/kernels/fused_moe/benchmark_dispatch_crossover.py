@@ -29,6 +29,7 @@ from typing import Any
 import torchada  # noqa: F401  # must patch before torch ecosystem imports
 import torch
 import torch.nn.functional as F
+
 # isort: on
 
 from mate.testing.utils import bench_gpu_time_with_musa_event

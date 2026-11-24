@@ -305,8 +305,7 @@ def get_provider_imports():
             state = "AVAILABLE" if spec is not None else "MISSING"
             origin = getattr(spec, "origin", None) if spec is not None else None
             lines.append(
-                f"{distribution_name}: {state}"
-                + (f" ({origin})" if origin else "")
+                f"{distribution_name}: {state}" + (f" ({origin})" if origin else "")
             )
         except (ImportError, AttributeError, ModuleNotFoundError, ValueError) as exc:
             lines.append(f"{distribution_name}: ERROR {type(exc).__name__}: {exc}")
@@ -518,8 +517,7 @@ def get_pip_packages(run_lambda, patterns=None):
         return "\n".join(
             line
             for line in out.splitlines()
-            if canonicalize_name(line.split("==", 1)[0].strip())
-            in normalized_patterns
+            if canonicalize_name(line.split("==", 1)[0].strip()) in normalized_patterns
         )
 
     pip_version = "pip3" if sys.version[0] == "3" else "pip"

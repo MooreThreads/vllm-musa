@@ -207,7 +207,9 @@ def test_musa_image_matches_upstream_workspace_and_includes_pytest():
     test_requirements = (ROOT / "requirements" / "test.txt").read_text().splitlines()
 
     assert "WORKDIR /vllm-workspace" in dockerfile
-    assert "COPY requirements/ /tmp/vllm-runtime-requirements/requirements/" in dockerfile
+    assert (
+        "COPY requirements/ /tmp/vllm-runtime-requirements/requirements/" in dockerfile
+    )
     assert "COPY . /vllm-workspace" in dockerfile
     assert "/workspace/vllm-musa" not in dockerfile
     assert "pytest" in test_requirements
@@ -259,9 +261,9 @@ def test_musa_image_stage_and_optional_component_contract():
     )
     assert arch_check < native_build
 
-    mooncake_stage = dockerfile.split("FROM vllm_runtime AS mooncake", 1)[
-        1
-    ].split("FROM mooncake AS final", 1)[0]
+    mooncake_stage = dockerfile.split("FROM vllm_runtime AS mooncake", 1)[1].split(
+        "FROM mooncake AS final", 1
+    )[0]
     assert "MTHREADS_VISIBLE_DEVICES" not in mooncake_stage
     assert "ARG MOONCAKE_VERSION=0.3.14" in mooncake_stage
     assert '"mooncake-transfer-engine-musa==${MOONCAKE_VERSION}"' in mooncake_stage
@@ -345,7 +347,7 @@ def test_mooncake_example_uses_current_proxy_and_scoped_cleanup():
         'PROXY_RELATIVE_PATH="examples/disaggregated/mooncake_connector/'
         'mooncake_connector_proxy.py"'
     ) in script
-    assert 'third_party/vllm/${PROXY_RELATIVE_PATH}' in script
+    assert "third_party/vllm/${PROXY_RELATIVE_PATH}" in script
     assert "mooncake_connector_proxy.py" in script
     assert "VLLM_MOONCAKE_BOOTSTRAP_PORT" in script
     assert "VLLM_ENFORCE_EAGER" in script
@@ -360,11 +362,7 @@ def test_mooncake_example_uses_current_proxy_and_scoped_cleanup():
 
 def test_mooncake_rdma_container_contract_is_explicit():
     example_readme = (
-        ROOT
-        / "examples"
-        / "disaggregated"
-        / "disaggregated_serving"
-        / "README.md"
+        ROOT / "examples" / "disaggregated" / "disaggregated_serving" / "README.md"
     ).read_text()
     for token in (
         "--detach",

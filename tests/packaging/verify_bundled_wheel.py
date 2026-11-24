@@ -67,9 +67,9 @@ def _verify_native_modules(wheel: Path, names: set[str]) -> None:
             for name in names
             if name.startswith(f"{module}.") and name.endswith(".so")
         }
-        assert actual == {expected}, (
-            f"{module}: expected {expected}, found {sorted(actual)}"
-        )
+        assert actual == {
+            expected
+        }, f"{module}: expected {expected}, found {sorted(actual)}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -151,9 +151,9 @@ def main() -> None:
         version = re.search(
             r"^__version__ = version = ['\"]([^'\"]+)['\"]", version_module, re.M
         )
-        assert version and not Version(version[1]).is_devrelease, (
-            "missing vLLM release version"
-        )
+        assert (
+            version and not Version(version[1]).is_devrelease
+        ), "missing vLLM release version"
 
         old_metadata_lookups = []
         for name in names:
