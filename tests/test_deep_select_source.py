@@ -548,7 +548,7 @@ def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
     )
     added = _added_lines(source_patch)
     assert "https://github.com/MooreThreads/DeepSelect.git" in added
-    assert "set(deepselect_rev main)" in added
+    assert "set(deepselect_rev b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32)" in added
     assert "musa_api.mu" in added
 
 
@@ -600,6 +600,7 @@ def test_install_vllm_keeps_empty_mode_without_injecting_hardware(
         **inherited,
         "VLLM_TARGET_DEVICE": "empty",
         "VLLM_VERSION_OVERRIDE": "0.32.0",
+        "VLLM_MUSA_BUILD_DEEPSELECT": "1",
     }
 
 
@@ -618,34 +619,27 @@ def test_vllm_build_does_not_add_musa_platform_or_compiler_detection() -> None:
 
 
 @pytest.mark.parametrize(
-    ("empty", "source_env", "cmake_args"),
+    ("empty", "source_env", "cmake_args", "musa_build"),
     [
-        (False, "", ""),
-        (True, "", ""),
-        (True, "/prepared/DeepSelect", ""),
-        (True, "", "-DDEEPSELECT_SRC_DIR=/prepared/DeepSelect"),
+        (False, "", "", "1"),
+        (True, "", "", ""),
+        (True, "", "", "1"),
+        (True, "/prepared/DeepSelect", "", ""),
+        (True, "", "-DDEEPSELECT_SRC_DIR=/prepared/DeepSelect", ""),
     ],
 )
 def test_vllm_empty_mode_builds_deepselect_only_when_configured(
-    empty: bool, source_env: str, cmake_args: str
+    empty: bool, source_env: str, cmake_args: str, musa_build: str
 ) -> None:
-    source = """
-_deepselect_source_requested = bool(os.environ.get("DEEPSELECT_SRC_DIR")) or any(
-    argument.startswith("-DDEEPSELECT_SRC_DIR=")
-    for argument in os.environ.get("CMAKE_ARGS", "").split()
-)
-
-if _no_device():
-    ext_modules = []
-    if _deepselect_source_requested:
-        deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
-        deepselect_extension.py_limited_api = False
-        ext_modules = [deepselect_extension]
-"""
+    setup_hunk = BUILD_PATCH.read_text().split("diff --git a/setup.py b/setup.py", 1)[1]
+    body = setup_hunk.split("@@", 2)[2].splitlines()[1:]
+    patched = "\n".join(line[1:] for line in body if line.startswith(("+", " ")))
+    source = patched[patched.index("_deepselect_source_requested =") : patched.index("if not ext_modules:")]
     extensions = [SimpleNamespace(name="existing")]
     environment = {
         "DEEPSELECT_SRC_DIR": source_env,
         "CMAKE_ARGS": cmake_args,
+        "VLLM_MUSA_BUILD_DEEPSELECT": musa_build,
     }
     namespace = {
         "_no_device": lambda: empty,
@@ -655,7 +649,7 @@ if _no_device():
     }
     exec(compile(source, str(BUILD_PATCH), "exec"), namespace)
     result = namespace["ext_modules"]
-    configured = bool(source_env or cmake_args)
+    configured = bool(source_env or cmake_args or musa_build == "1")
     if empty and configured:
         assert [extension.name for extension in result] == ["vllm._deepselect_C"]
         assert result[0].py_limited_api is False

@@ -109,16 +109,13 @@ not substitute a public CUDA wheel with the same package name.
 
 ### Optional DeepSelect backend
 
-The MUSA install can build `vllm._deepselect_C` from a DeepSelect checkout.
-Select it at serving time with `--sparse-indexer-topk-backend deep_select`.
+The vllm-musa source installer builds `vllm._deepselect_C` through vLLM's
+CMake target. It fetches `MooreThreads/DeepSelect` at commit
+`b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32`. Select the backend at
+serving time with `--sparse-indexer-topk-backend deep_select`.
 
-Set `DEEPSELECT_SRC_DIR` to the adapted checkout containing `csrc/musa_api.mu`
-and its initialized `csrc/3rdparty/mutlass` submodule. The override is required
-for the MUSA registration source and remains the supported MUSA build path.
-
-```bash
-DEEPSELECT_SRC_DIR=/path/to/musa-deepselect pip install -e . --no-build-isolation -v
-```
+To override the pin, set `DEEPSELECT_SRC_DIR` to a local checkout with its
+`csrc/3rdparty/mutlass` submodule initialized.
 
 ## Device visibility
 

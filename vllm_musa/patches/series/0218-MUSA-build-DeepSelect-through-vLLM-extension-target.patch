@@ -4,10 +4,10 @@ Date: Sun, 22 Nov 2026 23:26:01 +0800
 Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
-CMakeLists.txt                           |  5 ++++
- cmake/external_projects/deepselect.cmake | 45 +++++++++++++++++++++++++++++---
+ CMakeLists.txt                           |  5 ++++
+ cmake/external_projects/deepselect.cmake | 46 +++++++++++++++++++++++++++++---
  setup.py                                 |  9 +++++++
- 3 files changed, 56 insertions(+), 3 deletions(-)
+ 3 files changed, 57 insertions(+), 3 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 3a71d7e1e5..29d018da33 100644
@@ -26,10 +26,10 @@ index 3a71d7e1e5..29d018da33 100644
 
  # Ensure the 'nvcc' command is in the PATH
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e61..9c86dfba0a 100644
+index e2a5592e61..54e74d4120 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
-@@ -5,7 +5,11 @@ include(FetchContent)
+@@ -5,7 +5,12 @@ include(FetchContent)
  # It can be set as an environment variable or passed as a cmake argument.
  # The environment variable takes precedence.
  if (DEFINED ENV{DEEPSELECT_SRC_DIR})
@@ -37,12 +37,13 @@ index e2a5592e61..9c86dfba0a 100644
 +  set(DEEPSELECT_SRC_DIR "$ENV{DEEPSELECT_SRC_DIR}")
 +endif()
 +
-+if(VLLM_TARGET_DEVICE STREQUAL "empty" AND NOT DEEPSELECT_SRC_DIR)
++if(VLLM_TARGET_DEVICE STREQUAL "empty" AND NOT DEEPSELECT_SRC_DIR
++   AND NOT "$ENV{VLLM_MUSA_BUILD_DEEPSELECT}" STREQUAL "1")
 +  return()
  endif()
 
  if(DEEPSELECT_SRC_DIR)
-@@ -16,10 +20,18 @@ if(DEEPSELECT_SRC_DIR)
+@@ -16,10 +21,18 @@ if(DEEPSELECT_SRC_DIR)
          BUILD_COMMAND ""
    )
  else()
@@ -50,7 +51,7 @@ index e2a5592e61..9c86dfba0a 100644
 +  set(deepselect_rev d96d33afe1fab0d6066da49cdc91e64c2bee65ea)
 +  if(VLLM_TARGET_DEVICE STREQUAL "empty")
 +    set(deepselect_repo https://github.com/MooreThreads/DeepSelect.git)
-+    set(deepselect_rev main)
++    set(deepselect_rev b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32)
 +    set(deepselect_submodules GIT_SUBMODULES csrc/3rdparty/mutlass)
 +  endif()
    FetchContent_Declare(
@@ -63,7 +64,7 @@ index e2a5592e61..9c86dfba0a 100644
          GIT_PROGRESS TRUE
          CONFIGURE_COMMAND ""
          BUILD_COMMAND ""
-@@ -29,6 +41,33 @@ endif()
+@@ -29,6 +42,33 @@ endif()
  FetchContent_MakeAvailable(deepselect)
  message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
 
@@ -98,7 +99,7 @@ index e2a5592e61..9c86dfba0a 100644
  set(DEEPSELECT_SUPPORT_ARCHS)
  if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.9)
 diff --git a/setup.py b/setup.py
-index 37bfc3e41b..4db4bf89a3 100644
+index 37bfc3e41b..ccae557aeb 100644
 --- a/setup.py
 +++ b/setup.py
 @@ -1651,8 +1651,17 @@ if PRECOMPILED_RUST_FRONTEND_PATH.exists():
@@ -112,7 +113,7 @@ index 37bfc3e41b..4db4bf89a3 100644
 +
  if _no_device():
      ext_modules = []
-+    if _deepselect_source_requested:
++    if os.environ.get("VLLM_MUSA_BUILD_DEEPSELECT") == "1" or _deepselect_source_requested:
 +        deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
 +        deepselect_extension.py_limited_api = False
 +        ext_modules = [deepselect_extension]

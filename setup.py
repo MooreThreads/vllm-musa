@@ -566,6 +566,7 @@ class _CustomBuildExt(BuildExtension):
 
         env = os.environ.copy()
         env["VLLM_TARGET_DEVICE"] = "empty"
+        env.setdefault("VLLM_MUSA_BUILD_DEEPSELECT", "1")
 
         # The exact upstream release commit is pinned in third_party/PINS, but
         # its local Git object set may not contain the corresponding tag.
