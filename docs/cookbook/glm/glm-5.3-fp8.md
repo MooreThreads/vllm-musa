@@ -15,6 +15,7 @@ different; see the GLM-5.2 section below.
 | Setting | Value |
 |---|---|
 | Hardware | 2 nodes, 8x S5000 per node |
+| Precision | FP8 |
 | Tensor parallelism | TP8 |
 | Pipeline parallelism | PP2 |
 | Expert parallelism | Enabled |

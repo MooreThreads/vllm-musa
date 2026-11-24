@@ -109,6 +109,31 @@ The recipe uses the checkpoint's own canvas (256 tokens, 48 steps) and the
 `/v1/systemone` endpoint that vLLM v0.32 ships, so one server answers both
 `/v1/chat/completions` and structured reads.
 
+## Qwen-Image
+
+Text-to-image recipes served through vLLM-Omni. See the
+[Qwen-Image cookbook index](qwen-image/README.md) for the four model recipes.
+
+| Model | Precision | Steps | Hardware | Recipe |
+|---|---|---|---|---|
+| Qwen-Image-2.1 | BF16 | 20 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-bf16.md) |
+| Qwen-Image-2.1 | FP8 | 20 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-fp8.md) |
+| Qwen-Image-2.1-Turbo | BF16 | 8 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-turbo-bf16.md) |
+| Qwen-Image-2.1-Turbo | FP8 | 8 | 1x S5000, TP1 | [Open recipe](qwen-image/qwen-image-2.1-turbo-fp8.md) |
+
+These differ from every other recipe here: the server takes `--omni`, requests go
+to `/v1/images/generations`, and the image is built rather than pulled as a
+`vllm-openai` tag. All four run in the same image, built once from a pinned
+vLLM-MUSA v0.32 base:
+
+```bash
+export VLLM_MUSA_IMAGE=<your pinned vLLM-MUSA v0.32 image>
+bash docker/build_omni_image.sh --omni-ref 31c8986250d
+```
+
+That is the vLLM-Omni revision the recipes were validated on; the tag follows the
+ref, so the command above builds `vllm-omni-musa:31c8986250d`.
+
 ## Verify a server
 
 The recipes expose an OpenAI-compatible endpoint on port 8000.
@@ -124,3 +149,36 @@ response = client.chat.completions.create(
 )
 print(response.choices[0].message.content)
 ```
+
+## Adding a recipe
+
+One Markdown file per recipe at `<vendor>/<slug>.md` (lowercase, usually
+`<model>-<precision>`), plus a row in the tables above — a file that no table
+links is not reachable from this page.
+
+A recipe carries four things, and the build fails without them:
+
+- `# <model title>` — also the card title and the page `<title>`;
+- `## Overview` — the first sentence becomes the card summary;
+- `## At a glance` — a two-column table whose rows become the sidebar and the
+  catalog filters (`Precision`, `Hardware`, `Tensor parallelism`,
+  `Speculative decoding`, `Architecture`, ...);
+- `## Launching the server` with a fenced block that starts the server —
+  `vllm serve ...`, or `docker run ...` for the container-based profiles. The
+  block that actually launches is what the copy button hands out.
+
+The pull request that adds the file runs the same build the site uses and fails
+on a missing section, a table it cannot read, a recipe the index does not link,
+or an internal link that resolves to nothing. Merging publishes
+<https://moorethreads.github.io/vllm-musa/> from the default branch, with the
+footer naming the commit it was built from.
+
+Preview the page locally:
+
+```console
+$ python tools/cookbook-site/build_site.py --source docs/cookbook --out _site
+$ python3 -m http.server -d _site 8000
+```
+
+Build options and the complete list of checks are in
+[tools/cookbook-site/README.md](https://github.com/MooreThreads/vllm-musa/blob/HEAD/tools/cookbook-site/README.md).

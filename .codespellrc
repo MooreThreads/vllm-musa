@@ -2,5 +2,6 @@
 skip = .git,*.egg-info,*.pyc,__pycache__,build,dist,.ruff_cache,*.so,third_party
 count =
 quiet-level = 3
-# `caf` is the first three bytes of the `caf\xe9` path fixtures.
-ignore-words-list = caf
+# `caf` is the first three bytes of the `caf\xe9` path fixtures;
+# `nothink` is the GLM-5.3 template file name used in the recipe commands.
+ignore-words-list = caf,nothink
