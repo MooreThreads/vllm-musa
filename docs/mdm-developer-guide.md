@@ -54,28 +54,33 @@ requirements entrypoints before installing `vllm-musa`.
 # required before pip install . / pip install -e .
 pip install -r requirements/build.txt -r requirements/musa.txt
 
-# developer install (recommended) — vllm-musa editable:
+# developer install — vllm-musa and the patched upstream vLLM editable:
 pip install -e . --no-build-isolation -v
 
-# end-user install — vllm-musa baked in:
+# source-tree wheel install — vllm-musa wheel and patched upstream vLLM
+# are installed without editable source paths:
 pip install . --no-build-isolation -v
 ```
 
-Both run `setup.py`, which clones upstream vLLM at the immutable
+The editable command is the development workflow. It clones upstream vLLM at the immutable
 `third_party/PINS:VLLM_COMMIT` into
 `third_party/vllm`, `git apply`s the series, builds the MUSA extensions
 (`vllm._C`, `vllm._moe_C`, `vllm_musa._C`) from the patched csrc, and installs vLLM.
 
-> **vLLM is always installed editable** (both commands above), so edits to
-> `third_party/vllm` are live (see §2). It uses setuptools *compat* (path-based)
-> mode — a `.pth` that adds `third_party/vllm` to `sys.path`, so `import vllm`
-> resolves to the clone and wins over any system vLLM (e.g. a
-> `--system-site-packages` venv). No clean venv required.
+The non-editable command builds and installs the bundled wheel. It does not
+provide a live `third_party/vllm` source path. The production Docker targets
+use this wheel path. The Docker `test` target retains the editable source
+workflow for development.
+
+> In the editable workflow, setuptools compat mode adds `third_party/vllm` to
+> `sys.path`, so `import vllm` resolves to the patched clone. In the wheel
+> workflow, `vllm` and `vllm_musa` are both provided by the installed
+> `vllm-musa` distribution.
 
 ## 2. The developer edit loop (fast iteration)
 
-vLLM is always editable, so edit the patched source in place — Python edits take
-effect on the next run, no reinstall:
+After the editable install, edit the patched source in place. Python edits take
+effect on the next run, without reinstalling:
 
 ```bash
 $EDITOR third_party/vllm/vllm/<file>.py     # live on the next run

@@ -82,6 +82,11 @@ github.com，也可以将其设为其他镜像前缀，详见
 pip install -e . --no-build-isolation -v
 ```
 
+`pip install -e .` 是开发模式，会保留当前仓库和
+`third_party/vllm` 的可编辑源码路径。生产镜像使用打包后的
+`vllm-musa` wheel，不使用 editable source path；需要源码调试时请使用
+Docker 的 `--target test`。
+
 验证插件：
 
 ```bash

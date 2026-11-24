@@ -156,7 +156,7 @@ Build the shell/test target under a separate tag when arbitrary container
 commands should run without overriding an entrypoint:
 
 ```bash
-IMAGE_TAG=vllm-musa:test bash docker/build_image.sh --target final
+IMAGE_TAG=vllm-musa:test bash docker/build_image.sh --target test
 ```
 
 Verify the workspace and test-runner contract with:
@@ -165,6 +165,12 @@ Verify the workspace and test-runner contract with:
 docker run --rm --entrypoint /bin/bash vllm-musa:test \
   -lc 'test "$PWD" = /vllm-workspace && python -m pytest --version'
 ```
+
+The `test` target is the source-bearing development image. It keeps
+`/vllm-workspace/third_party/vllm` and installs the editable distributions.
+The default `vllm-openai` and `final` targets are production-style images.
+They install the bundled `vllm-musa` wheel and do not rely on source paths
+under `/vllm-workspace`.
 
 ## Configuration
 
