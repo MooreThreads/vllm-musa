@@ -35,7 +35,9 @@ def _reference(
     ]
 
 
-@pytest.mark.parametrize("num_tokens", [1, 2, 3, 4])
+@pytest.mark.parametrize(
+    "num_tokens", [1, 2, 3, 4, 5, 8, 12, 16, 24, 32, 48]
+)
 @pytest.mark.parametrize(
     ("k", "rank", "hc", "padded_n"),
     [
@@ -86,7 +88,7 @@ def test_hc_down_silu_unpadded_output() -> None:
     )
 
 
-@pytest.mark.parametrize("num_tokens", [1, 4])
+@pytest.mark.parametrize("num_tokens", [1, 4, 16, 48])
 def test_hc_down_silu_float32_epilogue_reference(
     num_tokens: int,
 ) -> None:
