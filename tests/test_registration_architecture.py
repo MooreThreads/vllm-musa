@@ -107,6 +107,7 @@ def test_pyproject_declares_native_vllm_plugin_entrypoints() -> None:
     assert entry_points["vllm.general_plugins"] == {
         "musa_out_of_tree": "vllm_musa:register_out_of_tree",
         "musa_attn_backends": "vllm_musa:register_attn_backends",
+        "musa_custom_ops": "vllm_musa:register_custom_ops",
     }
 
 
