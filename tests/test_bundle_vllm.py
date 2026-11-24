@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import ast
+import os
 from pathlib import Path
 from runpy import run_path
 from sysconfig import get_config_var
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -134,3 +138,38 @@ def test_prebuilt_extensions_reject_wrong_abi_and_untagged_files(
 
     with pytest.raises(RuntimeError, match="missing: vllm/_C"):
         find_prebuilt_extensions((Path("vllm") / f"_C{EXT_SUFFIX}",), (tmp_path,))
+
+
+def test_reusing_prepared_extensions_does_not_replay_source_patches(
+    tmp_path, monkeypatch
+):
+    setup = Path(__file__).parents[1] / "setup.py"
+    tree = ast.parse(setup.read_text())
+    build_ext = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "_CustomBuildExt"
+    )
+    prepare = next(
+        node
+        for node in build_ext.body
+        if isinstance(node, ast.FunctionDef) and node.name == "prepare_third_party"
+    )
+    repos = []
+    for name in ("vllm", "flashinfer"):
+        source_dir = tmp_path / name
+        source_dir.mkdir()
+        repos.append(SimpleNamespace(source_dir=source_dir))
+    namespace = {
+        "os": os,
+        "_VLLM_REPO": repos[0],
+        "_FLASHINFER_REPO": repos[1],
+    }
+    exec(compile(ast.Module([prepare], []), str(setup), "exec"), namespace)
+    builder = SimpleNamespace(
+        _third_party_prepared=False, _apply_musa_patch_series=Mock()
+    )
+    monkeypatch.setenv("VLLM_MUSA_REUSE_PREBUILT", "1")
+    namespace["prepare_third_party"].__func__(builder)
+    assert builder._third_party_prepared
+    builder._apply_musa_patch_series.assert_not_called()

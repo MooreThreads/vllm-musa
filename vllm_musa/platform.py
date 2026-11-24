@@ -33,9 +33,8 @@ else:
 
 import pymtml as pynvml
 
-from vllm_musa.optimization_contract import ModelFamily
+from vllm_musa.optimization_contract import ModelFamily, resolve_optimization_contract
 from vllm_musa.optimization_contract import policy as contract_policy
-from vllm_musa.optimization_contract import resolve_optimization_contract
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
@@ -1188,7 +1187,9 @@ class MtmlMUSAPlatform(MUSAPlatformBase):
 class NonMtmlMUSAPlatform(MUSAPlatformBase):
     @classmethod
     @cache
-    def get_device_capability(cls, device_id: int = 0) -> DeviceCapability:
+    def get_device_capability(cls, device_id: int = 0) -> DeviceCapability | None:
+        if not torch.musa.is_available():
+            return None
         major, minor = torch.cuda.get_device_capability(device_id)
         return DeviceCapability(major=major, minor=minor)
 

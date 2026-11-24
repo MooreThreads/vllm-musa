@@ -445,7 +445,7 @@ RUN mkdir -p /tmp/vllm-wheel && \
         install -Dm755 /tmp/vllm-rs-artifacts/vllm-rs \
             /vllm-workspace/third_party/vllm/vllm/vllm-rs; \
     fi && \
-    SKIP_THIRD_PARTY=1 VLLM_MUSA_REUSE_PREBUILT=1 \
+    VLLM_MUSA_REUSE_PREBUILT=1 \
         python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel
 
 # Install the prebuilt MUSA wheel after torch/vllm-musa so Mooncake integrations

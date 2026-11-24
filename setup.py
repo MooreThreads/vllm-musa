@@ -614,10 +614,16 @@ class _CustomBuildExt(BuildExtension):
         if cls._third_party_prepared:
             return
 
-        if (
-            os.environ.get("SKIP_THIRD_PARTY") == "1"
-            or os.environ.get("VLLM_MUSA_REUSE_PREBUILT") == "1"
-        ):
+        if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") == "1":
+            # This tree was already patched and compiled by the source stage.
+            # Later patches can overlap earlier hunks, so replaying the series
+            # on the final tree is not a valid substitute for preparing it once.
+            for repo in (_VLLM_REPO, _FLASHINFER_REPO):
+                if not repo.source_dir.is_dir():
+                    raise RuntimeError(f"missing prepared source tree: {repo.source_dir}")
+            cls._third_party_prepared = True
+            return
+        if os.environ.get("SKIP_THIRD_PARTY") == "1":
             print("Using prepared third-party source trees")
         else:
             proxy = resolve_proxy()
