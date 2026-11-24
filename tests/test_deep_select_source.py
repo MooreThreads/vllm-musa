@@ -14,6 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from build_utils.git_proxy import PROXY_ENV, resolve_proxy
+
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
 BUILD_PATCH = SERIES / "0218-MUSA-build-DeepSelect-through-vLLM-extension-target.patch"
@@ -481,6 +483,12 @@ def test_build_provides_vllm_extension_from_deepselect_source() -> None:
     assert "deepselect_extension.py_limited_api = False" in build
     assert "include(cmake/external_projects/deepselect.cmake)" in build
     assert 'if(VLLM_TARGET_DEVICE STREQUAL "empty")' in build
+    assert "deepselect_git_config_args" in build
+    assert "VLLM_MUSA_GIT_MIRROR" in build
+    assert (
+        "url.$ENV{VLLM_MUSA_GIT_MIRROR}https://github.com/.insteadOf=https://github.com/"
+        in build
+    )
     added = _added_lines(build)
     assert "CMAKE_CXX_COMPILER" not in added
     assert "csrc/musa_api.mu" in added
@@ -557,8 +565,9 @@ def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
     [{}, {"VLLM_TARGET_DEVICE": "empty", "MTGPU_TARGET": "mp_22"}],
 )
 def test_install_vllm_keeps_empty_mode_without_injecting_hardware(
-    configured: dict[str, str],
+    configured: dict[str, str], monkeypatch
 ) -> None:
+    monkeypatch.setenv(PROXY_ENV, "https://mirror.example/")
     tree = ast.parse((ROOT / "setup.py").read_text())
     build_class = next(
         node
@@ -593,6 +602,7 @@ def test_install_vllm_keeps_empty_mode_without_injecting_hardware(
         "Path": Path,
         "os": SimpleNamespace(environ=inherited),
         "_PINS": {"VLLM_TAG": "v0.32.0"},
+        "resolve_proxy": resolve_proxy,
     }
     exec(compile(module, "setup.py", "exec"), namespace)
     environment = namespace["environment"]("/prepared/vllm")
@@ -601,6 +611,7 @@ def test_install_vllm_keeps_empty_mode_without_injecting_hardware(
         "VLLM_TARGET_DEVICE": "empty",
         "VLLM_VERSION_OVERRIDE": "0.32.0",
         "VLLM_MUSA_BUILD_DEEPSELECT": "1",
+        "VLLM_MUSA_GIT_MIRROR": "https://mirror.example/",
     }
 
 

@@ -5,9 +5,9 @@ Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
  CMakeLists.txt                           |  5 ++++
- cmake/external_projects/deepselect.cmake | 46 +++++++++++++++++++++++++++++---
+ cmake/external_projects/deepselect.cmake | 50 +++++++++++++++++++++++++++++++++---
  setup.py                                 |  9 +++++++
- 3 files changed, 57 insertions(+), 3 deletions(-)
+ 3 files changed, 61 insertions(+), 3 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 3a71d7e1e5..29d018da33 100644
@@ -43,7 +43,7 @@ index e2a5592e61..54e74d4120 100644
  endif()
 
  if(DEEPSELECT_SRC_DIR)
-@@ -16,10 +21,18 @@ if(DEEPSELECT_SRC_DIR)
+@@ -16,10 +21,22 @@ if(DEEPSELECT_SRC_DIR)
          BUILD_COMMAND ""
    )
  else()
@@ -54,17 +54,21 @@ index e2a5592e61..54e74d4120 100644
 +    set(deepselect_rev b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32)
 +    set(deepselect_submodules GIT_SUBMODULES csrc/3rdparty/mutlass)
 +  endif()
++  set(deepselect_git_config_args)
++  if(DEFINED ENV{VLLM_MUSA_GIT_MIRROR} AND NOT "$ENV{VLLM_MUSA_GIT_MIRROR}" STREQUAL "")
++    set(deepselect_git_config_args GIT_CONFIG "url.$ENV{VLLM_MUSA_GIT_MIRROR}https://github.com/.insteadOf=https://github.com/")
++  endif()
    FetchContent_Declare(
          deepselect
 -        GIT_REPOSITORY https://github.com/vllm-project/DeepSelect.git
 -        GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea
 +        GIT_REPOSITORY ${deepselect_repo}
 +        GIT_TAG ${deepselect_rev}
-+        ${deepselect_submodules}
++        ${deepselect_submodules} ${deepselect_git_config_args}
          GIT_PROGRESS TRUE
          CONFIGURE_COMMAND ""
          BUILD_COMMAND ""
-@@ -29,6 +42,33 @@ endif()
+@@ -29,6 +46,33 @@ endif()
  FetchContent_MakeAvailable(deepselect)
  message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
 

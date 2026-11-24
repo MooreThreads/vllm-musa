@@ -107,12 +107,15 @@ python -c "from vllm_musa.platform import mtml_available; print(mtml_available)"
 `requirements/musa_private.txt` is the source of truth for the MUSA stack; do
 not substitute a public CUDA wheel with the same package name.
 
-### Optional DeepSelect backend
+### DeepSelect backend
 
 The vllm-musa source installer builds `vllm._deepselect_C` through vLLM's
 CMake target. It fetches `MooreThreads/DeepSelect` at commit
-`b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32`. Select the backend at
+`b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32`. The fetch goes through the same
+`VLLM_MUSA_GIT_PROXY` mirror as the other source fetches. Select the backend at
 serving time with `--sparse-indexer-topk-backend deep_select`.
+
+Set `VLLM_MUSA_BUILD_DEEPSELECT=0` to skip building it.
 
 To override the pin, set `DEEPSELECT_SRC_DIR` to a local checkout with its
 `csrc/3rdparty/mutlass` submodule initialized.
