@@ -375,8 +375,8 @@ for ext in ("vllm._C", "vllm._C_stable_libtorch", "vllm._moe_C", "vllm_musa._C")
     assert ext in sys.modules, f"missing AOT extension: {ext}"
 
 assert hasattr(torch.ops, "_C_musa_ops"), "AOT namespace _C_musa_ops not loaded"
-assert hasattr(torch.ops._C_musa_ops, "rms_norm_musa"), (
-    "AOT op _C_musa_ops::rms_norm_musa missing"
+assert hasattr(torch.ops._C_musa_ops, "musa_fused_add_rms_norm"), (
+    "AOT op _C_musa_ops::musa_fused_add_rms_norm missing"
 )
 assert hasattr(torch.ops.vllm, "musa_csrc_rmsnorm"), (
     "JIT op vllm::musa_csrc_rmsnorm not preloaded by general plugin"
@@ -387,11 +387,12 @@ assert hasattr(torch.ops.vllm, "musa_csrc_fused_add_rmsnorm"), (
 
 # Invoke representative AOT and JIT custom ops directly on MUSA tensors.
 x = torch.randn((4, 256), device="musa", dtype=torch.bfloat16)
+res = torch.randn((4, 256), device="musa", dtype=torch.bfloat16)
 w = torch.ones((256,), device="musa", dtype=torch.bfloat16)
-out_aot = torch.empty_like(x)
-torch.ops._C_musa_ops.rms_norm_musa(out_aot, x, w, 1e-6)
-out_jit = torch.ops.vllm.musa_csrc_rmsnorm(x, w, 1e-6)
-torch.testing.assert_close(out_aot, out_jit, atol=2e-2, rtol=2e-2)
+x_aot, res_aot = x.clone(), res.clone()
+torch.ops._C_musa_ops.musa_fused_add_rms_norm(x_aot, res_aot, w, 1e-6)
+out_jit = torch.ops.vllm.musa_csrc_rmsnorm(res_aot, w, 1e-6)
+torch.testing.assert_close(x_aot, out_jit, atol=2e-2, rtol=2e-2)
 
 # 4. import_ir_kernels registers MUSA IR providers from vllm_musa.ir.
 current_platform.import_ir_kernels()
