@@ -328,3 +328,10 @@ python -m pip install --index-url "${PYPI_INDEX_URL}" \
 python -m pip install --index-url "${PYPI_INDEX_URL}" \
   -c requirements/musa_private.txt /path/to/vllm_musa-*.whl
 ```
+
+> [!NOTE]
+> Production images provide both `vllm` and `vllm_musa` through the single
+> `vllm-musa` distribution and do not install a separate `vllm` distribution.
+> When installing third-party packages on top of `vllm-openai` or `final`,
+> avoid letting pip pull an upstream CUDA `vllm` wheel from PyPI (use
+> `--no-deps` or pin/filter the `vllm` requirement).

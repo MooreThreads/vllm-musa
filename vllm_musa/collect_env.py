@@ -55,7 +55,6 @@ SystemEnv = namedtuple(
         "provider_imports",
         "native_extensions",
         "runtime_provenance",
-        "environment_variables",
         "patch_report",
         "vllm_build_flags",
         "gpu_topo",
@@ -635,11 +634,10 @@ def get_env_info():
         provider_imports=get_provider_imports(),
         native_extensions=get_native_extensions(),
         runtime_provenance=get_runtime_provenance(),
-        environment_variables=get_environment_variables(),
         patch_report=get_patch_report(),
         vllm_build_flags=vllm_build_flags,
         gpu_topo=gpu_topo,
-        env_vars=get_env_vars(),
+        env_vars=get_environment_variables(),
     )
 
 
@@ -724,11 +722,6 @@ Versions of relevant libraries
        Runtime Provenance
 ==============================
 {runtime_provenance}
-
-==============================
-       Backend Environment
-==============================
-{environment_variables}
 """.strip()
 
 env_info_fmt += "\n\n"

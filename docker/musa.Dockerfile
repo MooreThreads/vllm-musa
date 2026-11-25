@@ -89,36 +89,30 @@ RUN apt-get update && \
 RUN if [[ "${PYTHON_VERSION}" != "3.12" ]]; then \
         echo "This image supports only PYTHON_VERSION=3.12 (got ${PYTHON_VERSION})" >&2; \
         exit 1; \
-    elif python3 -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' \
+    fi && \
+    if python3 -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' \
         >/dev/null 2>&1 && command -v pip >/dev/null 2>&1; then \
         echo "Keeping Python 3.12 from BASE_IMAGE"; \
-    fi && \
-    if python3 -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' \
-        >/dev/null 2>&1 && command -v pip >/dev/null 2>&1; then \
-        true; \
-    elif [[ -n "${DEADSNAKES_MIRROR_URL}" ]]; then \
-        if [[ -z "${DEADSNAKES_GPGKEY_URL}" ]]; then \
-            echo "DEADSNAKES_GPGKEY_URL is required with DEADSNAKES_MIRROR_URL" >&2; \
-            exit 1; \
+    else \
+        if [[ -n "${DEADSNAKES_MIRROR_URL}" ]]; then \
+            if [[ -z "${DEADSNAKES_GPGKEY_URL}" ]]; then \
+                echo "DEADSNAKES_GPGKEY_URL is required with DEADSNAKES_MIRROR_URL" >&2; \
+                exit 1; \
+            fi && \
+            install -d -m 0755 /etc/apt/keyrings && \
+            curl -fsSL "${DEADSNAKES_GPGKEY_URL}" | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg && \
+            chmod 0644 /etc/apt/keyrings/deadsnakes.gpg && \
+            printf 'deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] %s jammy main\n' \
+                "${DEADSNAKES_MIRROR_URL}" > /etc/apt/sources.list.d/deadsnakes.list; \
+        else \
+            env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+                add-apt-repository -y ppa:deadsnakes/ppa; \
         fi && \
-        install -d -m 0755 /etc/apt/keyrings && \
-        curl -fsSL "${DEADSNAKES_GPGKEY_URL}" | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg && \
-        chmod 0644 /etc/apt/keyrings/deadsnakes.gpg && \
-        printf 'deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] %s jammy main\n' \
-            "${DEADSNAKES_MIRROR_URL}" > /etc/apt/sources.list.d/deadsnakes.list; \
-    else \
-        env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
-            add-apt-repository -y ppa:deadsnakes/ppa; \
-    fi && \
-    if python3 -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' \
-        >/dev/null 2>&1 && command -v pip >/dev/null 2>&1; then \
-        true; \
-    else \
         apt-get update && \
         apt-get install -y --no-install-recommends \
             python${PYTHON_VERSION} \
             python${PYTHON_VERSION}-dev && \
-    update-alternatives --install /usr/bin/python3 python3 \
+        update-alternatives --install /usr/bin/python3 python3 \
             /usr/bin/python${PYTHON_VERSION} 100 && \
         update-alternatives --set python3 /usr/bin/python${PYTHON_VERSION} && \
         ln -sfn /usr/bin/python${PYTHON_VERSION}-config /usr/bin/python3-config && \
@@ -430,7 +424,8 @@ RUN mkdir -p /tmp/vllm-wheel && \
             /vllm-workspace/third_party/vllm/vllm/vllm-rs; \
     fi && \
     VLLM_MUSA_REUSE_PREBUILT=1 \
-        python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel
+        python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel && \
+    sha256sum /tmp/vllm-wheel/*.whl > /tmp/vllm-wheel/wheel.sha256
 
 # Install the prebuilt MUSA wheel after torch/vllm-musa so Mooncake integrations
 # can import the installed accelerator stack. The wheel provides both the
@@ -441,17 +436,20 @@ FROM vllm_musa_deps AS vllm_runtime
 ARG PYPI_INDEX_URL
 
 WORKDIR /vllm-workspace
-COPY --from=vllm_wheel /tmp/vllm-wheel/ /tmp/vllm-wheel/
+# Copy only the wheel checksum to invalidate this layer when the wheel changes;
+# bind-mount the wheel itself so it never enters the runtime image layers.
+COPY --from=vllm_wheel /tmp/vllm-wheel/wheel.sha256 /tmp/vllm-wheel.sha256
 COPY docker/verify_installed_dependencies.py /tmp/verify_installed_dependencies.py
 
-RUN python -m pip install \
+RUN --mount=type=bind,from=vllm_wheel,src=/tmp/vllm-wheel,target=/tmp/vllm-wheel \
+    python -m pip install \
         --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
         -c /tmp/vllm-runtime-requirements/requirements/musa_private.txt \
         /tmp/vllm-wheel/*.whl && \
     VLLM_MUSA_REQUIREMENTS_ROOT=/tmp/vllm-runtime-requirements \
         python /tmp/verify_installed_dependencies.py && \
-    rm -rf /tmp/vllm-wheel /tmp/vllm-runtime-requirements
+    rm -rf /tmp/vllm-wheel.sha256 /tmp/verify_installed_dependencies.py /tmp/vllm-runtime-requirements
 
 # Use the upstream runtime layout for the examples and benchmarks maintained
 # in this repository. The root helper includes MUSA driver and SDK diagnostics.
@@ -471,6 +469,7 @@ RUN python -c 'import importlib.metadata as m; from pathlib import Path; names=(
 FROM vllm_musa_installed AS test
 
 WORKDIR /vllm-workspace
+ENV MTHREADS_VISIBLE_DEVICES=all
 
 CMD ["/bin/bash"]
 

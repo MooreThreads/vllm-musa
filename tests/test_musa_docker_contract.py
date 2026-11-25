@@ -22,8 +22,18 @@ def test_production_image_installs_a_bundled_wheel_before_runtime_split():
 
     assert "FROM vllm_rs_build AS vllm_wheel" in dockerfile
     assert "python -m build --wheel --no-isolation" in dockerfile
+    assert (
+        "sha256sum /tmp/vllm-wheel/*.whl > /tmp/vllm-wheel/wheel.sha256" in dockerfile
+    )
     assert "FROM vllm_musa_deps AS vllm_runtime" in dockerfile
-    assert "COPY --from=vllm_wheel /tmp/vllm-wheel/" in dockerfile
+    assert (
+        "COPY --from=vllm_wheel /tmp/vllm-wheel/wheel.sha256 /tmp/vllm-wheel.sha256"
+        in dockerfile
+    )
+    assert (
+        "--mount=type=bind,from=vllm_wheel,src=/tmp/vllm-wheel,target=/tmp/vllm-wheel"
+        in dockerfile
+    )
     assert "python -m pip install" in dockerfile
 
 
@@ -36,6 +46,10 @@ def test_production_and_source_targets_are_explicitly_separate():
     assert dockerfile.index("FROM vllm_musa_installed AS test") < dockerfile.index(
         "FROM mooncake AS final"
     )
+    test_stage = dockerfile.split("FROM vllm_musa_installed AS test", 1)[1].split(
+        "FROM vllm_runtime AS mooncake", 1
+    )[0]
+    assert "ENV MTHREADS_VISIBLE_DEVICES=all" in test_stage
     assert dockerfile.rstrip().endswith('ENTRYPOINT ["vllm", "serve"]')
 
 
@@ -96,6 +110,8 @@ def test_collect_env_reports_musa_distribution_and_provider_inventory():
     assert "vLLM Version" not in source
     assert "get_vllm_version" not in source
     assert "vLLM import package path" in source
+    assert "Backend Environment" not in source
+    assert "{env_vars}" in source
 
 
 def test_packaging_metadata_keeps_musa_extra_and_lora_resolvers():
