@@ -424,8 +424,7 @@ RUN mkdir -p /tmp/vllm-wheel && \
             /vllm-workspace/third_party/vllm/vllm/vllm-rs; \
     fi && \
     VLLM_MUSA_REUSE_PREBUILT=1 \
-        python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel && \
-    sha256sum /tmp/vllm-wheel/*.whl > /tmp/vllm-wheel/wheel.sha256
+        python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel
 
 # Install the prebuilt MUSA wheel after torch/vllm-musa so Mooncake integrations
 # can import the installed accelerator stack. The wheel provides both the
@@ -436,20 +435,17 @@ FROM vllm_musa_deps AS vllm_runtime
 ARG PYPI_INDEX_URL
 
 WORKDIR /vllm-workspace
-# Copy only the wheel checksum to invalidate this layer when the wheel changes;
-# bind-mount the wheel itself so it never enters the runtime image layers.
-COPY --from=vllm_wheel /tmp/vllm-wheel/wheel.sha256 /tmp/vllm-wheel.sha256
+COPY --from=vllm_wheel /tmp/vllm-wheel/ /tmp/vllm-wheel/
 COPY docker/verify_installed_dependencies.py /tmp/verify_installed_dependencies.py
 
-RUN --mount=type=bind,from=vllm_wheel,src=/tmp/vllm-wheel,target=/tmp/vllm-wheel \
-    python -m pip install \
+RUN python -m pip install \
         --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
         -c /tmp/vllm-runtime-requirements/requirements/musa_private.txt \
         /tmp/vllm-wheel/*.whl && \
     VLLM_MUSA_REQUIREMENTS_ROOT=/tmp/vllm-runtime-requirements \
         python /tmp/verify_installed_dependencies.py && \
-    rm -rf /tmp/vllm-wheel.sha256 /tmp/verify_installed_dependencies.py /tmp/vllm-runtime-requirements
+    rm -rf /tmp/vllm-wheel /tmp/verify_installed_dependencies.py /tmp/vllm-runtime-requirements
 
 # Use the upstream runtime layout for the examples and benchmarks maintained
 # in this repository. The root helper includes MUSA driver and SDK diagnostics.

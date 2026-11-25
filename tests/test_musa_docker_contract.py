@@ -22,19 +22,10 @@ def test_production_image_installs_a_bundled_wheel_before_runtime_split():
 
     assert "FROM vllm_rs_build AS vllm_wheel" in dockerfile
     assert "python -m build --wheel --no-isolation" in dockerfile
-    assert (
-        "sha256sum /tmp/vllm-wheel/*.whl > /tmp/vllm-wheel/wheel.sha256" in dockerfile
-    )
     assert "FROM vllm_musa_deps AS vllm_runtime" in dockerfile
-    assert (
-        "COPY --from=vllm_wheel /tmp/vllm-wheel/wheel.sha256 /tmp/vllm-wheel.sha256"
-        in dockerfile
-    )
-    assert (
-        "--mount=type=bind,from=vllm_wheel,src=/tmp/vllm-wheel,target=/tmp/vllm-wheel"
-        in dockerfile
-    )
+    assert "COPY --from=vllm_wheel /tmp/vllm-wheel/" in dockerfile
     assert "python -m pip install" in dockerfile
+    assert "--mount=" not in dockerfile
 
 
 def test_production_and_source_targets_are_explicitly_separate():
