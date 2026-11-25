@@ -257,7 +257,7 @@ def test_plugin_wires_every_hook_set() -> None:
 
 def test_general_plugin_entry_calls_the_registrars() -> None:
     assert "_register_modules" in function_calls(PACKAGE_INIT, "register_out_of_tree")
-    assert "register_out_of_tree" in function_calls(PACKAGE_INIT, "register_custom_ops")
+    assert "_register_ops" in function_calls(PACKAGE_INIT, "register_out_of_tree")
 
 
 def run_isolated(source: str) -> subprocess.CompletedProcess:

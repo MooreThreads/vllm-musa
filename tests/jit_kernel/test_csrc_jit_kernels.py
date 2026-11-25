@@ -180,7 +180,7 @@ def test_ir_fused_add_rmsnorm_jit_dispatch_is_h5120_only(
     weight_dtype: torch.dtype,
     expected: bool,
 ) -> None:
-    from vllm_musa.ir.musa_ops import _jit_fused_add_rms_norm_supports_args
+    from vllm_musa.ir.layernorm import _jit_fused_add_rms_norm_supports_args
 
     device = torch.device("musa")
     x = torch.empty((rows, hidden), device=device, dtype=dtype)
@@ -191,7 +191,7 @@ def test_ir_fused_add_rmsnorm_jit_dispatch_is_h5120_only(
 
 
 def test_ir_fused_add_rmsnorm_dispatch_rejects_unsafe_inputs() -> None:
-    from vllm_musa.ir.musa_ops import _fused_add_rms_norm_supports_args
+    from vllm_musa.ir.layernorm import _fused_add_rms_norm_supports_args
 
     device = torch.device("musa")
     weight = torch.empty((5120,), device=device, dtype=torch.bfloat16)
@@ -213,7 +213,7 @@ def test_ir_fused_add_rmsnorm_dispatch_rejects_unsafe_inputs() -> None:
 
 
 def test_ir_fused_add_rmsnorm_c_ext_branch_preserves_broad_shapes() -> None:
-    from vllm_musa.ir.musa_ops import (
+    from vllm_musa.ir.layernorm import (
         _c_ext_fused_add_rms_norm_supports_args,
         _fused_add_rms_norm_supports_args,
         _select_musa_fused_add_rms_norm_impl,
@@ -238,7 +238,7 @@ def test_ir_fused_add_rmsnorm_dispatch_uses_compile_range_not_shape_hint() -> No
     from vllm.compilation.passes.inductor_pass import pass_context
     from vllm.config.utils import Range
 
-    from vllm_musa.ir.musa_ops import (
+    from vllm_musa.ir.layernorm import (
         _fused_add_rms_norm_supports_args,
         _select_musa_fused_add_rms_norm_impl,
     )
@@ -271,7 +271,7 @@ def test_ir_fused_add_rmsnorm_dispatch_uses_compile_range_not_shape_hint() -> No
 def test_ir_fused_add_rmsnorm_single_provider_covers_standard_rmsnorm() -> None:
     from vllm import ir
 
-    from vllm_musa.ir.musa_ops import _select_musa_fused_add_rms_norm_impl
+    from vllm_musa.ir.layernorm import _select_musa_fused_add_rms_norm_impl
 
     device = torch.device("musa")
     bf16_x = torch.empty((1, 2048), device=device, dtype=torch.bfloat16)
@@ -303,7 +303,7 @@ def test_ir_fused_add_rmsnorm_single_provider_covers_standard_rmsnorm() -> None:
 def test_ir_fused_add_rmsnorm_dispatch_fails_closed_without_compile_range(
     monkeypatch,
 ) -> None:
-    from vllm_musa.ir.musa_ops import _fused_add_rms_norm_supports_args
+    from vllm_musa.ir.layernorm import _fused_add_rms_norm_supports_args
 
     device = torch.device("musa")
     x = torch.empty((64, 5120), device=device, dtype=torch.bfloat16)
@@ -354,7 +354,7 @@ def test_ir_fused_add_rmsnorm_provider_invokes_selected_kernel(monkeypatch) -> N
 
 
 def test_ir_fused_add_rmsnorm_preserves_functional_and_inplace_contracts() -> None:
-    from vllm_musa.ir.musa_ops import fused_add_rms_norm as musa_fused_add_rms_norm
+    from vllm_musa.ir.layernorm import fused_add_rms_norm as musa_fused_add_rms_norm
 
     torch.manual_seed(321)
     device = torch.device("musa")
@@ -394,7 +394,7 @@ def test_ir_fused_add_rmsnorm_qwen2_small_hidden_contract(
     dtype: torch.dtype,
     rows: int,
 ) -> None:
-    from vllm_musa.ir.musa_ops import fused_add_rms_norm as musa_fused_add_rms_norm
+    from vllm_musa.ir.layernorm import fused_add_rms_norm as musa_fused_add_rms_norm
 
     torch.manual_seed(896 + rows)
     device = torch.device("musa")

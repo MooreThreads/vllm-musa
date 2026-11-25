@@ -5,7 +5,6 @@
 ```bash
 export MUSA_VISIBLE_DEVICES=0
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export VLLM_PLUGINS=musa,musa_custom_ops
 ```
 
 `MUSA_VISIBLE_DEVICES` is authoritative. Keep it aligned with the devices

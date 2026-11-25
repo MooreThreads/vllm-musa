@@ -35,7 +35,7 @@ LAYERNORM_PATH = REPO_ROOT / "vllm_musa" / "model_executor" / "layers" / "layern
 MODEL_EXECUTOR_INIT = REPO_ROOT / "vllm_musa" / "model_executor" / "__init__.py"
 V1_INIT = REPO_ROOT / "vllm_musa" / "v1" / "__init__.py"
 IR_INIT_PATH = REPO_ROOT / "vllm_musa" / "ir" / "__init__.py"
-IR_MUSA_OPS_PATH = REPO_ROOT / "vllm_musa" / "ir" / "musa_ops.py"
+IR_LAYERNORM_PATH = REPO_ROOT / "vllm_musa" / "ir" / "layernorm.py"
 KERNELS_INIT_PATH = REPO_ROOT / "vllm_musa" / "kernels" / "__init__.py"
 
 MODEL_EXECUTOR_ADAPTER_MODULES = (
@@ -65,10 +65,22 @@ def _load_pyproject() -> dict:
     return tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
 
 
-def _run_isolated(code: str) -> subprocess.CompletedProcess[str]:
+def _run_isolated(
+    code: str, env_overrides: dict[str, str | None] | None = None
+) -> subprocess.CompletedProcess[str]:
+    import os
+
+    env = os.environ.copy()
+    if env_overrides:
+        for key, value in env_overrides.items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = value
     return subprocess.run(
         [sys.executable, "-c", code],
         cwd=REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
         timeout=180,
@@ -108,7 +120,6 @@ def test_pyproject_declares_native_vllm_plugin_entrypoints() -> None:
     assert entry_points["vllm.general_plugins"] == {
         "musa_out_of_tree": "vllm_musa:register_out_of_tree",
         "musa_attn_backends": "vllm_musa:register_attn_backends",
-        "musa_custom_ops": "vllm_musa:register_custom_ops",
     }
 
 
@@ -118,8 +129,9 @@ def test_ir_providers_are_separated_from_standalone_kernels() -> None:
     kernels_init_src = KERNELS_INIT_PATH.read_text(encoding="utf-8")
 
     assert "import vllm_musa.ir" in platform_src
-    assert "from . import gated_qkv, musa_ops" in ir_init_src
+    assert "from . import gated_qkv, layernorm" in ir_init_src
     # vllm_musa/kernels/ must not hold IR provider modules or re-export shims.
+    assert "layernorm" not in kernels_init_src
     assert "musa_ops" not in kernels_init_src
     assert "gated_qkv" not in kernels_init_src
     assert not (REPO_ROOT / "vllm_musa" / "kernels" / "musa_ops.py").exists()
@@ -148,7 +160,7 @@ def test_rmsnorm_oot_layer_delegates_non_residual_path_to_ir() -> None:
 
 
 def test_musa_ir_rms_norm_provider_wires_jit_kernel_before_c_ext() -> None:
-    source = IR_MUSA_OPS_PATH.read_text(encoding="utf-8")
+    source = IR_LAYERNORM_PATH.read_text(encoding="utf-8")
 
     assert "def _has_jit_rms_norm()" in source
     assert "def _jit_rms_norm_supports_args(" in source
@@ -262,10 +274,6 @@ def test_general_plugin_registrars_are_idempotent(
             vllm_musa.register_attn_backends()
             vllm_musa.register_attn_backends()
             assert mock_attn.call_count == 1
-
-            vllm_musa.register_custom_ops()
-            assert mock_ops.call_count == 1
-            assert mock_attn.call_count == 1
     finally:
         vllm_musa._OUT_OF_TREE_REGISTERED = orig_oot
         vllm_musa._ATTN_BACKENDS_REGISTERED = orig_attn
@@ -322,28 +330,34 @@ def test_rms_norm_ir_priority_honors_eager_inductor_and_native_override(
 
 
 def test_runtime_plugin_startup_idempotency_and_preload_order() -> None:
-    """Verify full vLLM plugin startup, attention registration, IR isolation,
-    AOT kernel loading, and repeat-initialization idempotency in a fresh process.
+    """Verify full vLLM plugin startup without VLLM_PLUGINS set: automatic
+    platform & general plugin discovery, custom ops (AOT + JIT) auto-loading
+    and invocation, attention registration, IR isolation, and idempotency.
     """
     _require_musa_device()
-    result = _run_isolated("""
+    result = _run_isolated(
+        """
+import os
 import sys
+import torch
 import vllm_musa
 from vllm.ir.op import IrOp
 from vllm.platforms import current_platform
 from vllm.plugins import load_general_plugins
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
 
+# 0. VLLM_PLUGINS must be unset to prove zero-env auto-discovery.
+assert "VLLM_PLUGINS" not in os.environ
+
 # 1. Importing standalone kernel helpers must not register IR providers.
 import vllm_musa.kernels  # noqa: F401
 assert "rms_norm" not in IrOp.registry or "musa" not in IrOp.registry["rms_norm"].impls
 
-# 2. General plugins register OOT layers, compat adapters, custom-op schemas,
-#    and attention backends; repeat calls must be idempotent.
+# 2. General plugins auto-discover and register OOT layers, compat adapters,
+#    custom-op schemas, and attention backends; repeat calls must be idempotent.
 load_general_plugins()
 vllm_musa.register_out_of_tree()
 vllm_musa.register_attn_backends()
-vllm_musa.register_custom_ops()
 
 assert (
     AttentionBackendEnum.FLASH_ATTN.get_path()
@@ -354,17 +368,38 @@ assert (
     == "vllm_musa.v1.attention.backends.mla.flashmla.MUSAFlashMLABackend"
 )
 
-# 3. Platform import_kernels loads all 4 AOT extensions, and import_ir_kernels
-#    registers the MUSA IR providers from vllm_musa.ir.
+# 3. Platform import_kernels loads all 4 AOT extensions, and both AOT
+#    (_C_musa_ops) and JIT (torch.ops.vllm.*) custom ops are callable.
 current_platform.import_kernels()
 for ext in ("vllm._C", "vllm._C_stable_libtorch", "vllm._moe_C", "vllm_musa._C"):
     assert ext in sys.modules, f"missing AOT extension: {ext}"
 
+assert hasattr(torch.ops, "_C_musa_ops"), "AOT namespace _C_musa_ops not loaded"
+assert hasattr(torch.ops._C_musa_ops, "rms_norm_musa"), (
+    "AOT op _C_musa_ops::rms_norm_musa missing"
+)
+assert hasattr(torch.ops.vllm, "musa_csrc_rmsnorm"), (
+    "JIT op vllm::musa_csrc_rmsnorm not preloaded by general plugin"
+)
+assert hasattr(torch.ops.vllm, "musa_csrc_fused_add_rmsnorm"), (
+    "JIT op vllm::musa_csrc_fused_add_rmsnorm not preloaded by general plugin"
+)
+
+# Invoke representative AOT and JIT custom ops directly on MUSA tensors.
+x = torch.randn((4, 256), device="musa", dtype=torch.bfloat16)
+w = torch.ones((256,), device="musa", dtype=torch.bfloat16)
+out_aot = torch.empty_like(x)
+torch.ops._C_musa_ops.rms_norm_musa(out_aot, x, w, 1e-6)
+out_jit = torch.ops.vllm.musa_csrc_rmsnorm(x, w, 1e-6)
+torch.testing.assert_close(out_aot, out_jit, atol=2e-2, rtol=2e-2)
+
+# 4. import_ir_kernels registers MUSA IR providers from vllm_musa.ir.
 current_platform.import_ir_kernels()
 assert IrOp.registry["rms_norm"].impls["musa"].supported is True
 assert IrOp.registry["fused_add_rms_norm"].impls["musa"].supported is True
 assert IrOp.registry["gated_qkv_rms_norm_rope"].impls["musa_inductor"].supported is True
-# 4. All 14 compat adapters must have been installed by load_general_plugins().
+
+# 5. All 14 compat adapters must have been installed by load_general_plugins().
 for mod_name in (
     "vllm_musa.model_executor.layers.fused_moe.fused_moe",
     "vllm_musa.model_executor.layers.fused_moe.router.fused_topk_bias_router",
@@ -387,7 +422,9 @@ for mod_name in (
 import vllm.v1.sample.ops.topk_topp_sampler as _vllm_topk_mod
 assert getattr(_vllm_topk_mod.TopKTopPSampler, "_musa_sampling_hooks_installed", False) is True
 print("PASS_RUNTIME_PLUGIN_STARTUP")
-""")
+""",
+        env_overrides={"VLLM_PLUGINS": None},
+    )
     assert result.returncode == 0, result.stderr[-2000:]
     assert "PASS_RUNTIME_PLUGIN_STARTUP" in result.stdout
 

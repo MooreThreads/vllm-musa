@@ -19,7 +19,6 @@ __all__ = [
     "musa_platform_plugin",
     "register_out_of_tree",
     "register_attn_backends",
-    "register_custom_ops",
     "collect_env",
 ]
 __version__ = "0.1.32"
@@ -209,12 +208,6 @@ def register_attn_backends() -> None:
 
     register_attention_backends()
     _ATTN_BACKENDS_REGISTERED = True
-
-
-def register_custom_ops() -> None:
-    """Backward-compatible alias that runs all MUSA general plugin registrations."""
-    register_out_of_tree()
-    register_attn_backends()
 
 
 ########### console scripts ###########

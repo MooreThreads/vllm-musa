@@ -11,6 +11,6 @@ Keep standalone MUSA/Triton kernel helper modules under ``vllm_musa/kernels/``;
 place only ``@ir.ops.<op>.register_impl(...)`` provider modules here.
 """
 
-from . import gated_qkv, musa_ops  # noqa: F401
+from . import gated_qkv, layernorm  # noqa: F401
 
-__all__ = ["gated_qkv", "musa_ops"]
+__all__ = ["gated_qkv", "layernorm"]

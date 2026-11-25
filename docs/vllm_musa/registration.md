@@ -11,11 +11,10 @@ monkey-patches.
 | `vllm.platform_plugins` | `musa` | `vllm_musa:musa_platform_plugin` | Returns `vllm_musa.platform.MUSAPlatform` without side effects. |
 | `vllm.general_plugins` | `musa_out_of_tree` | `vllm_musa:register_out_of_tree` | Idempotent registration of cat-6 runtime patches, Inductor heuristics, OOT layers, model-executor/v1 adapters, and AOT-cache custom-op preloads. |
 | `vllm.general_plugins` | `musa_attn_backends` | `vllm_musa:register_attn_backends` | Idempotent registration of MUSA attention backends via `vllm.v1.attention.backends.registry`. |
-| `vllm.general_plugins` | `musa_custom_ops` | `vllm_musa:register_custom_ops` | Backward-compatible idempotent alias for existing `VLLM_PLUGINS=musa,musa_custom_ops` recipes and scripts. |
 
-`vllm_musa.register_custom_ops()` remains as an idempotent compatibility alias
-that invokes the other two general plugin entry points (`musa_out_of_tree` and
-`musa_attn_backends`).
+vLLM automatically discovers all installed `vllm.platform_plugins` and
+`vllm.general_plugins` entry points when `VLLM_PLUGINS` is unset — users do not
+need to export `VLLM_PLUGINS`.
 
 ## Where to add a new extension
 

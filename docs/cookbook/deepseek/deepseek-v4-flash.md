@@ -56,7 +56,6 @@ target image before this candidate is promoted to a production recommendation.
 This profile uses a fixed four-token MTP draft.
 
 ```bash
-export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export SAFETENSORS_FAST_GPU=1
 export PYTHONUNBUFFERED=1
@@ -94,7 +93,6 @@ memory on some 8x S5000 deployments. Reduce `max-num-seqs` and the graph
 capture ceiling together, then revalidate before production use.
 
 ```bash
-export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export SAFETENSORS_FAST_GPU=1
 export VLLM_USE_DEEP_GEMM=1
