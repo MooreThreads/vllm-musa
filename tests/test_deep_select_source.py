@@ -481,8 +481,8 @@ def test_build_provides_vllm_extension_from_deepselect_source() -> None:
     build = BUILD_PATCH.read_text(encoding="utf-8")
     assert 'CMakeExtension(name="vllm._deepselect_C")' in build
     assert "deepselect_extension.py_limited_api = False" in build
-    assert "include(cmake/external_projects/deepselect.cmake)" in build
-    assert 'if(VLLM_TARGET_DEVICE STREQUAL "empty")' in build
+    cmake = (ROOT / "third_party/vllm/CMakeLists.txt").read_text()
+    assert cmake.count("include(cmake/external_projects/deepselect.cmake)") == 1
     assert "deepselect_git_config_args" in build
     assert "VLLM_MUSA_GIT_MIRROR" in build
     assert (
@@ -556,7 +556,8 @@ def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
     )
     added = _added_lines(source_patch)
     assert "https://github.com/MooreThreads/DeepSelect.git" in added
-    assert "set(deepselect_rev b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32)" in added
+    assert "GIT_TAG b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32" in added
+    assert "https://github.com/vllm-project/DeepSelect.git" not in added
     assert "musa_api.mu" in added
 
 
