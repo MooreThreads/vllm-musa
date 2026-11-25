@@ -559,7 +559,7 @@ def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
 
 @pytest.mark.parametrize(
     "configured",
-    [{}, {"VLLM_TARGET_DEVICE": "empty", "MTGPU_TARGET": "mp_22"}],
+    [{}, {"CMAKE_ARGS": "-GNinja", "MTGPU_TARGET": "mp_22"}],
 )
 def test_install_vllm_keeps_empty_mode_without_injecting_hardware(
     configured: dict[str, str], monkeypatch
@@ -606,6 +606,9 @@ def test_install_vllm_keeps_empty_mode_without_injecting_hardware(
     assert environment == {
         **inherited,
         "VLLM_TARGET_DEVICE": "empty",
+        "CMAKE_ARGS": (
+            "-GNinja -DVLLM_GPU_LANG=MUSA" if configured else "-DVLLM_GPU_LANG=MUSA"
+        ),
         "VLLM_VERSION_OVERRIDE": "0.32.0",
         "VLLM_MUSA_GIT_MIRROR": "https://mirror.example/",
     }
@@ -625,21 +628,26 @@ def test_vllm_build_does_not_add_musa_platform_or_compiler_detection() -> None:
         assert forbidden not in added
 
 
-def test_vllm_empty_mode_builds_deepselect() -> None:
+@pytest.mark.parametrize("cmake_args", ["", "-GNinja -DVLLM_GPU_LANG=MUSA"])
+def test_vllm_empty_mode_selects_deepselect_by_gpu_language(cmake_args: str) -> None:
     setup = ROOT / "third_party/vllm/setup.py"
     empty_branch = next(
         node
         for node in ast.parse(setup.read_text()).body
-        if isinstance(node, ast.If) and ast.unparse(node.test) == "_no_device()"
+        if isinstance(node, ast.If) and "-DVLLM_GPU_LANG=MUSA" in ast.unparse(node.test)
     )
     namespace = {
         "_no_device": lambda: True,
+        "os": SimpleNamespace(environ={"CMAKE_ARGS": cmake_args}),
         "CMakeExtension": lambda **kwargs: SimpleNamespace(**kwargs),
     }
     exec(compile(ast.Module([empty_branch], []), str(setup), "exec"), namespace)
-    (extension,) = namespace["ext_modules"]
-    assert extension.name == "vllm._deepselect_C"
-    assert extension.py_limited_api is False
+    if cmake_args:
+        (extension,) = namespace["ext_modules"]
+        assert extension.name == "vllm._deepselect_C"
+        assert extension.py_limited_api is False
+    else:
+        assert namespace["ext_modules"] == []
 
 
 @pytest.mark.parametrize("stale_only", [False, True])

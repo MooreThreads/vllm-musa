@@ -565,7 +565,9 @@ class _CustomBuildExt(BuildExtension):
         )
 
         env = os.environ.copy()
+        # Skip vLLM's native backend targets and build the MUSA extension through CMake.
         env["VLLM_TARGET_DEVICE"] = "empty"
+        env["CMAKE_ARGS"] = f"{env.get('CMAKE_ARGS', '')} -DVLLM_GPU_LANG=MUSA".strip()
         # vLLM's CMake starts its own git for DeepSelect; hand it the same mirror.
         env["VLLM_MUSA_GIT_MIRROR"] = resolve_proxy()
 

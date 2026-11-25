@@ -6,19 +6,19 @@ Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 ---
  CMakeLists.txt                           |  9 ++++
  cmake/external_projects/deepselect.cmake | 63 ++++++++++++++++++------
- setup.py                                 |  4 +-
- 3 files changed, 60 insertions(+), 16 deletions(-)
+ setup.py                                 |  6 ++-
+ 3 files changed, 62 insertions(+), 16 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3a71d7e1e5..12eee5535a 100644
+index 3a71d7e1e5..a81b1c6782 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -92,6 +92,8 @@ else()
      " before running cmake configure.")
  endif()
  
-+# The empty-device build only needs the DeepSelect external project.
-+if (NOT VLLM_TARGET_DEVICE STREQUAL "empty")
++# MUSA uses the external DeepSelect target below.
++if (NOT VLLM_GPU_LANG STREQUAL "MUSA")
  #
  # Update cmake's `CMAKE_PREFIX_PATH` with torch location.
  #
@@ -29,7 +29,7 @@ index 3a71d7e1e5..12eee5535a 100644
 +endif()
 +endif() # Native target setup
 +
-+if (VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_TARGET_DEVICE STREQUAL "empty")
++if (VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "MUSA")
      include(cmake/external_projects/deepselect.cmake)
 +endif()
 +
@@ -38,7 +38,7 @@ index 3a71d7e1e5..12eee5535a 100644
      include(cmake/external_projects/flashmla.cmake)
      include(cmake/external_projects/flashkda.cmake)
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e61..d7cd9f9e44 100644
+index e2a5592e61..90a3b77399 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
 @@ -5,30 +5,63 @@ include(FetchContent)
@@ -57,7 +57,7 @@ index e2a5592e61..d7cd9f9e44 100644
 -        BUILD_COMMAND ""
 -  )
 +  set(deepselect_source SOURCE_DIR "${DEEPSELECT_SRC_DIR}")
-+elseif(VLLM_TARGET_DEVICE STREQUAL "empty")
++elseif(VLLM_GPU_LANG STREQUAL "MUSA")
 +  set(deepselect_source
 +      GIT_REPOSITORY https://github.com/MooreThreads/DeepSelect.git
 +      GIT_TAG b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32
@@ -90,7 +90,7 @@ index e2a5592e61..d7cd9f9e44 100644
  FetchContent_MakeAvailable(deepselect)
  message(STATUS "DeepSelect is available at ${deepselect_SOURCE_DIR}")
  
-+if(VLLM_TARGET_DEVICE STREQUAL "empty")
++if(VLLM_GPU_LANG STREQUAL "MUSA")
 +  find_path(MUSA_CMAKE_DIR Modules/CMakeDetermineMUSACompiler.cmake
 +    HINTS "$ENV{MUSA_HOME}/cmake" /usr/local/musa/cmake REQUIRED)
 +  list(PREPEND CMAKE_MODULE_PATH "${MUSA_CMAKE_DIR}/Modules" "${MUSA_CMAKE_DIR}")
@@ -121,17 +121,19 @@ index e2a5592e61..d7cd9f9e44 100644
  set(DEEPSELECT_SUPPORT_ARCHS)
  if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL 12.9)
 diff --git a/setup.py b/setup.py
-index 37bfc3e41b..43b7d21f88 100644
+index 37bfc3e41b..03e81f78d7 100644
 --- a/setup.py
 +++ b/setup.py
-@@ -1652,7 +1652,9 @@ for rust_extension_path in get_precompiled_rust_extension_paths():
+@@ -1651,7 +1651,11 @@ if PRECOMPILED_RUST_FRONTEND_PATH.exists():
+ for rust_extension_path in get_precompiled_rust_extension_paths():
      add_vllm_package_data(rust_extension_path.name)
  
- if _no_device():
--    ext_modules = []
+-if _no_device():
++if "-DVLLM_GPU_LANG=MUSA" in os.environ.get("CMAKE_ARGS", "").split():
 +    deepselect_extension = CMakeExtension(name="vllm._deepselect_C")
 +    deepselect_extension.py_limited_api = False
 +    ext_modules = [deepselect_extension]
++elif _no_device():
+     ext_modules = []
  
  if not ext_modules:
-     cmdclass = {}
