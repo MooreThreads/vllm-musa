@@ -1,0 +1,79 @@
+diff --git a/vllm/models/qwen4_exp/nvidia/hyperconnection.py b/vllm/models/qwen4_exp/nvidia/hyperconnection.py
+--- a/vllm/models/qwen4_exp/nvidia/hyperconnection.py
++++ b/vllm/models/qwen4_exp/nvidia/hyperconnection.py
+@@ -46,6 +46,18 @@
+     hc_silu,
+ )
+ 
++if current_platform.is_musa():
++    from vllm_musa.kernels.hc_down_silu import (
++        hc_down_silu as _musa_hc_down_silu,
++        hc_down_silu_enabled as _musa_hc_down_silu_enabled,
++        supports_hc_down_silu as _musa_supports_hc_down_silu,
++    )
++else:
++    # Keep the CUDA path free of any vllm_musa import.
++    _musa_hc_down_silu = None
++    _musa_hc_down_silu_enabled = None
++    _musa_supports_hc_down_silu = None
++
+ 
+ # ---------------------------------------------------------------------------
+ # Gated-residual variant
+@@ -114,6 +126,12 @@
+                 and weight.dtype == torch.bfloat16
+                 and current_platform.has_device_capability(90)
+             )
++            self._use_musa_hc_down_silu = (
++                current_platform.is_musa()
++                and _musa_hc_down_silu_enabled()
++                and weight.shape[1] % 8 == 0
++                and weight.dtype == torch.bfloat16
++            )
+         else:
+             self.input_mix_weight_down = ReplicatedLinear(
+                 self.hyper_hidden_size,
+@@ -141,6 +159,26 @@
+         if not self.use_combine:
+             return hc_silu(self.input_mix_weight_down(xn), self.hc_count), None
+ 
++        # Per-call gate: the MUSA helpers decide which token counts have a
++        # fused kernel that actually beats the padded ssgemm path.
++        use_musa_fused = (
++            self._use_musa_hc_down_silu
++            and not envs.VLLM_BATCH_INVARIANT
++            and _musa_supports_hc_down_silu(
++                xn,
++                self.input_mix_weight_down_block_inject.weight,
++                self.lora_rank,
++                self.hc_count,
++            )
++        )
++        if use_musa_fused:
++            return _musa_hc_down_silu(
++                xn,
++                self.input_mix_weight_down_block_inject.weight,
++                self.lora_rank,
++                self.hc_count,
++            )
++
+         use_fused = (
+             self._use_hc_down_silu
+             and not envs.VLLM_BATCH_INVARIANT
+diff --git a/vllm/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py b/vllm/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py
+--- a/vllm/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py
++++ b/vllm/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py
+@@ -209,6 +209,13 @@
+         k: Input feature size.
+ 
+     """
++    if current_platform.is_musa():
++        from vllm_musa.kernels.hc_down_silu import (
++            request_hc_down_silu_warmup as _musa_request_warmup,
++        )
++
++        _musa_request_warmup(m_values, rank, hc, k)
++        return
+     if not current_platform.has_device_capability(90) or k % 8 != 0:
+         return
+     m_set = {int(m) for m in m_values if 1 <= m <= MAX_FUSED_M}
