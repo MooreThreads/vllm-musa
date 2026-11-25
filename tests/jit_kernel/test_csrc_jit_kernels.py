@@ -316,7 +316,7 @@ def test_ir_fused_add_rmsnorm_dispatch_fails_closed_without_compile_range(
 
 def test_ir_fused_add_rmsnorm_provider_invokes_selected_kernel(monkeypatch) -> None:
     from vllm_musa import _custom_ops as musa_ops
-    from vllm_musa.ir import musa_ops as ir_musa_ops
+    from vllm_musa.ir import layernorm as ir_layernorm
     from vllm_musa.jit_kernel.csrc import norm as musa_jit_norm
 
     device = torch.device("musa")
@@ -336,20 +336,20 @@ def test_ir_fused_add_rmsnorm_provider_invokes_selected_kernel(monkeypatch) -> N
     monkeypatch.setattr(musa_ops, "musa_fused_add_rms_norm", fake_c_ext)
 
     monkeypatch.setattr(
-        ir_musa_ops,
+        ir_layernorm,
         "_select_musa_fused_add_rms_norm_impl",
         lambda *args, **kwargs: "jit",
     )
-    ir_musa_ops.fused_add_rms_norm.impl_fn(x, residual, weight, 1e-6)
+    ir_layernorm.fused_add_rms_norm.impl_fn(x, residual, weight, 1e-6)
     assert calls == ["jit"]
 
     calls.clear()
     monkeypatch.setattr(
-        ir_musa_ops,
+        ir_layernorm,
         "_select_musa_fused_add_rms_norm_impl",
         lambda *args, **kwargs: "c_ext",
     )
-    ir_musa_ops.fused_add_rms_norm.impl_fn(x, residual, weight, 1e-6)
+    ir_layernorm.fused_add_rms_norm.impl_fn(x, residual, weight, 1e-6)
     assert calls == ["c_ext"]
 
 

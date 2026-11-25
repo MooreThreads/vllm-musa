@@ -93,7 +93,7 @@ class MusaRMSNorm(RMSNorm):
 
         # Delegate standard RMSNorm (non-residual) and generic residual
         # fused-add RMSNorm to upstream forward_native -> vllm.ir.ops.{rms_norm,
-        # fused_add_rms_norm}. MUSA's IR provider in vllm_musa/ir/musa_ops.py
+        # fused_add_rms_norm}. MUSA's IR provider in vllm_musa/ir/layernorm.py
         # owns kernel selection (JIT vs C-ext vs native) and honors both eager
         # and Inductor IR priority.
         return self.forward_native(x, residual)
