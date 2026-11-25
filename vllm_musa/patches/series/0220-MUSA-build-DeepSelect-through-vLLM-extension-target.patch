@@ -5,9 +5,9 @@ Subject: [PATCH] MUSA: build DeepSelect through vLLM extension target
 
 ---
  CMakeLists.txt                           |  9 ++++
- cmake/external_projects/deepselect.cmake | 62 ++++++++++++++++++------
+ cmake/external_projects/deepselect.cmake | 60 ++++++++++++++++++------
  setup.py                                 |  6 ++-
- 3 files changed, 61 insertions(+), 16 deletions(-)
+ 3 files changed, 59 insertions(+), 16 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 3a71d7e1e5..a81b1c6782 100644
@@ -38,10 +38,10 @@ index 3a71d7e1e5..a81b1c6782 100644
      include(cmake/external_projects/flashmla.cmake)
      include(cmake/external_projects/flashkda.cmake)
 diff --git a/cmake/external_projects/deepselect.cmake b/cmake/external_projects/deepselect.cmake
-index e2a5592e61..b1ffd38557 100644
+index e2a5592e61..7e5fd7ad19 100644
 --- a/cmake/external_projects/deepselect.cmake
 +++ b/cmake/external_projects/deepselect.cmake
-@@ -5,30 +5,62 @@ include(FetchContent)
+@@ -5,30 +5,60 @@ include(FetchContent)
  # It can be set as an environment variable or passed as a cmake argument.
  # The environment variable takes precedence.
  if (DEFINED ENV{DEEPSELECT_SRC_DIR})
@@ -105,10 +105,8 @@ index e2a5592e61..b1ffd38557 100644
 +    DESTINATION vllm LANGUAGE MUSA WITH_SOABI
 +    SOURCES "${deepselect_SOURCE_DIR}/csrc/musa_api.mu"
 +    INCLUDE_DIRECTORIES ${deepselect_include_dirs} "${deepselect_SOURCE_DIR}/csrc/3rdparty/mutlass/include"
-+    COMPILE_FLAGS --offload-arch=mp_31 -O3 -std=c++17 -Wno-error=address-of-temporary
-+      -ffast-math -fmusa-flush-denormals-to-zero
++    COMPILE_FLAGS --offload-arch=mp_31 -O3 -std=c++17 -ffast-math
 +      "SHELL:-mllvm -mtgpu-opt-level=1" "SHELL:-mllvm -mtgpu-load-store-opt=1"
-+      "SHELL:-mllvm -mtgpu-fold-global-ldst=1"
 +    LIBRARIES ${deepselect_libraries})
 +  target_link_directories(_deepselect_C PRIVATE ${deepselect_library_dirs})
 +  set_target_properties(_deepselect_C PROPERTIES LINKER_LANGUAGE CXX
