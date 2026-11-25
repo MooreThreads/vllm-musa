@@ -391,7 +391,8 @@ res = torch.randn((4, 256), device="musa", dtype=torch.bfloat16)
 w = torch.ones((256,), device="musa", dtype=torch.bfloat16)
 x_aot, res_aot = x.clone(), res.clone()
 torch.ops._C_musa_ops.musa_fused_add_rms_norm(x_aot, res_aot, w, 1e-6)
-out_jit = torch.ops.vllm.musa_csrc_rmsnorm(res_aot, w, 1e-6)
+out_jit = torch.empty_like(x)
+torch.ops.vllm.musa_csrc_rmsnorm(res_aot, w, out_jit, 1e-6, False)
 torch.testing.assert_close(x_aot, out_jit, atol=2e-2, rtol=2e-2)
 
 # 4. import_ir_kernels registers MUSA IR providers from vllm_musa.ir.
