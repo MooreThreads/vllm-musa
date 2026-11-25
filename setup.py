@@ -566,7 +566,6 @@ class _CustomBuildExt(BuildExtension):
 
         env = os.environ.copy()
         env["VLLM_TARGET_DEVICE"] = "empty"
-        env.setdefault("VLLM_MUSA_BUILD_DEEPSELECT", "1")
         # vLLM's CMake starts its own git for DeepSelect; hand it the same mirror.
         env["VLLM_MUSA_GIT_MIRROR"] = resolve_proxy()
 

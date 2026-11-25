@@ -115,8 +115,6 @@ CMake target. It fetches `MooreThreads/DeepSelect` at commit
 `VLLM_MUSA_GIT_PROXY` mirror as the other source fetches. Select the backend at
 serving time with `--sparse-indexer-topk-backend deep_select`.
 
-Set `VLLM_MUSA_BUILD_DEEPSELECT=0` to skip building it.
-
 To override the pin, set `DEEPSELECT_SRC_DIR` to a local checkout with its
 `csrc/3rdparty/mutlass` submodule initialized.
 

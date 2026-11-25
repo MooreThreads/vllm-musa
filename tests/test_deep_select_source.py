@@ -483,7 +483,6 @@ def test_build_provides_vllm_extension_from_deepselect_source() -> None:
     assert "deepselect_extension.py_limited_api = False" in build
     cmake = (ROOT / "third_party/vllm/CMakeLists.txt").read_text()
     assert cmake.count("include(cmake/external_projects/deepselect.cmake)") == 1
-    assert "deepselect_git_config_args" in build
     assert "VLLM_MUSA_GIT_MIRROR" in build
     assert (
         "url.$ENV{VLLM_MUSA_GIT_MIRROR}https://github.com/.insteadOf=https://github.com/"
@@ -549,16 +548,13 @@ def test_native_build_delegates_deepselect_to_vllm(skip: bool) -> None:
 
 def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
     assert "DEEPSELECT_" not in PINS.read_text(encoding="utf-8")
-    source_patch = (
-        BUILD_PATCH.read_text()
-        .split("diff --git a/cmake/external_projects/deepselect.cmake", 1)[1]
-        .split("diff --git", 1)[0]
-    )
-    added = _added_lines(source_patch)
-    assert "https://github.com/MooreThreads/DeepSelect.git" in added
-    assert "GIT_TAG b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32" in added
-    assert "https://github.com/vllm-project/DeepSelect.git" not in added
-    assert "musa_api.mu" in added
+    cmake = ROOT / "third_party/vllm/cmake/external_projects/deepselect.cmake"
+    source = cmake.read_text(encoding="utf-8")
+    assert source.count("FetchContent_Declare(") == 1
+    assert "GIT_REPOSITORY https://github.com/MooreThreads/DeepSelect.git" in source
+    assert "GIT_TAG b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32" in source
+    assert "GIT_REPOSITORY https://github.com/vllm-project/DeepSelect.git" in source
+    assert "GIT_TAG d96d33afe1fab0d6066da49cdc91e64c2bee65ea" in source
 
 
 @pytest.mark.parametrize(
@@ -611,7 +607,6 @@ def test_install_vllm_keeps_empty_mode_without_injecting_hardware(
         **inherited,
         "VLLM_TARGET_DEVICE": "empty",
         "VLLM_VERSION_OVERRIDE": "0.32.0",
-        "VLLM_MUSA_BUILD_DEEPSELECT": "1",
         "VLLM_MUSA_GIT_MIRROR": "https://mirror.example/",
     }
 
@@ -630,45 +625,21 @@ def test_vllm_build_does_not_add_musa_platform_or_compiler_detection() -> None:
         assert forbidden not in added
 
 
-@pytest.mark.parametrize(
-    ("empty", "source_env", "cmake_args", "musa_build"),
-    [
-        (False, "", "", "1"),
-        (True, "", "", ""),
-        (True, "", "", "1"),
-        (True, "/prepared/DeepSelect", "", ""),
-        (True, "", "-DDEEPSELECT_SRC_DIR=/prepared/DeepSelect", ""),
-    ],
-)
-def test_vllm_empty_mode_builds_deepselect_only_when_configured(
-    empty: bool, source_env: str, cmake_args: str, musa_build: str
-) -> None:
-    setup_hunk = BUILD_PATCH.read_text().split("diff --git a/setup.py b/setup.py", 1)[1]
-    body = setup_hunk.split("@@", 2)[2].splitlines()[1:]
-    patched = "\n".join(line[1:] for line in body if line.startswith(("+", " ")))
-    source = patched[patched.index("_deepselect_source_requested =") : patched.index("if not ext_modules:")]
-    extensions = [SimpleNamespace(name="existing")]
-    environment = {
-        "DEEPSELECT_SRC_DIR": source_env,
-        "CMAKE_ARGS": cmake_args,
-        "VLLM_MUSA_BUILD_DEEPSELECT": musa_build,
-    }
+def test_vllm_empty_mode_builds_deepselect() -> None:
+    setup = ROOT / "third_party/vllm/setup.py"
+    empty_branch = next(
+        node
+        for node in ast.parse(setup.read_text()).body
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "_no_device()"
+    )
     namespace = {
-        "_no_device": lambda: empty,
+        "_no_device": lambda: True,
         "CMakeExtension": lambda **kwargs: SimpleNamespace(**kwargs),
-        "ext_modules": extensions,
-        "os": SimpleNamespace(environ=environment),
     }
-    exec(compile(source, str(BUILD_PATCH), "exec"), namespace)
-    result = namespace["ext_modules"]
-    configured = bool(source_env or cmake_args or musa_build == "1")
-    if empty and configured:
-        assert [extension.name for extension in result] == ["vllm._deepselect_C"]
-        assert result[0].py_limited_api is False
-    elif empty:
-        assert result == []
-    else:
-        assert result is extensions
+    exec(compile(ast.Module([empty_branch], []), str(setup), "exec"), namespace)
+    (extension,) = namespace["ext_modules"]
+    assert extension.name == "vllm._deepselect_C"
+    assert extension.py_limited_api is False
 
 
 @pytest.mark.parametrize("stale_only", [False, True])
