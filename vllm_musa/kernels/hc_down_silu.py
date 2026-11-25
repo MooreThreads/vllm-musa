@@ -8,22 +8,11 @@ through a CuTe DSL kernel and gates it on SM90+. MUSA reports capability
 separate ``hc_silu`` launch.
 
 This module replaces both launches with one Triton kernel for single-token
-decode, and leaves every other token count on the unfused path:
-
-* ``M == 1``: one program per merged output column (the FMA-equivalent path).
-  The vendor padded ssgemm is latency-bound at this size rather than
-  compute-bound -- 27.8 us for 13 MFLOP, flat at 27.8 -> 32.0 us from M=1 to
-  M=48 -- so removing one launch per call is the entire win.
-* ``M >= 2``: the unfused ``MergedColumnParallelLinear`` + ``hc_silu`` maths.
-  The padded ssgemm amortises its fixed cost there and the fusion stops paying:
-  over the 96 calls per step it saved 1.16 ms/token at M=1 and nothing
-  measurable from M=4 up.
-
-Widening the fused range is not free: a per-column kernel spills registers past
-``M = 8`` (measured: 3.7 ms at M=32, 8.0 ms at M=48), and a tiled split-K
-rewrite, while faster in isolation (22.9/18.3/21.1 us at M=16/32/48 against a
-flat 27.8-32.0 us ssgemm), was never measured end to end. Keep the range at
-``M = 1`` until such a measurement exists.
+decode: one program per merged output column, which reads its weight row once
+and applies the epilogue in the same program. At that size the projection is
+6.6 MFLOP over a 6.9 MB weight stream, so the call is weight-bandwidth bound
+and the second launch is a large share of its cost. Token counts above one keep
+the unfused path; the padded ssgemm amortises the launch there.
 
 The fused path keeps the unfused rounding boundary: GEMM accumulator -> bf16,
 then ``silu(value / hc_count)`` on the first ``rank`` columns and passthrough
@@ -38,14 +27,14 @@ import torch
 from vllm.triton_utils import tl, triton
 from vllm.utils.torch_utils import direct_register_custom_op
 
-# Only single-token decode is fused; see the module docstring for the evidence.
+# Only single-token decode is fused.
 _FUSED_MAX_M = 1
 _BLOCK_K = 1024
 _NUM_WARPS = 8
 
 
 def hc_down_silu_enabled() -> bool:
-    """Runtime switch used for matched fused/fallback A/B runs."""
+    """Set ``VLLM_MUSA_HC_DOWN_SILU=0`` to force the unfused path."""
     return os.environ.get("VLLM_MUSA_HC_DOWN_SILU", "1") != "0"
 
 
@@ -96,7 +85,7 @@ def _hc_down_silu_unfused(
     rank: int,
     hc: int,
 ) -> torch.Tensor:
-    """Unfused maths for token counts no fused kernel wins on."""
+    """Unfused maths for token counts above the fused range."""
     down = torch.nn.functional.linear(x, weight).to(torch.bfloat16)
     down = down[:, : rank + hc].contiguous()
     lora = down[:, :rank].float() / hc
@@ -147,9 +136,7 @@ def _hc_down_silu_fake(
     hc: int,
 ) -> torch.Tensor:
     del weight
-    return torch.empty(
-        (x.shape[0], rank + hc), dtype=x.dtype, device=x.device
-    )
+    return torch.empty((x.shape[0], rank + hc), dtype=x.dtype, device=x.device)
 
 
 direct_register_custom_op(
@@ -170,9 +157,7 @@ def hc_down_silu(
     # execution and CUDA-graph capture can launch the Triton kernel directly
     # and skip the dispatcher cost of the custom-op wrapper.
     if torch.compiler.is_compiling():
-        output = torch.ops.vllm.musa_qwen4_exp_hc_down_silu(
-            x, weight, rank, hc
-        )
+        output = torch.ops.vllm.musa_qwen4_exp_hc_down_silu(x, weight, rank, hc)
     else:
         output = _hc_down_silu(x, weight, rank, hc)
     return output[:, :rank], output[:, rank:]
@@ -214,8 +199,6 @@ def request_hc_down_silu_warmup(
     device = torch.device("musa", torch.musa.current_device())
     weight = torch.zeros((rank + hc, k), dtype=torch.bfloat16, device=device)
     for num_tokens in sorted(m_set):
-        x = torch.zeros(
-            (num_tokens, k), dtype=torch.bfloat16, device=device
-        )
+        x = torch.zeros((num_tokens, k), dtype=torch.bfloat16, device=device)
         hc_down_silu(x, weight, rank, hc)
     torch.musa.synchronize()

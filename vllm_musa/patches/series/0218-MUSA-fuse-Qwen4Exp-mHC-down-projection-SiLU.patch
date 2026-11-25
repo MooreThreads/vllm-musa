@@ -1,7 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 25 Nov 2026 12:57:15 +0000
+Subject: [PATCH] MUSA: fuse Qwen4Exp mHC down projection + SiLU
+
+MUSA reports device capability (3, 1), so the SM90+ CuTe DSL kernel for the
+merged down+inject projection is skipped and each call runs
+MergedColumnParallelLinear followed by a separate hc_silu launch. Qwen4Exp
+issues that op 96 times per decode step, and at single-token decode the
+projection is 6.6 MFLOP over a 6.9 MB weight stream, so the call is
+weight-bandwidth bound and the second launch is a large share of its cost.
+
+Add a Triton kernel that computes the projection and the epilogue in one
+program per merged output column, registered as a custom op so Dynamo and
+graph capture treat it as a single node. The fused path keeps the unfused
+rounding boundary: accumulator to bf16, then silu(value / hc_count) on the
+first rank columns and passthrough on the injection columns.
+
+The gate is per call. supports_hc_down_silu() checks the token count, dtype,
+strides and K alignment; token counts above one keep the unfused path,
+because the padded ssgemm amortises its launch cost at larger shapes.
+---
+ .../qwen4_exp/nvidia/hyperconnection.py       | 38 +++++++++++++++++++
+ .../nvidia/ops/cute_dsl/hc_down_silu.py       |  7 ++++
+ 2 files changed, 45 insertions(+)
+
 diff --git a/vllm/models/qwen4_exp/nvidia/hyperconnection.py b/vllm/models/qwen4_exp/nvidia/hyperconnection.py
+index dcf8daa..77ab170 100644
 --- a/vllm/models/qwen4_exp/nvidia/hyperconnection.py
 +++ b/vllm/models/qwen4_exp/nvidia/hyperconnection.py
-@@ -46,6 +46,18 @@
+@@ -46,6 +46,18 @@ from .ops.hc import (
      hc_silu,
  )
  
@@ -20,7 +47,7 @@ diff --git a/vllm/models/qwen4_exp/nvidia/hyperconnection.py b/vllm/models/qwen4
  
  # ---------------------------------------------------------------------------
  # Gated-residual variant
-@@ -114,6 +126,12 @@
+@@ -114,6 +126,12 @@ class GatedResidual(nn.Module):
                  and weight.dtype == torch.bfloat16
                  and current_platform.has_device_capability(90)
              )
@@ -33,7 +60,7 @@ diff --git a/vllm/models/qwen4_exp/nvidia/hyperconnection.py b/vllm/models/qwen4
          else:
              self.input_mix_weight_down = ReplicatedLinear(
                  self.hyper_hidden_size,
-@@ -141,6 +159,26 @@
+@@ -141,6 +159,26 @@ class GatedResidual(nn.Module):
          if not self.use_combine:
              return hc_silu(self.input_mix_weight_down(xn), self.hc_count), None
  
@@ -61,9 +88,10 @@ diff --git a/vllm/models/qwen4_exp/nvidia/hyperconnection.py b/vllm/models/qwen4
              self._use_hc_down_silu
              and not envs.VLLM_BATCH_INVARIANT
 diff --git a/vllm/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py b/vllm/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py
+index 2495d8c..ebf481a 100644
 --- a/vllm/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py
 +++ b/vllm/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py
-@@ -209,6 +209,13 @@
+@@ -209,6 +209,13 @@ def request_hc_down_silu_warmup(
          k: Input feature size.
  
      """
@@ -77,3 +105,6 @@ diff --git a/vllm/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py b/vllm/mo
      if not current_platform.has_device_capability(90) or k % 8 != 0:
          return
      m_set = {int(m) for m in m_values if 1 <= m <= MAX_FUSED_M}
+-- 
+2.34.1
+

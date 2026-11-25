@@ -51,21 +51,15 @@ def test_hc_down_silu_matches_fallback(
 ) -> None:
     torch.manual_seed(0)
     x = torch.randn(num_tokens, k, dtype=torch.bfloat16, device="musa")
-    weight = torch.randn(
-        padded_n, k, dtype=torch.bfloat16, device="musa"
-    )
+    weight = torch.randn(padded_n, k, dtype=torch.bfloat16, device="musa")
 
     lora, injection = hc_down_silu(x, weight, rank, hc)
     expected_lora, expected_injection = _reference(x, weight, rank, hc)
 
     assert lora.shape == (num_tokens, rank)
     assert injection.shape == (num_tokens, hc)
-    torch.testing.assert_close(
-        lora, expected_lora, rtol=2e-2, atol=2e-2
-    )
-    torch.testing.assert_close(
-        injection, expected_injection, rtol=2e-2, atol=2e-2
-    )
+    torch.testing.assert_close(lora, expected_lora, rtol=2e-2, atol=2e-2)
+    torch.testing.assert_close(injection, expected_injection, rtol=2e-2, atol=2e-2)
 
 
 @pytest.mark.parametrize("num_tokens", [2, 3, 4, 5, 8, 16, 32, 48])
@@ -76,37 +70,25 @@ def test_hc_down_silu_falls_back_beyond_one_token(
     torch.manual_seed(0)
     k, rank, hc, padded_n = 10240, 320, 4, 336
     x = torch.randn(num_tokens, k, dtype=torch.bfloat16, device="musa")
-    weight = torch.randn(
-        padded_n, k, dtype=torch.bfloat16, device="musa"
-    )
+    weight = torch.randn(padded_n, k, dtype=torch.bfloat16, device="musa")
 
     lora, injection = hc_down_silu(x, weight, rank, hc)
     expected_lora, expected_injection = _reference(x, weight, rank, hc)
 
     assert lora.shape == (num_tokens, rank)
-    torch.testing.assert_close(
-        lora, expected_lora, rtol=2e-2, atol=2e-2
-    )
-    torch.testing.assert_close(
-        injection, expected_injection, rtol=2e-2, atol=2e-2
-    )
+    torch.testing.assert_close(lora, expected_lora, rtol=2e-2, atol=2e-2)
+    torch.testing.assert_close(injection, expected_injection, rtol=2e-2, atol=2e-2)
 
 
 def test_hc_down_silu_unpadded_output() -> None:
     """The fused output stops at rank + hc and never computes pad columns."""
     num_tokens, k, rank, hc = 1, 64, 8, 4
     x = torch.randn(num_tokens, k, dtype=torch.bfloat16, device="musa")
-    weight = torch.randn(
-        rank + hc + 12, k, dtype=torch.bfloat16, device="musa"
-    )
+    weight = torch.randn(rank + hc + 12, k, dtype=torch.bfloat16, device="musa")
     lora, injection = hc_down_silu(x, weight, rank, hc)
     expected_lora, expected_injection = _reference(x, weight, rank, hc)
-    torch.testing.assert_close(
-        lora, expected_lora, rtol=2e-2, atol=2e-2
-    )
-    torch.testing.assert_close(
-        injection, expected_injection, rtol=2e-2, atol=2e-2
-    )
+    torch.testing.assert_close(lora, expected_lora, rtol=2e-2, atol=2e-2)
+    torch.testing.assert_close(injection, expected_injection, rtol=2e-2, atol=2e-2)
 
 
 @pytest.mark.parametrize("num_tokens", [1])
@@ -116,15 +98,11 @@ def test_hc_down_silu_float32_epilogue_reference(
     torch.manual_seed(1)
     k, rank, hc = 10240, 320, 4
     x = torch.randn(num_tokens, k, dtype=torch.bfloat16, device="musa")
-    weight = torch.randn(
-        rank + hc + 12, k, dtype=torch.bfloat16, device="musa"
-    )
+    weight = torch.randn(rank + hc + 12, k, dtype=torch.bfloat16, device="musa")
 
     lora, injection = hc_down_silu(x, weight, rank, hc)
 
-    down = (
-        x.cpu().float() @ weight[: rank + hc].cpu().float().T
-    ).to(torch.bfloat16)
+    down = (x.cpu().float() @ weight[: rank + hc].cpu().float().T).to(torch.bfloat16)
     scaled = down[:, :rank].float() / hc
     expected_lora = (scaled * torch.sigmoid(scaled)).to(torch.bfloat16)
     expected_injection = down[:, rank : rank + hc]
@@ -156,12 +134,8 @@ def test_supports_hc_down_silu_rejects_fallbacks() -> None:
             320,
             4,
         ), f"M={num_tokens} must stay on the unfused path"
-    assert not supports_hc_down_silu(
-        x.float(), weight, 320, 4
-    )
-    assert not supports_hc_down_silu(
-        x, weight.float(), 320, 4
-    )
+    assert not supports_hc_down_silu(x.float(), weight, 320, 4)
+    assert not supports_hc_down_silu(x, weight.float(), 320, 4)
     assert not supports_hc_down_silu(
         torch.empty((1, 10239), dtype=torch.bfloat16, device="musa"),
         torch.empty((336, 10239), dtype=torch.bfloat16, device="musa"),
@@ -175,16 +149,12 @@ def test_gated_residual_uses_musa_fused_path() -> None:
 
     num_tokens, k, rank, hc = 1, 64, 8, 4
     x = torch.randn(num_tokens, k, dtype=torch.bfloat16, device="musa")
-    weight = torch.randn(
-        rank + hc + 12, k, dtype=torch.bfloat16, device="musa"
-    )
+    weight = torch.randn(rank + hc + 12, k, dtype=torch.bfloat16, device="musa")
     residual = types.SimpleNamespace(
         use_combine=True,
         _use_hc_down_silu=False,
         _use_musa_hc_down_silu=True,
-        input_mix_weight_down_block_inject=types.SimpleNamespace(
-            weight=weight
-        ),
+        input_mix_weight_down_block_inject=types.SimpleNamespace(weight=weight),
         lora_rank=rank,
         hc_count=hc,
         pad_size=12,
@@ -192,9 +162,5 @@ def test_gated_residual_uses_musa_fused_path() -> None:
 
     lora, injection = GatedResidual._down_and_inject(residual, x)
     expected_lora, expected_injection = _reference(x, weight, rank, hc)
-    torch.testing.assert_close(
-        lora, expected_lora, rtol=2e-2, atol=2e-2
-    )
-    torch.testing.assert_close(
-        injection, expected_injection, rtol=2e-2, atol=2e-2
-    )
+    torch.testing.assert_close(lora, expected_lora, rtol=2e-2, atol=2e-2)
+    torch.testing.assert_close(injection, expected_injection, rtol=2e-2, atol=2e-2)
