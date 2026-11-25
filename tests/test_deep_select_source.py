@@ -40,6 +40,13 @@ def _added_lines(text: str) -> str:
     )
 
 
+def _applied_vllm_file(relative_path: str) -> Path:
+    path = ROOT / "third_party/vllm" / relative_path
+    if not path.is_file():
+        pytest.skip(f"Applied vLLM source is required: {relative_path}")
+    return path
+
+
 def test_series_patch_retains_native_extension_import_detection() -> None:
     source = (
         SERIES / "0218-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
@@ -68,9 +75,7 @@ def test_series_patch_keeps_the_cuda_capability_check() -> None:
 
 def _deep_select_validation_helpers(family: int, extension_available: bool) -> dict:
     patch = SERIES / "0218-MUSA-register-an-out-of-tree-DeepSelect-top-k-backen.patch"
-    source_path = ROOT / "third_party/vllm/vllm/model_executor/layers/indexer_topk.py"
-    if not source_path.exists():
-        pytest.skip("Applied vLLM source is required")
+    source_path = _applied_vllm_file("vllm/model_executor/layers/indexer_topk.py")
     source = source_path.read_text(encoding="utf-8")
     branch = source[source.index('        elif self._backend == "deep_select":') :]
     branch = branch.split('        elif self._backend == "aiter":', 1)[0]
@@ -155,9 +160,7 @@ def test_series_patch_routes_supported_windows_to_explicit_backend() -> None:
 def test_deep_select_support_checks_native_shape_and_topk_bounds(
     shape: tuple[int, ...], topk: int, supported: bool, offset: int, aligned: bool
 ) -> None:
-    source_path = ROOT / "third_party/vllm/vllm/model_executor/layers/indexer_topk.py"
-    if not source_path.is_file():
-        pytest.skip("Applied vLLM source is required")
+    source_path = _applied_vllm_file("vllm/model_executor/layers/indexer_topk.py")
     function = next(
         node
         for node in ast.parse(source_path.read_text()).body
@@ -481,7 +484,7 @@ def test_build_provides_vllm_extension_from_deepselect_source() -> None:
     build = BUILD_PATCH.read_text(encoding="utf-8")
     assert 'CMakeExtension(name="vllm._deepselect_C")' in build
     assert "deepselect_extension.py_limited_api = False" in build
-    cmake = (ROOT / "third_party/vllm/CMakeLists.txt").read_text()
+    cmake = _applied_vllm_file("CMakeLists.txt").read_text()
     assert cmake.count("include(cmake/external_projects/deepselect.cmake)") == 1
     assert "VLLM_MUSA_GIT_MIRROR" in build
     assert (
@@ -548,7 +551,7 @@ def test_native_build_delegates_deepselect_to_vllm(skip: bool) -> None:
 
 def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
     assert "DEEPSELECT_" not in PINS.read_text(encoding="utf-8")
-    cmake = ROOT / "third_party/vllm/cmake/external_projects/deepselect.cmake"
+    cmake = _applied_vllm_file("cmake/external_projects/deepselect.cmake")
     source = cmake.read_text(encoding="utf-8")
     assert source.count("FetchContent_Declare(") == 1
     assert "GIT_REPOSITORY https://github.com/MooreThreads/DeepSelect.git" in source
@@ -630,7 +633,7 @@ def test_vllm_build_does_not_add_musa_platform_or_compiler_detection() -> None:
 
 @pytest.mark.parametrize("cmake_args", ["", "-GNinja -DVLLM_GPU_LANG=MUSA"])
 def test_vllm_empty_mode_selects_deepselect_by_gpu_language(cmake_args: str) -> None:
-    setup = ROOT / "third_party/vllm/setup.py"
+    setup = _applied_vllm_file("setup.py")
     empty_branch = next(
         node
         for node in ast.parse(setup.read_text()).body

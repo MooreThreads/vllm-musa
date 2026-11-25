@@ -115,8 +115,9 @@ CMake target. It fetches `MooreThreads/DeepSelect` at commit
 `VLLM_MUSA_GIT_PROXY` mirror as the other source fetches. Select the backend at
 serving time with `--sparse-indexer-topk-backend deep_select`.
 
-To override the pin, set `DEEPSELECT_SRC_DIR` to a local checkout with its
-`csrc/3rdparty/mutlass` submodule initialized.
+To use a local checkout, initialize its `csrc/3rdparty/mutlass` submodule
+and set `DEEPSELECT_SRC_DIR` to the checkout path. This only changes the
+source location. The installer builds the extension in both cases.
 
 ## Device visibility
 
