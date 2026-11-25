@@ -9,7 +9,6 @@ import torch
 import torch.nn.functional as F
 
 from vllm_musa.kernels.hc_down_silu import (
-    MAX_MUSA_FUSED_M,
     hc_down_silu,
     hc_down_silu_enabled,
     supports_hc_down_silu,
@@ -35,9 +34,7 @@ def _reference(
     ]
 
 
-@pytest.mark.parametrize(
-    "num_tokens", [1, 2, 3, 4, 5, 8, 12, 16, 24, 32, 48]
-)
+@pytest.mark.parametrize("num_tokens", [1])
 @pytest.mark.parametrize(
     ("k", "rank", "hc", "padded_n"),
     [
@@ -71,6 +68,30 @@ def test_hc_down_silu_matches_fallback(
     )
 
 
+@pytest.mark.parametrize("num_tokens", [2, 3, 4, 5, 8, 16, 32, 48])
+def test_hc_down_silu_falls_back_beyond_one_token(
+    num_tokens: int,
+) -> None:
+    """Only M=1 is fused; the custom op must stay exact for larger M."""
+    torch.manual_seed(0)
+    k, rank, hc, padded_n = 10240, 320, 4, 336
+    x = torch.randn(num_tokens, k, dtype=torch.bfloat16, device="musa")
+    weight = torch.randn(
+        padded_n, k, dtype=torch.bfloat16, device="musa"
+    )
+
+    lora, injection = hc_down_silu(x, weight, rank, hc)
+    expected_lora, expected_injection = _reference(x, weight, rank, hc)
+
+    assert lora.shape == (num_tokens, rank)
+    torch.testing.assert_close(
+        lora, expected_lora, rtol=2e-2, atol=2e-2
+    )
+    torch.testing.assert_close(
+        injection, expected_injection, rtol=2e-2, atol=2e-2
+    )
+
+
 def test_hc_down_silu_unpadded_output() -> None:
     """The fused output stops at rank + hc and never computes pad columns."""
     num_tokens, k, rank, hc = 1, 64, 8, 4
@@ -88,7 +109,7 @@ def test_hc_down_silu_unpadded_output() -> None:
     )
 
 
-@pytest.mark.parametrize("num_tokens", [1, 4, 16, 48])
+@pytest.mark.parametrize("num_tokens", [1])
 def test_hc_down_silu_float32_epilogue_reference(
     num_tokens: int,
 ) -> None:
@@ -124,21 +145,22 @@ def test_supports_hc_down_silu_rejects_fallbacks() -> None:
     weight = torch.empty((336, 10240), dtype=torch.bfloat16, device="musa")
     assert hc_down_silu_enabled()
     assert supports_hc_down_silu(x, weight, 320, 4)
+    for num_tokens in (2, 3, 4, 8, 16, 32, 48):
+        assert not supports_hc_down_silu(
+            torch.empty(
+                (num_tokens, 10240),
+                dtype=torch.bfloat16,
+                device="musa",
+            ),
+            weight,
+            320,
+            4,
+        ), f"M={num_tokens} must stay on the unfused path"
     assert not supports_hc_down_silu(
         x.float(), weight, 320, 4
     )
     assert not supports_hc_down_silu(
         x, weight.float(), 320, 4
-    )
-    assert not supports_hc_down_silu(
-        torch.empty(
-            (MAX_MUSA_FUSED_M + 1, 10240),
-            dtype=torch.bfloat16,
-            device="musa",
-        ),
-        weight,
-        320,
-        4,
     )
     assert not supports_hc_down_silu(
         torch.empty((1, 10239), dtype=torch.bfloat16, device="musa"),
