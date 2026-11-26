@@ -5,19 +5,23 @@ on:
     paths:
       - '.dockerignore'
       - '.github/workflows/patch-series.yml'
+      - 'Makefile.sync'
       - 'README.md'
+      - 'README_CN.md'
       - 'benchmarks/**'
       - 'examples/**'
       - 'MANIFEST.in'
       - 'build_utils/**'
       - 'csrc/**'
       - 'docker/**'
+      - 'docs/mdm-developer-guide.md'
       - 'pyproject.toml'
       - 'requirements/**'
       - 'setup.py'
       - 'third_party/PINS'
       - 'tools/musa_sync.py'
       - 'tools/patch_metadata.py'
+      - 'tools/patch_validate.py'
       - 'vllm_musa/**'
       - 'vllm_musa_omni_compat_pth.py'
       - 'tests/**'
@@ -29,19 +33,23 @@ on:
     paths:
       - '.dockerignore'
       - '.github/workflows/patch-series.yml'
+      - 'Makefile.sync'
       - 'README.md'
+      - 'README_CN.md'
       - 'benchmarks/**'
       - 'examples/**'
       - 'MANIFEST.in'
       - 'build_utils/**'
       - 'csrc/**'
       - 'docker/**'
+      - 'docs/mdm-developer-guide.md'
       - 'pyproject.toml'
       - 'requirements/**'
       - 'setup.py'
       - 'third_party/PINS'
       - 'tools/musa_sync.py'
       - 'tools/patch_metadata.py'
+      - 'tools/patch_validate.py'
       - 'vllm_musa/**'
       - 'vllm_musa_omni_compat_pth.py'
       - 'tests/**'
@@ -66,7 +74,10 @@ jobs:
         run: python -m pytest -q tests/test_packaging_sources.py -k sdist
       - name: Test metadata, manifest, and lineage
         run: |
-          python -m pytest -q tests/test_patch_metadata.py tests/test_musa_sync.py tests/test_musa_sync_upstream.py tests/test_manifest.py tests/test_manifest_completeness.py tests/test_ordered_series_lineage.py tests/test_git_proxy.py
+          python -m pytest -q tests/test_patch_metadata.py tests/test_musa_sync.py \
+            tests/test_musa_sync_upstream.py tests/test_manifest.py \
+            tests/test_manifest_completeness.py tests/test_ordered_series_lineage.py \
+            tests/test_git_proxy.py tests/test_pins.py
           python tools/musa_sync.py report --metadata
           python tools/musa_sync.py check-series
       - name: Check patch contracts in runtime test modules

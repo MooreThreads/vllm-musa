@@ -2596,15 +2596,12 @@ def test_git_slug_reproduces_git_format_patch_filenames(ms, tmp_path):
 
 
 def test_developer_guide_documents_the_gate_truthfully():
-    """F13: the guide claimed a per-PR fixed-point gate that did not exist.
-
-    Mutation: remove the documented modes from docs/mdm-developer-guide.md.
-    """
     guide = (ROOT / "docs" / "mdm-developer-guide.md").read_text()
 
     for flag in ("--repo", "--replay", "--round-trip"):
         assert flag in guide, flag
-    assert "no in-repo CI" in guide
+    assert "../.github/workflows/patch-series.yml" in guide
+    assert "`offline-series`" in guide
     assert "runs on every PR" not in guide
 
 

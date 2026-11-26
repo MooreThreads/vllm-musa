@@ -399,11 +399,11 @@ their seams. cat-4a drift tripwires are regenerated separately (`musa_sync regen
   is consulted, so a typo'd path cannot pass a series that declares no anchor); a
   red series makes `verify` exit 1 even when every divergence is clean. A usage error prints
   `=== musa_sync check-series: FAIL (usage) ===`.
-  **Nothing invokes the gate automatically:** there is no in-repo CI workflow
-  and no git hook that runs `check-series` or `patch_validate.py`, and the PR
-  pipelines are external to this tree. Whatever gate runs, runs because a human
-  or an external pipeline typed the command — so the cost table above is what
-  decides which mode a reviewer should ask for.
+  [Patch series gates](../.github/workflows/patch-series.yml) runs `check-series`,
+  `check-series --replay`, `verify`, and `check-series --round-trip` in its
+  `offline-series` job when a change matches the workflow's paths. Replay and
+  verification use a pristine checkout at `VLLM_COMMIT`. The round-trip check
+  uses a separate checkout with the full series applied.
 - **On-hardware:** `tools/musa_verify/verify.sh` (configured via env vars
   `MUSA_HOST`, `MUSA_CONTAINER`, `MUSA_VENV`, … — never commit real values) runs the
   patch unit tests plus one functional server smoke per model, each pinned to its
