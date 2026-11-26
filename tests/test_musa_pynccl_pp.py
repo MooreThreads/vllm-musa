@@ -101,10 +101,12 @@ def test_eager_mccl_uses_the_workers_visible_device(
     init_process_group = Mock()
     namespace = {
         "backend": backend,
-        "config": None
-        if pp_size is None
-        else SimpleNamespace(
-            parallel_config=SimpleNamespace(pipeline_parallel_size=pp_size)
+        "config": (
+            None
+            if pp_size is None
+            else SimpleNamespace(
+                parallel_config=SimpleNamespace(pipeline_parallel_size=pp_size)
+            )
         ),
         "local_rank": 0,
         "init_kwargs": {"backend": backend},
