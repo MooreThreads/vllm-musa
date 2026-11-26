@@ -13,6 +13,7 @@ import pytest
 
 from build_utils.bundle_vllm import (
     BUNDLED_DISTRIBUTION,
+    EXPECTED_METADATA_REWRITES,
     bundle_vllm_package,
     find_prebuilt_extensions,
 )
@@ -69,6 +70,17 @@ def test_bundle_vllm_copies_payload_and_retargets_metadata(
     lookups = (destination / "metadata_lookups.py").read_text()
     assert lookups.count(BUNDLED_DISTRIBUTION) == 5
     assert 'version("vllm")' not in lookups
+
+
+def test_pinned_vllm_metadata_rewrite_count(tmp_path: Path) -> None:
+    pin_repo = os.environ.get("PIN_REPO")
+    if pin_repo is None:
+        pytest.skip("Set PIN_REPO to a checkout of the vLLM pin.")
+
+    result = bundle_vllm_package(
+        Path(pin_repo) / "vllm", tmp_path / "vllm", tag=VLLM_TAG, revision=VLLM_REVISION
+    )
+    assert result.metadata_rewrites == EXPECTED_METADATA_REWRITES
 
 
 def test_bundle_vllm_writes_pinned_version_from_archive(

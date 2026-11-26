@@ -98,6 +98,17 @@ python -c "from vllm_musa.platform import mtml_available; print(mtml_available)"
 `requirements/musa_private.txt` 是 MUSA 软件栈的版本来源，不要用同名的公共
 CUDA wheel 替换。
 
+### DeepSelect 后端
+
+`pip install .` 和 `pip install -e .` 都通过打过补丁的 vLLM CMake 目标编译
+`vllm._deepselect_C`。普通安装生成的 wheel 包含这个扩展。
+构建时使用 `VLLM_MUSA_GIT_PROXY` 配置的镜像，从 `MooreThreads/DeepSelect`
+获取提交 `b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32`。
+启动服务时，使用 `--sparse-indexer-topk-backend deep_select` 选择这个后端。
+
+如需使用本地 DeepSelect 源码，先初始化其 `csrc/3rdparty/mutlass` 子模块，
+再将 `DEEPSELECT_SRC_DIR` 设为该仓库的路径。安装程序会从指定目录编译扩展。
+
 ## 设备可见性
 
 启动服务前设置 `MUSA_VISIBLE_DEVICES`；它是插件使用的权威设备列表：
