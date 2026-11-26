@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 26 Nov 2026 18:52:12 +0800
+Subject: [PATCH] MUSA: drop top_k_per_row from the MUSA build
+
+---
+ csrc/sampler.cu         | 4 ++++
+ csrc/torch_bindings.cpp | 3 +++
+ 2 files changed, 7 insertions(+)
+
+diff --git a/csrc/sampler.cu b/csrc/sampler.cu
+index e9145e3b99..d9946ea095 100644
+--- a/csrc/sampler.cu
++++ b/csrc/sampler.cu
+@@ -341,6 +341,7 @@ __device__ bool processHistogramStep(
+ 
+ // Follows half - 11 - 11 - 10 bit iterations
+ // Keep the adaptive kernel's device instantiation separate from legacy calls.
++#ifndef USE_MUSA
+ template <int kNumThreadsPerBlock, int kNumBins, bool useRadixSort,
+           bool multipleBlocksPerRow = false, bool mergeBlocks = false,
+           bool deviceLengthAware = false, bool useTopK512Optimization = false>
+@@ -756,6 +757,7 @@ __launch_bounds__(kNumThreadsPerBlock) void topKPerRowDecode512DeviceLengthAware
+   #endif
+ }
+ #endif  // USE_ROCM
++#endif  // !USE_MUSA
+ 
+ }  // namespace vllm
+ 
+@@ -802,6 +804,7 @@ void apply_repetition_penalties_(
+       });
+ }
+ 
++#ifndef USE_MUSA
+ void top_k_per_row_decode(const torch::stable::Tensor& logits, int64_t next_n,
+                           const torch::stable::Tensor& seqLens,
+                           torch::stable::Tensor& indices, int64_t numRows,
+@@ -1017,3 +1020,4 @@ void top_k_per_row_prefill(const torch::stable::Tensor& logits,
+             static_cast<int>(topK), kSortingAlgorithmThreshold);
+   }
+ }
++#endif  // !USE_MUSA
+diff --git a/csrc/torch_bindings.cpp b/csrc/torch_bindings.cpp
+index e616ee9e2f..922f009923 100644
+--- a/csrc/torch_bindings.cpp
++++ b/csrc/torch_bindings.cpp
+@@ -586,6 +586,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+       "Tensor output_mask, Tensor repetition_penalties) -> ()");
+ 
+   // Optimized top-k per row operations.
++#ifndef USE_MUSA
+   ops.def(
+       "top_k_per_row_prefill(Tensor logits, Tensor rowStarts, Tensor rowEnds, "
+       "Tensor! indices, int numRows, int stride0, "
+@@ -596,6 +597,8 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+       "Tensor seq_lens, Tensor! indices, "
+       "int numRows, int stride0, int stride1, int topK) -> ()");
+ 
++#endif  // !USE_MUSA
++
+   ops.def(
+       "persistent_topk(Tensor logits, Tensor lengths, Tensor! output, "
+       "Tensor workspace, int k, int max_seq_len) -> ()");
