@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 19 Nov 2026 22:51:13 +0800
+Subject: [PATCH] MUSA: track the native current stream
+
+Use the CUDA-like non-default stream on a cold lookup: MUSA graphs cannot
+capture on the default stream. Register the existing tracking wrapper on
+the native MUSA setter too: MUSA stream contexts call it directly, and a
+later torchada import can rebind the CUDA name to it.
+---
+ vllm/utils/torch_utils.py | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
+index 6d80de8194..e95bbcd8dc 100644
+--- a/vllm/utils/torch_utils.py
++++ b/vllm/utils/torch_utils.py
+@@ -809,6 +809,10 @@ def _patched_set_stream(stream: torch.cuda.Stream) -> None:
+ 
+ torch.cuda.set_stream = _patched_set_stream
+ 
++if getattr(torch.version, "musa", None) is not None:
++    prev_set_stream = torch.musa.set_stream
++    torch.musa.set_stream = _patched_set_stream
++
+ 
+ class _StreamPlaceholder:
+     def __init__(self):
+@@ -837,7 +841,7 @@ def current_stream() -> torch.cuda.Stream:
+         # stream cannot be used for cudagraph capture, see
+         # https://github.com/pytorch/pytorch/blob/42ad9edfb754743fdae3276ade43de000beb4f60/aten/src/ATen/cuda/CUDAGraph.cpp#L77
+         # for more details. Therefore, we create a dedicated stream per process.
+-        if current_platform.is_rocm() or current_platform.is_cuda():
++        if current_platform.is_cuda_alike():
+             # Ensure new stream is ordered w.r.t. replaced stream's work.
+             new_stream = torch.cuda.Stream()
+             new_stream.wait_stream(torch.cuda.current_stream())
