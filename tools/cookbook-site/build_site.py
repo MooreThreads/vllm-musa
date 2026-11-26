@@ -480,21 +480,34 @@ def badge(text: str, kind: str = "neutral") -> str:
     return f'<span class="badge badge-{kind}">{esc(plain(text))}</span>'
 
 
+NODE_LAYOUT_RE = re.compile(
+    r"(\d+)\s*nodes?,\s*(\d+)\s*[x\u00d7]\s*([A-Za-z0-9.]+)\s+per\s+node", re.I
+)
+
+
+def hardware_label(hardware: str) -> str:
+    """Return a plain hardware facet, collapsing an exact node layout.
+
+    "2 nodes, 8x S5000 per node" is too long for a badge and hides the total,
+    so the badge, the card footnote and the GPU filter all use "16x S5000".
+    Any other value is normalized but left unchanged, so a layout such as
+    "2 nodes, 16x S5000 total" can never be multiplied into 32 GPUs.
+    """
+    hardware = plain(hardware)
+    match = NODE_LAYOUT_RE.fullmatch(hardware)
+    if match:
+        nodes, per_node, unit = match.groups()
+        return f"{int(nodes) * int(per_node)}x {unit}"
+    return hardware
+
+
 def recipe_badges(recipe: Recipe) -> str:
     out = []
     precision = recipe.facet("Precision")
     if precision:
         out.append(badge(precision, "precision"))
-    hardware = recipe.facet("Hardware")
+    hardware = hardware_label(recipe.facet("Hardware"))
     if hardware:
-        # "2 nodes, 8x S5000 per node" is too long for a badge and hides the
-        # total, so collapse it to the GPU count it actually means.
-        nodes = re.search(r"(\d+)\s*nodes?", hardware, re.I)
-        per_node = re.search(r"(\d+)\s*[x\u00d7]\s*([A-Za-z0-9.]+)", hardware)
-        if nodes and per_node:
-            hardware = (
-                f"{int(nodes.group(1)) * int(per_node.group(1))}x {per_node.group(2)}"
-            )
         out.append(badge(hardware, "hardware"))
     tp = recipe.facet("Tensor parallelism")
     if tp:
@@ -514,10 +527,12 @@ def recipe_badges(recipe: Recipe) -> str:
 
 def card(recipe: Recipe, page: str) -> str:
     url = rel_link(page, recipe.page_path)
-    hardware = recipe.facet("Hardware")
-    tp = recipe.facet("Tensor parallelism")
-    ctx = recipe.facet("Maximum context")
-    meta = " · ".join(x for x in (tp, ctx) if x)
+    # The footnote is plain text: strip inline markdown and reuse the badge
+    # hardware label so a two-node recipe cannot contradict its own badge.
+    hardware = hardware_label(recipe.facet("Hardware"))
+    tp = plain(recipe.facet("Tensor parallelism"))
+    ctx = plain(recipe.facet("Maximum context"))
+    meta = " · ".join(x for x in (hardware, tp, ctx) if x)
     facets = " ".join(
         f'data-{key}="{esc(value)}"' for key, value in recipe.facets().items()
     )
@@ -530,7 +545,7 @@ def card(recipe: Recipe, page: str) -> str:
   <div class="badges">{recipe_badges(recipe)}</div>
   <p class="card-desc">{esc(recipe.overview)}</p>
   <footer class="card-foot">
-    <span class="card-meta">{esc(" · ".join(x for x in (hardware, meta) if x))}</span>
+    <span class="card-meta">{esc(meta)}</span>
     <span class="card-open">Open recipe <span aria-hidden="true">→</span></span>
   </footer>
 </article>"""
@@ -682,12 +697,9 @@ def recipe_facets(recipe: Recipe) -> dict[str, str]:
     else:
         spec_key = spec
 
-    hardware = plain(recipe.facet("Hardware"))
-    per_node = re.search(r"(\d+)\s*[x×]", hardware)
-    nodes = re.search(r"(\d+)\s*nodes?\b", hardware, re.I)
-    gpus = ""
-    if per_node:
-        gpus = str(int(per_node.group(1)) * (int(nodes.group(1)) if nodes else 1))
+    hardware = hardware_label(recipe.facet("Hardware"))
+    per_node = re.match(r"(\d+)\s*[x×]", hardware)
+    gpus = per_node.group(1) if per_node else ""
     task = (
         "Multimodal"
         if MULTIMODAL_RE.search(
