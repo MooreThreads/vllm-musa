@@ -72,13 +72,18 @@ def test_bundle_vllm_copies_payload_and_retargets_metadata(
     assert 'version("vllm")' not in lookups
 
 
-def test_pinned_vllm_metadata_rewrite_count(tmp_path: Path) -> None:
-    pin_repo = os.environ.get("PIN_REPO")
-    if pin_repo is None:
-        pytest.skip("Set PIN_REPO to a checkout of the vLLM pin.")
+def test_patched_vllm_metadata_rewrite_count(tmp_path: Path) -> None:
+    patched_repo = os.environ.get("PATCHED_VLLM_REPO")
+    if patched_repo is None:
+        pytest.skip(
+            "Set PATCHED_VLLM_REPO to the vLLM checkout with the series applied."
+        )
 
     result = bundle_vllm_package(
-        Path(pin_repo) / "vllm", tmp_path / "vllm", tag=VLLM_TAG, revision=VLLM_REVISION
+        Path(patched_repo) / "vllm",
+        tmp_path / "vllm",
+        tag=VLLM_TAG,
+        revision=VLLM_REVISION,
     )
     assert result.metadata_rewrites == EXPECTED_METADATA_REWRITES
 
