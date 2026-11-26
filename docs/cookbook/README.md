@@ -75,6 +75,8 @@ See the [OCR cookbook index](ocr/README.md) for the four model recipes.
 |---|---|---|---|
 | [DeepSeek-V4-Flash](deepseek/deepseek-v4-flash.md) | 8x S5000, TP8 | Fixed MTP4 | MTP-off |
 | [DeepSeek-V4-Flash-0731](deepseek/deepseek-v4-flash-731.md) | 8x S5000 per node, TP8 | Single node, DSpark4 | 1P1D with Mooncake store |
+| [DeepSeek-V4.1-Flash-1017 W4AFP8](deepseek/deepseek-v4.1-flash-1017-w4afp8.md) | 8x S5000, TP8 + EP8 | Single node, DSpark Adaptive-5 | Single node, Fixed-4 |
+| [DeepSeek-V4.1-Flash-1017 FP8](deepseek/deepseek-v4.1-flash-1017-fp8.md) | 8x S5000, TP8 | Single node, DSpark Adaptive-5 | Single node, Fixed-4 |
 
 ## GLM
 
