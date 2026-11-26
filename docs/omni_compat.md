@@ -405,26 +405,24 @@ hardware smoke is for, and why `docker/omni.Dockerfile` is not the last gate.
 ## The image
 
 Build with Docker BuildKit on a digest-pinned vLLM-MUSA `vllm-openai` image.
-The default Omni
-revision is pinned in [docker/omni.Dockerfile](../docker/omni.Dockerfile).
-The build script can export the selected commit from a local checkout, so
-working tree changes do not enter the image. When fetching from a remote,
-pass a full commit SHA to override the default.
+`--omni-ref` accepts a branch, tag, or commit and defaults to `origin/main`.
+The build script refreshes movable remote refs on each invocation and records
+the resolved commit in `/opt/vllm-omni-commit.txt`. With `--omni-clone`, it
+exports the selected commit from the local checkout.
 
 ```bash
-bash docker/build_omni_image.sh --base <pinned-vllm-musa-image> --omni-clone <local-omni-checkout>
+bash docker/build_omni_image.sh --base <pinned-vllm-musa-image> --omni-ref <branch-tag-or-sha>
 bash docker/build_omni_image.sh --base <pinned-vllm-musa-image> --target test
 ```
 
 Both targets use the shim already shipped by the base wheel and activate it
-with `install-pth`. The builder audits the Omni source against the installed
-vLLM, then builds a MUSA-targeted Omni wheel. The production target installs
-that wheel and copies the pinned Omni examples and benchmarks into
+with `install-pth`. The production target installs a MUSA-targeted Omni wheel
+and copies the selected revision's examples and benchmarks into
 `examples/` and `benchmarks/` under `/vllm-workspace/omni`. Run those assets
-from that directory to preserve their upstream import paths. Use
-`docker run --rm <image> --help` to see the production entry point's options.
-The `test` target keeps an editable Omni checkout at
-`/vllm-workspace/vllm-omni` and defaults to Bash.
+from that directory to preserve their upstream import paths.
+The `test` target installs Omni in editable mode from its checkout at
+`/vllm-workspace/vllm-omni`. Both targets default to Bash. To see the serving
+options, run `docker run --rm <image> vllm-omni serve --omni --help`.
 
 Omni installation constrains the Python packages in the base interpreter's
 `purelib` and `platlib` so Torch, MUSA packages, and NumPy keep their base
@@ -433,8 +431,7 @@ repacks the two hash-pinned guardrail wheels with their OpenCV requirements
 pointing to that provider. Both targets run `pip check`, verify installed
 package ownership and exercise `cv2` with NumPy.
 
-The image keeps source and installed compatibility audit reports in
-`/opt/vllm-omni-compat-preflight.json` and `/opt/vllm-omni-compat.json`.
+The installed compatibility audit writes `/opt/vllm-omni-compat.json`.
 The runtime shim report is `/opt/vllm-omni-shim-verify.json`. The verifier
 checks the startup hook, invokes the MUSA sampler hook installer after #365,
 and checks adapter survival after the binding. Driverless verification reports
@@ -483,7 +480,7 @@ in the image, so they are unaffected by the interpreter or the torch version:
 [verdict]   PASS (imports, attributes, calls, staleness, semantics)
 ```
 
-Without `--target-vllm` -- which is what both build gates run -- the same trees
+Without `--target-vllm`, as in the image build audit, the same trees
 give the same four pin-only passes and `PASS (imports, attributes, calls,
 staleness; semantics not compared, no --target-vllm)`.
 
@@ -539,7 +536,8 @@ Two further things that only a build on this base could settle:
   `{vllm, vllm_musa}`, so the bootstrap genuinely is unreachable beside the
   package and genuinely is reachable from `purelib`.
 * **the foundation is 181 pins, not 177 and not 201.** 201 is what a bare
-  `pip freeze` reports on this base and it is wrong, for the reason in stage 6.
+  `pip freeze` reports on this base because it also includes apt-managed
+  packages outside the Python foundation paths.
   A side effect worth knowing: with the distro packages no longer pinned, the
   Omni install replaces apt's `cryptography` 3.4.8 with a cp312 build (50.0.2).
   That is correct — `cryptography` was never part of the MUSA foundation — and
