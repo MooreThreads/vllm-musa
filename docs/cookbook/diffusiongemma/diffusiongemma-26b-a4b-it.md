@@ -16,14 +16,17 @@ so one `vllm serve` process exposes both `/v1/chat/completions` and `/v1/systemo
 |---|---|
 | Image | `registry.mthreads.com/mcconline/inference/vllm/vllm-openai:jev` |
 | Checkpoint | `google/diffusiongemma-26B-A4B-it` (BF16) |
-| Hardware | 1x S5000 (TP1), MUSA 5.2.0, driver `5.2.0-server` |
+| Hardware | 1x S5000 |
 | Precision | BF16 |
+| Tensor parallelism | TP1 |
 | Speculative decoding | Off |
 | Diffusion canvas | 256 tokens, 48 denoising steps (values from the checkpoint) |
-| Maximum context | 8,192 tokens (recipe value; the canvas is 256) |
+| Maximum context | 8,192 tokens |
 | Attention backend | `TRITON_ATTN`, selected automatically on MUSA for diffusion models |
 | Weights / KV cache | 48.5 GiB / 11.5 GiB at `--gpu-memory-utilization 0.86` |
 | Logprob mode | `raw_logprobs` (default) or `processed_logprobs`; other modes are rejected |
+
+The 8,192-token context is the recipe value; a request still denoises a 256-token canvas at a time.
 
 `TRITON_ATTN` is pinned by `vllm_musa/platform.py` for diffusion models: a diffusion batch carries a
 per-request `causal` tensor, which the MUSA FlashAttention path cannot express. An explicit
