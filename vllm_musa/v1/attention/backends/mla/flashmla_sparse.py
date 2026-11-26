@@ -122,15 +122,11 @@ def _musa_backend_sparse_fwd(
         is_glm_dsa, q, kv, indices, d_v, attn_sink, topk_length
     ):
         logger.info_once("Using GLM DSA MATE sparse-MLA adapter.")
-        from vllm_musa.v1.attention.ops.sparse_mla_mate import (
-            sparse_mla_fwd_bf16,
-        )
+        from vllm_musa.v1.attention.ops.sparse_mla_mate import sparse_mla_fwd_bf16
     elif _can_use_tilelang_sparse_prefill(q, kv, indices, d_v, attn_sink, topk_length):
         # Preserve the pre-existing generic TileLang route for non-GLM MLA
         # models; it has a different implementation contract from MATE v32.
-        from vllm_musa.v1.attention.ops.sparse_mla_tilelang import (
-            sparse_mla_fwd_bf16,
-        )
+        from vllm_musa.v1.attention.ops.sparse_mla_tilelang import sparse_mla_fwd_bf16
 
     if sparse_mla_fwd_bf16 is not None:
         # This monkeypatch is private to FlashMLASparseImpl._bf16_flash_mla_kernel,
@@ -160,10 +156,19 @@ def _musa_backend_sparse_fwd(
     )
 
 
-_core_sparse.get_mla_metadata = _musa_get_mla_metadata
-_core_sparse.flash_mla_sparse_fwd = _musa_backend_sparse_fwd
-_core_sparse.flash_mla_with_kvcache = _musa_mla_kvcache
-_core_sparse.FlashMLASchedMeta = _musa_sched_meta
+_HOOKS_INSTALLED = False
+
+
+def install_hooks() -> None:
+    """Rebind core sparse FlashMLA ops to MUSA ``flash_mla`` equivalents (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    _core_sparse.get_mla_metadata = _musa_get_mla_metadata
+    _core_sparse.flash_mla_sparse_fwd = _musa_backend_sparse_fwd
+    _core_sparse.flash_mla_with_kvcache = _musa_mla_kvcache
+    _core_sparse.FlashMLASchedMeta = _musa_sched_meta
+    _HOOKS_INSTALLED = True
 
 
 @register_backend(AttentionBackendEnum.FLASHMLA_SPARSE)

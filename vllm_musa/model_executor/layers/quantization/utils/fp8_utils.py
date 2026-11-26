@@ -3,9 +3,7 @@
 import os
 
 import torch
-from vllm.model_executor.layers.quantization.utils.quant_utils import (
-    get_fp8_min_max,
-)
+from vllm.model_executor.layers.quantization.utils.quant_utils import get_fp8_min_max
 from vllm.platforms import current_platform
 from vllm.utils.deep_gemm import get_tma_aligned_size, is_deep_gemm_e8m0_used
 
@@ -304,8 +302,17 @@ def silu_mul_per_token_group_quant_fp8_musa(
     return output, output_s
 
 
-import vllm.model_executor.layers.quantization.utils.fp8_utils
+_HOOKS_INSTALLED = False
 
-vllm.model_executor.layers.quantization.utils.fp8_utils.deepgemm_post_process_fp8_weight_block = (
-    deepgemm_post_process_fp8_weight_block
-)
+
+def install_hooks() -> None:
+    """Install MUSA ``deepgemm_post_process_fp8_weight_block`` override (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    import vllm.model_executor.layers.quantization.utils.fp8_utils as _upstream_fp8_utils
+
+    _upstream_fp8_utils.deepgemm_post_process_fp8_weight_block = (
+        deepgemm_post_process_fp8_weight_block
+    )
+    _HOOKS_INSTALLED = True

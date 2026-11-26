@@ -45,7 +45,8 @@ EXPECTED_ENTRY_POINTS = {
     "vllm.general_plugins": {
         "lora_filesystem_resolver": "vllm.plugins.lora_resolvers.filesystem_resolver:register_filesystem_resolver",
         "lora_hf_hub_resolver": "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_hub_resolver",
-        "musa_custom_ops": "vllm_musa:register_custom_ops",
+        "musa_out_of_tree": "vllm_musa:register_out_of_tree",
+        "musa_attn_backends": "vllm_musa:register_attn_backends",
     },
 }
 

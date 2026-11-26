@@ -9,14 +9,8 @@ from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.v1.worker.gpu.sample.sampler import Sampler
 
-from vllm_musa.optimization_contract import (
-    OptimizationFeature,
-    prefers_optimization,
-)
-from vllm_musa.v1.sample.topk_topp_sampler import (
-    _is_qwen_sampler_vocab,
-    is_musa_tensor,
-)
+from vllm_musa.optimization_contract import OptimizationFeature, prefers_optimization
+from vllm_musa.v1.sample.topk_topp_sampler import _is_qwen_sampler_vocab, is_musa_tensor
 
 logger = init_logger(__name__)
 
@@ -94,10 +88,15 @@ def select_qwen_uniform_sample_counts(
     return num_sampled_tokens, buffers[2][:num_reqs]
 
 
+_HOOKS_INSTALLED = False
+
+
 def install_hooks() -> None:
+    """Install MUSA uniform decode sample-count hook on ``Sampler`` (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
     Sampler._musa_select_num_sampled_and_rejected = (  # type: ignore[attr-defined]
         select_qwen_uniform_sample_counts
     )
-
-
-install_hooks()
+    _HOOKS_INSTALLED = True

@@ -1,27 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""MUSA IR-op providers for vllm.ir.ops.*
+"""MUSA IR-op providers for ``vllm.ir.ops.*``.
 
 Currently registers:
-- rms_norm: delegates to torch.ops._C.rms_norm only when that op has a MUSA
-  dispatch kernel. In vLLM v0.22 the upstream layernorm implementation moved
-  to _C_stable_libtorch; vllm-musa builds that extension as a schema-only
-  compatibility shim, so this provider self-disables until a real MUSA kernel
-  is present.
-- fused_add_rms_norm: exposes one ``musa`` provider whose internal capability
-  dispatch uses the exact FP32-sum JIT kernel for measured H5120 BF16 work and
-  the pre-existing C-extension kernel for broader standard RMSNorm shapes. It
-  is registered as in-place so vLLM's IR functionalization pass, rather than a
-  model-name check, owns activation donation.
-
-Engine log from baseline confirms:
-    ir_op_priority=IrOpPriorityConfig(rms_norm=['native'])
-
-i.e. before this provider lands, every decoder layer per token uses
-the pure-PyTorch native rms_norm. With the "musa" provider plus a
-priority override in `vllm_musa.platform`, the dispatcher / Inductor
-lowering picks the MUSA kernel when `_dispatch_has_kernel_for_dispatch_key`
-confirms one is registered.
+- ``rms_norm``: single ``musa`` provider that dispatches to the validated
+  MUSA JIT kernel (``torch.ops.vllm.musa_csrc_rmsnorm``) for contiguous 2D
+  FP16/BF16 tensors (hidden_size <= 32768), and falls back to
+  ``torch.ops._C.rms_norm`` only when that op actually has a ``MUSA`` dispatch
+  kernel. Unsupported shapes/dtypes return ``False`` from ``supports_args`` so
+  vLLM IR priority falls back cleanly to ``native``.
+- ``fused_add_rms_norm``: exposes one ``musa`` provider whose internal
+  capability dispatch uses the exact FP32-sum JIT kernel for measured H5120
+  BF16 work and the pre-existing C-extension kernel for broader standard
+  RMSNorm shapes. It is registered as in-place so vLLM's IR functionalization
+  pass, rather than a model-name check, owns activation donation.
 """
 
 import torch
@@ -31,7 +23,8 @@ from vllm.platforms import current_platform
 
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
-# vllm._C must be loaded before torch.ops._C.rms_norm is resolvable.
+# Ensure AOT C++ extensions are loaded before probing dispatch keys or
+# lowering IR ops.
 current_platform.import_kernels()
 
 
@@ -44,7 +37,80 @@ def _has_C_rms_norm() -> bool:
         return False
 
 
-MUSA_RMS_NORM_SUPPORTED = current_platform.is_musa() and _has_C_rms_norm()
+def _has_jit_rms_norm() -> bool:
+    try:
+        import vllm_musa.jit_kernel.csrc.norm  # noqa: F401
+
+        return hasattr(torch.ops.vllm, "musa_csrc_rmsnorm")
+    except Exception:
+        return False
+
+
+def _jit_rms_norm_supports_args(
+    x: Tensor,
+    weight: Tensor | None,
+    epsilon: float,
+    variance_size: int | None = None,
+) -> bool:
+    del epsilon
+    if weight is None or x.dim() != 2 or weight.dim() != 1:
+        return False
+    hidden_size = x.shape[-1]
+    return (
+        variance_size is None
+        and x.device.type == "musa"
+        and weight.device.type == "musa"
+        and hidden_size > 0
+        and hidden_size == weight.numel()
+        and hidden_size <= 32768
+        and x.dtype in (torch.float16, torch.bfloat16)
+        and weight.dtype == x.dtype
+        and x.is_contiguous()
+        and weight.is_contiguous()
+    )
+
+
+def _c_ext_rms_norm_supports_args(
+    x: Tensor,
+    weight: Tensor | None,
+    epsilon: float,
+    variance_size: int | None = None,
+) -> bool:
+    del epsilon
+    return (
+        _HAS_C_RMS_NORM
+        and variance_size is None
+        and weight is not None
+        and x.device.type == "musa"
+        and weight.device.type == "musa"
+        and x.dim() >= 2
+        and x.dtype in (torch.float16, torch.bfloat16)
+        and weight.dtype == x.dtype
+        and weight.is_contiguous()
+    )
+
+
+_HAS_JIT_RMS_NORM = _has_jit_rms_norm()
+_HAS_C_RMS_NORM = _has_C_rms_norm()
+MUSA_RMS_NORM_SUPPORTED = current_platform.is_musa() and (
+    _HAS_JIT_RMS_NORM or _HAS_C_RMS_NORM
+)
+
+
+def _select_musa_rms_norm_impl(
+    x: Tensor,
+    weight: Tensor | None,
+    epsilon: float,
+    variance_size: int | None = None,
+) -> str | None:
+    """Select the concrete kernel hidden behind the public ``musa`` provider."""
+    if _HAS_JIT_RMS_NORM and _jit_rms_norm_supports_args(
+        x, weight, epsilon, variance_size
+    ):
+        return "jit"
+    if _c_ext_rms_norm_supports_args(x, weight, epsilon, variance_size):
+        return "c_ext"
+    return None
 
 
 def _rms_norm_supports_args(
@@ -53,14 +119,7 @@ def _rms_norm_supports_args(
     epsilon: float,
     variance_size: int | None = None,
 ) -> bool:
-    return (
-        variance_size is None
-        and weight is not None
-        and x.dim() >= 2
-        and x.dtype in (torch.float16, torch.bfloat16)
-        and weight.dtype == x.dtype
-        and weight.is_contiguous()
-    )
+    return _select_musa_rms_norm_impl(x, weight, epsilon, variance_size) is not None
 
 
 @ir.ops.rms_norm.register_impl(
@@ -74,16 +133,24 @@ def rms_norm(
     epsilon: float,
     variance_size: int | None = None,
 ) -> Tensor:
-    """MUSA provider for vllm.ir.ops.rms_norm.
+    """MUSA provider for ``vllm.ir.ops.rms_norm``.
 
-    Delegates to torch.ops._C.rms_norm only when a MUSA dispatch kernel is
-    registered for the upstream op namespace.
+    Routes standard 2D FP16/BF16 tensors to the MUSA JIT RMSNorm kernel and
+    falls back to ``torch.ops._C.rms_norm`` only when a MUSA dispatch kernel
+    is registered for the upstream op namespace.
     """
     assert variance_size is None
     assert weight is not None
-    output = torch.empty_like(x)
-    torch.ops._C.rms_norm(output, x, weight, epsilon)
-    return output
+    selected = _select_musa_rms_norm_impl(x, weight, epsilon, variance_size)
+    if selected == "jit":
+        from vllm_musa.jit_kernel.csrc import norm as musa_jit_norm
+
+        return musa_jit_norm.rmsnorm(x, weight, epsilon)
+    if selected == "c_ext":
+        output = torch.empty_like(x)
+        torch.ops._C.rms_norm(output, x, weight, epsilon)
+        return output
+    raise AssertionError("musa rms_norm provider invoked with unsupported arguments")
 
 
 def _jit_fused_add_rms_norm_supports_args(

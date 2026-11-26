@@ -17,7 +17,8 @@ import logging
 __all__ = [
     "MUSAPlatform",
     "musa_platform_plugin",
-    "register_custom_ops",
+    "register_out_of_tree",
+    "register_attn_backends",
     "collect_env",
 ]
 __version__ = "0.1.32"
@@ -57,7 +58,8 @@ def musa_platform_plugin() -> str | None:
 
     Note: We intentionally do NOT apply patches here because this function
     is called during vLLM module initialization which can cause circular
-    import issues. Patches are applied via the general plugin mechanism.
+    import issues. Patches and OOT registrations run via the general plugin
+    mechanism.
     """
     # Check if torchada detected MUSA platform
     if _torchada_available:
@@ -75,22 +77,6 @@ def musa_platform_plugin() -> str | None:
         pass
 
     return None
-
-
-# Optional, default-off registration of Inductor GEMM template heuristics
-# for device_type='musa'. The default ATen lowering is the fast path; set
-# VLLM_MUSA_ENABLE_INDUCTOR_HEURISTICS=1 to experiment with Triton GEMM
-# autotuning. No-ops quietly on old torch versions.
-try:
-    from vllm_musa._inductor import maybe_register_musa_template_heuristics
-
-    maybe_register_musa_template_heuristics()
-except Exception as _exc:  # pragma: no cover
-    logger.warning(
-        "failed to register Inductor template heuristics for "
-        "MUSA (%s); falling back to ATen path for compiled `mm` ops.",
-        _exc,
-    )
 
 
 ########### general plugins ###########
@@ -128,59 +114,73 @@ def patch_report() -> list[dict]:
     return _patch_report()
 
 
+_OUT_OF_TREE_REGISTERED = False
+_ATTN_BACKENDS_REGISTERED = False
+
+
 def _register_patches() -> None:
-    """Register MUSA runtime patches.
+    """Register MUSA runtime patches and optional Inductor heuristics.
 
     vLLM **source** edits are applied at BUILD time (setup.py +
-    ``vllm_musa/patches/series/``), not here. the torch/vLLM config
-    compat shims are now cat-6 object patches too, so ``_register_patches``
+    ``vllm_musa/patches/series/``), not here. The torch/vLLM config
+    compat shims are cat-6 object patches too, so ``_register_patches``
     installs only the runtime **object** monkey-patches (live-object edits that
-    have no source-diff form), all via :func:`_apply_object_patches`.
+    have no source-diff form) and optional Inductor template heuristics.
     """
     _apply_object_patches()
+    try:
+        from vllm_musa._inductor import maybe_register_musa_template_heuristics
+
+        maybe_register_musa_template_heuristics()
+    except Exception as exc:  # pragma: no cover
+        logger.warning(
+            "failed to register Inductor template heuristics for "
+            "MUSA (%s); falling back to ATen path for compiled `mm` ops.",
+            exc,
+        )
 
 
 def _register_ops() -> None:
-    """Register OOT custom ops (activation, layernorm, fused_moe, etc.)."""
+    """Register OOT layers, model-executor adapters, and Torch custom op schemas."""
     import vllm_musa.jit_kernel.csrc.moe as _moe  # noqa: F401
-    import vllm_musa.model_executor  # noqa: F401
+    import vllm_musa.model_executor as _model_executor
 
     from .custom_op_modules import preload_custom_op_modules
 
+    _model_executor.register_model_executor_adapters()
     preload_custom_op_modules()
     _moe.prewarm()
 
 
 def _register_modules() -> None:
-    """Register connectors, utils, v1 backends, and the Qwen runner hooks."""
+    """Register v1 runtime adapters and the Qwen runner hooks."""
     import vllm_musa.distributed  # noqa: F401
     import vllm_musa.utils  # noqa: F401
-    import vllm_musa.v1  # noqa: F401
+    import vllm_musa.v1 as _v1
+
+    _v1.register_v1_adapters()
 
     # Installed by the general plugin rather than on import: vLLM imports
     # vllm_musa.v1 from inside a partially initialized model_runner.
     from vllm_musa.v1.sample.qwen_sample_input_views import (
         install_qwen_sample_input_views,
     )
-    from vllm_musa.v1.worker import (
-        qwen_fused_next_input_ids,
-        qwen_identity_logits_view,
-    )
+    from vllm_musa.v1.worker import qwen_fused_next_input_ids, qwen_identity_logits_view
 
     install_qwen_sample_input_views()
     qwen_fused_next_input_ids.install_hooks()
     qwen_identity_logits_view.install_hooks()
 
 
-def register_custom_ops() -> None:
-    """
-    vLLM general plugin entry point for MUSA customizations.
+def register_out_of_tree() -> None:
+    """vLLM general plugin entry point for MUSA OOT layers, ops, and adapters.
 
-    This function is called by vLLM's general plugin mechanism after the
-    platform is initialized, which avoids circular import issues.
-    It applies the runtime object patches and registers all MUSA-specific ops,
-    distributed connectors, and attention backends.
+    Idempotent: safe to call repeatedly within the same process.
     """
+    global _OUT_OF_TREE_REGISTERED
+    if _OUT_OF_TREE_REGISTERED:
+        return
+
     # Must run before any Mooncake worker is constructed.  Keep this helper
     # stdlib-only so it does not pull in torch or replace upstream connector
     # objects during plugin discovery.
@@ -190,7 +190,24 @@ def register_custom_ops() -> None:
     _register_patches()
     _register_ops()
     _register_modules()
-    logger.info("MUSA patches and custom ops registered")
+    _OUT_OF_TREE_REGISTERED = True
+    logger.info("MUSA out-of-tree layers, custom ops, and runtime adapters registered")
+
+
+def register_attn_backends() -> None:
+    """vLLM general plugin entry point for MUSA attention backend overrides.
+
+    Registers MUSA attention backends via ``vllm.v1.attention.backends.registry``
+    so backend lookup works before platform selectors run. Idempotent.
+    """
+    global _ATTN_BACKENDS_REGISTERED
+    if _ATTN_BACKENDS_REGISTERED:
+        return
+
+    from .platform import register_attention_backends
+
+    register_attention_backends()
+    _ATTN_BACKENDS_REGISTERED = True
 
 
 ########### console scripts ###########

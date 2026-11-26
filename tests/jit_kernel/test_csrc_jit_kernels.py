@@ -86,10 +86,7 @@ def _fused_add_rmsnorm_ref(
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_csrc_rmsnorm_kernels_match_reference(dtype: torch.dtype) -> None:
-    from vllm_musa.jit_kernel.csrc.norm import (
-        gemma_rmsnorm,
-        rmsnorm,
-    )
+    from vllm_musa.jit_kernel.csrc.norm import gemma_rmsnorm, rmsnorm
 
     torch.manual_seed(123)
     device = torch.device("musa")
@@ -183,9 +180,7 @@ def test_ir_fused_add_rmsnorm_jit_dispatch_is_h5120_only(
     weight_dtype: torch.dtype,
     expected: bool,
 ) -> None:
-    from vllm_musa.kernels.musa_ops import (
-        _jit_fused_add_rms_norm_supports_args,
-    )
+    from vllm_musa.ir.layernorm import _jit_fused_add_rms_norm_supports_args
 
     device = torch.device("musa")
     x = torch.empty((rows, hidden), device=device, dtype=dtype)
@@ -196,9 +191,7 @@ def test_ir_fused_add_rmsnorm_jit_dispatch_is_h5120_only(
 
 
 def test_ir_fused_add_rmsnorm_dispatch_rejects_unsafe_inputs() -> None:
-    from vllm_musa.kernels.musa_ops import (
-        _fused_add_rms_norm_supports_args,
-    )
+    from vllm_musa.ir.layernorm import _fused_add_rms_norm_supports_args
 
     device = torch.device("musa")
     weight = torch.empty((5120,), device=device, dtype=torch.bfloat16)
@@ -220,11 +213,12 @@ def test_ir_fused_add_rmsnorm_dispatch_rejects_unsafe_inputs() -> None:
 
 
 def test_ir_fused_add_rmsnorm_c_ext_branch_preserves_broad_shapes() -> None:
-    from vllm_musa.kernels.musa_ops import (
+    from vllm_musa.ir.layernorm import (
         _c_ext_fused_add_rms_norm_supports_args,
         _fused_add_rms_norm_supports_args,
         _select_musa_fused_add_rms_norm_impl,
     )
+
     device = torch.device("musa")
     x = torch.empty((1, 5376), device=device, dtype=torch.bfloat16)
     residual = torch.empty_like(x)
@@ -244,7 +238,7 @@ def test_ir_fused_add_rmsnorm_dispatch_uses_compile_range_not_shape_hint() -> No
     from vllm.compilation.passes.inductor_pass import pass_context
     from vllm.config.utils import Range
 
-    from vllm_musa.kernels.musa_ops import (
+    from vllm_musa.ir.layernorm import (
         _fused_add_rms_norm_supports_args,
         _select_musa_fused_add_rms_norm_impl,
     )
@@ -277,9 +271,7 @@ def test_ir_fused_add_rmsnorm_dispatch_uses_compile_range_not_shape_hint() -> No
 def test_ir_fused_add_rmsnorm_single_provider_covers_standard_rmsnorm() -> None:
     from vllm import ir
 
-    from vllm_musa.kernels.musa_ops import (
-        _select_musa_fused_add_rms_norm_impl,
-    )
+    from vllm_musa.ir.layernorm import _select_musa_fused_add_rms_norm_impl
 
     device = torch.device("musa")
     bf16_x = torch.empty((1, 2048), device=device, dtype=torch.bfloat16)
@@ -311,9 +303,7 @@ def test_ir_fused_add_rmsnorm_single_provider_covers_standard_rmsnorm() -> None:
 def test_ir_fused_add_rmsnorm_dispatch_fails_closed_without_compile_range(
     monkeypatch,
 ) -> None:
-    from vllm_musa.kernels.musa_ops import (
-        _fused_add_rms_norm_supports_args,
-    )
+    from vllm_musa.ir.layernorm import _fused_add_rms_norm_supports_args
 
     device = torch.device("musa")
     x = torch.empty((64, 5120), device=device, dtype=torch.bfloat16)
@@ -326,8 +316,8 @@ def test_ir_fused_add_rmsnorm_dispatch_fails_closed_without_compile_range(
 
 def test_ir_fused_add_rmsnorm_provider_invokes_selected_kernel(monkeypatch) -> None:
     from vllm_musa import _custom_ops as musa_ops
+    from vllm_musa.ir import layernorm as ir_layernorm
     from vllm_musa.jit_kernel.csrc import norm as musa_jit_norm
-    from vllm_musa.kernels import musa_ops as ir_musa_ops
 
     device = torch.device("musa")
     x = torch.empty((1, 5120), device=device, dtype=torch.bfloat16)
@@ -346,27 +336,25 @@ def test_ir_fused_add_rmsnorm_provider_invokes_selected_kernel(monkeypatch) -> N
     monkeypatch.setattr(musa_ops, "musa_fused_add_rms_norm", fake_c_ext)
 
     monkeypatch.setattr(
-        ir_musa_ops,
+        ir_layernorm,
         "_select_musa_fused_add_rms_norm_impl",
         lambda *args, **kwargs: "jit",
     )
-    ir_musa_ops.fused_add_rms_norm.impl_fn(x, residual, weight, 1e-6)
+    ir_layernorm.fused_add_rms_norm.impl_fn(x, residual, weight, 1e-6)
     assert calls == ["jit"]
 
     calls.clear()
     monkeypatch.setattr(
-        ir_musa_ops,
+        ir_layernorm,
         "_select_musa_fused_add_rms_norm_impl",
         lambda *args, **kwargs: "c_ext",
     )
-    ir_musa_ops.fused_add_rms_norm.impl_fn(x, residual, weight, 1e-6)
+    ir_layernorm.fused_add_rms_norm.impl_fn(x, residual, weight, 1e-6)
     assert calls == ["c_ext"]
 
 
 def test_ir_fused_add_rmsnorm_preserves_functional_and_inplace_contracts() -> None:
-    from vllm_musa.kernels.musa_ops import (
-        fused_add_rms_norm as musa_fused_add_rms_norm,
-    )
+    from vllm_musa.ir.layernorm import fused_add_rms_norm as musa_fused_add_rms_norm
 
     torch.manual_seed(321)
     device = torch.device("musa")
@@ -406,9 +394,7 @@ def test_ir_fused_add_rmsnorm_qwen2_small_hidden_contract(
     dtype: torch.dtype,
     rows: int,
 ) -> None:
-    from vllm_musa.kernels.musa_ops import (
-        fused_add_rms_norm as musa_fused_add_rms_norm,
-    )
+    from vllm_musa.ir.layernorm import fused_add_rms_norm as musa_fused_add_rms_norm
 
     torch.manual_seed(896 + rows)
     device = torch.device("musa")
@@ -521,12 +507,8 @@ def test_csrc_topk_fuses_qwen_shared_gate(dtype: torch.dtype) -> None:
         (rows, routed_experts + 1), device=device, dtype=dtype
     )
 
-    weights = torch.empty(
-        (rows, routed_topk + 1), device=device, dtype=torch.float32
-    )
-    ids = torch.empty(
-        (rows, routed_topk + 1), device=device, dtype=torch.int32
-    )
+    weights = torch.empty((rows, routed_topk + 1), device=device, dtype=torch.float32)
+    ids = torch.empty((rows, routed_topk + 1), device=device, dtype=torch.int32)
     topk_softmax(
         weights,
         ids,
@@ -539,9 +521,7 @@ def test_csrc_topk_fuses_qwen_shared_gate(dtype: torch.dtype) -> None:
         combined_logits[:, :routed_experts], routed_topk, True
     )
     shared_weights = torch.sigmoid(combined_logits[:, routed_experts:]).float()
-    shared_ids = torch.full(
-        (rows, 1), routed_experts, device=device, dtype=torch.int32
-    )
+    shared_ids = torch.full((rows, 1), routed_experts, device=device, dtype=torch.int32)
     ref_weights = torch.cat((routed_weights, shared_weights), dim=-1)
     ref_ids = torch.cat((routed_ids, shared_ids), dim=-1)
 

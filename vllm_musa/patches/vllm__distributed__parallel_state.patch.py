@@ -154,7 +154,9 @@ def apply() -> None:
     # "mismatched type for valid_count". This patch file sorts
     # alphabetically before `vllm__v1__spec_decode__eagle.patch.py`, so we
     # must prime the kernel patch ourselves before importing the proposers.
-    import vllm_musa.v1.spec_decode.utils  # noqa: F401 — prime the kernel monkey-patch
+    import vllm_musa.v1.spec_decode.utils as _spec_decode_utils
+
+    _spec_decode_utils.install_hooks()
 
     try:
         from vllm.v1.spec_decode.eagle import EagleProposer

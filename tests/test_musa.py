@@ -200,9 +200,7 @@ class TestMUSAPlatformBase:
         from vllm.config import CUDAGraphMode
         from vllm.config.compilation import CompilationMode
 
-        from vllm_musa.platform import (
-            _should_route_quantized_piecewise_ops_native,
-        )
+        from vllm_musa.platform import _should_route_quantized_piecewise_ops_native
 
         config = SimpleNamespace(
             model_config=SimpleNamespace(enforce_eager=False),
@@ -221,9 +219,7 @@ class TestMUSAPlatformBase:
     def test_fused_add_profit_boundary_splits_eligible_compile_range(self):
         import torch
 
-        from vllm_musa.platform import (
-            _configure_fused_add_rmsnorm_compile_range,
-        )
+        from vllm_musa.platform import _configure_fused_add_rmsnorm_compile_range
         from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
         config = SimpleNamespace(
@@ -763,7 +759,9 @@ class TestMUSAPlatformBase:
             triton_turboquant_store,
         )
 
-        import vllm_musa.v1.attention.backends.turboquant  # noqa: F401
+        from vllm_musa.v1.attention.backends import turboquant
+
+        turboquant.install_hooks()
 
         assert triton_turboquant_decode._use_fp8_e4b15(0) == 0
         assert triton_turboquant_store._use_fp8_e4b15(0) == 0

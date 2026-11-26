@@ -54,6 +54,7 @@ logger = init_logger(__name__)
 M = TypeVar("M", bound=MLACommonMetadata)
 A = TypeVar("A")
 
+
 class MUSAMLAPrefillBackend(MLAPrefillBackend):
     """MLA prefill backend for MATE FlashAttention.
 
@@ -585,10 +586,12 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         attn_metadata: MLACommonMetadata,
         k_scale: torch.Tensor,
         dcp_world_size: int,
-        fused_mla_kv_concat_fn: Callable[
-            [torch.Tensor, torch.Tensor, bool], tuple[torch.Tensor, torch.Tensor]
-        ]
-        | None = None,
+        fused_mla_kv_concat_fn: (
+            Callable[
+                [torch.Tensor, torch.Tensor, bool], tuple[torch.Tensor, torch.Tensor]
+            ]
+            | None
+        ) = None,
     ):
         assert k_scale is None, "DCP not support scaled kvcache now."
         assert attn_metadata.prefill is not None
@@ -763,12 +766,23 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         raise NotImplementedError
 
 
-import vllm.model_executor.layers.attention.mla_attention
-import vllm.v1.attention.backends.mla.prefill
-import vllm.v1.attention.backends.mla.prefill.selector
+_HOOKS_INSTALLED = False
 
-vllm.model_executor.layers.attention.mla_attention.MLAAttention._v_up_proj = _v_up_proj
-vllm.model_executor.layers.attention.mla_attention.MLACommonImpl = MLACommonImpl
-_install_prefill_backend_hook(vllm.model_executor.layers.attention.mla_attention)
-_install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill)
-_install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill.selector)
+
+def install_hooks() -> None:
+    """Install MUSA MLA attention overrides and prefill backend hooks (idempotent)."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    import vllm.model_executor.layers.attention.mla_attention
+    import vllm.v1.attention.backends.mla.prefill
+    import vllm.v1.attention.backends.mla.prefill.selector
+
+    vllm.model_executor.layers.attention.mla_attention.MLAAttention._v_up_proj = (
+        _v_up_proj
+    )
+    vllm.model_executor.layers.attention.mla_attention.MLACommonImpl = MLACommonImpl
+    _install_prefill_backend_hook(vllm.model_executor.layers.attention.mla_attention)
+    _install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill)
+    _install_prefill_backend_hook(vllm.v1.attention.backends.mla.prefill.selector)
+    _HOOKS_INSTALLED = True

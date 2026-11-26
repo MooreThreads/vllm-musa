@@ -13,13 +13,6 @@ def _fp8_linear_may_use_deep_gemm(module: torch.nn.Module) -> bool:
     return False
 
 
-import vllm.model_executor.warmup.deep_gemm_warmup
-
-vllm.model_executor.warmup.deep_gemm_warmup._fp8_linear_may_use_deep_gemm = (
-    _fp8_linear_may_use_deep_gemm
-)
-
-
 def _alignment_m() -> int:
     from vllm.utils.deep_gemm import get_mk_alignment_for_contiguous_layout
 
@@ -272,16 +265,31 @@ def _warmup_rope_store_hints(model: torch.nn.Module) -> None:
         logger.info("Loaded MUSA rotary-embedding kernels: %s", ", ".join(loaded))
 
 
-_upstream_deep_gemm_warmup = (
-    vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup
-)
+_HOOKS_INSTALLED = False
+_upstream_deep_gemm_warmup = None
 
 
 def deep_gemm_warmup(model: torch.nn.Module, max_tokens: int, pbar=None):
-    _upstream_deep_gemm_warmup(model, max_tokens)
+    upstream = _upstream_deep_gemm_warmup
+    if upstream is None:
+        import vllm.model_executor.warmup.deep_gemm_warmup as _upstream_mod
+
+        upstream = _upstream_mod.deep_gemm_warmup
+    upstream(model, max_tokens)
     _warmup_bf16_grouped_moe(model, max_tokens)
     _warmup_paged_mqa_logits_metadata(model)
     _warmup_rope_store_hints(model)
 
 
-vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup = deep_gemm_warmup
+def install_hooks() -> None:
+    """Install MUSA DeepGEMM/RoPE warmup overrides (idempotent)."""
+    global _HOOKS_INSTALLED, _upstream_deep_gemm_warmup
+    if _HOOKS_INSTALLED:
+        return
+    import vllm.model_executor.warmup.deep_gemm_warmup as _upstream_mod
+
+    _upstream_mod._fp8_linear_may_use_deep_gemm = _fp8_linear_may_use_deep_gemm
+    if _upstream_mod.deep_gemm_warmup is not deep_gemm_warmup:
+        _upstream_deep_gemm_warmup = _upstream_mod.deep_gemm_warmup
+        _upstream_mod.deep_gemm_warmup = deep_gemm_warmup
+    _HOOKS_INSTALLED = True

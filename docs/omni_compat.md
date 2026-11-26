@@ -207,7 +207,7 @@ vllm_topk_topp_sampler.apply_top_k_top_p = _apply_top_k_top_p
 ```
 
 to put MUSA's radix kernels in the sampling path. It runs when vLLM loads the
-MUSA general plugin (`register_custom_ops` -> `_register_modules` ->
+MUSA general plugin (`register_out_of_tree` -> `_register_modules` ->
 `vllm_musa.v1.sample`, whose `__init__` imports that module), so it is
 necessarily *later* than the shim's adapter: the adapter runs while the vLLM
 module is being created, and the assignment needs the module to exist first. It

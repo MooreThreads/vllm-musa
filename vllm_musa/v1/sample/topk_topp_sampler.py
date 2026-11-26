@@ -1677,6 +1677,3 @@ def install_hooks() -> None:
         worker_cls._musa_original_sample = worker_cls.sample
         worker_cls.sample = _worker_sample
         worker_cls._musa_sampling_hooks_installed = True
-
-
-install_hooks()

@@ -23,15 +23,16 @@ PATCHES: list = []
 
 
 def apply() -> None:
-    """explicit object-patch entry (was an import-time side effect).
+    """Explicit object-patch entry (idempotent).
 
-    Primes the MUSA-Triton-adapted ``eagle_prepare_next_token_padded_kernel``
+    Installs the MUSA-Triton-adapted ``eagle_prepare_next_token_padded_kernel``
     from ``vllm_musa.v1.spec_decode.utils`` before upstream
     ``vllm.v1.spec_decode.llm_base_proposer`` binds its own copy (otherwise the
     proposer's Triton compile fails with "mismatched type for valid_count").
 
     Called explicitly by ``vllm_musa.patches.apply_object_patches()`` at plugin
-    load — importing this file no longer triggers the prime. Idempotent (the
-    import is a no-op after the first).
+    load — importing this file does not trigger the hook installation.
     """
-    import vllm_musa.v1.spec_decode.utils  # noqa: F401
+    import vllm_musa.v1.spec_decode.utils as _spec_decode_utils
+
+    _spec_decode_utils.install_hooks()

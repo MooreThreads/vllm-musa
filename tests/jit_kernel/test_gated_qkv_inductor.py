@@ -112,7 +112,7 @@ def test_gated_qkv_inductor_matches_native(
 ) -> None:
     from vllm import ir
 
-    from vllm_musa.kernels.gated_qkv import gated_qkv_rms_norm_rope
+    from vllm_musa.ir.gated_qkv import gated_qkv_rms_norm_rope
 
     args = _inputs(num_tokens, num_q_heads)
     expected = ir.ops.gated_qkv_rms_norm_rope.impls["native"].impl_fn(*args)
@@ -142,7 +142,7 @@ def test_gated_qkv_inductor_matches_randomized_ir_inputs(
     """Cover the IR generator's unconstrained BF16 weights and RoPE cache."""
     from vllm import ir
 
-    from vllm_musa.kernels.gated_qkv import gated_qkv_rms_norm_rope
+    from vllm_musa.ir.gated_qkv import gated_qkv_rms_norm_rope
 
     args = _inputs(
         2500,
@@ -255,7 +255,7 @@ def test_gated_qkv_vllm_ir_lowers_to_triton_hop() -> None:
 
 
 def test_gated_qkv_inductor_support_scope(monkeypatch) -> None:
-    from vllm_musa.kernels import gated_qkv
+    from vllm_musa.ir import gated_qkv
 
     _supports_gated_qkv = gated_qkv._supports_gated_qkv
 

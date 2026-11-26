@@ -10,9 +10,7 @@ from functools import cache
 import torch
 from vllm import _custom_ops as ops
 from vllm.logger import init_logger
-from vllm.model_executor.layers.fused_moe.utils import (
-    moe_kernel_quantize_input,
-)
+from vllm.model_executor.layers.fused_moe.utils import moe_kernel_quantize_input
 from vllm.model_executor.layers.quantization.utils.mxfp4_utils import dequant_mxfp4
 from vllm.model_executor.layers.quantization.utils.mxfp6_utils import dequant_mxfp6
 from vllm.model_executor.layers.quantization.utils.ocp_mx_utils import OCP_MX_Scheme
@@ -2760,7 +2758,7 @@ def _musa_fused_experts_impl_dispatch(
         )
 
 
-_upstream_fused_moe.fused_experts_impl = _musa_fused_experts_impl_dispatch
+_HOOKS_INSTALLED = False
 
 
 def _patch_triton_experts_quant_scheme() -> None:
@@ -2778,6 +2776,9 @@ def _patch_triton_experts_quant_scheme() -> None:
         )
         return
 
+    if getattr(TritonExperts._supports_quant_scheme, "_musa_patched", False):
+        return
+
     upstream_supports_quant_scheme = TritonExperts._supports_quant_scheme
 
     def supports_quant_scheme(weight_key, activation_key) -> bool:
@@ -2787,8 +2788,16 @@ def _patch_triton_experts_quant_scheme() -> None:
             weight_key, activation_key
         ) or _supports_quant_scheme(weight_key, activation_key)
 
+    supports_quant_scheme._musa_patched = True  # type: ignore[attr-defined]
     TritonExperts._supports_quant_scheme = staticmethod(supports_quant_scheme)
 
 
-# Keep the upstream quant keys and extend them with MUSA's supported keys.
-_patch_triton_experts_quant_scheme()
+def install_hooks() -> None:
+    """Install MUSA fused-MoE dispatch and TritonExperts quant-scheme hooks."""
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    _upstream_fused_moe.fused_experts_impl = _musa_fused_experts_impl_dispatch
+    # Keep the upstream quant keys and extend them with MUSA's supported keys.
+    _patch_triton_experts_quant_scheme()
+    _HOOKS_INSTALLED = True

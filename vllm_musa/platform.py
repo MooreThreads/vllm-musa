@@ -282,12 +282,17 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def import_kernels(cls) -> None:
-        """Import upstream vLLM kernels, including v0.22 stable ABI ops."""
+        """Import upstream vLLM and MUSA AOT C++ kernel extensions."""
         super().import_kernels()
-        try:
-            import vllm._C_stable_libtorch  # noqa: F401
-        except ImportError as e:
-            logger.warning("Failed to import from vllm._C_stable_libtorch: %r", e)
+        for ext_name in (
+            "vllm._C_stable_libtorch",
+            "vllm._moe_C",
+            "vllm_musa._C",
+        ):
+            try:
+                __import__(ext_name)
+            except ImportError as e:
+                logger.warning("Failed to import from %s: %r", ext_name, e)
 
     @classmethod
     def check_runner_kv_caches_multi_layer(cls) -> None:
@@ -303,21 +308,21 @@ class MUSAPlatformBase(Platform):
     def import_ir_kernels(cls) -> None:
         """Import upstream and MUSA-OOT IR-op providers.
 
-        Order matters: upstream first (registers `native` / `vllm_c` /
-        `oink` / etc.), then OOT MUSA providers so they appear in the
-        registry alongside upstream impls. Used by
-        `vllm.config.kernel.KernelConfig.set_priority()` to ensure
-        every provider mentioned in `ir_op_priority` is registered
+        Order matters: upstream first (registers ``native`` / ``vllm_c`` /
+        ``oink`` / etc.), then OOT MUSA providers in :mod:`vllm_musa.ir` so
+        they appear in the registry alongside upstream impls. Used by
+        ``vllm.config.kernel.KernelConfig.set_priority()`` to ensure
+        every provider mentioned in ``ir_op_priority`` is registered
         before the dispatcher needs it.
         """
         super().import_ir_kernels()
         try:
-            import vllm_musa.kernels  # noqa: F401
+            import vllm_musa.ir  # noqa: F401
         except ImportError as exc:
             from vllm.logger import init_logger
 
             init_logger(__name__).info(
-                "vllm_musa.kernels unavailable (%s); MUSA IR providers "
+                "vllm_musa.ir unavailable (%s); MUSA IR providers "
                 "will not be registered. Upstream providers remain "
                 "available.",
                 exc,
@@ -364,7 +369,7 @@ class MUSAPlatformBase(Platform):
             rms_norm = ["musa", "native"]
         # VLLM_MUSA_CUSTOM_OP_USE_NATIVE is a correctness route for quantized
         # models under piecewise CUDAGraph capture. It must remain authoritative
-        # for the IR provider too; unlike supports_args, this is global provider
+        # for IR providers too; unlike supports_args, this is global provider
         # enablement and therefore belongs in the priority policy.
         from vllm_musa.utils.environ import envs as musa_envs
 
@@ -378,6 +383,8 @@ class MUSAPlatformBase(Platform):
             native_custom_ops = _should_route_quantized_piecewise_ops_native(
                 vllm_config
             )
+        if native_custom_ops:
+            rms_norm = ["native"]
         fused_add_rms_norm = ["native"] if native_custom_ops else ["musa", "native"]
         # The direct Triton HOP is profitable for every validated dense shape
         # family; supports_args remains the semantic/shape guard. Keep routed

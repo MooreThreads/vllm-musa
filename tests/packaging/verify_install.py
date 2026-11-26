@@ -88,7 +88,8 @@ def verify_bundled() -> None:
         "vllm.general_plugins": {
             "lora_filesystem_resolver",
             "lora_hf_hub_resolver",
-            "musa_custom_ops",
+            "musa_out_of_tree",
+            "musa_attn_backends",
         },
     }.items():
         selected = {
