@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 26 Nov 2026 17:52:05 +0800
+Subject: [PATCH] MUSA: order PP sends before sampling broadcasts
+
+Model Runner V2 receives sampled tokens on a separate stream and MCCL communicator. Make the current stream wait for the outgoing PP activation Work before sampling so the broadcast stream inherits the dependency. This prevents overlapping activation transfers and sampling broadcasts from stalling MP pipeline parallelism.
+---
+ vllm/v1/worker/gpu_worker.py | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+index 02186a85b3..6a3c5e8136 100644
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -1459,6 +1459,12 @@ class Worker(WorkerBase):
+     def sample_tokens(
+         self, grammar_output: "GrammarOutput | None"
+     ) -> ModelRunnerOutput | AsyncModelRunnerOutput:
++        if current_platform.device_type == "musa" and self.use_v2_model_runner:
++            # The sampled-token broadcast uses a different MCCL communicator.
++            # Order its receive after this stage's outgoing activation transfer.
++            for handle in self._pp_send_work:
++                handle.wait()
++            self._pp_send_work = []
+         return self.model_runner.sample_tokens(grammar_output)
+ 
+     @torch.inference_mode()

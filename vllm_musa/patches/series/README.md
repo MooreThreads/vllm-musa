@@ -351,6 +351,7 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0218-MUSA-enable-PyNccl-for-pipeline-parallelism.patch` | v0.32 new | select MCCL for the PP communicator and submit PyNccl work to the active stream on its device |
 | `0219-MUSA-eagerly-initialize-MCCL-for-PP.patch` | v0.32 new | eagerly initialize ProcessGroupMCCL for asynchronous PP tensor transfers |
 | `0220-MUSA-query-the-active-native-MUSA-stream.patch` | v0.32 new | query the native MUSA stream when synchronizing PP receives and other stream work |
+| `0221-MUSA-order-PP-sends-before-sampling-broadcasts.patch` | v0.32 new | order V2 sampling broadcasts after outgoing pipeline activation transfers on MUSA |
 
 For non-speculative DSV4.1 on Model Runner V2 (DP1, no microbatching),
 the optimization contract fixes the context cutoff at `32768` tokens. All-short batches
@@ -363,7 +364,7 @@ Candidate-only scoring is selected whenever its width is smaller than the dense
 window, and eligible prefill query rows are sharded across TP ranks. These
 decisions do not require environment-variable overrides.
 
-Currently **220 patches** and **2 upstream entries** in `upstream/`.
+Currently **221 patches** and **2 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and

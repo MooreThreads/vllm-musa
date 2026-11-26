@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Exercise the PP PyNccl patch's library and stream choices on CPU."""
+"""Exercise MUSA PP library selection, stream selection, and ordering on CPU."""
 
 import re
 import sys
 from pathlib import Path
-from textwrap import dedent
+from textwrap import dedent, indent
 from types import ModuleType, SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -15,6 +15,7 @@ SERIES = Path(__file__).resolve().parents[1] / "vllm_musa/patches/series"
 PYNCCL_PATCH = SERIES / "0218-MUSA-enable-PyNccl-for-pipeline-parallelism.patch"
 EAGER_PATCH = SERIES / "0219-MUSA-eagerly-initialize-MCCL-for-PP.patch"
 STREAM_PATCH = SERIES / "0220-MUSA-query-the-active-native-MUSA-stream.patch"
+PP_ORDER_PATCH = SERIES / "0221-MUSA-order-PP-sends-before-sampling-broadcasts.patch"
 
 
 def _patched_hunk(patch: Path, path: str, marker: str) -> str:
@@ -127,6 +128,46 @@ def test_eager_mccl_uses_the_workers_visible_device(
         init_process_group.assert_called_once_with(
             backend=backend, device_id=expected_device
         )
+
+
+@pytest.mark.parametrize(
+    ("device_type", "use_v2_model_runner", "waits"),
+    [("musa", True, True), ("musa", False, False), ("cuda", True, False)],
+)
+def test_orders_pp_activation_sends_before_mrv2_sampling(
+    device_type: str, use_v2_model_runner: bool, waits: bool
+) -> None:
+    source = _patched_hunk(
+        PP_ORDER_PATCH, "vllm/v1/worker/gpu_worker.py", "sampled-token broadcast"
+    )
+    start = source.index("        if current_platform")
+    end = source.index("    @torch.inference_mode()")
+    calls = Mock()
+    worker = SimpleNamespace(
+        use_v2_model_runner=use_v2_model_runner,
+        _pp_send_work=[calls.work],
+        model_runner=calls.runner,
+    )
+    namespace = {"current_platform": SimpleNamespace(device_type=device_type)}
+    body = dedent(source[start:end]).rstrip()
+    exec(
+        compile(
+            "def sample(self, grammar_output):\n" + indent(body, "    "),
+            str(PP_ORDER_PATCH),
+            "exec",
+        ),
+        namespace,
+    )
+
+    output = namespace["sample"](worker, None)
+
+    assert output is calls.runner.sample_tokens.return_value
+    if waits:
+        assert calls.mock_calls == [call.work.wait(), call.runner.sample_tokens(None)]
+        assert worker._pp_send_work == []
+    else:
+        assert calls.mock_calls == [call.runner.sample_tokens(None)]
+        assert worker._pp_send_work == [calls.work]
 
 
 def test_current_stream_follows_native_musa_switches(
