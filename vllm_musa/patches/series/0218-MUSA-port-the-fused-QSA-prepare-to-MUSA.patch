@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 25 Nov 2026 13:32:59 +0000
+Subject: [PATCH] MUSA: port the fused QSA prepare to MUSA
+
+MUSA-100048. Run the QSA indexer prepare without the unfused chain: one Triton kernel per QSA layer now covers the indexer Q/K norm and RoPE, the compression-group pooling, the raw and compressed cache row writes, and the main-attention QK-norm/RoPE/gate/KV write.
+
+Measured on MTT S5000 x8 (Qwen3.8-Flash-Next, TP8+EP8, 1024-in/128-out): TPOT 40.72 -> 36.78 ms, output throughput +9.5%, TTFT -4.5%.
+
+The gate extends the existing platform check in qsa.py to MUSA; the kernel itself ships in vllm_musa/kernels/qsa_prepare.py.
+---
+ .../warmup/qwen4_exp_qsa_warmup.py            | 28 +++++++++++++++++++
+ vllm/models/qwen4_exp/nvidia/indexer_qsa.py   |  8 +++++-
+ vllm/models/qwen4_exp/nvidia/qsa.py           |  7 ++++-
+ 3 files changed, 41 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py b/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
+index ed45cd0..9bddc34 100644
+--- a/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
++++ b/vllm/model_executor/warmup/qwen4_exp_qsa_warmup.py
+@@ -101,3 +101,31 @@ def qwen4_exp_qsa_triton_warmup(worker: "Worker") -> None:
+         "Warmed up Qwen4Exp QSA sparse attention kernels: %s.",
+         attention_profiles,
+     )
++
++    logger.info(
++        "MUSA QSA fused prepare: %s (use_fused_qk_norm_rope_gate=%s).",
++        "on" if owner.use_fused_qsa_prepare else "off",
++        owner.use_fused_qk_norm_rope_gate,
++    )
++    if owner.use_fused_qsa_prepare:
++        # The fused prepare runs inside the same eager capture segment as the
++        # indexer, so compile every constexpr specialization (both query-tile
++        # widths, and both position layouts when the model has MRoPE) before
++        # graph capture. Slot mappings are -1, so this writes no cache rows.
++        from vllm_musa.kernels.qsa_prepare import warmup_qsa_prepare
++
++        position_modes = (
++            (False, True) if getattr(indexer.rotary_emb, "mrope_section", None) else (False,)
++        )
++        fused_profiles = []
++        for num_tokens in (2, 4097):
++            for is_2d_positions in position_modes:
++                warmup_qsa_prepare(
++                    indexer=indexer,
++                    owner=owner,
++                    num_k_work=1,
++                    num_tokens=num_tokens,
++                    is_2d_positions=is_2d_positions,
++                )
++                fused_profiles.append((num_tokens, is_2d_positions))
++        logger.info("Warmed up MUSA QSA fused prepare: %s.", fused_profiles)
+diff --git a/vllm/models/qwen4_exp/nvidia/indexer_qsa.py b/vllm/models/qwen4_exp/nvidia/indexer_qsa.py
+index c8ffa0d..0e347c8 100644
+--- a/vllm/models/qwen4_exp/nvidia/indexer_qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/indexer_qsa.py
+@@ -14,6 +14,7 @@ from vllm.model_executor.layers.layernorm import GemmaRMSNorm
+ from vllm.model_executor.layers.linear import ReplicatedLinear
+ from vllm.model_executor.layers.quantization import QuantizationConfig
+ from vllm.model_executor.layers.rotary_embedding.mrope import triton_mrope
++from vllm.platforms import current_platform
+ 
+ from ..common.qsa_cache import (
+     QSACompressedKeyCache,
+@@ -21,7 +22,12 @@ from ..common.qsa_cache import (
+     QSAKeyStateCache,
+     canonical_qsa_rope_positions,
+ )
+-from .ops.qsa_prepare import qsa_prepare
++if current_platform.is_musa():
++    # Same launch contract and math as the in-tree NVIDIA kernel, with the
++    # raw-state source select expressed as two masked loads for MUSA Triton.
++    from vllm_musa.kernels.qsa_prepare import qsa_prepare
++else:
++    from .ops.qsa_prepare import qsa_prepare
+ 
+ if TYPE_CHECKING:
+     from .qsa import Qwen4ExpQSAAttention
+diff --git a/vllm/models/qwen4_exp/nvidia/qsa.py b/vllm/models/qwen4_exp/nvidia/qsa.py
+index fb80cd0..957cba3 100644
+--- a/vllm/models/qwen4_exp/nvidia/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+@@ -589,10 +589,15 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
+             torch.float16,
+             torch.bfloat16,
+         )
++        # CUDA runs the in-tree Triton prepare; MUSA has a launch-compatible
++        # copy under vllm_musa/kernels.
++        fused_prepare_platform = (
++            current_platform.is_cuda() or current_platform.is_musa()
++        )
+         self.use_fused_qk_norm_rope_gate = (
+             self.attn_output_gate
+             and getattr(self.rotary_emb, "is_neox_style", False)
+-            and current_platform.is_cuda()
++            and fused_prepare_platform
+             and supports_dtype
+             and (text_only or supports_mrope)
+         )
