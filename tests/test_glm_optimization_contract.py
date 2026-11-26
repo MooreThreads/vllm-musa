@@ -52,9 +52,8 @@ def _config(
     )
 
 
-def test_glm_contract_prefers_both_glm_features() -> None:
+def test_glm_contract_prefers_mate_sparse_prefill() -> None:
     contract = resolve_optimization_contract(_config())
-    assert contract.prefers(OptimizationFeature.GLM5_EAGER_MCCL_INIT)
     assert contract.prefers(OptimizationFeature.GLM5_SPARSE_MLA_MATE_PREFILL)
 
 
@@ -69,7 +68,6 @@ def test_glm_contract_prefers_both_glm_features() -> None:
 )
 def test_glm_mate_sparse_prefill_requires_full_signature(override) -> None:
     contract = resolve_optimization_contract(_config(**override))
-    assert contract.prefers(OptimizationFeature.GLM5_EAGER_MCCL_INIT)
     assert not contract.prefers(OptimizationFeature.GLM5_SPARSE_MLA_MATE_PREFILL)
 
 
@@ -77,6 +75,5 @@ def test_non_glm_contract_fails_closed() -> None:
     contract = resolve_optimization_contract(
         _config(architecture="Qwen3ForCausalLM", model_type="qwen3")
     )
-    assert not contract.prefers(OptimizationFeature.GLM5_EAGER_MCCL_INIT)
     assert not contract.prefers(OptimizationFeature.GLM5_SPARSE_MLA_MATE_PREFILL)
     assert resolve_glm_contract(contract.model, contract.execution) is None

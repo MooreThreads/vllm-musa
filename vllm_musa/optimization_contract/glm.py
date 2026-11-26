@@ -14,10 +14,7 @@ from .types import (
 
 def _is_glm5_dsa(model: ModelSignature) -> bool:
     architectures = set(model.outer_architectures or model.architectures)
-    return (
-        "GlmMoeDsaForCausalLM" in architectures
-        or model.model_type == "glm_moe_dsa"
-    )
+    return "GlmMoeDsaForCausalLM" in architectures or model.model_type == "glm_moe_dsa"
 
 
 def resolve_glm_contract(
@@ -28,9 +25,7 @@ def resolve_glm_contract(
         return None
 
     model = replace(model, family=ModelFamily.GLM5, role=ModelRole.TEXT)
-    preferred = {
-        OptimizationFeature.GLM5_EAGER_MCCL_INIT,
-    }
+    preferred: set[OptimizationFeature] = set()
     if (
         model.dtype == "bfloat16"
         and model.quantization == "fp8"

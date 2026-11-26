@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 26 Nov 2026 17:14:19 +0800
+Subject: [PATCH] MUSA: eagerly initialize MCCL for PP
+
+Bind the world group to the same visible device as the worker. ProcessGroupMCCL can stall on the first unbatched PP transfer when initialization is lazy.
+---
+ vllm/distributed/parallel_state.py | 24 +++++++++++-------------
+ 1 file changed, 11 insertions(+), 13 deletions(-)
+
+diff --git a/vllm/distributed/parallel_state.py b/vllm/distributed/parallel_state.py
+index f3513b6ecd..0b7f489fa7 100644
+--- a/vllm/distributed/parallel_state.py
++++ b/vllm/distributed/parallel_state.py
+@@ -1958,23 +1958,21 @@ def init_distributed_environment(
+                 rank=rank,
+                 timeout=timeout,
+             )
+-            from vllm_musa.optimization_contract import (
+-                OptimizationFeature,
+-                resolve_optimization_contract,
+-            )
+-            contract = resolve_optimization_contract(config)
+-            needs_glm_pp_eager_mccl = (
+-                contract.prefers(OptimizationFeature.GLM5_EAGER_MCCL_INIT)
+-                and backend == "mccl"
+-                and config.parallel_config.nnodes > 1
+-                and config.parallel_config.pipeline_parallel_size > 1
+-            )
++            # Eagerly initialize MCCL before posting the first async PP P2P
++            # operations. Lazy peer initialization can leave them pending.
+             if (
+-                needs_glm_pp_eager_mccl
++                backend == "mccl"
++                and config is not None
++                and config.parallel_config.pipeline_parallel_size > 1
+                 and getattr(torch.version, "musa", None) is not None
+                 and local_rank >= 0
+             ):
+-                init_kwargs["device_id"] = torch.device("musa", local_rank)
++                from vllm.platforms import current_platform
++
++                device_index = current_platform.logical_device_id_to_visible_device_id(
++                    local_rank
++                )
++                init_kwargs["device_id"] = torch.device("musa", device_index)
+             torch.distributed.init_process_group(**init_kwargs)
+         if enable_elastic_ep:
+             tp_pp_cpu_group = torch.distributed.new_group(
