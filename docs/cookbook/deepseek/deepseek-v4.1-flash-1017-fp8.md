@@ -54,8 +54,6 @@ with its `DeepSeek-V4.1-Flash-1017/inference/convert.py` script.
 ```bash
 export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_USE_V2_MODEL_RUNNER=1
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
 
 vllm serve /models/DeepSeek-V4.1-Flash-1017-FP8 \
   --trust-remote-code \
@@ -84,8 +82,6 @@ vllm serve /models/DeepSeek-V4.1-Flash-1017-FP8 \
 ```bash
 export VLLM_PLUGINS=musa,musa_custom_ops
 export VLLM_USE_V2_MODEL_RUNNER=1
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
 
 vllm serve /models/DeepSeek-V4.1-Flash-1017-FP8 \
   --trust-remote-code \

@@ -52,8 +52,6 @@ The MUSA-converted W4AFP8 checkpoint is available from
 
 ```bash
 export VLLM_PLUGINS=musa,musa_custom_ops
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
 
 vllm serve /models/DeepSeek-V4.1-Flash-1017-W4AFP8-mt \
   --trust-remote-code \
@@ -81,8 +79,6 @@ vllm serve /models/DeepSeek-V4.1-Flash-1017-W4AFP8-mt \
 
 ```bash
 export VLLM_PLUGINS=musa,musa_custom_ops
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
 
 vllm serve /models/DeepSeek-V4.1-Flash-1017-W4AFP8-mt \
   --trust-remote-code \
