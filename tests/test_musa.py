@@ -848,18 +848,34 @@ class TestNonMtmlMUSAPlatform:
 
     def test_get_device_capability(self):
         """Test get_device_capability returns DeviceCapability."""
-        with patch("torch.cuda.get_device_capability") as mock_cap:
-            mock_cap.return_value = (3, 1)
+        from vllm_musa.platform import NonMtmlMUSAPlatform
 
-            from vllm_musa.platform import NonMtmlMUSAPlatform
+        get_capability = NonMtmlMUSAPlatform.get_device_capability
+        get_capability.cache_clear()
+        try:
+            with (
+                patch("torch.musa.is_available", return_value=True),
+                patch("torch.cuda.get_device_capability", return_value=(3, 1)),
+            ):
+                cap = get_capability(0)
+            assert (cap.major, cap.minor) == (3, 1)
+        finally:
+            get_capability.cache_clear()
 
-            # Clear cache to allow re-testing
-            NonMtmlMUSAPlatform.get_device_capability.cache_clear()
+    def test_get_device_capability_without_gpu(self):
+        from vllm_musa.platform import NonMtmlMUSAPlatform
 
-            cap = NonMtmlMUSAPlatform.get_device_capability(0)
-
-            assert cap.major == 3
-            assert cap.minor == 1
+        get_capability = NonMtmlMUSAPlatform.get_device_capability
+        get_capability.cache_clear()
+        try:
+            with (
+                patch("torch.musa.is_available", return_value=False),
+                patch("torch.cuda.get_device_capability") as mock_cap,
+            ):
+                assert get_capability(0) is None
+                mock_cap.assert_not_called()
+        finally:
+            get_capability.cache_clear()
 
     def test_get_device_name(self):
         """Test get_device_name returns device name."""

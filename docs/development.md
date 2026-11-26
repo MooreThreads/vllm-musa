@@ -16,7 +16,7 @@
 | `pyproject.toml` | Package metadata and build configuration |
 | `third_party/` | Pinned upstream source and dependency revisions |
 | `build_utils/` | Build helpers and patch application utilities |
-| `example/` | Small runnable examples |
+| `examples/` | Small runnable examples |
 
 ## Project background
 
@@ -43,6 +43,10 @@ first: `setup.py` imports `torchada.arch` at build time.
 ```bash
 pip install -e . --no-build-isolation -v
 ```
+
+This editable install is for source development. The production Docker targets
+use the bundled `vllm-musa` wheel, while the Docker `test` target retains the
+editable checkout for debugging and tests.
 
 ## Tests and checks
 

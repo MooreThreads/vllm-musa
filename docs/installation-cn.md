@@ -39,8 +39,9 @@ docker pull "${VLLM_MUSA_IMAGE}"
 [服务配置示例（英文）](cookbook/README.md)中的引擎参数，并为 `docker run`
 配置部署环境所需的 MUSA 运行时和模型卷参数。
 
-需要源码构建时，在仓库根目录运行 `bash docker/build_image.sh`。若只需要
-用于测试或交互的命令行镜像，请使用 `--target final`。构建参数和兼容性说明见
+需要源码构建时，在仓库根目录运行 `bash docker/build_image.sh`。需要带可编辑
+源码的测试/调试镜像请使用 `--target test`，需要带打包 wheel 的命令行镜像请使用
+`--target final`。构建参数和兼容性说明见
 [docker/README.md](../docker/README.md)。
 
 ## 源码安装
@@ -81,6 +82,11 @@ github.com，也可以将其设为其他镜像前缀，详见
 ```bash
 pip install -e . --no-build-isolation -v
 ```
+
+`pip install -e .` 是开发模式，会保留当前仓库和
+`third_party/vllm` 的可编辑源码路径。生产镜像使用打包后的
+`vllm-musa` wheel，不使用 editable source path；需要源码调试时请使用
+Docker 的 `--target test`。
 
 验证插件：
 

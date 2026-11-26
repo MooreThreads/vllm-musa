@@ -29,6 +29,7 @@ from typing import Any
 import torchada  # noqa: F401  # must patch before torch ecosystem imports
 import torch
 import torch.nn.functional as F
+
 # isort: on
 
 from mate.testing.utils import bench_gpu_time_with_musa_event
@@ -208,7 +209,13 @@ def repo_provenance() -> dict[str, Any]:
 
 def package_versions() -> dict[str, str | None]:
     versions: dict[str, str | None] = {}
-    for package in ("torch", "torch_musa", "torchada", "mate", "vllm", "vllm-musa"):
+    for package in (
+        "torch",
+        "torch_musa",
+        "torchada",
+        "mate",
+        "vllm-musa",
+    ):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:

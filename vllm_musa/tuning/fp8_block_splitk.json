@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "kernel": "fp8_block_splitk",
-  "source": "MTT S5000 (mp_31), cold L2, DeepSeek-V4.1 TP8 per-rank projections. Rows without multiprocessor_count are the original measurement, on one card whose MP count was not recorded. Rows with it are the table rows benchmarks/fp8_block_splitk/tune_fp8_block_splitk.py derives on a card of that count",
+  "source": "MTT S5000 (mp_31), cold L2, DeepSeek-V4.1 TP8 per-rank projections. Rows without multiprocessor_count are the original measurement, on one card whose MP count was not recorded. Rows with it are the table rows benchmarks/kernels/fp8_block_splitk/tune_fp8_block_splitk.py derives on a card of that count",
   "entries": [
     {"n": 1792, "k": 5120, "split": 16, "block_n": 64, "num_warps": 4, "unroll": 2, "tile_m": 32, "min_rows": 2, "max_rows": {"capture": 59, "eager": 192}},
     {"n": 576, "k": 5120, "split": 16, "block_n": 64, "num_warps": 4, "unroll": 2, "tile_m": 16, "min_rows": 4, "max_rows": {"capture": 64, "eager": 320}},

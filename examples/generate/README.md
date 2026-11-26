@@ -24,10 +24,10 @@ tensor parallelism to match (the FP8 weights fit on two).
 and prints the answers.
 
 ```bash
-MUSA_VISIBLE_DEVICES=0,1,2,3 python example/generate/qwen3_5_offline.py
+MUSA_VISIBLE_DEVICES=0,1,2,3 python examples/generate/qwen3_5_offline.py
 
 # Local checkpoint
-MUSA_VISIBLE_DEVICES=0,1,2,3 python example/generate/qwen3_5_offline.py \
+MUSA_VISIBLE_DEVICES=0,1,2,3 python examples/generate/qwen3_5_offline.py \
     --model /path/to/Qwen3.5-35B-A3B-FP8
 ```
 
@@ -59,7 +59,7 @@ Then send a regular and a streaming chat request with `qwen3_5_online.py`
 `http://localhost:8000` and `Qwen3.5-35B-A3B-FP8`):
 
 ```bash
-python example/generate/qwen3_5_online.py
+python examples/generate/qwen3_5_online.py
 ```
 
 Or with curl:

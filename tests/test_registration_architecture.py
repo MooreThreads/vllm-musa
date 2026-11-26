@@ -120,6 +120,8 @@ def test_pyproject_declares_native_vllm_plugin_entrypoints() -> None:
     assert entry_points["vllm.general_plugins"] == {
         "musa_out_of_tree": "vllm_musa:register_out_of_tree",
         "musa_attn_backends": "vllm_musa:register_attn_backends",
+        "lora_filesystem_resolver": "vllm.plugins.lora_resolvers.filesystem_resolver:register_filesystem_resolver",
+        "lora_hf_hub_resolver": "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_hub_resolver",
     }
 
 

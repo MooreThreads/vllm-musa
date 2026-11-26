@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "benchmarks" / "fp8_block_splitk"))
+sys.path.insert(0, str(ROOT / "benchmarks" / "kernels" / "fp8_block_splitk"))
 
 import table_rows  # noqa: E402
 

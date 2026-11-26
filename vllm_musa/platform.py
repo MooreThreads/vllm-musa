@@ -1195,7 +1195,9 @@ class MtmlMUSAPlatform(MUSAPlatformBase):
 class NonMtmlMUSAPlatform(MUSAPlatformBase):
     @classmethod
     @cache
-    def get_device_capability(cls, device_id: int = 0) -> DeviceCapability:
+    def get_device_capability(cls, device_id: int = 0) -> DeviceCapability | None:
+        if not torch.musa.is_available():
+            return None
         major, minor = torch.cuda.get_device_capability(device_id)
         return DeviceCapability(major=major, minor=minor)
 

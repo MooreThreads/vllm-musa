@@ -34,7 +34,7 @@ repos:
         args:
           - --select=F401,F821
           - --fix
-        files: ^(vllm_musa/|tests/|example/)
+        files: ^(vllm_musa/|tests/|examples/)
         exclude: |
           (?x)^(
           .*/__init__\.py$

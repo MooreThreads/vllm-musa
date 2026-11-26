@@ -46,8 +46,9 @@ your deployment's standard MUSA runtime and model-volume flags to
 `docker run`.
 
 To build an image from source instead, run `bash docker/build_image.sh` from
-the repository root. Use `--target final` for a shell/test image. Build
-arguments and image compatibility notes are maintained in
+the repository root. Use `--target test` for an editable shell/test image, or
+`--target final` for a shell image with the bundled wheel. Build arguments and
+image compatibility notes are maintained in
 [docker/README.md](../docker/README.md).
 
 ## Source install
@@ -91,6 +92,10 @@ For an editable install:
 ```bash
 pip install -e . --no-build-isolation -v
 ```
+
+This is the source-development workflow. It creates editable installs for the
+MUSA package and the patched upstream checkout under `third_party/vllm`.
+Production images install the bundled `vllm-musa` wheel instead.
 
 Verify that the plugin can be imported:
 

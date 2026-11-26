@@ -12,16 +12,19 @@ The resulting image contains:
   `flash_mla`, `deep-gemm`, `tilelang_musa`, `apache-tvm-ffi`,
   `torch_c_dlpack_ext`),
 - `torchada` and the other common runtime dependencies from the public index,
-- `vllm-musa` and the vendored upstream vLLM, built from source,
-- `vllm-rs` and its Python tool-parser extension when `BUILD_VLLM_RS=1`,
+- a bundled `vllm-musa` wheel containing the `vllm` and `vllm_musa` import packages,
+- the `vllm-rs` executable when `BUILD_VLLM_RS=1`,
 - `mooncake-transfer-engine-musa`,
 - `pytest`, so the repository's pytest-based validation can run directly in the
   image.
 
-The source tree and default working directory are `/vllm-workspace`, matching
-the upstream vLLM runtime-image contract. A default build produces the
-`vllm-openai` target with `ENTRYPOINT ["vllm", "serve"]`; the `final` target
-retains `CMD ["/bin/bash"]` for tests and interactive use.
+The default `vllm-openai` target starts `vllm serve` in `/vllm-workspace`.
+The directory follows the upstream vLLM runtime layout, with the MUSA
+repository's `examples/` and `benchmarks/` alongside `collect_env.py` and
+`torch_lib_versions.txt`. The `final` target opens a shell with the same layout.
+Use the `test` target for an editable checkout under `/vllm-workspace`.
+The production-style `final` and `vllm-openai` targets install the bundled
+wheel and do not retain the upstream source checkout.
 
 ## Prerequisites
 
@@ -34,8 +37,7 @@ retains `CMD ["/bin/bash"]` for tests and interactive use.
   - the MUSA apt source (`MUSA_APT_SOURCE`) — the runtime SDK,
   - GitHub — the vendored vLLM/flashinfer clones, the Rust frontend's
     `llm-multimodal` dependency when the Rust frontend is enabled.
-- **A MUSA GPU visible to the build** if you want the final-stage import verify to
-  pass — see [Building on a MUSA host](#building-on-a-musa-host).
+- A MUSA GPU is required for serving and accelerator smoke tests.
 
 ## Quick start
 
@@ -156,7 +158,7 @@ Build the shell/test target under a separate tag when arbitrary container
 commands should run without overriding an entrypoint:
 
 ```bash
-IMAGE_TAG=vllm-musa:test bash docker/build_image.sh --target final
+IMAGE_TAG=vllm-musa:test bash docker/build_image.sh --target test
 ```
 
 Verify the workspace and test-runner contract with:
@@ -165,6 +167,12 @@ Verify the workspace and test-runner contract with:
 docker run --rm --entrypoint /bin/bash vllm-musa:test \
   -lc 'test "$PWD" = /vllm-workspace && python -m pytest --version'
 ```
+
+The `test` target is the source-bearing development image. It keeps
+`/vllm-workspace/third_party/vllm` and installs the editable distributions.
+The default `vllm-openai` and `final` targets are production-style images.
+They install the bundled `vllm-musa` wheel and do not rely on source paths
+under `/vllm-workspace`.
 
 ## Configuration
 
@@ -185,7 +193,7 @@ docker run --rm --entrypoint /bin/bash vllm-musa:test \
 | `MUSA_PIP_INDEX_URL` | `https://dl.mthreads.com/repo/api/pypi/pypi/simple` | Moore Threads index for the MUSA/MT wheels. |
 | `VLLM_MUSA_GIT_PROXY` | `https://gh-proxy.org/` | Mirror for the vLLM/FlashInfer fetch that `setup.py` performs while building the image. Empty keeps the default; `0` fetches from github.com directly. |
 | `MOONCAKE_VERSION` | `0.3.14` | Exact `mooncake-transfer-engine-musa` version installed from `PYPI_INDEX_URL`. The wheel provides both the Transfer Engine and the Store bindings. |
-| `BUILD_VLLM_RS` | `1` | `1`: build and install `vllm-rs` plus `_rust_tool_parser`; `0`: omit both and skip Rust/protoc setup. |
+| `BUILD_VLLM_RS` | `1` | `1`: build and install the `vllm-rs` executable; `0`: omit it and skip the Rust toolchain setup. |
 | `IMAGE_REPOSITORY` | `vllm-musa` | Image repository name. |
 | `IMAGE_FLAVOR` | `ubuntu22.04_py<py>_musa_runtime_<ver>_pytorch_release_<torch>` | Tag flavor; `<torch>` is derived from `requirements/musa_private.txt` and sanitized for Docker tags. |
 | `IMAGE_TAG` | `${IMAGE_REPOSITORY}:${IMAGE_FLAVOR}` | Full image tag. |
@@ -243,27 +251,11 @@ GPU):
 bash docker/build_image.sh --target vllm_musa_deps
 ```
 
-## Building on a MUSA host
+## GPU access during the build
 
-The `final` stage's verify step imports every MUSA package, including `tilelang`
-and `flash_mla`, which require `torch.musa.is_available()` to be `True` at import
-time. That is only satisfied when the build step can see the GPU — i.e. when the
-**MUSA container runtime is the host's default docker runtime**, so `docker build`
-`RUN` steps get the device. On a CPU-only builder the build otherwise completes
-and then fails at the verify step with
-`ImportError: cannot import name 'GPUEvent' from 'tilelang.utils.device'`.
-
-Two build-time details make this work on such a host:
-
-- **Device visibility is scoped to the import verify and final stage.**
-  `MTHREADS_VISIBLE_DEVICES` is deliberately *not* inherited by earlier stages,
-  including Mooncake: otherwise the MUSA runtime can bind-mount host driver
-  libraries into an `apt` step and break package installs
-  (`Invalid cross-device link`).
-- **Runtime compatibility shims.** When intentionally overriding the runtime to
-  an older 5.1 line, the devel stage can add a `libmupti.so.1` soname link and
-  a `libmusolver` OpenBLAS dependency so `import torch` works. Both are guarded
-  and no-op on the default 5.2 runtime.
+The build uses the MUSA SDK and disables device injection. Build-time checks
+verify versions for packages that initialize a MUSA device at import time.
+The final image enables device visibility after these checks.
 
 ## Verify the built image
 
@@ -278,7 +270,7 @@ On a MUSA GPU you should see `musa available: True`.
 
 Mooncake over RoCE also requires host networking and explicit RDMA device
 access. See the
-[container and RDMA prerequisites](../example/disaggregated_serving/README.md#container-and-rdma-prerequisites)
+[container and RDMA prerequisites](../examples/disaggregated/disaggregated_serving/README.md#container-and-rdma-prerequisites)
 for the documented container shape and host-runtime prerequisite.
 
 ## How it works (build stages)
@@ -298,22 +290,58 @@ for the documented container shape and host-runtime prerequisite.
    The split keeps names like `torch`/`mate`/`apache-tvm-ffi` resolving from the
    internal index only, so pip never pulls the unrelated public (CUDA) builds.
 5. **vllm_musa_installed** — copies the source, builds `vllm-musa` + vendored
-   vLLM, re-pins numpy, installs runtime dependencies, and runs import checks.
-6. **vllm_rs_build** — optionally builds Rust artifacts (`BUILD_VLLM_RS`) without
-   carrying Rust/protoc into the final image.
-7. **mooncake** — installs the pinned `mooncake-transfer-engine-musa` wheel on
+   vLLM in editable mode, and verifies the installed dependencies.
+6. **vllm_rs_build** — optionally builds the `vllm-rs` executable
+   (`BUILD_VLLM_RS`) without carrying the Rust toolchain into the final image.
+7. **vllm_wheel** — packages the patched vLLM source and prepared native
+   extensions into the `vllm-musa` wheel.
+8. **vllm_runtime** — installs the wheel with its public dependencies and the
+   private stack constraints, then copies the runtime workspace files.
+9. **test** — exposes the source-bearing editable installation.
+10. **mooncake** — installs the pinned `mooncake-transfer-engine-musa` wheel on
    top of the torch/vLLM stack.
-8. **final** — installs optional Rust artifacts, enables MUSA device visibility,
-   removes build caches, and retains a shell command for test/debug use.
-9. **vllm-openai** — the default serving target, with `vllm serve` as its
+11. **final** — verifies wheel ownership and dependencies, enables MUSA device
+    visibility, and opens a shell by default.
+12. **vllm-openai** — the default serving target, with `vllm serve` as its
    entrypoint.
 
 The Triton `3.2.0` pin is intentional for the MUSA 5.2 stack and is maintained
 independently of the PyTorch release. Validate image imports, Inductor, and
-compiled serving before changing it. The explicit vLLM runtime dependency pass
-also restores the `fastapi[standard]` extras and `pycountry` that are skipped
-when the vendored requirements are installed with `--no-deps` to protect the
-MUSA torch pins.
+compiled serving before changing it. The wheel and editable install use the
+same public runtime requirements, including NumPy below 2 and a compatible
+OpenCV release.
 
 For the reasoning behind the pip-index split and the runtime shims, see the
 comments in `docker/musa.Dockerfile`.
+
+## Installing the wheel outside the image
+
+In the bundled runtime, `vllm --version` reports the `vllm-musa` distribution
+version, currently `0.1.32`. The distribution uses `0.1.<upstream minor>`.
+`vllm.__version__` reports the pinned upstream version, currently `0.32.0`.
+
+Build a source distribution with `python -m build --sdist` from a checkout or
+source export. To build a wheel from the unpacked archive, prepare the MUSA SDK
+and Python dependencies described in the installation guide, then run
+`python -m build --wheel --no-isolation` in the unpacked directory. The wheel
+build prepares the vLLM and FlashInfer commits recorded in `third_party/PINS`.
+
+The `vllm-musa` wheel bundles both Python import packages. Install the pinned
+hardware dependencies from the MUSA index first, then resolve the wheel's
+public dependencies with the same pins as constraints:
+
+```bash
+python -m pip install --no-deps --index-url "${MUSA_PIP_INDEX_URL}" \
+  -r requirements/musa_private.txt
+python -m pip install --index-url "${PYPI_INDEX_URL}" \
+  --extra-index-url "${MUSA_PIP_INDEX_URL}" -r requirements/musa_private.txt
+python -m pip install --index-url "${PYPI_INDEX_URL}" \
+  -c requirements/musa_private.txt /path/to/vllm_musa-*.whl
+```
+
+> [!NOTE]
+> Production images provide both `vllm` and `vllm_musa` through the single
+> `vllm-musa` distribution and do not install a separate `vllm` distribution.
+> When installing third-party packages on top of `vllm-openai` or `final`,
+> avoid letting pip pull an upstream CUDA `vllm` wheel from PyPI (use
+> `--no-deps` or pin/filter the `vllm` requirement).
