@@ -39,19 +39,26 @@ def test_sdist_contains_build_inputs_without_git(tmp_path):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(original, target)
     assert not (source / ".git").exists()
+    build_inputs = (
+        "build_utils/**/*.py",
+        "csrc/**/*",
+        "requirements/**/*.txt",
+        "vllm_musa/patches/metadata/**/*",
+        "vllm_musa/patches/series/**/*.patch",
+    )
     expected = {
         path.relative_to(source).as_posix()
-        for folder in ("csrc", "vllm_musa/patches/metadata")
-        for path in (source / folder).rglob("*")
+        for pattern in build_inputs
+        for path in source.glob(pattern)
         if path.is_file()
     }
-    assert expected
     expected.update(
         {
             "PKG-INFO",
             "third_party/PINS",
-            "requirements/vllm_runtime_transitive.txt",
+            "vllm_musa/patches/build_apply.py",
             "vllm_musa/jit_kernel/tilelang/_atomic_helper.h",
+            "vllm_musa_omni_compat_pth.py",
         }
     )
     dist = tmp_path / "dist"

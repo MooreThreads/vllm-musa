@@ -19,6 +19,7 @@ on:
       - 'tools/musa_sync.py'
       - 'tools/patch_metadata.py'
       - 'vllm_musa/**'
+      - 'vllm_musa_omni_compat_pth.py'
       - 'tests/**'
   push:
     branches:
@@ -42,6 +43,7 @@ on:
       - 'tools/musa_sync.py'
       - 'tools/patch_metadata.py'
       - 'vllm_musa/**'
+      - 'vllm_musa_omni_compat_pth.py'
       - 'tests/**'
 
 permissions:
