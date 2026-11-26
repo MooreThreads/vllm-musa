@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
+import shutil
 import subprocess
+import sys
+import tarfile
 from pathlib import Path
 from typing import Iterator
 
@@ -8,7 +11,6 @@ import pytest
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
-from setuptools.command.egg_info import FileList
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,23 +26,48 @@ RUNTIME_OVERRIDES = {
 }
 
 
-def test_sdist_manifest_includes_native_sources_and_patch_metadata(monkeypatch):
-    # Check the MANIFEST.in fallback independently of setuptools-scm's Git inventory.
-    monkeypatch.chdir(ROOT)
+def test_sdist_contains_build_inputs_without_git(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=ROOT, text=True
+    ).split("\0")
+    for path in filter(None, tracked):
+        original = ROOT / path
+        if original.is_file():
+            target = source / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(original, target)
+    assert not (source / ".git").exists()
     expected = {
-        path.as_posix()
+        path.relative_to(source).as_posix()
         for folder in ("csrc", "vllm_musa/patches/metadata")
-        for path in Path(folder).rglob("*")
+        for path in (source / folder).rglob("*")
         if path.is_file()
-        and path.suffix in {".cpp", ".cu", ".mu", ".h", ".cuh", ".muh", ".json"}
     }
     assert expected
-    manifest = FileList()
-    manifest.set_allfiles(sorted(expected))
-    for line in Path("MANIFEST.in").read_text().splitlines():
-        if line.strip() and not line.lstrip().startswith("#"):
-            manifest.process_template_line(line)
-    assert expected <= set(manifest.files), sorted(expected - set(manifest.files))
+    expected.update(
+        {
+            "PKG-INFO",
+            "third_party/PINS",
+            "requirements/vllm_runtime_transitive.txt",
+            "vllm_musa/jit_kernel/tilelang/_atomic_helper.h",
+        }
+    )
+    dist = tmp_path / "dist"
+    subprocess.run(
+        [sys.executable, "-m", "build", "--sdist", "--outdir", str(dist)],
+        cwd=source,
+        check=True,
+    )
+    (sdist,) = dist.glob("*.tar.gz")
+    with tarfile.open(sdist) as archive:
+        packaged = {
+            member.name.split("/", 1)[1]
+            for member in archive.getmembers()
+            if member.isfile()
+        }
+    assert expected <= packaged, sorted(expected - packaged)
 
 
 def _active_requirements(

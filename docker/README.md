@@ -320,6 +320,12 @@ In the bundled runtime, `vllm --version` reports the `vllm-musa` distribution
 version, currently `0.1.32`. The distribution uses `0.1.<upstream minor>`.
 `vllm.__version__` reports the pinned upstream version, currently `0.32.0`.
 
+Build a source distribution with `python -m build --sdist` from a checkout or
+source export. To build a wheel from the unpacked archive, prepare the MUSA SDK
+and Python dependencies described in the installation guide, then run
+`python -m build --wheel --no-isolation` in the unpacked directory. The wheel
+build prepares the vLLM and FlashInfer commits recorded in `third_party/PINS`.
+
 The `vllm-musa` wheel bundles both Python import packages. Install the pinned
 hardware dependencies from the MUSA index first, then resolve the wheel's
 public dependencies with the same pins as constraints:

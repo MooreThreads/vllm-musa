@@ -10,18 +10,11 @@ import time
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
-# isort: off
-# Activate MUSA patches before importing the torch ecosystem.
-import torchada  # noqa: F401
-import torch  # noqa: F401
-
-# isort: on
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
 
 from setuptools import setup  # noqa: E402
 from setuptools.command.build_py import build_py  # noqa: E402
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension  # noqa: E402
 
 from build_utils.build_info import write_build_info  # noqa: E402
 from build_utils.bundle_vllm import (  # noqa: E402
@@ -88,6 +81,25 @@ def _runtime_requirements() -> list[str]:
     )
 
 
+# The sdist frontend runs egg_info before sdist. Both commands can use the
+# public build-system dependencies and MANIFEST.in without loading Torch.
+if sys.argv[1:2] in (["egg_info"], ["sdist"]) and not {
+    "build",
+    "build_ext",
+    "bdist_wheel",
+    "editable_wheel",
+    "install",
+    "develop",
+}.intersection(sys.argv[2:]):
+    setup(include_package_data=False, install_requires=_runtime_requirements())
+    sys.exit(0)
+
+# isort: off
+# Activate MUSA patches before importing Torch's extension machinery.
+import torchada  # noqa: E402, F401
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension  # noqa: E402
+
+# isort: on
 configure_compiler_cache(root)
 
 # Detect editable install (pip install -e .) or develop mode

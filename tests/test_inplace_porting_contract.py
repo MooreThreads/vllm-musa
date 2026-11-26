@@ -450,7 +450,7 @@ def test_setup_finds_local_build_helpers_before_importing_them():
 def test_setup_activates_torchada_without_installing_dependencies():
     setup = (ROOT / "setup.py").read_text()
     assert "ensure_torchada_installed" not in setup
-    torch_import = re.search(r"^import torch\b", setup, re.M)
+    torch_import = re.search(r"^(import torch\b|from torch\.)", setup, re.M)
     assert torch_import is not None
     assert setup.index("import torchada") < torch_import.start()
     assert setup.index("import torchada") < setup.index(

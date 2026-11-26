@@ -373,7 +373,9 @@ RUN python docker/check_musa_arch_env.py
 RUN python -m pip install \
         -e . --no-build-isolation -c requirements/musa_private.txt -v
 
-RUN python docker/verify_installed_dependencies.py && python -m pip check
+RUN python docker/verify_installed_dependencies.py && python -m pip check && \
+    cd /tmp && \
+    python /vllm-workspace/tests/packaging/verify_install.py --mode editable
 
 # Build vllm-rs from the vLLM tree cloned and patched by vllm-musa setup.py,
 # while keeping the Rust toolchain out of the runtime image.
@@ -424,7 +426,10 @@ RUN mkdir -p /tmp/vllm-wheel && \
             /vllm-workspace/third_party/vllm/vllm/vllm-rs; \
     fi && \
     VLLM_MUSA_REUSE_PREBUILT=1 \
-        python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel
+        python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel && \
+    rust_check=() && \
+    if [[ "${BUILD_VLLM_RS}" == "1" ]]; then rust_check+=(--require-rust); fi && \
+    python tests/packaging/verify_bundled_wheel.py "${rust_check[@]}" /tmp/vllm-wheel/*.whl
 
 # Install the prebuilt MUSA wheel after torch/vllm-musa so Mooncake integrations
 # can import the installed accelerator stack. The wheel provides both the
