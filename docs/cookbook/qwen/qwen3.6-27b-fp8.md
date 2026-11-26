@@ -31,9 +31,6 @@ FP8 dense-model recipe with three-token MTP speculative decoding.
 ## Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
-export SAFETENSORS_FAST_GPU=1
 
 CAPTURE_SIZES="$(seq -s, 4 4 512)"
 

@@ -32,9 +32,6 @@ FP8 MoE recipe with two-token MTP speculative decoding.
 ## Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
-export SAFETENSORS_FAST_GPU=1
 
 vllm serve /models/Qwen3.6-35B-A3B-FP8 \
   --trust-remote-code \

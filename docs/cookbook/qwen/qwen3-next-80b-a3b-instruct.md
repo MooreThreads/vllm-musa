@@ -36,9 +36,6 @@ CUDA graphs.
 ## Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
-export SAFETENSORS_FAST_GPU=1
 
 vllm serve /models/Qwen3-Next-80B-A3B-Instruct \
   --trust-remote-code \
