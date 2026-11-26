@@ -62,6 +62,3 @@ index e616ee9e2f..922f009923 100644
    ops.def(
        "persistent_topk(Tensor logits, Tensor lengths, Tensor! output, "
        "Tensor workspace, int k, int max_seq_len) -> ()");
--- 
-2.25.1
-
