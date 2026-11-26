@@ -13,13 +13,6 @@ import sys
 from collections import namedtuple
 
 try:
-    import vllm
-
-    VLLM_AVAILABLE = True
-except (ImportError, NameError, AttributeError, OSError):
-    VLLM_AVAILABLE = False
-
-try:
     import vllm_musa
 
     VLLM_MUSA_AVAILABLE = True
@@ -56,8 +49,12 @@ SystemEnv = namedtuple(
         "pip_packages",
         "is_xnnpack_available",
         "cpu_info",
-        "vllm_version",
         "vllm_musa_version",
+        "vllm_import_path",
+        "package_inventory",
+        "provider_imports",
+        "native_extensions",
+        "runtime_provenance",
         "patch_report",
         "vllm_build_flags",
         "gpu_topo",
@@ -66,21 +63,78 @@ SystemEnv = namedtuple(
 )
 
 DEFAULT_PIP_PATTERNS = {
-    "musa",
-    "mthreads",
     "torch",
-    "vllm",
+    "torch-musa",
+    "torchvision",
+    "torchaudio",
+    "vllm-musa",
     "numpy",
-    "mypy",
-    "flake8",
     "triton",
-    "optree",
-    "onnx",
-    "mccl",
-    "transformers",
-    "zmq",
     "torchada",
+    "mthreads-ml-py",
     "mate",
+    "mate-mubin",
+    "flash-attn-3",
+    "flash-mla",
+    "deep-gemm",
+    "flashinfer-python",
+    "sageattention",
+    "deep-ep",
+    "tilelang-musa",
+    "apache-tvm-ffi",
+    "torch-c-dlpack-ext",
+    "mooncake-transfer-engine-musa",
+    "fmha-sm100",
+    "flash-kda",
+    "huggingface-hub",
+    "tokenizers",
+    "openai",
+    "transformers",
+}
+
+MUSA_PROVIDER_IMPORTS = {
+    "torch_musa": "torch_musa",
+    "torchada": "torchada",
+    "mate": "mate",
+    "mate_mubin": "mate_mubin",
+    "flash_attn_3": "flash_attn_3",
+    "flash_mla": "flash_mla",
+    "deep_gemm": "deep_gemm",
+    "flashinfer": "flashinfer",
+    "sageattention": "sageattention",
+    "deep_ep": "deep_ep",
+    "tilelang": "tilelang",
+    "tvm_ffi": "tvm_ffi",
+    "torch_c_dlpack_ext": "torch_c_dlpack_ext",
+    "pymtml": "pymtml",
+    "mooncake": "mooncake",
+    "fmha_sm100": "fmha_sm100",
+    "flash_kda": "flash_kda",
+}
+
+MUSA_DISTRIBUTIONS = {
+    "vllm-musa": "vllm_musa",
+    "torch": "torch",
+    "torch_musa": "torch_musa",
+    "torchvision": "torchvision",
+    "torchaudio": "torchaudio",
+    "torchada": "torchada",
+    "mthreads-ml-py": "pymtml",
+    "mate": "mate",
+    "mate-mubin": "mate_mubin",
+    "flash-attn-3": "flash_attn_3",
+    "flash-mla": "flash_mla",
+    "deep-gemm": "deep_gemm",
+    "flashinfer-python": "flashinfer",
+    "sageattention": "sageattention",
+    "deep-ep": "deep_ep",
+    "tilelang-musa": "tilelang",
+    "apache-tvm-ffi": "tvm_ffi",
+    "torch-c-dlpack-ext": "torch_c_dlpack_ext",
+    "triton": "triton",
+    "mooncake-transfer-engine-musa": "mooncake",
+    "fmha-sm100": "fmha_sm100",
+    "flash-kda": "flash_kda",
 }
 
 
@@ -201,30 +255,105 @@ def get_musa_sdk_version(run_lambda):
             pass
 
 
-def get_vllm_version():
-    if not VLLM_AVAILABLE:
+def get_vllm_import_path():
+    """Report the bundled import package without requiring a vllm distribution."""
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("vllm")
+        return spec.origin if spec is not None else "N/A"
+    except (ImportError, AttributeError, OSError, ValueError):
         return "N/A"
-
-    from vllm import __version__, __version_tuple__
-
-    if __version__ == "dev":
-        return "N/A (dev)"
-    version_str = __version_tuple__[-1]
-    if isinstance(version_str, str) and version_str.startswith("g"):
-        if "." in version_str:
-            git_sha = version_str.split(".")[0][1:]
-            date = version_str.split(".")[-1][1:]
-            return f"{__version__} (git sha: {git_sha}, date: {date})"
-        else:
-            git_sha = version_str[1:]
-            return f"{__version__} (git sha: {git_sha})"
-    return __version__
 
 
 def get_vllm_musa_version():
-    if not VLLM_MUSA_AVAILABLE:
-        return "N/A"
-    return vllm_musa.__version__
+    try:
+        from importlib import metadata
+
+        return metadata.version("vllm-musa")
+    except metadata.PackageNotFoundError:
+        if not VLLM_MUSA_AVAILABLE:
+            return "N/A"
+        return getattr(vllm_musa, "__version__", "N/A")
+
+
+def get_package_inventory():
+    """Return installed MUSA/runtime distributions without importing providers."""
+    try:
+        from importlib import metadata
+
+        versions = []
+        for name in sorted(MUSA_DISTRIBUTIONS):
+            try:
+                versions.append(f"{name}=={metadata.version(name)}")
+            except metadata.PackageNotFoundError:
+                versions.append(f"{name}: MISSING")
+        return "\n".join(versions)
+    except Exception as exc:
+        return f"Could not collect package metadata: {exc}"
+
+
+def get_provider_imports():
+    """Check provider module discoverability without importing device code."""
+    import importlib.util
+
+    lines = []
+    for distribution_name, module_name in MUSA_PROVIDER_IMPORTS.items():
+        try:
+            spec = importlib.util.find_spec(module_name)
+            state = "AVAILABLE" if spec is not None else "MISSING"
+            origin = getattr(spec, "origin", None) if spec is not None else None
+            lines.append(
+                f"{distribution_name}: {state}" + (f" ({origin})" if origin else "")
+            )
+        except (ImportError, AttributeError, ModuleNotFoundError, ValueError) as exc:
+            lines.append(f"{distribution_name}: ERROR {type(exc).__name__}: {exc}")
+    return "\n".join(lines)
+
+
+def get_native_extensions():
+    """List native artifacts visible in the installed import packages."""
+    import glob
+    import importlib.util
+    from pathlib import Path
+
+    packages = ("vllm", "vllm_musa", "torch_musa", "mate", "flash_attn_3")
+    paths = []
+    for package in packages:
+        try:
+            spec = importlib.util.find_spec(package)
+            if spec is None or spec.origin is None:
+                continue
+            root = Path(spec.origin).parent
+            paths.extend(glob.glob(str(root / "*.so")))
+        except (ImportError, AttributeError, ModuleNotFoundError, OSError, ValueError):
+            continue
+    return "\n".join(sorted(set(paths))) or "No native extensions found"
+
+
+def get_runtime_provenance():
+    """Describe the interpreter and import locations used by this report."""
+    import importlib.util
+    import os
+    import sys
+
+    lines = [
+        f"python: {sys.executable}",
+        f"python_version: {sys.version.split()[0]}",
+        f"cwd: {os.getcwd()}",
+    ]
+    for name in ("vllm_musa", "vllm", "torch", "torch_musa"):
+        try:
+            spec = importlib.util.find_spec(name)
+            lines.append(f"{name}: {getattr(spec, 'origin', None) or 'MISSING'}")
+        except (ImportError, AttributeError, ModuleNotFoundError, ValueError) as exc:
+            lines.append(f"{name}: ERROR {type(exc).__name__}: {exc}")
+    return "\n".join(lines)
+
+
+def get_environment_variables():
+    """Collect variables that commonly change MUSA backend selection."""
+    return get_env_vars() or "No relevant environment variables set"
 
 
 def get_patch_report():
@@ -356,6 +485,9 @@ def get_pip_packages(run_lambda, patterns=None):
     """Return `pip list` output."""
     if patterns is None:
         patterns = DEFAULT_PIP_PATTERNS
+    from packaging.utils import canonicalize_name
+
+    normalized_patterns = {canonicalize_name(name) for name in patterns}
 
     def run_with_pip():
         try:
@@ -371,13 +503,20 @@ def get_pip_packages(run_lambda, patterns=None):
         elif os.environ.get("UV") is not None:
             cmd = ["uv", "pip", "list", "--format=freeze"]
         else:
-            raise RuntimeError(
-                "Could not collect pip list output (pip or uv module not available)"
+            from importlib import metadata
+
+            return "\n".join(
+                f"{dist.metadata['Name']}=={dist.version}"
+                for dist in metadata.distributions()
+                if dist.metadata.get("Name")
+                and canonicalize_name(dist.metadata["Name"]) in normalized_patterns
             )
 
         out = run_and_read_all(run_lambda, cmd)
         return "\n".join(
-            line for line in out.splitlines() if any(name in line for name in patterns)
+            line
+            for line in out.splitlines()
+            if canonicalize_name(line.split("==", 1)[0].strip()) in normalized_patterns
         )
 
     pip_version = "pip3" if sys.version[0] == "3" else "pip"
@@ -395,30 +534,31 @@ def is_xnnpack_available():
 
 
 def get_env_vars():
-    try:
-        from vllm.envs import environment_variables as vllm_envs
-    except Exception:
-        vllm_envs = {}
-
     env_vars = ""
-    secret_terms = ("secret", "token", "api", "access", "password")
-    report_prefix = (
-        "TORCH",
-        "MCCL",
-        "PYTORCH",
-        "MUBLAS",
-        "MUDNN",
-        "OMP_",
-        "MKL_",
-        "MUSA",
-        "MTHREADS",
-    )
+    allowed_names = {
+        "CUDA_VISIBLE_DEVICES",
+        "MUSA_VISIBLE_DEVICES",
+        "MTHREADS_VISIBLE_DEVICES",
+        "TORCH_COMPILE_DEBUG",
+        "TORCHDYNAMO_DISABLE",
+        "TORCH_LOGS",
+        "TORCH_SHOW_CPP_STACKTRACES",
+        "PYTORCH_MUSA_ALLOC_CONF",
+        "PYTORCH_NO_CUDA_MEMORY_CACHING",
+        "VLLM_ATTENTION_BACKEND",
+        "VLLM_MUSA_REUSE_PREBUILT",
+        "VLLM_USE_V1",
+        "VLLM_WORKER_MULTIPROC_METHOD",
+        "MCCL_DEBUG",
+        "MCCL_SOCKET_IFNAME",
+        "MUSA_HOME",
+        "MUSA_PATH",
+        "MUSA_TOOLKIT_PATH",
+        "LD_LIBRARY_PATH",
+        "PATH",
+    }
     for k, v in os.environ.items():
-        if any(term in k.lower() for term in secret_terms):
-            continue
-        if k in vllm_envs:
-            env_vars = env_vars + "{}={}".format(k, v) + "\n"
-        if k.startswith(report_prefix):
+        if k in allowed_names:
             env_vars = env_vars + "{}={}".format(k, v) + "\n"
 
     return env_vars
@@ -463,7 +603,6 @@ def get_env_info():
 
     sys_version = sys.version.replace("\n", " ")
 
-    vllm_version = get_vllm_version()
     vllm_build_flags = summarize_vllm_build_flags()
     gpu_topo = get_gpu_topo(run_lambda)
 
@@ -489,12 +628,16 @@ def get_env_info():
         cmake_version=get_cmake_version(run_lambda),
         is_xnnpack_available=is_xnnpack_available(),
         cpu_info=get_cpu_info(run_lambda),
-        vllm_version=vllm_version,
         vllm_musa_version=get_vllm_musa_version(),
+        vllm_import_path=get_vllm_import_path(),
+        package_inventory=get_package_inventory(),
+        provider_imports=get_provider_imports(),
+        native_extensions=get_native_extensions(),
+        runtime_provenance=get_runtime_provenance(),
         patch_report=get_patch_report(),
         vllm_build_flags=vllm_build_flags,
         gpu_topo=gpu_topo,
-        env_vars=get_env_vars(),
+        env_vars=get_environment_variables(),
     )
 
 
@@ -528,10 +671,10 @@ Python version               : {python_version}
 Python platform              : {python_platform}
 
 ==============================
-         vLLM Info
+         vLLM-MUSA Info
 ==============================
-vLLM Version                 : {vllm_version}
 vLLM-MUSA Version            : {vllm_musa_version}
+vLLM import package path     : {vllm_import_path}
 vLLM Build Flags:
   {vllm_build_flags}
 GPU Topology:
@@ -559,6 +702,26 @@ Is XNNPACK available         : {is_xnnpack_available}
 Versions of relevant libraries
 ==============================
 {pip_packages}
+
+==============================
+       MUSA Package Inventory
+==============================
+{package_inventory}
+
+==============================
+       Provider Discoverability
+==============================
+{provider_imports}
+
+==============================
+       Native Extensions
+==============================
+{native_extensions}
+
+==============================
+       Runtime Provenance
+==============================
+{runtime_provenance}
 """.strip()
 
 env_info_fmt += "\n\n"

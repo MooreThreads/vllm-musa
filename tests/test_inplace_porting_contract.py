@@ -96,7 +96,7 @@ def test_supported_musa_stack_contract_cases_are_explicit():
 
 
 def test_torchada_floor_is_consistent():
-    assert 'dynamic = ["dependencies"]' in (ROOT / "pyproject.toml").read_text()
+    assert '"dependencies"' in (ROOT / "pyproject.toml").read_text()
     private_requirements, common_requirements, expected = _declared_musa_stack()
     assert set(expected["private"]).issubset(private_requirements)
     assert expected["torchada"] in common_requirements
@@ -125,20 +125,9 @@ def _dockerfile_run_commands(dockerfile: str) -> list[str]:
     return commands
 
 
-def test_musa_image_caps_huggingface_hub(dockerfile=None):
-    """Our own pins must govern the vendored install, and the self-check import the pair.
-
-    The pinned upstream file asks for `huggingface_hub >= 1.31.0` with no upper bound,
-    while this image pins `transformers==5.19.0` (requirements/common.txt), whose metadata
-    requires `huggingface-hub<2.0`. docker/musa.Dockerfile installs that upstream file
-    with `--no-deps`, so nothing else would stop that one line resolving to the newest
-    release (2.0.0) and the image could not import transformers (measured in
-    `vllm-musa:pr250-final-8b4cbc997`). The version belongs in requirements/common.txt;
-    this Dockerfile only applies it. Dropping the constraint, the pin, or a module from
-    the self-check loop must fail here.
-    """
-    if dockerfile is None:
-        dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
+def test_musa_image_caps_huggingface_hub():
+    dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
+    setup = (ROOT / "setup.py").read_text()
     verifier = (ROOT / "docker" / "verify_installed_dependencies.py").read_text()
     pinned = (ROOT / "requirements" / "common.txt").read_text()
     assert "huggingface_hub>=1.31.0,<2.0" in pinned, "the pin belongs in requirements/"
@@ -149,21 +138,17 @@ def test_musa_image_caps_huggingface_hub(dockerfile=None):
     for module in ("transformers", "huggingface_hub"):
         assert f'"{module}"' in verifier, module
 
-    # Per pip *invocation*: the vendored install and the transitive install share one
-    # RUN line, so a check on the RUN would pass even with the constraint moved off the
-    # invocation that resolves the uncapped line.
-    invocations = []
-    for command in _dockerfile_run_commands(dockerfile):
-        for chunk in command.split("python -m pip install")[1:]:
-            invocations.append(chunk.split("&&")[0])
-    vendored = [
-        argv
-        for argv in invocations
-        if "third_party/vllm/requirements/common.txt" in argv
-    ]
-    assert vendored, "no pip invocation installs the vendored requirements"
-    for argv in vendored:
-        assert "--constraint requirements/common.txt" in argv, argv
+    assert 'return _read_requirements("common.txt")' in setup
+    assert "install_requires=_runtime_requirements()" in setup
+    assert '"\\n".join(_runtime_requirements())' in setup
+    runtime = dockerfile.split("FROM vllm_musa_deps AS vllm_runtime", 1)[1]
+    install = next(
+        command.split("&&", 1)[0]
+        for command in _dockerfile_run_commands(runtime)
+        if "/tmp/vllm-wheel/*.whl" in command
+    )
+    assert "--no-deps" not in install
+    assert "-c /tmp/vllm-runtime-requirements/requirements/musa_private.txt" in install
 
 
 def test_musa_image_runtime_dependency_contract():
@@ -173,13 +158,14 @@ def test_musa_image_runtime_dependency_contract():
     runtime_requirements = (
         (ROOT / "requirements" / "vllm_runtime_transitive.txt").read_text().splitlines()
     )
+    assert "mcp>=2,<3" in runtime_requirements
     dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
     verifier = (ROOT / "docker" / "verify_installed_dependencies.py").read_text()
 
     assert "triton==3.2.0" in private_requirements
     _, _, expected = _declared_musa_stack()
     assert set(expected["private"]).issubset(private_requirements)
-    assert "fastapi[standard]" in runtime_requirements
+    assert "fastapi[standard]>=0.133.0,<0.137.0" in runtime_requirements
     assert "pycountry" in runtime_requirements
     assert '"requirements/common.txt"' in verifier
     assert "RUN python docker/verify_installed_dependencies.py" in dockerfile
@@ -209,13 +195,8 @@ def test_musa_image_runtime_dependency_contract():
     assert import_statement in verifier
     assert verifier.index(import_statement) < verifier.index(version_statement)
     assert "if dist_name in EXACT_VERSION_DISTS and installed != pinned:" in verifier
-    assert (
-        "if (\n"
-        "        dist_name not in EXACT_VERSION_DISTS\n"
-        "        and pinned\n"
-        "        and not installed.startswith(pinned)\n"
-        "    ):"
-    ) in verifier
+    assert "if dist_name not in EXACT_VERSION_DISTS and pinned:" in verifier
+    assert 'if pinned == "<2":' in verifier
     assert '("triton", "triton", requirement_prefix("triton"))' in verifier
     assert '("uvloop", "uvloop", "")' in verifier
     assert '("pycountry", "pycountry", "")' in verifier
@@ -226,7 +207,9 @@ def test_musa_image_matches_upstream_workspace_and_includes_pytest():
     test_requirements = (ROOT / "requirements" / "test.txt").read_text().splitlines()
 
     assert "WORKDIR /vllm-workspace" in dockerfile
-    assert "COPY requirements/ /vllm-workspace/requirements/" in dockerfile
+    assert (
+        "COPY requirements/ /tmp/vllm-runtime-requirements/requirements/" in dockerfile
+    )
     assert "COPY . /vllm-workspace" in dockerfile
     assert "/workspace/vllm-musa" not in dockerfile
     assert "pytest" in test_requirements
@@ -244,7 +227,7 @@ def test_musa_image_stage_and_optional_component_contract():
         "FROM devel AS vllm_musa_deps",
         "FROM vllm_musa_deps AS vllm_musa_installed",
         "FROM vllm_musa_installed AS vllm_rs_build",
-        "FROM vllm_musa_installed AS mooncake",
+        "FROM vllm_runtime AS mooncake",
         "FROM mooncake AS final",
         "FROM final AS vllm-openai",
     )
@@ -278,9 +261,9 @@ def test_musa_image_stage_and_optional_component_contract():
     )
     assert arch_check < native_build
 
-    mooncake_stage = dockerfile.split("FROM vllm_musa_installed AS mooncake", 1)[
-        1
-    ].split("FROM mooncake AS final", 1)[0]
+    mooncake_stage = dockerfile.split("FROM vllm_runtime AS mooncake", 1)[1].split(
+        "FROM mooncake AS final", 1
+    )[0]
     assert "MTHREADS_VISIBLE_DEVICES" not in mooncake_stage
     assert "ARG MOONCAKE_VERSION=0.3.14" in mooncake_stage
     assert '"mooncake-transfer-engine-musa==${MOONCAKE_VERSION}"' in mooncake_stage
@@ -353,10 +336,18 @@ def test_mooncake_uses_the_pinned_upstream_connector():
 
 def test_mooncake_example_uses_current_proxy_and_scoped_cleanup():
     script = (
-        ROOT / "example" / "disaggregated_serving" / "disaggregated_serving.sh"
+        ROOT
+        / "examples"
+        / "disaggregated"
+        / "disaggregated_serving"
+        / "disaggregated_serving.sh"
     ).read_text()
 
-    assert "third_party/vllm/examples/disaggregated/mooncake_connector" in script
+    assert (
+        'PROXY_RELATIVE_PATH="examples/disaggregated/mooncake_connector/'
+        'mooncake_connector_proxy.py"'
+    ) in script
+    assert "third_party/vllm/${PROXY_RELATIVE_PATH}" in script
     assert "mooncake_connector_proxy.py" in script
     assert "VLLM_MOONCAKE_BOOTSTRAP_PORT" in script
     assert "VLLM_ENFORCE_EAGER" in script
@@ -371,7 +362,7 @@ def test_mooncake_example_uses_current_proxy_and_scoped_cleanup():
 
 def test_mooncake_rdma_container_contract_is_explicit():
     example_readme = (
-        ROOT / "example" / "disaggregated_serving" / "README.md"
+        ROOT / "examples" / "disaggregated" / "disaggregated_serving" / "README.md"
     ).read_text()
     for token in (
         "--detach",
@@ -459,7 +450,7 @@ def test_setup_finds_local_build_helpers_before_importing_them():
 def test_setup_activates_torchada_without_installing_dependencies():
     setup = (ROOT / "setup.py").read_text()
     assert "ensure_torchada_installed" not in setup
-    torch_import = re.search(r"^import torch\b", setup, re.M)
+    torch_import = re.search(r"^(import torch\b|from torch\.)", setup, re.M)
     assert torch_import is not None
     assert setup.index("import torchada") < torch_import.start()
     assert setup.index("import torchada") < setup.index(

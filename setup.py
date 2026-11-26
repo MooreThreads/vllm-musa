@@ -10,19 +10,17 @@ import time
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
-# isort: off
-# Activate MUSA patches before importing the torch ecosystem.
-import torchada  # noqa: F401
-import torch  # noqa: F401
-
-# isort: on
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
 
-from setuptools import setup
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+from setuptools import setup  # noqa: E402
+from setuptools.command.build_py import build_py  # noqa: E402
 
 from build_utils.build_info import write_build_info  # noqa: E402
+from build_utils.bundle_vllm import (  # noqa: E402
+    bundle_vllm_package,
+    find_prebuilt_extensions,
+)
 from build_utils.ccache import configure_compiler_cache  # noqa: E402
 from build_utils.git_proxy import (  # noqa: E402
     PROXY_ENV,
@@ -77,6 +75,31 @@ def _read_requirements(filename, seen=None):
     return requirements
 
 
+def _runtime_requirements() -> list[str]:
+    return _read_requirements("common.txt") + _read_requirements(
+        "vllm_runtime_transitive.txt"
+    )
+
+
+# The sdist frontend runs egg_info before sdist. Both commands can use the
+# public build-system dependencies and MANIFEST.in without loading Torch.
+if sys.argv[1:2] in (["egg_info"], ["sdist"]) and not {
+    "build",
+    "build_ext",
+    "bdist_wheel",
+    "editable_wheel",
+    "install",
+    "develop",
+}.intersection(sys.argv[2:]):
+    setup(include_package_data=False, install_requires=_runtime_requirements())
+    sys.exit(0)
+
+# isort: off
+# Activate MUSA patches before importing Torch's extension machinery.
+import torchada  # noqa: E402, F401
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension  # noqa: E402
+
+# isort: on
 configure_compiler_cache(root)
 
 # Detect editable install (pip install -e .) or develop mode
@@ -374,15 +397,26 @@ EXT_MODULES = [
 class _CustomBuildExt(BuildExtension):
     """Custom build extension that clones third-party repositories before building."""
 
-    # A failed attempt that ran this long and received nothing did not fail
-    # transiently: the host never answered, and another attempt would wait out
-    # the same connect timeout, so the next candidate runs instead.
     _SLOW_CONNECT_FAIL_S = 120
+    _third_party_prepared = False
 
     def build_extensions(self):
-        super().build_extensions()
-        # The source tree serves editable installs; build_lib is what a wheel packs,
-        # and build_py has already copied the package there.
+        if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") == "1":
+            build_lib = Path(self.build_lib)
+            extension_paths = [
+                Path(self.get_ext_fullpath(extension.name)).relative_to(build_lib)
+                for extension in self.extensions
+            ]
+            sources = find_prebuilt_extensions(
+                extension_paths, (root / _VLLM_REPO.source_dir, root)
+            )
+            print("Reusing native extensions from the prepared source tree")
+            for extension_path, source in sources.items():
+                output = build_lib / extension_path
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, output)
+        else:
+            super().build_extensions()
         package_dirs = {root / "vllm_musa"}
         if self.build_lib and (Path(self.build_lib) / "vllm_musa").is_dir():
             package_dirs.add(Path(self.build_lib) / "vllm_musa")
@@ -518,6 +552,13 @@ class _CustomBuildExt(BuildExtension):
     def _install_vllm(repo_path):
         """Install the cloned + patched vLLM (editable) against the existing torch."""
         source_dir = Path(repo_path)
+        subprocess.check_call(
+            [sys.executable, "tools/use_existing_torch.py"], cwd=source_dir
+        )
+        # Keep the editable distribution on the same dependency policy as the wheel.
+        (source_dir / "requirements" / "common.txt").write_text(
+            "\n".join(_runtime_requirements()) + "\n", encoding="utf-8"
+        )
 
         env = os.environ.copy()
         env["VLLM_TARGET_DEVICE"] = "empty"
@@ -547,43 +588,17 @@ class _CustomBuildExt(BuildExtension):
             "-v",
         ]
 
-        steps = [
-            {
-                "name": "Install vllm use existing torch",
-                "cmd": f"cd {source_dir} && python tools/use_existing_torch.py",
-                "shell": True,
-                "env": None,
-            },
-            {
-                "name": "Install vllm build requirements",
-                "cmd": [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "-r",
-                    str(source_dir / "requirements" / "build" / "cuda.txt"),
-                ],
-                "shell": False,
-                "env": None,
-            },
-            {
-                "name": "Install vllm (editable)",
-                "cmd": vllm_install_cmd,
-                "shell": False,
-                "env": env,
-            },
-        ]
-
-        for step in steps:
-            print(f"{step['name']}")
-
-            if step["shell"]:
-                print(f"Command: {step['cmd']}")
-                subprocess.check_call(step["cmd"], shell=True, env=step["env"])
-            else:
-                print(f"Command: {' '.join(step['cmd'])}")
-                subprocess.check_call(step["cmd"], env=step["env"])
+        subprocess.check_call(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                str(source_dir / "requirements" / "build" / "cuda.txt"),
+            ]
+        )
+        subprocess.check_call(vllm_install_cmd, env=env)
 
     @staticmethod
     def _apply_musa_patch_series(repo_path):
@@ -605,42 +620,89 @@ class _CustomBuildExt(BuildExtension):
         for name, status in ba.apply_patch_series(repo, series, strict=True):
             print(f"MUSA build patch: {status:16} {name}")
 
-    def run(self):
-        if os.environ.get("SKIP_THIRD_PARTY", "0") == "1":
-            print("Skipping third-party repositories cloning (SKIP_THIRD_PARTY=1)")
+    @classmethod
+    def prepare_third_party(cls):
+        """Materialize the exact patched sources consumed by every build path."""
+        if cls._third_party_prepared:
+            return
+
+        if os.environ.get("VLLM_MUSA_REUSE_PREBUILT") == "1":
+            # This tree was already patched and compiled by the source stage.
+            # Later patches can overlap earlier hunks, so replaying the series
+            # on the final tree is not a valid substitute for preparing it once.
+            for repo in (_VLLM_REPO, _FLASHINFER_REPO):
+                if not repo.source_dir.is_dir():
+                    raise RuntimeError(
+                        f"missing prepared source tree: {repo.source_dir}"
+                    )
+            cls._third_party_prepared = True
+            return
+        if os.environ.get("SKIP_THIRD_PARTY") == "1":
+            print("Using prepared third-party source trees")
         else:
             proxy = resolve_proxy()
             via = f" through {proxy}" if proxy else ""
             print(f"Fetching pinned third-party sources{via}...")
-            self._clone_and_checkout(
+            cls._clone_and_checkout(
                 _VLLM_REPO.source_dir,
                 _VLLM_REPO.git_repository,
                 _VLLM_REPO.git_tag,
             )
-            self._clone_and_checkout(
+            cls._clone_and_checkout(
                 _FLASHINFER_REPO.source_dir,
                 _FLASHINFER_REPO.git_repository,
                 _FLASHINFER_REPO.git_tag,
             )
             print("Third-party repositories ready.")
 
-        # patch the clone BEFORE installing, so the installed vLLM is pre-patched.
-        self._apply_musa_patch_series(_VLLM_REPO.source_dir)
+        # Patch the clone before either copying it into a wheel or exposing it
+        # through the existing editable development install.
+        cls._apply_musa_patch_series(_VLLM_REPO.source_dir)
+        cls._third_party_prepared = True
 
-        self._install_vllm(_VLLM_REPO.source_dir)
+    def run(self):
+        self.prepare_third_party()
+
+        if _is_editable_install:
+            self._install_vllm(_VLLM_REPO.source_dir)
 
         super().run()
 
 
+class _CustomBuildPy(build_py):
+    """Bundle the pinned, patched upstream vLLM package in non-editable wheels."""
+
+    def run(self):
+        super().run()
+        if _is_editable_install:
+            return
+
+        _CustomBuildExt.prepare_third_party()
+        repo = root / _VLLM_REPO.source_dir
+        source = repo / "vllm"
+        destination = Path(self.build_lib) / "vllm"
+        result = bundle_vllm_package(
+            source, destination, tag=_PINS["VLLM_TAG"], revision=_PINS["VLLM_COMMIT"]
+        )
+        print(
+            "Bundled patched vLLM package: "
+            f"files={result.files} metadata_rewrites={result.metadata_rewrites}"
+        )
+
+
 setup(
     ext_modules=EXT_MODULES,
-    cmdclass={"build_ext": _CustomBuildExt.with_options(use_ninja=True)},
+    cmdclass={
+        "build_ext": _CustomBuildExt.with_options(use_ninja=True),
+        "build_py": _CustomBuildPy,
+    },
     include_package_data=False,
-    # Runtime dependencies live in requirements/musa.txt so Docker and package
-    # metadata share one source. MUSA-private pins, including torch/torch_musa,
-    # are kept in requirements/musa_private.txt.
-    install_requires=_read_requirements("musa.txt"),
+    # Keep the default wheel installable from public indexes. Hardware-private
+    # wheels are an explicit extra because torch_musa, MATE, and FlashInfer
+    # must come from the matching MUSA index.
+    install_requires=_runtime_requirements(),
 )
 
-# place the built vllm.* extensions into the editable vLLM clone (see the function).
-develop_dynamic_library("vllm", target_override=_VLLM_REPO.source_dir / "vllm")
+# Place built vllm.* extensions into the editable vLLM checkout.
+if _is_editable_install:
+    develop_dynamic_library("vllm", target_override=_VLLM_REPO.source_dir / "vllm")

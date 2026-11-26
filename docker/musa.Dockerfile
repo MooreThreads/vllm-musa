@@ -13,6 +13,9 @@ ARG PIP_BOOTSTRAP_INDEX_URL=https://pypi.org/simple
 FROM ${BASE_IMAGE} AS base
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENTRYPOINT []
+# Derived serving images can enable device injection by default.
+ENV MTHREADS_VISIBLE_DEVICES=void
 
 ARG PYTHON_VERSION
 ARG DEADSNAKES_MIRROR_URL
@@ -48,6 +51,7 @@ RUN apt-get update && \
         git-lfs \
         gnupg \
         infiniband-diags \
+        libcairo2-dev \
         libcurl4-openssl-dev \
         libdrm2 \
         libibverbs-dev \
@@ -86,36 +90,41 @@ RUN if [[ "${PYTHON_VERSION}" != "3.12" ]]; then \
         echo "This image supports only PYTHON_VERSION=3.12 (got ${PYTHON_VERSION})" >&2; \
         exit 1; \
     fi && \
-    if [[ -n "${DEADSNAKES_MIRROR_URL}" ]]; then \
-        if [[ -z "${DEADSNAKES_GPGKEY_URL}" ]]; then \
-            echo "DEADSNAKES_GPGKEY_URL is required with DEADSNAKES_MIRROR_URL" >&2; \
-            exit 1; \
-        fi && \
-        install -d -m 0755 /etc/apt/keyrings && \
-        curl -fsSL "${DEADSNAKES_GPGKEY_URL}" | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg && \
-        chmod 0644 /etc/apt/keyrings/deadsnakes.gpg && \
-        printf 'deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] %s jammy main\n' \
-            "${DEADSNAKES_MIRROR_URL}" > /etc/apt/sources.list.d/deadsnakes.list; \
+    if python3 -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' \
+        >/dev/null 2>&1 && command -v pip >/dev/null 2>&1; then \
+        echo "Keeping Python 3.12 from BASE_IMAGE"; \
     else \
-        env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
-            add-apt-repository -y ppa:deadsnakes/ppa; \
+        if [[ -n "${DEADSNAKES_MIRROR_URL}" ]]; then \
+            if [[ -z "${DEADSNAKES_GPGKEY_URL}" ]]; then \
+                echo "DEADSNAKES_GPGKEY_URL is required with DEADSNAKES_MIRROR_URL" >&2; \
+                exit 1; \
+            fi && \
+            install -d -m 0755 /etc/apt/keyrings && \
+            curl -fsSL "${DEADSNAKES_GPGKEY_URL}" | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg && \
+            chmod 0644 /etc/apt/keyrings/deadsnakes.gpg && \
+            printf 'deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] %s jammy main\n' \
+                "${DEADSNAKES_MIRROR_URL}" > /etc/apt/sources.list.d/deadsnakes.list; \
+        else \
+            env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+                add-apt-repository -y ppa:deadsnakes/ppa; \
+        fi && \
+        apt-get update && \
+        apt-get install -y --no-install-recommends \
+            python${PYTHON_VERSION} \
+            python${PYTHON_VERSION}-dev && \
+        update-alternatives --install /usr/bin/python3 python3 \
+            /usr/bin/python${PYTHON_VERSION} 100 && \
+        update-alternatives --set python3 /usr/bin/python${PYTHON_VERSION} && \
+        ln -sfn /usr/bin/python${PYTHON_VERSION}-config /usr/bin/python3-config && \
+        rm -f /usr/lib/python${PYTHON_VERSION}/EXTERNALLY-MANAGED && \
+        curl -fsSL --retry 5 --retry-all-errors --connect-timeout 10 \
+            "${GET_PIP_URL}" -o /tmp/get-pip.py && \
+        /usr/bin/python${PYTHON_VERSION} /tmp/get-pip.py \
+            --index-url "${PIP_BOOTSTRAP_INDEX_URL}" && \
+        rm -f /tmp/get-pip.py && \
+        ln -sfn /usr/local/bin/pip${PYTHON_VERSION} /usr/local/bin/pip && \
+        ln -sfn /usr/local/bin/pip${PYTHON_VERSION} /usr/local/bin/pip3; \
     fi && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python${PYTHON_VERSION} \
-        python${PYTHON_VERSION}-dev && \
-    update-alternatives --install /usr/bin/python3 python3 \
-        /usr/bin/python${PYTHON_VERSION} 100 && \
-    update-alternatives --set python3 /usr/bin/python${PYTHON_VERSION} && \
-    ln -sfn /usr/bin/python${PYTHON_VERSION}-config /usr/bin/python3-config && \
-    rm -f /usr/lib/python${PYTHON_VERSION}/EXTERNALLY-MANAGED && \
-    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 10 \
-        "${GET_PIP_URL}" -o /tmp/get-pip.py && \
-    /usr/bin/python${PYTHON_VERSION} /tmp/get-pip.py \
-        --index-url "${PIP_BOOTSTRAP_INDEX_URL}" && \
-    rm -f /tmp/get-pip.py && \
-    ln -sfn /usr/local/bin/pip${PYTHON_VERSION} /usr/local/bin/pip && \
-    ln -sfn /usr/local/bin/pip${PYTHON_VERSION} /usr/local/bin/pip3 && \
     python --version && \
     python3 --version && \
     pip --version && \
@@ -302,8 +311,13 @@ ARG MUSA_PIP_INDEX_URL
 ENV PIP_CACHE_DIR=/root/.cache/pip \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-COPY requirements/ /vllm-workspace/requirements/
-WORKDIR /vllm-workspace
+# A prebuilt serving image can carry an editable checkout and overlapping
+# distribution records. Uninstall both before copying the current sources.
+RUN cd /tmp && python -m pip uninstall -y vllm vllm-musa && \
+    rm -rf /vllm-workspace
+
+COPY requirements/ /tmp/vllm-runtime-requirements/requirements/
+WORKDIR /tmp/vllm-runtime-requirements
 
 # 1. MUSA/MT wheels from the internal index only, FIRST and --no-deps (their
 #    ordinary deps come in steps 2-3). MUSA torch must land before the public
@@ -316,13 +330,13 @@ RUN python -m pip install \
         -r requirements/musa_private.txt
 
 # 2. Ordinary third-party wheels from public PyPI: build tools, common.txt, and
-#    musa.txt's direct pins (transformers). Step 1 already satisfies `torch`.
+#    musa.txt's direct pins (transformers). Pycairo satisfies apt's PyGObject.
 RUN musa_public_extras="$(grep -vE '^[[:space:]]*(#|-r[[:space:]]|--|$)' requirements/musa.txt || true)" && \
-    python -m pip install \
-        --index-url "${PYPI_INDEX_URL}" \
+    PIP_INDEX_URL="${PYPI_INDEX_URL}" python -m pip install \
         -r requirements/build.txt \
         -r requirements/common.txt \
         -r requirements/test.txt \
+        pycairo \
         ${musa_public_extras}
 
 # 3. Fill in the MUSA wheels' ordinary deps (sympy, networkx, ...) from public
@@ -341,10 +355,8 @@ RUN python /tmp/vllm-musa-mate-patch/apply_mate_dynamo_bool_patch.py && \
 
 FROM vllm_musa_deps AS vllm_musa_installed
 
-# setup.py's develop_dynamic_library() installs the vendored vLLM with
-# --no-deps to avoid replacing the MUSA torch stack. Route the explicit vLLM
-# runtime dependency install and the numpy re-pin below through the same public
-# index as the deps stage. PYPI_INDEX_URL comes from docker/build_image.sh.
+# setup.py installs the vendored vLLM editable with --no-deps. The outer
+# vllm-musa distribution supplies the shared runtime requirements.
 ARG PYPI_INDEX_URL
 # The vendored vLLM/FlashInfer fetch goes through a GitHub mirror by default.
 # An empty value keeps that default; pass 0 to fetch from github.com directly.
@@ -352,33 +364,25 @@ ARG VLLM_MUSA_GIT_PROXY
 ENV PIP_INDEX_URL=${PYPI_INDEX_URL}
 ENV VLLM_MUSA_GIT_PROXY=${VLLM_MUSA_GIT_PROXY}
 
+WORKDIR /vllm-workspace
 COPY . /vllm-workspace
 # Before the native build: the arch variables above must name one arch from
 # torchada's table, each spelled for its reader.
 RUN python docker/check_musa_arch_env.py
 RUN python -m pip install \
-        -e . --no-build-isolation -v && \
-    python -m pip install numpy==1.26.4
+        -e . --no-build-isolation -c requirements/musa_private.txt -v
 
-RUN python -m pip install \
-        --no-cache-dir \
-        --no-deps \
-        --constraint requirements/common.txt \
-        -r third_party/vllm/requirements/common.txt && \
-    python -m pip install \
-        --no-cache-dir \
-        -r requirements/vllm_runtime_transitive.txt
-
-RUN python docker/verify_installed_dependencies.py
+RUN python docker/verify_installed_dependencies.py && python -m pip check && \
+    cd /tmp && \
+    python /vllm-workspace/tests/packaging/verify_install.py --mode editable
 
 # Build vllm-rs from the vLLM tree cloned and patched by vllm-musa setup.py,
-# while keeping Rust/protoc tooling out of the runtime image.
+# while keeping the Rust toolchain out of the runtime image.
 FROM vllm_musa_installed AS vllm_rs_build
 
 ARG BUILD_VLLM_RS=1
 
 RUN if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
-        /vllm-workspace/third_party/vllm/tools/install_protoc.sh && \
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
             sh -s -- -y --profile minimal --default-toolchain none; \
     elif [[ "${BUILD_VLLM_RS}" == "0" ]]; then \
@@ -399,19 +403,77 @@ RUN mkdir -p /tmp/vllm-rs-artifacts && \
     printf '%s\n' "${BUILD_VLLM_RS}" > /tmp/vllm-rs-artifacts/build-mode && \
     if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
         cd /vllm-workspace/third_party/vllm && \
-        bash build_rust.sh && \
-        install -Dm755 vllm/vllm-rs /tmp/vllm-rs-artifacts/vllm-rs && \
-        install -Dm755 vllm/_rust_tool_parser.abi3.so \
-            /tmp/vllm-rs-artifacts/_rust_tool_parser.abi3.so; \
+        bash tools/build_rust.sh && \
+        install -Dm755 vllm/vllm-rs /tmp/vllm-rs-artifacts/vllm-rs; \
     else \
         echo "Skipping vllm-rs build because BUILD_VLLM_RS=0"; \
     fi
+
+# Turn the patched, compiled source tree into one self-contained wheel. The
+# Rust artifacts are copied into the vendored vLLM package before the wheel is
+# built, so the runtime stage does not need the source checkout. The source
+# stage has already built the four native extension modules. The build hook
+# reuses those files instead of compiling them a second time.
+FROM vllm_rs_build AS vllm_wheel
+
+RUN mkdir -p /tmp/vllm-wheel && \
+    mkdir -p /vllm-workspace/third_party/vllm/vllm /vllm-workspace/vllm_musa && \
+    test -n "$(find /vllm-workspace/third_party/vllm/vllm -maxdepth 1 -name '_C*.so' -print -quit)" && \
+    test -n "$(find /vllm-workspace/vllm_musa -maxdepth 1 -name '_C*.so' -print -quit)" && \
+    if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
+        install -Dm755 /tmp/vllm-rs-artifacts/vllm-rs \
+            /vllm-workspace/third_party/vllm/vllm/vllm-rs; \
+    fi && \
+    VLLM_MUSA_REUSE_PREBUILT=1 \
+        python -m build --wheel --no-isolation --outdir /tmp/vllm-wheel && \
+    rust_check=() && \
+    if [[ "${BUILD_VLLM_RS}" == "1" ]]; then rust_check+=(--require-rust); fi && \
+    python tests/packaging/verify_bundled_wheel.py "${rust_check[@]}" /tmp/vllm-wheel/*.whl
 
 # Install the prebuilt MUSA wheel after torch/vllm-musa so Mooncake integrations
 # can import the installed accelerator stack. The wheel provides both the
 # Transfer Engine and the Store bindings, so the stage check imports both.
 # Device visibility remains unset; the final image enables it below.
-FROM vllm_musa_installed AS mooncake
+FROM vllm_musa_deps AS vllm_runtime
+
+ARG PYPI_INDEX_URL
+
+WORKDIR /vllm-workspace
+COPY --from=vllm_wheel /tmp/vllm-wheel/ /tmp/vllm-wheel/
+COPY docker/verify_installed_dependencies.py /tmp/verify_installed_dependencies.py
+
+RUN python -m pip install \
+        --no-cache-dir \
+        --index-url "${PYPI_INDEX_URL}" \
+        -c /tmp/vllm-runtime-requirements/requirements/musa_private.txt \
+        /tmp/vllm-wheel/*.whl && \
+    VLLM_MUSA_REQUIREMENTS_ROOT=/tmp/vllm-runtime-requirements \
+        python /tmp/verify_installed_dependencies.py && \
+    rm -rf /tmp/vllm-wheel /tmp/verify_installed_dependencies.py /tmp/vllm-runtime-requirements
+
+# Use the upstream runtime layout for the examples and benchmarks maintained
+# in this repository. The root helper includes MUSA driver and SDK diagnostics.
+COPY examples/ /vllm-workspace/examples/
+# Both Mooncake launchers use this proxy from the pinned upstream checkout.
+COPY --from=vllm_musa_installed \
+     /vllm-workspace/third_party/vllm/examples/disaggregated/mooncake_connector/mooncake_connector_proxy.py \
+     /vllm-workspace/examples/disaggregated/mooncake_connector/mooncake_connector_proxy.py
+COPY benchmarks/ /vllm-workspace/benchmarks/
+COPY --from=vllm_musa_installed /vllm-workspace/vllm_musa/collect_env.py \
+     /vllm-workspace/collect_env.py
+RUN python -c 'import importlib.metadata as m; from pathlib import Path; names=("torch", "torchvision", "torchaudio"); available={d.metadata["Name"].lower() for d in m.distributions()}; lines=[f"{name}=={m.version(name)}" for name in names if name in available]; Path("/vllm-workspace/torch_lib_versions.txt").write_text(chr(10).join(lines)+chr(10))'
+
+# Keep the source-bearing target available for CI and debugging without making
+# it the implicit target of `docker build`. Docker uses the last stage as its
+# default, so the serving target must remain last.
+FROM vllm_musa_installed AS test
+
+WORKDIR /vllm-workspace
+ENV MTHREADS_VISIBLE_DEVICES=all
+
+CMD ["/bin/bash"]
+
+FROM vllm_runtime AS mooncake
 
 ARG MOONCAKE_VERSION=0.3.14
 ARG PYPI_INDEX_URL
@@ -428,30 +490,18 @@ FROM mooncake AS final
 ARG BUILD_VLLM_RS=1
 ARG MOONCAKE_VERSION=0.3.14
 
-ENV MTHREADS_VISIBLE_DEVICES=all
-
-# Match the upstream vLLM runtime-image workspace contract.
+# Match the upstream vLLM runtime-image workspace contract. Python packages
+# are installed in site-packages, so this directory contains no editable
+# source checkout in the production image.
 WORKDIR /vllm-workspace
 
-COPY --from=vllm_rs_build /tmp/vllm-rs-artifacts/ /tmp/vllm-rs-artifacts/
-
-RUN test "$(cat /tmp/vllm-rs-artifacts/build-mode)" = "${BUILD_VLLM_RS}" && \
+COPY tests/packaging/verify_install.py /tmp/verify_vllm_install.py
+RUN python -m pip check && \
+    python /tmp/verify_vllm_install.py --mode bundled && \
+    rm /tmp/verify_vllm_install.py && \
     if [[ "${BUILD_VLLM_RS}" == "1" ]]; then \
-        install -Dm755 /tmp/vllm-rs-artifacts/vllm-rs \
-            /vllm-workspace/third_party/vllm/vllm/vllm-rs && \
-        install -Dm755 /tmp/vllm-rs-artifacts/_rust_tool_parser.abi3.so \
-            /vllm-workspace/third_party/vllm/vllm/_rust_tool_parser.abi3.so && \
-        VLLM_USE_RUST_FRONTEND=1 python -c 'from pathlib import Path; from vllm import envs; path = Path(envs.VLLM_RUST_FRONTEND_PATH); assert path.is_file(), f"missing vllm-rs binary: {path}"; print(f"PASS vllm-rs path={path}")'; \
-    elif [[ "${BUILD_VLLM_RS}" == "0" ]]; then \
-        rm -f \
-            /vllm-workspace/third_party/vllm/vllm/vllm-rs \
-            /vllm-workspace/third_party/vllm/vllm/_rust_tool_parser.abi3.so && \
-        echo "Skipping vllm-rs artifact install because BUILD_VLLM_RS=0"; \
-    else \
-        echo "Unsupported BUILD_VLLM_RS=${BUILD_VLLM_RS}" >&2; \
-        exit 1; \
-    fi && \
-    rm -rf /tmp/vllm-rs-artifacts
+        VLLM_USE_RUST_FRONTEND=1 python -c 'from pathlib import Path; from vllm import envs; path = Path(envs.VLLM_RUST_FRONTEND_PATH); assert path.is_file(), f"missing vllm-rs binary: {path}"; print(f"PASS packaged vllm-rs path={path}")'; \
+    fi
 
 RUN rm -rf \
         /root/.cache/pip \
@@ -468,6 +518,7 @@ LABEL org.opencontainers.image.source="https://github.com/MooreThreads/vllm-musa
       com.mthreads.vllm.version="${VLLM_TAG}" \
       com.mthreads.vllm-musa.mooncake-version="${MOONCAKE_VERSION}"
 
+ENV MTHREADS_VISIBLE_DEVICES=all
 CMD ["/bin/bash"]
 
 FROM final AS vllm-openai

@@ -9,11 +9,14 @@ declares as a core requirement and is therefore read back from its metadata.
 from __future__ import annotations
 
 import importlib
+import os
 import re
 from importlib.metadata import requires, version
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(
+    os.environ.get("VLLM_MUSA_REQUIREMENTS_ROOT", Path(__file__).resolve().parents[1])
+)
 REQUIREMENT_FILES = (
     ROOT / "requirements/musa_private.txt",
     ROOT / "requirements/common.txt",
@@ -82,7 +85,7 @@ def expected() -> tuple[tuple[str, str, str], ...]:
     """Return ``(distribution, module, expected version)`` for the cohort."""
     return (
         ("torchada", "torchada", requirement_prefix("torchada")),
-        ("numpy", "numpy", "1.26."),
+        ("numpy", "numpy", "<2"),
         ("torch", "torch", requirement_prefix("torch")),
         ("torch_musa", "torch_musa", requirement_prefix("torch_musa")),
         ("torchvision", "torchvision", requirement_prefix("torchvision")),
@@ -121,12 +124,14 @@ def check(dist_name: str, module_name: str, pinned: str) -> None:
     installed = version(dist_name)
     if dist_name in EXACT_VERSION_DISTS and installed != pinned:
         raise RuntimeError(f"{dist_name} expected exactly {pinned}, got {installed}")
-    if (
-        dist_name not in EXACT_VERSION_DISTS
-        and pinned
-        and not installed.startswith(pinned)
-    ):
-        raise RuntimeError(f"{dist_name} expected {pinned}, got {installed}")
+    if dist_name not in EXACT_VERSION_DISTS and pinned:
+        if pinned == "<2":
+            from packaging.version import Version
+
+            if Version(installed) >= Version("2"):
+                raise RuntimeError(f"{dist_name} expected {pinned}, got {installed}")
+        elif not installed.startswith(pinned):
+            raise RuntimeError(f"{dist_name} expected {pinned}, got {installed}")
     action = "skip import" if skip_import else "import"
     print(f"PASS {action} {module_name} version={installed}")
 

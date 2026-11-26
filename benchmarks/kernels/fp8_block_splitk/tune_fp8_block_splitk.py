@@ -142,7 +142,14 @@ def provenance() -> dict:
     package = Path(vllm_musa.__file__).resolve().parent
     props = torch.cuda.get_device_properties(torch.cuda.current_device())
     versions = {}
-    for dist in ("torch", "torch_musa", "triton", "mate", "torchada", "vllm"):
+    for dist in (
+        "torch",
+        "torch_musa",
+        "triton",
+        "mate",
+        "torchada",
+        "vllm-musa",
+    ):
         try:
             versions[dist] = importlib.metadata.version(dist)
         except importlib.metadata.PackageNotFoundError:

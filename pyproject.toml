@@ -1,8 +1,8 @@
 [build-system]
-# Keep build tool pins mirrored in requirements/build.txt. vllm-musa is
-# installed with --no-build-isolation in MUSA images after MUSA-private runtime
-# requirements such as torch/torch_musa have been installed.
-requires = ["setuptools>=80.10.2,<81.0.0", "wheel"]
+# Keep build tool pins mirrored in requirements/build.txt. Source distribution
+# builds use these public dependencies. Wheel and editable builds use
+# --no-build-isolation with the prepared MUSA stack.
+requires = ["setuptools>=80.10.2,<81.0.0", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -25,22 +25,14 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dynamic = ["dependencies"]
+dynamic = ["dependencies", "optional-dependencies"]
 
-[project.optional-dependencies]
-dev = [
-    "pytest",
-    "pytest-asyncio",
-    "pytest-cov",
-    "ruff",
-    "mypy",
-    "isort",
-    "black",
-    "build",
-    "twine",
-]
+[tool.setuptools.dynamic.optional-dependencies]
+dev = {file = ["requirements/dev.txt"]}
+musa = {file = ["requirements/musa_private.txt"]}
 
 [project.scripts]
+vllm = "vllm.entrypoints.cli.main:main"
 vllm_collect_env = "vllm_musa:collect_env"
 
 [project.entry-points."vllm.platform_plugins"]
@@ -48,6 +40,8 @@ musa = "vllm_musa:musa_platform_plugin"
 
 [project.entry-points."vllm.general_plugins"]
 musa_custom_ops = "vllm_musa:register_custom_ops"
+lora_filesystem_resolver = "vllm.plugins.lora_resolvers.filesystem_resolver:register_filesystem_resolver"
+lora_hf_hub_resolver = "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_hub_resolver"
 
 [project.urls]
 Homepage = "https://github.com/MooreThreads/vllm-musa"
@@ -67,6 +61,7 @@ vllm_musa = [
     "jit_kernel/csrc/*.h",
     "jit_kernel/csrc/*/*.mu",
     "jit_kernel/include/.gitkeep",
+    "jit_kernel/tilelang/*.h",
     "tuning/*.json",
 ]
 
@@ -77,6 +72,7 @@ target-version = "py39"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
 ignore = ["E501"]
+per-file-ignores = {"setup.py" = ["E402"]}
 
 [tool.mypy]
 python_version = "3.9"
