@@ -1,4 +1,6 @@
 include third_party/PINS
 recursive-include build_utils *.py
+recursive-include csrc *.cpp *.cu *.mu *.h *.cuh *.muh
 recursive-include requirements *.txt
+recursive-include vllm_musa/patches/metadata *.json
 recursive-include vllm_musa/patches/series *.patch

@@ -316,6 +316,10 @@ comments in `docker/musa.Dockerfile`.
 
 ## Installing the wheel outside the image
 
+In the bundled runtime, `vllm --version` reports the `vllm-musa` distribution
+version, currently `0.1.32`. The distribution uses `0.1.<upstream minor>`.
+`vllm.__version__` reports the pinned upstream version, currently `0.32.0`.
+
 The `vllm-musa` wheel bundles both Python import packages. Install the pinned
 hardware dependencies from the MUSA index first, then resolve the wheel's
 public dependencies with the same pins as constraints:
