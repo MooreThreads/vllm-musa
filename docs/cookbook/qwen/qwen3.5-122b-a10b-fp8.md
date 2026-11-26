@@ -37,9 +37,6 @@ multimodal deployments.
 ### Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
-export SAFETENSORS_FAST_GPU=1
 
 CAPTURE_SIZES="$(seq -s, 4 4 512)"
 
@@ -63,10 +60,7 @@ vllm serve /models/Qwen3.5-122B-A10B-FP8 \
 ### Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
 export VLLM_MUSA_QWEN3_VL_VISION_CUDAGRAPH=1
-export SAFETENSORS_FAST_GPU=1
 
 CAPTURE_SIZES="$(seq -s, 4 4 512)"
 

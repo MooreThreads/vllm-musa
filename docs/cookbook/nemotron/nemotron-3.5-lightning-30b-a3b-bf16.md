@@ -48,9 +48,6 @@ deployment profiles:
 ### Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
-export SAFETENSORS_FAST_GPU=1
 
 vllm serve /models/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16 \
   --served-model-name Nemotron-3.5-Lightning-30B-A3B \
@@ -136,10 +133,7 @@ Use this profile when the workload needs more than one concurrent request.
 ### Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
 export LD_LIBRARY_PATH=/usr/local/mtshmem/lib:${LD_LIBRARY_PATH:-}
-export SAFETENSORS_FAST_GPU=1
 
 CAPTURE_SIZES="$(seq -s, 5 5 490)"
 

@@ -39,8 +39,6 @@ FP8 on the DiT linears. This is the fastest of the four profiles in this section
 ## Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
 export TORCHINDUCTOR_COMPILE_THREADS=1
 export MUSA_VISIBLE_DEVICES=0
 

@@ -31,8 +31,6 @@ FP8 dense-model recipe for a single S5000 GPU.
 ## Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export SAFETENSORS_FAST_GPU=1
 
 vllm serve /models/Qwen3-8B-FP8 \
   --trust-remote-code \

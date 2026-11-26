@@ -49,7 +49,6 @@ client application.
 
 ```bash
 export MODEL_PATH="<MODEL_PATH>"
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 vllm serve "${MODEL_PATH}" \
   --trust-remote-code \

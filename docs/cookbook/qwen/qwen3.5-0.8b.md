@@ -34,10 +34,7 @@ and decode-only CUDA graphs.
 ## Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
 export VLLM_DISABLE_COMPILE_CACHE=1
-export SAFETENSORS_FAST_GPU=1
 
 vllm serve /models/Qwen3.5-0.8B \
   --trust-remote-code \

@@ -32,9 +32,6 @@ FP8 vision-language MoE recipe for four S5000 GPUs.
 ## Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
-export SAFETENSORS_FAST_GPU=1
 
 vllm serve /models/Qwen3-VL-30B-A3B-Instruct-FP8 \
   --trust-remote-code \

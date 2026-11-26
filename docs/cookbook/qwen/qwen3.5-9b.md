@@ -32,10 +32,7 @@ BF16 small-model recipe for two S5000 GPUs with MTP1 speculative decoding.
 ## Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
 export VLLM_DISABLE_COMPILE_CACHE=1
-export SAFETENSORS_FAST_GPU=1
 
 vllm serve /models/Qwen3.5-9B \
   --trust-remote-code \

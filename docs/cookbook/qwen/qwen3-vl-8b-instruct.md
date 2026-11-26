@@ -32,10 +32,7 @@ Vision-language recipe for a single S5000 GPU.
 ## Launching the server
 
 ```bash
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export PYTHONUNBUFFERED=1
 export VLLM_MUSA_QWEN3_VL_VISION_CUDAGRAPH=1
-export SAFETENSORS_FAST_GPU=1
 
 CAPTURE_SIZES="$(seq -s, 1 256)"
 
