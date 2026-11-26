@@ -332,8 +332,7 @@ RUN python -m pip install \
 # 2. Ordinary third-party wheels from public PyPI: build tools, common.txt, and
 #    musa.txt's direct pins (transformers). Pycairo satisfies apt's PyGObject.
 RUN musa_public_extras="$(grep -vE '^[[:space:]]*(#|-r[[:space:]]|--|$)' requirements/musa.txt || true)" && \
-    python -m pip install \
-        --index-url "${PYPI_INDEX_URL}" \
+    PIP_INDEX_URL="${PYPI_INDEX_URL}" python -m pip install \
         -r requirements/build.txt \
         -r requirements/common.txt \
         -r requirements/test.txt \
