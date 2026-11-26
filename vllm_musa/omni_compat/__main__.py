@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.purelib is not None:
             # An explicit target is the operator's choice and may belong to a
-            # different interpreter -- stage_shim.py uses it that way -- so this
+            # different interpreter, so this
             # probe cannot be the verdict.
             print(f"warning: {trouble}", file=sys.stderr)
             return 0

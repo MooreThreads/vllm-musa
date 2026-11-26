@@ -10,7 +10,6 @@ under test is import resolution.
 
 from __future__ import annotations
 
-import filecmp
 import importlib
 import importlib.util
 import json
@@ -18,6 +17,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -1424,79 +1424,6 @@ def test_package_dir_resolves_from_either_spelling(tmp_path, capsys):
     assert "--target-vllm" in capsys.readouterr().err
 
 
-def test_stage_shim_sees_a_nested_difference(tmp_path):
-    """Most of the shim lives under adapters/ and backports/.
-
-    ``filecmp.dircmp``'s left_only/right_only/diff_files are top-level only, so
-    comparing with them alone calls two trees identical when a nested adapter
-    has changed -- and the staging step would then skip a shim that is not the
-    one in this checkout.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "_stage_shim", ROOT / "docker" / "omni" / "stage_shim.py"
-    )
-    stage_shim = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(stage_shim)
-
-    left, right = tmp_path / "src", tmp_path / "installed"
-    for root in (left, right):
-        (root / "adapters").mkdir(parents=True)
-        (root / "__init__.py").write_text("x = 1\n")
-        (root / "adapters" / "topk.py").write_text("same\n")
-    assert stage_shim._compare_trees(left, right) == []
-
-    (right / "adapters" / "topk.py").write_text("rebuilt elsewhere\n")
-    nested = stage_shim._compare_trees(left, right)
-    assert nested and all("adapters/" in d for d in nested), nested
-    # The top-level-only view is exactly what missed it.
-    top = filecmp.dircmp(str(left), str(right))
-    assert not (top.left_only or top.right_only or top.diff_files)
-
-
-def test_stage_shim_replaces_an_older_base_shim(tmp_path, monkeypatch, capsys):
-    """Staging exists for a base whose shim predates the Omni ref being built.
-
-    Refusing on any difference made that case fail the build instead, since the
-    image never passes an override. This checkout is the authority; only an
-    identical tree is a no-op.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "_stage_shim_replace", ROOT / "docker" / "omni" / "stage_shim.py"
-    )
-    stage_shim = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = stage_shim
-    spec.loader.exec_module(stage_shim)
-
-    source = tmp_path / "src"
-    (source / "vllm_musa" / "omni_compat" / "adapters").mkdir(parents=True)
-    (source / "vllm_musa" / "omni_compat" / "__init__.py").write_text("new = 1\n")
-    (source / "vllm_musa" / "omni_compat" / "adapters" / "a.py").write_text("new\n")
-    (source / "vllm_musa_omni_compat_pth.py").write_text("bootstrap\n")
-
-    installed = tmp_path / "site" / "vllm_musa"
-    older = installed / "omni_compat" / "adapters"
-    older.mkdir(parents=True)
-    (installed / "omni_compat" / "__init__.py").write_text("old = 1\n")
-    (older / "a.py").write_text("old\n")
-    purelib = tmp_path / "site"
-
-    monkeypatch.setattr(stage_shim, "installed_package_dir", lambda: installed)
-    monkeypatch.setattr(stage_shim, "purelib", lambda: purelib)
-
-    assert stage_shim.main(["--source", str(source)]) == 0
-    assert "replacing the base's shim" in capsys.readouterr().out
-    assert (installed / "omni_compat" / "adapters" / "a.py").read_text() == "new\n"
-    assert (purelib / "vllm_musa_omni_compat_pth.py").read_text() == "bootstrap\n"
-
-    # An identical tree stays a no-op, so a base that already ships this shim
-    # is not needlessly rewritten.
-    assert stage_shim.main(["--source", str(source)]) == 0
-    assert "already installed and identical" in capsys.readouterr().out
-
-
-# --------------------------------------------------------------------------- #
-# The in-build gates' own failure modes
-# --------------------------------------------------------------------------- #
 def _load_verify_shim():
     """Import docker/omni/verify_shim.py, which is a script and not a package."""
     spec = importlib.util.spec_from_file_location(
@@ -1506,6 +1433,49 @@ def _load_verify_shim():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("mode", ["explicit", "import", "no-op"])
+def test_verify_shim_checks_the_live_sampler_binding(monkeypatch, mode):
+    from vllm_musa.omni_compat.adapters import topk_topp_sampler as adapter
+
+    def upstream_apply(logits, k, p):
+        return "upstream"
+
+    def musa_apply(logits, k, p):
+        return "musa"
+
+    sampler = ModuleType("vllm.v1.sample.ops.topk_topp_sampler")
+    sampler.apply_top_k_top_p = upstream_apply
+    adapter.apply(sampler)
+    musa_sampler = ModuleType("vllm_musa.v1.sample.topk_topp_sampler")
+    musa_sampler._apply_top_k_top_p = musa_apply
+    calls = []
+
+    def install_hooks():
+        calls.append(True)
+        if mode != "no-op":
+            sampler.apply_top_k_top_p = musa_apply
+
+    musa_sampler.install_hooks = install_hooks
+    monkeypatch.setitem(sys.modules, sampler.__name__, sampler)
+    monkeypatch.setitem(sys.modules, musa_sampler.__name__, musa_sampler)
+    if mode == "import":
+        sampler.apply_top_k_top_p = musa_apply
+
+    verify = _load_verify_shim()
+    if mode == "no-op":
+        with pytest.raises(RuntimeError, match="did not bind the MUSA"):
+            verify._exercise_sampler_rebind(musa_sampler.__name__)
+    else:
+        verify._exercise_sampler_rebind(musa_sampler.__name__)
+        assert adapter.is_applied(sampler) == ["apply_top_k_top_p"]
+        assert (
+            sampler.apply_top_k_top_p(None, None, None, has_topp_only_rows=True)
+            == "musa"
+        )
+
+    assert len(calls) == (0 if mode == "import" else 1)
 
 
 @pytest.mark.parametrize(

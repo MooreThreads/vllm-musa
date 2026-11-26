@@ -9,12 +9,26 @@ def test_spawn_is_baked_into_the_shared_musa_runtime_layer():
     assert dockerfile.count("VLLM_WORKER_MULTIPROC_METHOD") == 1
 
 
-def test_omni_image_restores_the_base_pinned_headless_opencv():
+def test_omni_image_installs_with_the_foundation_and_headless_wheels():
     dockerfile = (Path(__file__).parents[1] / "docker" / "omni.Dockerfile").read_text()
+    production = dockerfile.split("FROM omni-install AS omni\n", 1)[1]
+    development = dockerfile.split("FROM omni-install AS test\n", 1)[1].split(
+        "FROM omni-install AS omni\n", 1
+    )[0]
 
-    assert "opencv-python-headless==${OPENCV_HEADLESS}" in dockerfile
-    assert "opencv-python-headless==4.10.0.84" not in dockerfile
-    assert "opencv-python==4.10.0.84" in dockerfile
+    assert "--snapshot /opt/vllm-omni-foundation.txt" in dockerfile
+    assert "pip download --require-hashes" in dockerfile
+    assert "build_headless_wheels.py" in dockerfile
+    assert (
+        "--only-binary=:all: -c /opt/vllm-omni-foundation.txt /wheels/*.whl"
+        in production
+    )
+    assert "--mode wheel" in production
+    assert "-e /vllm-workspace/vllm-omni" in development
+    assert "--mode editable" in development
+    assert "python -m pip check" in production
+    assert "python -m pip check" in development
+    assert "pip uninstall" not in dockerfile
 
 
 def test_production_image_installs_a_bundled_wheel_before_runtime_split():

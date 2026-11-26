@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import inspect
 import json
 import sys
 
@@ -60,6 +61,18 @@ def _stale_adapter(applied: dict) -> str | None:
 def _needs_a_device(exc: BaseException) -> bool:
     """Whether an import failed for want of a GPU rather than for want of a shim."""
     return any(marker in str(exc) for marker in _DEVICE_MARKERS)
+
+
+def _exercise_sampler_rebind(name: str) -> None:
+    sampler = importlib.import_module("vllm.v1.sample.ops.topk_topp_sampler")
+    musa_sampler = importlib.import_module(name)
+    musa_impl = musa_sampler._apply_top_k_top_p
+    # Older images bind the sampler during import. Newer images call this
+    # installer from register_v1_adapters().
+    if inspect.unwrap(sampler.apply_top_k_top_p) is not musa_impl:
+        musa_sampler.install_hooks()
+    if inspect.unwrap(sampler.apply_top_k_top_p) is not musa_impl:
+        raise RuntimeError("sampler hook did not bind the MUSA apply_top_k_top_p")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -131,32 +144,20 @@ def main(argv: list[str] | None = None) -> int:
             "missing": missing,
         }
 
-    # Let vllm-musa install its own patches first. This is the whole point of
-    # checking adapters at all: vllm_musa.v1.sample.topk_topp_sampler rebinds
-    # apply_top_k_top_p at module scope, strictly after the shim, and a check
-    # run before that has not tested anything. Importing it is what the MUSA
-    # plugin does in production; it reaches the device, so a driverless build
-    # cannot do it and says so rather than claiming the check passed.
-    result["musa_hooks_installed"] = {}
-    rebind_exercised = True
-    for name in ("vllm_musa.v1.sample",):
-        try:
-            importlib.import_module(name)
-            result["musa_hooks_installed"][name] = True
-        except Exception as exc:
-            detail = f"{type(exc).__name__}: {exc}"
-            result["musa_hooks_installed"][name] = detail
-            rebind_exercised = False
-            if args.driverless and _needs_a_device(exc):
-                # vllm-musa's sampler reaches into the device at import, so a
-                # driverless build cannot make it rebind. The adapter check
-                # below still runs, but it has not been put under the pressure
-                # it exists for; --require-omni on hardware is where it is.
-                continue
-            failures.append(
-                f"{name} could not be imported, so the adapters below were not "
-                f"checked against vllm-musa's own patching: {detail}"
-            )
+    # Check adapters after the production sampler installer binds its function.
+    # The sampler may need a MUSA device at import time.
+    sampler_name = "vllm_musa.v1.sample.topk_topp_sampler"
+    try:
+        _exercise_sampler_rebind(sampler_name)
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        result["musa_hooks_installed"] = {sampler_name: detail}
+        rebind_exercised = False
+        if not (args.driverless and _needs_a_device(exc)):
+            failures.append(f"could not exercise {sampler_name} rebind: {detail}")
+    else:
+        result["musa_hooks_installed"] = {sampler_name: True}
+        rebind_exercised = True
     result["rebind_exercised"] = rebind_exercised
 
     for entry in table.adapter_entries():
@@ -189,9 +190,9 @@ def main(argv: list[str] | None = None) -> int:
             result["adapted"][entry.module] = "stale (the pin provides it)"
             continue
         # The marker above only says the adapter *ran*. Ask the adapter what is
-        # adapted right now: vllm-musa rebinds one of these names at module
-        # scope, strictly later, and a marker left on the module cannot see
-        # that. When the rebind above was triggered, this is the check that fails
+        # adapted right now: the sampler installer rebinds one of these names
+        # after import, and a marker left on the module cannot see that.
+        # When the rebind above was triggered, this is the check that fails
         # if the adapter does not survive it; when it could not be (driverless),
         # `rebind_exercised` records that this run did not test survival.
         adapter = importlib.import_module(

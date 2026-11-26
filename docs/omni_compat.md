@@ -18,10 +18,9 @@ steps in the image build or in CI:
 | Entry point | When | Invoked by |
 |---|---|---|
 | `tests/test_omni_compat.py` | every PR that touches the shim | `.github/workflows/omni-compat.yml` |
-| `docker/omni/stage_shim.py` | image build, before anything is installed | `docker/omni.Dockerfile` |
 | `tools/check_omni_compat.py` | image build, before that install and again after | `docker/omni.Dockerfile` |
-| `python -m vllm_musa.omni_compat install-pth` | image build, once the install is done | `docker/omni.Dockerfile` |
-| `python -m vllm_musa.omni_compat status` | image build, recorded as JSON; on demand afterwards | `docker/omni.Dockerfile`, then a person |
+| `python -m vllm_musa.omni_compat install-pth` | image build, before installing Omni | `docker/omni.Dockerfile` |
+| `python -m vllm_musa.omni_compat status` | on demand in a running image | operator |
 | `docker/omni/verify_shim.py` | image build, after everything else | `docker/omni.Dockerfile` |
 
 Two are worth knowing by name. `check_omni_compat.py` is what a person runs
@@ -32,7 +31,7 @@ prints what the shim actually did, as JSON, in a container that is already up.
 Two of them need the installed stack. `verify_shim.py` imports vLLM and the shim
 to check that both are live, and its `--require-omni` form needs a device;
 `status` goes through the `vllm_musa` package. The shim, its bootstrap,
-`stage_shim.py`, `check_omni_compat.py` and the test suite are standard library
+`check_omni_compat.py` and the test suite are standard library
 only, which is why the suite runs on an interpreter holding nothing but
 `pytest`.
 
@@ -199,19 +198,17 @@ Installing first is necessary but not sufficient. An adapter patches a module
 attribute, and **vllm-musa patches the same pinned vLLM**, so the question is not
 only who is early but who writes last.
 
-`vllm_musa/v1/sample/topk_topp_sampler.py` ends with a module-scope
-`install_hooks()` that does
+`vllm_musa/v1/sample/topk_topp_sampler.py` exposes `install_hooks()`, which does
 
 ```python
 vllm_topk_topp_sampler.apply_top_k_top_p = _apply_top_k_top_p
 ```
 
 to put MUSA's radix kernels in the sampling path. It runs when vLLM loads the
-MUSA general plugin (`register_out_of_tree` -> `_register_modules` ->
-`vllm_musa.v1.sample`, whose `__init__` imports that module), so it is
-necessarily *later* than the shim's adapter: the adapter runs while the vLLM
-module is being created, and the assignment needs the module to exist first. It
-is also earlier than Omni's model load, so Omni reads what MUSA left. A plain wrapper is
+MUSA general plugin (`register_out_of_tree` → `register_v1_adapters` → sampler
+`install_hooks()`). This runs after the shim's adapter because the adapter runs while the vLLM
+module is being created, and the assignment needs the module to exist first.
+Omni then reads the bound function during model load. A plain wrapper is
 therefore replaced without a word, and because Omni binds the name with
 `from vllm... import apply_top_k_top_p`, Omni captures the unadapted
 replacement — the `TypeError` the adapter exists to remove comes back inside the
@@ -407,77 +404,41 @@ hardware smoke is for, and why `docker/omni.Dockerfile` is not the last gate.
 
 ## The image
 
+Build with Docker BuildKit on a digest-pinned vLLM-MUSA `vllm-openai` image.
+The default Omni
+revision is pinned in [docker/omni.Dockerfile](../docker/omni.Dockerfile).
+The build script can export the selected commit from a local checkout, so
+working tree changes do not enter the image. When fetching from a remote,
+pass a full commit SHA to override the default.
+
 ```bash
-bash docker/build_omni_image.sh --base <pinned-vllm-musa-image> --omni-ref origin/main
-bash docker/build_omni_image.sh --base <image> --omni-ref origin/main --dry-run
+bash docker/build_omni_image.sh --base <pinned-vllm-musa-image> --omni-clone <local-omni-checkout>
+bash docker/build_omni_image.sh --base <pinned-vllm-musa-image> --target test
 ```
 
-Stages, each of which fails the build rather than deferring a surprise:
+Both targets use the shim already shipped by the base wheel and activate it
+with `install-pth`. The builder audits the Omni source against the installed
+vLLM, then builds a MUSA-targeted Omni wheel. The production target installs
+that wheel and copies the pinned Omni examples and benchmarks into
+`examples/` and `benchmarks/` under `/vllm-workspace/omni`. Run those assets
+from that directory to preserve their upstream import paths. Use
+`docker run --rm <image> --help` to see the production entry point's options.
+The `test` target keeps an editable Omni checkout at
+`/vllm-workspace/vllm-omni` and defaults to Bash.
 
-1. **Source** — `git archive` export from a local clone (immutable: no dirty
-   tree, no moving branch) or a clone in-build.
-2. **Base contract** — read the base's real `vllm`, `torch` and Python versions
-   and record them. A base bump fails here, before any Omni code is installed.
-3. **Shim staging** — `docker/omni/stage_shim.py` copies this checkout's
-   pure-Python shim into the base's installed `vllm_musa`. An identical tree is
-   a no-op; anything else is **replaced**, because this checkout is the
-   authority and a base whose shim is older than the Omni ref being built is
-   exactly the case the step exists for. The comparison is content-based and
-   recursive: `filecmp`'s defaults compare a (size, mtime) signature and only
-   the top level, which calls two shim revisions identical when one nested
-   adapter changed. The top-level bootstrap goes
-   to `purelib`, not next to the package: a PEP 660 editable install of the kind
-   that writes an import-hook finder maps
-   exactly what the project declared, and the base's vllm-musa was built before
-   this shim existed, so its mapping names `vllm_musa` and nothing else and a
-   module dropped beside it is never on `sys.path`. A checkout that declares the
-   bootstrap in `py-modules` does get it mapped -- measured on setuptools
-   80.10.2, the version the base now caps to -- but that is the case where this
-   step is already a no-op.
-4. **Gate 1** — the four pin-only audit passes, on source, before installing
-   anything. The signature diff is not among them: it needs a second vLLM
-   source tree, which this build deliberately does not fetch, so the verdict
-   line says `semantics not compared` rather than a bare `PASS`.
-5. **Install** — `pip install -e` with every package the base installed frozen as
-   a constraint, so Omni may *add* packages and any attempt to *move* one is a
-   `ResolutionImpossible` at build time. Verified afterwards by comparing the
-   two freezes, which reports how many pins held. This step is also what
-   enforces Omni's own `requires-python`: a base whose interpreter Omni refuses
-   fails here, with pip's message.
+Omni installation constrains the Python packages in the base interpreter's
+`purelib` and `platlib` so Torch, MUSA packages, and NumPy keep their base
+versions. The image uses the base's OpenCV headless provider. The wheel stage
+repacks the two hash-pinned guardrail wheels with their OpenCV requirements
+pointing to that provider. Both targets run `pip check`, verify installed
+package ownership and exercise `cv2` with NumPy.
 
-   The freeze is scoped to the paths the interpreter **owns**, which is not the
-   same as everything it can import. The MUSA image runs a deadsnakes Python 3.12
-   as the *system* interpreter, so Ubuntu 22.04's `/usr/lib/python3/dist-packages`
-   — about twenty apt packages built for python3.10 — is still on `sys.path` and
-   still appears in a bare `pip freeze`. Pinning those is wrong twice over: they
-   are not part of the MUSA foundation, and some have no distribution for this
-   interpreter at all, so a transitive requirement on one becomes an
-   unsatisfiable `==`. `cryptography==3.4.8` is the worked example — apt-provided,
-   no cp312 wheel — and it failed the whole Omni install with
-   `ResolutionImpossible` the first time this image was built on the 3.12 base.
-   `pip list --path <purelib> --format=freeze` is the scoped form: 181 pins
-   instead of 201, with the MUSA stack still fully constrained.
-6. **Activation** — `install-pth`, which writes the `.pth` and then proves it by
-   checking that a *fresh* interpreter comes up with the startup hook live. The
-   target is `sysconfig`'s `purelib`, and that is an assumption about the
-   interpreter's layout rather than a fact; a wrong one leaves a shim that is
-   silently inert, so the install verifies instead of trusting it.
-7. **Gate 2 + 3** — the audit against the installed trees, then
-   `docker/omni/verify_shim.py`, which imports every served module, checks every
-   adapter is *still* applied, and requires the hook to be the **startup** one:
-   any hook makes imports resolve under the verifier, but only the `.pth` runs
-   before Omni's CLI binds the symbols it moved.
-
-   Before checking the adapters it imports `vllm_musa.v1.sample`, so vllm-musa
-   has installed its own patches first and the check is made against the state
-   that actually ships. In a driverless build that import fails for want of a
-   device, so the build **cannot** test rebind survival; the report says so in
-   `rebind_exercised`, and `--require-omni` on hardware is what closes it.
-   `--driverless` likewise reports a served module that needs a GPU as skipped.
-
-`import vllm_omni` is deliberately **not** a build step: it activates the MUSA
-platform plugin, which queries device capability through `torch_musa` and raises
-without a driver. It belongs to the hardware run:
+The image keeps source and installed compatibility audit reports in
+`/opt/vllm-omni-compat-preflight.json` and `/opt/vllm-omni-compat.json`.
+The runtime shim report is `/opt/vllm-omni-shim-verify.json`. The verifier
+checks the startup hook, invokes the MUSA sampler hook installer after #365,
+and checks adapter survival after the binding. Driverless verification reports
+device-dependent skips. Run the strict check on a MUSA device to cover them.
 
 ```bash
 python /opt/omni-compat/verify_shim.py --require-omni
