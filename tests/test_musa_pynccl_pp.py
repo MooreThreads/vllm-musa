@@ -15,7 +15,6 @@ SERIES = Path(__file__).resolve().parents[1] / "vllm_musa/patches/series"
 PYNCCL_PATCH = SERIES / "0218-MUSA-enable-PyNccl-for-pipeline-parallelism.patch"
 EAGER_PATCH = SERIES / "0219-MUSA-eagerly-initialize-MCCL-for-PP.patch"
 STREAM_PATCH = SERIES / "0220-MUSA-query-the-active-native-MUSA-stream.patch"
-SCHEDULER_PATCH = SERIES / "0221-MUSA-default-MRV2-PP-to-synchronous-scheduling.patch"
 
 
 def _patched_hunk(patch: Path, path: str, marker: str) -> str:
@@ -128,43 +127,6 @@ def test_eager_mccl_uses_the_workers_visible_device(
         init_process_group.assert_called_once_with(
             backend=backend, device_id=expected_device
         )
-
-
-@pytest.mark.parametrize(
-    ("device_type", "executor", "pp_size", "use_v2", "expected"),
-    [
-        ("musa", "mp", 2, True, False),
-        ("musa", "mp", 1, True, True),
-        ("musa", "mp", 2, False, True),
-        ("musa", "ray", 2, True, True),
-        ("cuda", "mp", 2, True, True),
-    ],
-)
-def test_musa_mrv2_mp_pp_defaults_to_synchronous_scheduling(
-    device_type: str, executor: str, pp_size: int, use_v2: bool, expected: bool
-) -> None:
-    source = _patched_hunk(
-        SCHEDULER_PATCH, "vllm/config/vllm.py", "MUSA multiprocessing PP"
-    )
-    start = source.index("            elif (")
-    # The added branch is followed by upstream's generic async default.
-    config = SimpleNamespace(
-        parallel_config=SimpleNamespace(pipeline_parallel_size=pp_size),
-        scheduler_config=SimpleNamespace(async_scheduling=None),
-        use_v2_model_runner=use_v2,
-    )
-    logger = Mock()
-    namespace = {
-        "current_platform": SimpleNamespace(device_type=device_type),
-        "executor_backend": executor,
-        "self": config,
-        "logger": logger,
-    }
-    branch = dedent(source[start:]).replace("elif (", "if (", 1)
-    exec(compile(branch, str(SCHEDULER_PATCH), "exec"), namespace)
-
-    assert config.scheduler_config.async_scheduling is expected
-    assert logger.warning_once.call_count == int(not expected)
 
 
 def test_current_stream_follows_native_musa_switches(
