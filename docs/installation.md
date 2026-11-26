@@ -109,8 +109,9 @@ not substitute a public CUDA wheel with the same package name.
 
 ### DeepSelect backend
 
-The vllm-musa source installer builds `vllm._deepselect_C` through vLLM's
-CMake target. It fetches `MooreThreads/DeepSelect` at commit
+Both `pip install .` and `pip install -e .` build `vllm._deepselect_C` through
+patched vLLM's CMake target. The wheel includes the compiled extension.
+The target fetches `MooreThreads/DeepSelect` at commit
 `b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32`. The fetch goes through the same
 `VLLM_MUSA_GIT_PROXY` mirror as the other source fetches. Select the backend at
 serving time with `--sparse-indexer-topk-backend deep_select`.

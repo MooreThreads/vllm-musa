@@ -8,9 +8,11 @@ import ast
 import math
 import os
 import shutil
+import sys
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -468,7 +470,9 @@ def test_plugin_does_not_register_deep_select() -> None:
 
 def test_microbenchmark_uses_vllm_extension_without_standalone_package() -> None:
     assert not (ROOT / "tools/bench_indexer_topk_arms.py").exists()
-    source = (ROOT / "benchmarks/benchmark_deepselect_topk.py").read_text()
+    source = (
+        ROOT / "benchmarks/kernels/deepselect/benchmark_deepselect_topk.py"
+    ).read_text()
     assert "import vllm._deepselect_C as deepselect_extension" in source
     assert "vllm_musa.deep_select" not in source
     assert "deep_select.deep_select_musa_cpp" not in source
@@ -504,8 +508,10 @@ def test_build_provides_vllm_extension_from_deepselect_source() -> None:
     assert not (ROOT / "csrc/deep_select/torch_bindings.mu").exists()
 
 
-@pytest.mark.parametrize("skip", [False, True])
-def test_native_build_delegates_deepselect_to_vllm(skip: bool) -> None:
+@pytest.mark.parametrize("editable", [False, True])
+def test_native_build_delegates_deepselect_to_vllm(
+    editable: bool, tmp_path: Path
+) -> None:
     tree = ast.parse((ROOT / "setup.py").read_text(encoding="utf-8"))
     build_class = next(
         node
@@ -519,34 +525,45 @@ def test_native_build_delegates_deepselect_to_vllm(skip: bool) -> None:
     ]
     module = ast.Module(body=[build_class], type_ignores=[])
     events = []
-    clones = []
 
     class BuildExtension:
         def run(self) -> None:
             events.append("build")
 
-    environment = {"SKIP_THIRD_PARTY": "1" if skip else "0"}
+    repo = tmp_path / "vllm"
+    env = {"CMAKE_ARGS": "-DVLLM_GPU_LANG=MUSA"}
+    child = Mock(side_effect=lambda *args, **kwargs: events.append("vllm"))
     namespace = {
         "BuildExtension": BuildExtension,
-        "os": SimpleNamespace(environ=environment),
-        "resolve_proxy": lambda: None,
+        "_VLLM_REPO": SimpleNamespace(source_dir=repo),
+        "_is_editable_install": editable,
+        "os": SimpleNamespace(environ={}),
+        "subprocess": SimpleNamespace(check_call=child),
+        "sys": sys,
+        "Path": Path,
     }
-    for name in ("VLLM", "FLASHINFER"):
-        namespace[f"_{name}_REPO"] = SimpleNamespace(
-            source_dir=name,
-            git_repository="repository",
-            git_tag="pinned-commit",
-            git_shallow=False,
-        )
     exec(compile(module, "setup.py", "exec"), namespace)
-    build = namespace["_CustomBuildExt"]()
-    build._clone_and_checkout = lambda source, *arguments: clones.append(source)
-    build._apply_musa_patch_series = lambda source: events.append("patch")
-    build._install_vllm = lambda source: events.append("install")
-    build.run()
-    assert events == ["patch", "install", "build"]
-    expected_clones = [] if skip else ["VLLM", "FLASHINFER"]
-    assert clones == expected_clones
+    builder = namespace["_CustomBuildExt"]()
+    builder.build_lib = tmp_path / "lib"
+    builder.prepare_third_party = lambda: events.append("prepare")
+    builder._vllm_build_env = lambda: env
+    builder._install_vllm = child
+    builder.run()
+    assert events == ["prepare", "vllm", "build"]
+    if editable:
+        child.assert_called_once_with(repo, env)
+    else:
+        child.assert_called_once_with(
+            [
+                sys.executable,
+                "setup.py",
+                "build_ext",
+                "--build-lib",
+                str(builder.build_lib),
+            ],
+            cwd=repo,
+            env=env,
+        )
 
 
 def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
@@ -564,7 +581,7 @@ def test_deepselect_source_selection_uses_public_musa_ops_repository() -> None:
     "configured",
     [{}, {"CMAKE_ARGS": "-GNinja", "MTGPU_TARGET": "mp_22"}],
 )
-def test_install_vllm_keeps_empty_mode_without_injecting_hardware(
+def test_vllm_build_env_selects_musa_and_preserves_caller_options(
     configured: dict[str, str], monkeypatch
 ) -> None:
     monkeypatch.setenv(PROXY_ENV, "https://mirror.example/")
@@ -577,36 +594,17 @@ def test_install_vllm_keeps_empty_mode_without_injecting_hardware(
     method = next(
         node
         for node in build_class.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_install_vllm"
+        if isinstance(node, ast.FunctionDef) and node.name == "_vllm_build_env"
     )
-    prefix = method.body[
-        : next(
-            index
-            for index, node in enumerate(method.body)
-            if isinstance(node, ast.Assign)
-            and any(
-                isinstance(name, ast.Name) and name.id == "vllm_install_cmd"
-                for name in node.targets
-            )
-        )
-    ]
-    function = ast.FunctionDef(
-        name="environment",
-        args=method.args,
-        body=[*prefix, ast.Return(value=ast.Name(id="env", ctx=ast.Load()))],
-        decorator_list=[],
-    )
-    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    method.decorator_list = []
     inherited = {"DEEPSELECT_SRC_DIR": "/prepared/DeepSelect", **configured}
     namespace = {
-        "Path": Path,
         "os": SimpleNamespace(environ=inherited),
         "_PINS": {"VLLM_TAG": "v0.32.0"},
         "resolve_proxy": resolve_proxy,
     }
-    exec(compile(module, "setup.py", "exec"), namespace)
-    environment = namespace["environment"]("/prepared/vllm")
-    assert environment == {
+    exec(compile(ast.Module([method], []), "setup.py", "exec"), namespace)
+    assert namespace["_vllm_build_env"]() == {
         **inherited,
         "VLLM_TARGET_DEVICE": "empty",
         "CMAKE_ARGS": (

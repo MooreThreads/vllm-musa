@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 ATTENTION = ROOT / "csrc/musa/attention"
 DSV4_TOPK = "csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu"
 BINDINGS = ROOT / "csrc/musa/torch_bindings.cpp"

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import torch
 import torchada as torchada
+import vllm
 import vllm._deepselect_C as deepselect_extension
 from mate.testing.utils import bench_gpu_time_with_musa_event, bench_kineto
 from vllm.model_executor.layers.indexer_topk import get_deep_select_stride_requirement
@@ -247,12 +248,14 @@ def run_case(batch: int, width: int, args: argparse.Namespace, profile: bool) ->
 
 
 def provenance(dtype: str) -> dict:
-    sources = [
-        Path(__file__),
-        Path(vllm_musa.__file__).parent.parent
-        / "csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu",
-        Path(deepselect_extension.__file__),
-    ]
+    sources = [Path(__file__), Path(deepselect_extension.__file__)]
+    radix_source = (
+        Path(__file__).resolve().parents[3]
+        / "csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu"
+    )
+    # The runtime image ships the benchmark without the native source tree.
+    if radix_source.is_file():
+        sources.append(radix_source)
     return {
         "hostname": platform.node(),
         "python": sys.version,
@@ -261,8 +264,10 @@ def provenance(dtype: str) -> dict:
         "musa": torch.version.musa,
         "dtype": dtype,
         "packages": {
-            name: importlib.metadata.version(name)
-            for name in ("vllm", "vllm-musa", "torchada", "mate")
+            "vllm": vllm.__version__,
+            "vllm-musa": importlib.metadata.version("vllm-musa"),
+            "torchada": importlib.metadata.version("torchada"),
+            "mate": importlib.metadata.version("mate"),
         },
         "sha256": {
             str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in sources
@@ -322,7 +327,7 @@ def main() -> None:
             f"Positive batches, widths >= topk and {alignment}-byte aligned input rows are required"
         )
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    vllm_musa.register_custom_ops()
+    vllm_musa.register_out_of_tree()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     report = {"provenance": provenance(args.dtype), "results": []}
     for shape_index, (batch, width) in enumerate(shapes):

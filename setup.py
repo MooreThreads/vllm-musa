@@ -103,10 +103,8 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension  # noqa: E40
 configure_compiler_cache(root)
 
 # Detect editable install (pip install -e .) or develop mode
-_is_editable_install = (
-    "develop" in sys.argv
-    or "editable_wheel" in sys.argv
-    or any("--editable" in arg or "-e" in arg for arg in sys.argv)
+_is_editable_install = bool(
+    {"develop", "editable_wheel", "--editable", "-e"}.intersection(sys.argv[1:])
 )
 
 if _is_editable_install:
@@ -553,17 +551,7 @@ class _CustomBuildExt(BuildExtension):
         subprocess.check_call(["git", "clean", "-fdx"], cwd=repo_path)
 
     @staticmethod
-    def _install_vllm(repo_path):
-        """Install the cloned + patched vLLM (editable) against the existing torch."""
-        source_dir = Path(repo_path)
-        subprocess.check_call(
-            [sys.executable, "tools/use_existing_torch.py"], cwd=source_dir
-        )
-        # Keep the editable distribution on the same dependency policy as the wheel.
-        (source_dir / "requirements" / "common.txt").write_text(
-            "\n".join(_runtime_requirements()) + "\n", encoding="utf-8"
-        )
-
+    def _vllm_build_env():
         env = os.environ.copy()
         # Skip vLLM's native backend targets and build the MUSA extension through CMake.
         env["VLLM_TARGET_DEVICE"] = "empty"
@@ -576,6 +564,19 @@ class _CustomBuildExt(BuildExtension):
         # Always provide the pinned release version so setuptools-scm does not
         # derive a stale development version from the nearest available tag.
         env.setdefault("VLLM_VERSION_OVERRIDE", _PINS["VLLM_TAG"].lstrip("v"))
+        return env
+
+    @staticmethod
+    def _install_vllm(repo_path, env):
+        """Install the cloned + patched vLLM (editable) against the existing torch."""
+        source_dir = Path(repo_path)
+        subprocess.check_call(
+            [sys.executable, "tools/use_existing_torch.py"], cwd=source_dir
+        )
+        # Keep the editable distribution on the same dependency policy as the wheel.
+        (source_dir / "requirements" / "common.txt").write_text(
+            "\n".join(_runtime_requirements()) + "\n", encoding="utf-8"
+        )
 
         # always editable; compat (path-based .pth) -- the default PEP 660 finder
         # mis-resolves vLLM's submodules and loses to a system vLLM.
@@ -671,8 +672,27 @@ class _CustomBuildExt(BuildExtension):
     def run(self):
         self.prepare_third_party()
 
+        repo = _VLLM_REPO.source_dir
         if _is_editable_install:
-            self._install_vllm(_VLLM_REPO.source_dir)
+            self._install_vllm(repo, self._vllm_build_env())
+        elif os.environ.get("VLLM_MUSA_REUSE_PREBUILT") == "1":
+            extension = Path(self.get_ext_filename("vllm._deepselect_C"))
+            target = Path(self.build_lib) / extension
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(repo / extension, target)
+        else:
+            # Let patched vLLM install its CMake target into the outer wheel.
+            subprocess.check_call(
+                [
+                    sys.executable,
+                    "setup.py",
+                    "build_ext",
+                    "--build-lib",
+                    str(Path(self.build_lib).resolve()),
+                ],
+                cwd=repo,
+                env=self._vllm_build_env(),
+            )
 
         super().run()
 

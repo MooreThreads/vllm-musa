@@ -11,7 +11,8 @@ from unittest.mock import Mock
 import pytest
 
 BENCHMARK = (
-    Path(__file__).resolve().parents[1] / "benchmarks/benchmark_deepselect_topk.py"
+    Path(__file__).resolve().parents[1]
+    / "benchmarks/kernels/deepselect/benchmark_deepselect_topk.py"
 )
 
 

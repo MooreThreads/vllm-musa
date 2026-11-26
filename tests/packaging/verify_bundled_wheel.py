@@ -30,7 +30,13 @@ REQUIRED_FILES = {
     "vllm_musa_omni_compat_pth.py",
 }
 
-NATIVE_MODULES = ("vllm/_C", "vllm/_C_stable_libtorch", "vllm/_moe_C", "vllm_musa/_C")
+NATIVE_MODULES = (
+    "vllm/_C",
+    "vllm/_C_stable_libtorch",
+    "vllm/_moe_C",
+    "vllm/_deepselect_C",
+    "vllm_musa/_C",
+)
 EXTRA_REQUIREMENTS = {
     "dev": {"pytest", "ruff"},
     "musa": {"torch", "torch-musa", "mate", "flashinfer-python"},

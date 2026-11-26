@@ -18,7 +18,13 @@ from urllib.parse import unquote, urlsplit
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-NATIVE_MODULES = ("vllm._C", "vllm._C_stable_libtorch", "vllm._moe_C", "vllm_musa._C")
+NATIVE_MODULES = (
+    "vllm._C",
+    "vllm._C_stable_libtorch",
+    "vllm._moe_C",
+    "vllm._deepselect_C",
+    "vllm_musa._C",
+)
 
 
 def _module_files() -> dict[str, str]:

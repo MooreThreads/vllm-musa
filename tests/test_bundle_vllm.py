@@ -40,7 +40,7 @@ def fake_vllm(tmp_path: Path) -> Path:
         )
     )
     (package / "payload.json").write_text("{}\n")
-    for native_module in ("_C", "_C_stable_libtorch", "_moe_C"):
+    for native_module in ("_C", "_C_stable_libtorch", "_moe_C", "_deepselect_C"):
         (package / f"{native_module}{EXT_SUFFIX}").write_bytes(b"prebuilt")
         (package / f"{native_module}.so").write_bytes(b"untagged")
     (package / "_rust_tool_parser.abi3.so").write_bytes(b"rust")
