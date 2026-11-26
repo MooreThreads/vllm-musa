@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Exercise MUSA PP library selection, stream selection, and ordering on CPU."""
+"""Exercise the PP PyNccl patch's library and stream choices on CPU."""
 
 import re
 import sys
 from pathlib import Path
-from textwrap import dedent, indent
+from textwrap import dedent
 from types import ModuleType, SimpleNamespace
-from unittest.mock import Mock, call
+from unittest.mock import Mock
 
 import pytest
 
@@ -15,7 +15,7 @@ SERIES = Path(__file__).resolve().parents[1] / "vllm_musa/patches/series"
 PYNCCL_PATCH = SERIES / "0218-MUSA-enable-PyNccl-for-pipeline-parallelism.patch"
 EAGER_PATCH = SERIES / "0219-MUSA-eagerly-initialize-MCCL-for-PP.patch"
 STREAM_PATCH = SERIES / "0220-MUSA-query-the-active-native-MUSA-stream.patch"
-PP_ORDER_PATCH = SERIES / "0221-MUSA-order-PP-sends-before-sampling-broadcasts.patch"
+SCHEDULER_PATCH = SERIES / "0221-MUSA-default-MRV2-PP-to-synchronous-scheduling.patch"
 
 
 def _patched_hunk(patch: Path, path: str, marker: str) -> str:
@@ -131,43 +131,40 @@ def test_eager_mccl_uses_the_workers_visible_device(
 
 
 @pytest.mark.parametrize(
-    ("device_type", "use_v2_model_runner", "waits"),
-    [("musa", True, True), ("musa", False, False), ("cuda", True, False)],
+    ("device_type", "executor", "pp_size", "use_v2", "expected"),
+    [
+        ("musa", "mp", 2, True, False),
+        ("musa", "mp", 1, True, True),
+        ("musa", "mp", 2, False, True),
+        ("musa", "ray", 2, True, True),
+        ("cuda", "mp", 2, True, True),
+    ],
 )
-def test_orders_pp_activation_sends_before_mrv2_sampling(
-    device_type: str, use_v2_model_runner: bool, waits: bool
+def test_musa_mrv2_mp_pp_defaults_to_synchronous_scheduling(
+    device_type: str, executor: str, pp_size: int, use_v2: bool, expected: bool
 ) -> None:
     source = _patched_hunk(
-        PP_ORDER_PATCH, "vllm/v1/worker/gpu_worker.py", "sampled-token broadcast"
+        SCHEDULER_PATCH, "vllm/config/vllm.py", "MUSA multiprocessing PP"
     )
-    start = source.index("        if current_platform")
-    end = source.index("    @torch.inference_mode()")
-    calls = Mock()
-    worker = SimpleNamespace(
-        use_v2_model_runner=use_v2_model_runner,
-        _pp_send_work=[calls.work],
-        model_runner=calls.runner,
+    start = source.index("            elif (")
+    # The added branch is followed by upstream's generic async default.
+    config = SimpleNamespace(
+        parallel_config=SimpleNamespace(pipeline_parallel_size=pp_size),
+        scheduler_config=SimpleNamespace(async_scheduling=None),
+        use_v2_model_runner=use_v2,
     )
-    namespace = {"current_platform": SimpleNamespace(device_type=device_type)}
-    body = dedent(source[start:end]).rstrip()
-    exec(
-        compile(
-            "def sample(self, grammar_output):\n" + indent(body, "    "),
-            str(PP_ORDER_PATCH),
-            "exec",
-        ),
-        namespace,
-    )
+    logger = Mock()
+    namespace = {
+        "current_platform": SimpleNamespace(device_type=device_type),
+        "executor_backend": executor,
+        "self": config,
+        "logger": logger,
+    }
+    branch = dedent(source[start:]).replace("elif (", "if (", 1)
+    exec(compile(branch, str(SCHEDULER_PATCH), "exec"), namespace)
 
-    output = namespace["sample"](worker, None)
-
-    assert output is calls.runner.sample_tokens.return_value
-    if waits:
-        assert calls.mock_calls == [call.work.wait(), call.runner.sample_tokens(None)]
-        assert worker._pp_send_work == []
-    else:
-        assert calls.mock_calls == [call.runner.sample_tokens(None)]
-        assert worker._pp_send_work == [calls.work]
+    assert config.scheduler_config.async_scheduling is expected
+    assert logger.warning_once.call_count == int(not expected)
 
 
 def test_current_stream_follows_native_musa_switches(

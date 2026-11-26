@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 26 Nov 2026 17:59:37 +0800
+Subject: [PATCH] MUSA: default MRV2 PP to synchronous scheduling
+
+MUSA multiprocessing pipeline parallelism with Model Runner V2 can stall while waiting for the asynchronous output copy event. Default to synchronous scheduling for this combination of platform, executor, and runner. Preserve explicitly configured scheduling modes.
+---
+ vllm/config/vllm.py | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
+index d4a182bd41..3f33e15c1a 100644
+--- a/vllm/config/vllm.py
++++ b/vllm/config/vllm.py
+@@ -1661,6 +1661,19 @@ class VllmConfig:
+                     "does not support it with pipeline parallelism."
+                 )
+                 self.scheduler_config.async_scheduling = False
++            elif (
++                current_platform.device_type == "musa"
++                and executor_backend == "mp"
++                and self.parallel_config.pipeline_parallel_size > 1
++                and self.use_v2_model_runner
++            ):
++                # MUSA multiprocessing PP can stall with overlapping batches.
++                # Keep the explicit async-scheduling opt-in for debugging.
++                logger.warning_once(
++                    "Async scheduling defaults to disabled for MUSA "
++                    "multiprocessing pipeline parallelism with Model Runner V2."
++                )
++                self.scheduler_config.async_scheduling = False
+             else:
+                 self.scheduler_config.async_scheduling = True
+ 
