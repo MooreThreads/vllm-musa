@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 26 Nov 2026 19:48:45 +0800
+Subject: [PATCH] MUSA: discover MCCL in the shared library loader
+
+---
+ .../distributed/device_communicators/cuda_communicator.py | 8 ++++++++
+ vllm/distributed/device_communicators/pynccl.py           | 5 ++++-
+ vllm/utils/import_utils.py                                | 7 +++++--
+ vllm/utils/nccl.py                                        | 8 +++++---
+ 4 files changed, 22 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/distributed/device_communicators/cuda_communicator.py b/vllm/distributed/device_communicators/cuda_communicator.py
+index 4c6cb64bdf..daf3a45d54 100644
+--- a/vllm/distributed/device_communicators/cuda_communicator.py
++++ b/vllm/distributed/device_communicators/cuda_communicator.py
+@@ -105,9 +105,17 @@ class CudaCommunicator(DeviceCommunicatorBase):
+ 
+         self.pynccl_comm: PyNcclCommunicator | None = None
+         if self.world_size > 1:
++            # Keep default MCCL use to the validated PP route. In particular,
++            # the other groups can issue mixed-size grouped collectives.
++            enable_pynccl = (
++                current_platform.device_type != "musa"
++                or unique_name.split(":", 1)[0] == "pp"
++                or bool(envs.VLLM_NCCL_SO_PATH)
++            )
+             self.pynccl_comm = PyNcclCommunicator(
+                 group=self.cpu_group if tcp_store_group is None else tcp_store_group,
+                 device=self.device,
++                enabled=enable_pynccl,
+             )
+             if is_symmetric_memory_enabled():
+                 register_nccl_symmetric_ops(self.pynccl_comm)
+diff --git a/vllm/distributed/device_communicators/pynccl.py b/vllm/distributed/device_communicators/pynccl.py
+index 76eeb2291f..f87259d4a4 100644
+--- a/vllm/distributed/device_communicators/pynccl.py
++++ b/vllm/distributed/device_communicators/pynccl.py
+@@ -97,6 +97,8 @@ class PyNcclCommunicator:
+         group: ProcessGroup | StatelessProcessGroup,
+         device: int | str | torch.device,
+         library_path: str | None = None,
++        *,
++        enabled: bool = True,
+     ):
+         """Args:
+             group: the process group to work on. If None, it will use the
+@@ -105,6 +107,7 @@ class PyNcclCommunicator:
+                 it will be bound to f"cuda:{local_rank}".
+             library_path: the path to the NCCL library. If None, it will
+                 use the default library path.
++            enabled: Whether this caller opts into PyNccl.
+         It is the caller's responsibility to make sure each communicator
+         is bind to a unique device.
+ 
+@@ -124,7 +127,7 @@ class PyNcclCommunicator:
+         self.group = group
+ 
+         # if world_size == 1, no need to create communicator
+-        if self.world_size == 1 or envs.VLLM_DISABLE_PYNCCL:
++        if not enabled or self.world_size == 1 or envs.VLLM_DISABLE_PYNCCL:
+             self.available = False
+             self.disabled = True
+             return
+diff --git a/vllm/utils/import_utils.py b/vllm/utils/import_utils.py
+index 277f987d48..771a11fcb4 100644
+--- a/vllm/utils/import_utils.py
++++ b/vllm/utils/import_utils.py
+@@ -475,6 +475,11 @@ def deep_ep_v2_unavailable_reason() -> str | None:
+     Requires both the ElasticBuffer class in the deep_ep module and
+     NCCL >= 2.30.4 (GIN backend), checked against the runtime library.
+     """
++    import torch
++
++    if getattr(torch.version, "musa", None) is not None:
++        return "DeepEP v2 requires NVIDIA NCCL with GIN support."
++
+     install_doc = "See tools/ep_kernels/README.md."
+     if not _has_module("deep_ep"):
+         return f"DeepEP is not installed. {install_doc}"
+@@ -484,8 +489,6 @@ def deep_ep_v2_unavailable_reason() -> str | None:
+         return f"The installed DeepEP predates v2 (no ElasticBuffer). {install_doc}"
+     nccl_ver = _get_runtime_nccl_version()
+     if nccl_ver is None or nccl_ver < DEEPEP_V2_MIN_NCCL_VERSION_RAW:
+-        import torch
+-
+         min_version = _format_nccl_raw_version(DEEPEP_V2_MIN_NCCL_VERSION_RAW)
+         cuda_major = (torch.version.cuda or "13").split(".")[0]
+         return (
+diff --git a/vllm/utils/nccl.py b/vllm/utils/nccl.py
+index 1136661f6e..e27ed13c05 100644
+--- a/vllm/utils/nccl.py
++++ b/vllm/utils/nccl.py
+@@ -18,7 +18,7 @@ logger = init_logger(__name__)
+ 
+ 
+ def find_nccl_library() -> str:
+-    """Return NCCL/RCCL shared library name to load.
++    """Return NCCL, RCCL, or MCCL shared library name to load.
+ 
+     Uses `VLLM_NCCL_SO_PATH` if set; otherwise chooses by torch backend.
+     """
+@@ -28,12 +28,14 @@ def find_nccl_library() -> str:
+             "Found nccl from environment variable VLLM_NCCL_SO_PATH=%s", so_file
+         )
+     else:
+-        if torch.version.cuda is not None:
++        if getattr(torch.version, "musa", None) is not None:
++            so_file = "libmccl.so.2"
++        elif torch.version.cuda is not None:
+             so_file = "libnccl.so.2"
+         elif torch.version.hip is not None:
+             so_file = "librccl.so.1"
+         else:
+-            raise ValueError("NCCL only supports CUDA and ROCm backends.")
++            raise ValueError("NCCL-compatible libraries require CUDA, ROCm, or MUSA.")
+         logger.debug_once("Found nccl from library %s", so_file)
+     return so_file
+ 

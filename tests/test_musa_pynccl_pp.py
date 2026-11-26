@@ -12,9 +12,8 @@ from unittest.mock import Mock
 import pytest
 
 SERIES = Path(__file__).resolve().parents[1] / "vllm_musa/patches/series"
-PYNCCL_PATCH = SERIES / "0218-MUSA-enable-PyNccl-for-pipeline-parallelism.patch"
-EAGER_PATCH = SERIES / "0219-MUSA-eagerly-initialize-MCCL-for-PP.patch"
-STREAM_PATCH = SERIES / "0220-MUSA-query-the-active-native-MUSA-stream.patch"
+PYNCCL_PATCH = SERIES / "0218-MUSA-discover-MCCL-in-the-shared-library-loader.patch"
+STREAM_PATCH = SERIES / "0219-MUSA-query-the-active-native-MUSA-stream.patch"
 
 
 def _patched_hunk(patch: Path, path: str, marker: str) -> str:
@@ -33,18 +32,18 @@ def _patched_hunk(patch: Path, path: str, marker: str) -> str:
 @pytest.mark.parametrize(
     ("is_musa", "unique_name", "override", "expected"),
     [
-        (True, "pp:0", None, "libmccl.so.2"),
-        (True, "pp:1", "/opt/musa/lib/libmccl.so.2", "/opt/musa/lib/libmccl.so.2"),
-        (True, "tp:0", None, None),
-        (True, "ep:0", None, None),
-        (True, "dp:0", None, None),
-        (True, "pp_aux:0", None, None),
-        (False, "pp:0", None, None),
-        (False, "pp:0", "/opt/nccl/lib/libnccl.so.2", None),
+        (True, "pp:0", None, True),
+        (True, "ep:1", "/opt/musa/lib/libmccl.so.2", True),
+        (True, "tp:0", None, False),
+        (True, "ep:0", None, False),
+        (True, "dp:0", None, False),
+        (True, "pp_aux:0", None, False),
+        (False, "pp:0", None, True),
+        (False, "pp:0", "/opt/nccl/lib/libnccl.so.2", True),
     ],
 )
-def test_pynccl_default_library_is_musa_pp_only(
-    is_musa: bool, unique_name: str, override: str | None, expected: str | None
+def test_musa_pynccl_default_enablement_is_limited_to_pp(
+    is_musa: bool, unique_name: str, override: str | None, expected: bool
 ) -> None:
     source = _patched_hunk(
         PYNCCL_PATCH,
@@ -67,66 +66,49 @@ def test_pynccl_default_library_is_musa_pp_only(
     exec(compile(code, str(PYNCCL_PATCH), "exec"), namespace)
 
     make_pynccl.assert_called_once_with(
-        group=communicator.cpu_group, device=communicator.device, library_path=expected
+        group=communicator.cpu_group, device=communicator.device, enabled=expected
     )
     assert communicator.pynccl_comm is make_pynccl.return_value
 
 
 @pytest.mark.parametrize(
-    ("backend", "pp_size", "expected_device"),
+    ("musa", "cuda", "hip", "override", "expected"),
     [
-        ("mccl", 2, ("musa", 1)),
-        ("mccl", 1, None),
-        ("mccl", None, None),
-        ("gloo", 2, None),
+        ("5.2.0", None, None, None, "libmccl.so.2"),
+        ("5.2.0", None, None, "/opt/mccl.so", "/opt/mccl.so"),
+        (None, "13.0", None, None, "libnccl.so.2"),
+        (None, None, "7.0", None, "librccl.so.1"),
+        (None, None, None, None, None),
     ],
 )
-def test_eager_mccl_uses_the_workers_visible_device(
-    backend: str,
-    pp_size: int | None,
-    expected_device: tuple[str, int] | None,
-    monkeypatch: pytest.MonkeyPatch,
+def test_nccl_library_is_selected_by_torch_backend(
+    musa: str | None,
+    cuda: str | None,
+    hip: str | None,
+    override: str | None,
+    expected: str | None,
 ) -> None:
-    source = _patched_hunk(
-        EAGER_PATCH, "vllm/distributed/parallel_state.py", "Eagerly initialize MCCL"
+    source = _patched_hunk(PYNCCL_PATCH, "vllm/utils/nccl.py", "libmccl.so.2")
+    tail = source[source.index("    else:") :]
+    code = (
+        "def find_nccl_library():\n    so_file = envs.VLLM_NCCL_SO_PATH\n    if so_file:\n        pass\n"
+        + tail
     )
-    start = source.index("            # Eagerly initialize MCCL")
-    end = source.index("        if enable_elastic_ep:")
-    map_device = Mock(return_value=1)
-    platform = ModuleType("vllm.platforms")
-    platform.current_platform = SimpleNamespace(
-        logical_device_id_to_visible_device_id=map_device
-    )
-    monkeypatch.setitem(sys.modules, "vllm.platforms", platform)
-    init_process_group = Mock()
     namespace = {
-        "backend": backend,
-        "config": (
-            None
-            if pp_size is None
-            else SimpleNamespace(
-                parallel_config=SimpleNamespace(pipeline_parallel_size=pp_size)
-            )
-        ),
-        "local_rank": 0,
-        "init_kwargs": {"backend": backend},
         "torch": SimpleNamespace(
-            version=SimpleNamespace(musa="5.2.0"),
-            device=lambda *args: args,
-            distributed=SimpleNamespace(init_process_group=init_process_group),
+            version=SimpleNamespace(musa=musa, cuda=cuda, hip=hip)
         ),
+        "envs": SimpleNamespace(VLLM_NCCL_SO_PATH=override),
+        "logger": Mock(),
     }
+    exec(compile(code, str(PYNCCL_PATCH), "exec"), namespace)
+    find_library = namespace["find_nccl_library"]
 
-    exec(compile(dedent(source[start:end]), str(EAGER_PATCH), "exec"), namespace)
-
-    if expected_device is None:
-        map_device.assert_not_called()
-        init_process_group.assert_called_once_with(backend=backend)
+    if expected is None:
+        with pytest.raises(ValueError, match="require CUDA, ROCm, or MUSA"):
+            find_library()
     else:
-        map_device.assert_called_once_with(0)
-        init_process_group.assert_called_once_with(
-            backend=backend, device_id=expected_device
-        )
+        assert find_library() == expected
 
 
 def test_current_stream_follows_native_musa_switches(

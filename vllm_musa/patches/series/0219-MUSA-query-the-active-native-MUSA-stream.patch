@@ -1,9 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Thu, 26 Nov 2026 17:11:55 +0800
+Date: Thu, 26 Nov 2026 19:45:15 +0800
 Subject: [PATCH] MUSA: query the active native MUSA stream
 
-Ray PP uses the shared stream helper to synchronize after PyNccl receives. Read the native MUSA stream so communication and synchronization agree inside native stream contexts.
 ---
  vllm/utils/torch_utils.py | 4 ++++
  1 file changed, 4 insertions(+)

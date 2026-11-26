@@ -92,7 +92,7 @@ def test_per_layer_ambiguity_does_not_abort_the_resolver(error: type) -> None:
     assert model.hidden_size == 2816
     assert model.num_hidden_layers == 26
     assert model.family is ModelFamily.UNKNOWN
-    assert not contract.prefers(OptimizationFeature.GLM5_SPARSE_MLA_MATE_PREFILL)
+    assert not contract.prefers(OptimizationFeature.GLM5_EAGER_MCCL_INIT)
 
 
 def test_other_runtime_errors_propagate() -> None:
