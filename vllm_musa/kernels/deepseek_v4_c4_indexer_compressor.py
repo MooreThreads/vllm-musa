@@ -82,7 +82,8 @@ def _guard_c4_indexer_compressor(
     if not 0 < num_rows <= _MAX_DECODE_ROWS:
         return (
             False,
-            f"native C4 path supports 1..{_MAX_DECODE_ROWS} decode rows, got {num_rows}",
+            f"native C4 path supports 1..{_MAX_DECODE_ROWS} decode rows, "
+            f"got {num_rows}",
         )
     for name, tensor in (
         ("token_to_req_indices", token_to_req_indices),

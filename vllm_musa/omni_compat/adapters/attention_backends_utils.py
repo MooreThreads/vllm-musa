@@ -93,8 +93,10 @@ def _bridge():
         if clamp_sliding_window or span_pad:
             raise NotImplementedError(
                 "vllm_musa.omni_compat: compute_mm_prefix_ranges("
-                f"clamp_sliding_window={clamp_sliding_window!r}, span_pad={span_pad!r}) "
-                "needs vLLM >= 0.33. The pinned builder always skips ranges longer than "
+                f"clamp_sliding_window={clamp_sliding_window!r}, "
+                f"span_pad={span_pad!r}) "
+                "needs vLLM >= 0.33. The pinned builder always skips ranges "
+                "longer than "
                 "sliding_window and cannot round a span start, so bridging these would "
                 "return different attention ranges rather than fail. Bump "
                 "third_party/PINS to use this path."

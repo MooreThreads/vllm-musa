@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The Omni drift shim: every kind, with a fixture that must fail and one that must pass.
+"""The Omni drift shim: every kind, with a fixture that must fail and one that
+must pass.
 
 A gate that cannot fail is worse than no gate, so each test pairs the behaviour
 it wants with the opposite case. No MUSA hardware, no real vLLM: a synthetic
@@ -200,7 +201,8 @@ def _make_vllm(root: Path, version: str, *, moved: bool) -> Path:
             def get_global_kv_cache_groups(vllm_config, kv_cache_specs):
                 return ["native-groups"]
 
-            def get_kv_cache_configs(vllm_config, kv_cache_specs, available_memory, groups):
+            def get_kv_cache_configs(vllm_config, kv_cache_specs, available_memory, """
+            """groups):
                 return ["native-config", groups]
             """,
         )
@@ -233,7 +235,8 @@ def _make_vllm(root: Path, version: str, *, moved: bool) -> Path:
         _write(
             pkg / "v1" / "kv_cache_interface.py",
             """
-            def get_block_table_width(max_num_blocks, block_size, *, token_alignment=128):
+            def get_block_table_width(max_num_blocks, block_size, *, """
+            """token_alignment=128):
                 return "native-width"
             """,
         )
@@ -434,7 +437,8 @@ def test_relocation_serves_the_pinned_symbols(pin_site):
             FrontendArgs, make_arg_parser, resolve_default_chat_template_kwargs,
             validate_parsed_serve_args,
         )
-        from vllm.entrypoints.common.startup import VLLM_SUBCMD_PARSER_EPILOG, cli_env_setup
+        from vllm.entrypoints.common.startup import VLLM_SUBCMD_PARSER_EPILOG, """
+        """cli_env_setup
         import vllm.entrypoints.common.cli_args as shimmed
         result["origin"] = FrontendArgs.origin
         result["parser"] = make_arg_parser("p")
@@ -502,7 +506,8 @@ def test_out_of_range_version_is_not_shimmed(pin_site):
         [
             sys.executable,
             "-c",
-            "import vllm_musa.omni_compat as c; c.install(); import vllm; import vllm.entrypoints.common.cli_args",
+            "import vllm_musa.omni_compat as c; c.install(); import vllm; "
+            "import vllm.entrypoints.common.cli_args",
         ],
         capture_output=True,
         text=True,
@@ -522,7 +527,8 @@ def test_disable_env_makes_the_shim_inert(pin_site):
         [
             sys.executable,
             "-c",
-            "import vllm_musa.omni_compat as c; assert c.install() is False; import vllm.entrypoints.common.cli_args",
+            "import vllm_musa.omni_compat as c; assert c.install() is False; "
+            "import vllm.entrypoints.common.cli_args",
         ],
         capture_output=True,
         text=True,
@@ -544,7 +550,8 @@ def test_backport_reproduces_the_pinned_grouping(pin_site):
     result = _run(
         pin_site,
         """
-        from vllm.v1.core.kv_cache_planning import get_global_kv_cache_groups, get_kv_cache_configs
+        from vllm.v1.core.kv_cache_planning import get_global_kv_cache_groups, """
+        """get_kv_cache_configs
         from vllm.v1.kv_cache_spec_registry import KVCacheSpecRegistry
 
         class Config:
@@ -721,8 +728,10 @@ def test_install_is_idempotent_and_reversible(pin_site):
         import vllm_musa.omni_compat as compat
         compat.install()
         compat.install()
-        result["serve_hooks"] = sum(1 for f in sys.meta_path if type(f).__name__ == "OmniCompatFinder")
-        result["adapt_hooks"] = sum(1 for f in sys.meta_path if type(f).__name__ == "OmniAdapterFinder")
+        result["serve_hooks"] = sum(1 for f in sys.meta_path """
+        """if type(f).__name__ == "OmniCompatFinder")
+        result["adapt_hooks"] = sum(1 for f in sys.meta_path """
+        """if type(f).__name__ == "OmniAdapterFinder")
         result["adapt_first"] = type(sys.meta_path[0]).__name__ == "OmniAdapterFinder"
         result["serve_last"] = type(sys.meta_path[-1]).__name__ == "OmniCompatFinder"
         result["removed"] = compat.uninstall()
@@ -784,7 +793,8 @@ def test_hook_is_last_so_ordinary_finders_win(pin_site):
         """
         import sys
         result["is_last"] = type(sys.meta_path[-1]).__name__ == "OmniCompatFinder"
-        result["adapter_is_first"] = type(sys.meta_path[0]).__name__ == "OmniAdapterFinder"
+        result["adapter_is_first"] = type(sys.meta_path[0]).__name__ """
+        """== "OmniAdapterFinder"
         """,
         version=PIN_VERSION,
     )
@@ -798,20 +808,24 @@ def test_bootstrap_imports_nothing_heavy(pin_site):
     ``import vllm_musa.omni_compat`` would execute ``vllm_musa/__init__.py``,
     which imports torchada and torch; the bootstrap exists to avoid exactly that.
     """
-    script = textwrap.dedent("""
+    script = textwrap.dedent(
+        """
         import json, sys
         import vllm_musa_omni_compat_pth as boot
         heavy = sorted(
             m for m in sys.modules
-            if m.split(".")[0] in {"torch", "vllm", "numpy", "torch_musa", "torchada", "vllm_musa"}
+            if m.split(".")[0] in """
+        """{"torch", "vllm", "numpy", "torch_musa", "torchada", "vllm_musa"}
         )
         print("@@" + json.dumps({
             "heavy": heavy,
-            "installed": sum(1 for f in sys.meta_path if type(f).__name__ == "OmniCompatPathFinder"),
+            "installed": sum(1 for f in sys.meta_path """
+        """if type(f).__name__ == "OmniCompatPathFinder"),
             "is_last": type(sys.meta_path[-1]).__name__ == "OmniCompatPathFinder",
             "is_first": type(sys.meta_path[0]).__name__ == "OmniCompatPathFinder",
         }))
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -910,13 +924,16 @@ def test_bootstrap_adapter_survives_a_later_rebind(pin_site):
 
 
 def test_bootstrap_respects_the_disable_env(pin_site):
-    script = textwrap.dedent("""
+    script = textwrap.dedent(
+        """
         import sys
         import vllm_musa_omni_compat_pth as boot
-        assert not any(type(f).__name__ == "OmniCompatPathFinder" for f in sys.meta_path)
+        assert not any(type(f).__name__ == "OmniCompatPathFinder" """
+        """for f in sys.meta_path)
         assert boot.install() is False
         import vllm.entrypoints.common.startup
-        """)
+        """
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -1122,7 +1139,8 @@ def test_pth_activates_the_shim_without_an_explicit_install(tmp_path):
         [
             sys.executable,
             "-c",
-            "from vllm.entrypoints.common.startup import cli_env_setup; print(cli_env_setup())",
+            "from vllm.entrypoints.common.startup import cli_env_setup; "
+            "print(cli_env_setup())",
         ],
         capture_output=True,
         text=True,
@@ -1245,7 +1263,8 @@ def test_repeated_rebinds_do_not_stack_wrappers(pin_site):
             depth += 1
             fn = fn.__wrapped__
         result["depth"] = depth
-        result["value"] = list(mod.apply_top_k_top_p("l", 1, 2, has_topp_only_rows=True))
+        result["value"] = list(mod.apply_top_k_top_p("l", """
+        """1, 2, has_topp_only_rows=True))
         """,
         version=PIN_VERSION,
     )
@@ -1265,7 +1284,8 @@ def test_a_rebind_that_already_takes_the_argument_is_left_alone(pin_site):
 
         mod.apply_top_k_top_p = _newer
         result["wrapped"] = hasattr(mod.apply_top_k_top_p, "__wrapped__")
-        result["value"] = list(mod.apply_top_k_top_p("l", 1, 2, has_topp_only_rows=False))
+        result["value"] = list(mod.apply_top_k_top_p("l", """
+        """1, 2, has_topp_only_rows=False))
         """,
         version=PIN_VERSION,
     )
@@ -1296,7 +1316,8 @@ def test_is_applied_reads_the_live_function_not_a_marker(pin_site):
         # bypass __setattr__ so the guard does not fire.
         mod.__dict__["apply_top_k_top_p"] = _musa_sampler
         result["after_strip"] = ad.is_applied(mod)
-        result["marker_after_strip"] = getattr(mod, "__vllm_musa_adapted__", {}).get("names")
+        result["marker_after_strip"] = getattr(mod, "__vllm_musa_adapted__", {})"""
+        """.get("names")
         """,
         version=PIN_VERSION,
     )
@@ -1803,7 +1824,8 @@ def test_an_adapter_with_nothing_to_do_does_not_break_the_import(tmp_path):
         site,
         """
         import vllm.v1.sample.ops.topk_topp_sampler as mod
-        result["value"] = list(mod.apply_top_k_top_p("l", 1, 2, has_topp_only_rows=False))
+        result["value"] = list(mod.apply_top_k_top_p("l", """
+        """1, 2, has_topp_only_rows=False))
         result["marker"] = getattr(mod, "__vllm_musa_adapted__", None)
         """,
     )
@@ -1851,7 +1873,8 @@ def test_the_in_package_loader_also_survives_a_satisfied_adapter(tmp_path):
         _stale_pin_site(tmp_path),
         """
         import vllm.v1.sample.ops.topk_topp_sampler as mod
-        result["value"] = list(mod.apply_top_k_top_p("l", 1, 2, has_topp_only_rows=False))
+        result["value"] = list(mod.apply_top_k_top_p("l", """
+        """1, 2, has_topp_only_rows=False))
         result["marker"] = getattr(mod, "__vllm_musa_adapted__", None)
         """,
         version=PIN_VERSION,

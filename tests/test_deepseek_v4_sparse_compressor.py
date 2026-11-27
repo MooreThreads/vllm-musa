@@ -58,8 +58,8 @@ def test_kernel_uses_block_per_token_512d_geometry() -> None:
     assert "constexpr int64_t kScaleDim = 8;" in source
     assert "constexpr int64_t kThreadsPerBlock = 128;" in source
     assert (
-        "constexpr int kCompressRows = (1 + static_cast<int>(kOverlap)) * kCompressRatio;"
-        in source
+        "constexpr int kCompressRows = (1 + static_cast<int>(kOverlap)) * "
+        "kCompressRatio;" in source
     )
     assert "const int64_t token = static_cast<int64_t>(blockIdx.x);" in source
     assert "half_warp_reduce_max_u32" in source

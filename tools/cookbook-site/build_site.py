@@ -92,13 +92,18 @@ VENDOR_LABELS = {
 }
 
 VENDOR_BLURB = {
-    "qwen": "Dense, MoE and vision-language Qwen checkpoints on one to eight S5000 GPUs.",
+    "qwen": "Dense, MoE and vision-language Qwen checkpoints on one to eight "
+    "S5000 GPUs.",
     "qwen-image": "Text-to-image diffusion served through vLLM-Omni on a single S5000.",
-    "deepseek": "MLA/MoE DeepSeek deployments, including multi-node and PD-disaggregated profiles.",
-    "glm": "GLM serving topologies with PP2, full-decode graphs and thinking-mode templates.",
-    "nemotron": "Hybrid Mamba-2/attention Nemotron profiles tuned for per-token decode latency.",
+    "deepseek": "MLA/MoE DeepSeek deployments, including multi-node and "
+    "PD-disaggregated profiles.",
+    "glm": "GLM serving topologies with PP2, full-decode graphs and "
+    "thinking-mode templates.",
+    "nemotron": "Hybrid Mamba-2/attention Nemotron profiles tuned for per-token "
+    "decode latency.",
     "ocr": "Document, chart and scene-text extraction models served through vLLM.",
-    "diffusiongemma": "Block-diffusion text generation: parallel denoising instead of one token at a time.",
+    "diffusiongemma": "Block-diffusion text generation: parallel denoising instead of "
+    "one token at a time.",
 }
 
 # Sections whose first code block is the command the "Copy launch command"
@@ -441,7 +446,8 @@ def decorate_html(body: str, langs: list[str], primary_block: int) -> str:
         anchor = ' id="primary-command"' if index == primary_block else ""
         return (
             f'<div class="codeblock"{anchor}>'
-            f'<div class="codeblock-bar"><span class="codeblock-lang">{html.escape(lang)}</span>'
+            f'<div class="codeblock-bar">'
+            f'<span class="codeblock-lang">{html.escape(lang)}</span>'
             f'<button class="copy-btn" type="button" data-copy>Copy</button></div>'
             f"{match.group(0)}</div>"
         )
@@ -563,14 +569,16 @@ def nav_html(page: str, meta: SiteMeta, vendors: list[str]) -> str:
     for target, label in items:
         active = ' aria-current="page"' if target == page else ""
         links.append(
-            f'<a class="nav-link" href="{esc(rel_link(page, target))}"{active}>{label}</a>'
+            f'<a class="nav-link" href="{esc(rel_link(page, target))}"{active}>'
+            f"{label}</a>"
         )
     vendor_items = "".join(
         f'<a role="menuitem" href="{esc(rel_link(page, f"{v}/index.html"))}">'
         f"{esc(vendor_label(v))}</a>"
         for v in vendors
     )
-    return f"""<header class="topbar">
+    return (
+        f"""<header class="topbar">
   <div class="topbar-inner">
     <a class="brand" href="{esc(rel_link(page, "index.html"))}">
       <span class="brand-mark" aria-hidden="true">M</span>
@@ -579,16 +587,20 @@ def nav_html(page: str, meta: SiteMeta, vendors: list[str]) -> str:
     <nav class="nav" aria-label="Main">
       {"".join(links)}
       <div class="menu">
-        <button class="nav-link menu-button" type="button" aria-haspopup="true" aria-expanded="false">Vendors<span aria-hidden="true">▾</span></button>
+        <button class="nav-link menu-button" type="button" aria-haspopup="true" """
+        f"""aria-expanded="false">Vendors<span aria-hidden="true">▾</span></button>
         <div class="menu-items" role="menu">{vendor_items}</div>
       </div>
     </nav>
     <div class="topbar-actions">
-      <a class="ghost-btn" href="{esc(meta.repo_url)}" target="_blank" rel="noopener">GitHub ↗</a>
-      <button class="icon-btn" type="button" id="theme-toggle" aria-label="Toggle color theme">◐</button>
+      <a class="ghost-btn" href="{esc(meta.repo_url)}" target="_blank" """
+        f"""rel="noopener">GitHub ↗</a>
+      <button class="icon-btn" type="button" id="theme-toggle" """
+        """aria-label="Toggle color theme">◐</button>
     </div>
   </div>
 </header>"""
+    )
 
 
 @dataclass
@@ -620,7 +632,8 @@ def shell(
     root = "" if root == "." else root + "/"
     full_title = title if title == meta.name else f"{title} · {meta.name}"
     desc = description or meta.tagline
-    return f"""<!DOCTYPE html>
+    return (
+        f"""<!DOCTYPE html>
 <html lang="en" data-page="{esc(page)}">
 <head>
 <meta charset="utf-8">
@@ -632,21 +645,34 @@ def shell(
 <link rel="stylesheet" href="{root}assets/site.css">
 <link rel="stylesheet" href="{root}assets/pygments-light.css">
 <link rel="stylesheet" href="{root}assets/pygments-dark.css">
-<script>try{{var q=new URLSearchParams(location.search).get('theme');var t=q==='dark'||q==='light'?q:localStorage.getItem('theme');if(!t){{t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}}document.documentElement.setAttribute('data-theme',t);}}catch(e){{document.documentElement.setAttribute('data-theme','light');}}</script>
+<script>try{{var q=new URLSearchParams(location.search).get('theme');"""
+        """var t=q==='dark'||q==='light'?q:localStorage.getItem('theme');"""
+        """if(!t){t=matchMedia('(prefers-color-scheme: dark)').matches?"""
+        """'dark':'light';}"""
+        """document.documentElement.setAttribute('data-theme',t);}"""
+        """catch(e){document.documentElement.setAttribute('data-theme','light');"""
+        f"""}}</script>
 </head>
 <body class="{esc(body_class)}">
 {nav_html(page, meta, vendors)}
 {body}
 <footer class="footer">
   <div class="footer-inner">
-    <p>{esc(meta.name)} — generated {esc(meta.generated_at)} from <code>{esc(meta.source_label)}</code>{f" at <code>{esc(meta.commit[:10])}</code>" if meta.commit else ""}.</p>
-    <p>Recipes are starting configurations, not production guarantees. Revalidate image, checkpoint and workload before you ship.</p>
-    <p><a href="{esc(meta.repo_url)}" target="_blank" rel="noopener">Source repository ↗</a> · <a href="{esc(rel_link(page, "api/recipes.json"))}">Machine-readable catalog</a></p>
+    <p>{esc(meta.name)} — generated {esc(meta.generated_at)} from """
+        f"""<code>{esc(meta.source_label)}</code>"""
+        f"""{f" at <code>{esc(meta.commit[:10])}</code>" if meta.commit else ""}.</p>
+    <p>Recipes are starting configurations, not production guarantees. Revalidate """
+        f"""image, checkpoint and workload before you ship.</p>
+    <p><a href="{esc(meta.repo_url)}" target="_blank" rel="noopener">Source """
+        f"""repository ↗</a> · """
+        f"""<a href="{esc(rel_link(page, "api/recipes.json"))}">"""
+        f"""Machine-readable catalog</a></p>
   </div>
 </footer>
 <script src="{root}assets/site.js"></script>
 </body>
 </html>"""
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -760,16 +786,19 @@ def render_index(recipes: list[Recipe], meta: SiteMeta, vendors: list[str]) -> s
     )
 
     cards = "\n".join(card(recipe, page) for recipe in recipes)
-    body = f"""<main class="wrap">
+    body = (
+        f"""<main class="wrap">
   <section class="hero">
-    <p class="eyebrow">{esc(meta.hardware)}{(" · " + esc(meta.version)) if meta.version else ""}</p>
+    <p class="eyebrow">{esc(meta.hardware)}"""
+        f"""{(" · " + esc(meta.version)) if meta.version else ""}</p>
     <h1>{esc(meta.name)}</h1>
     <p class="hero-sub">{esc(meta.tagline)}</p>
     <div class="hero-actions">
       <a class="primary-btn" href="#catalog">Browse {len(recipes)} recipes</a>
       <a class="ghost-btn" href="getting-started.html">Before you start</a>
     </div>
-    <p class="hero-meta">{len(recipes)} recipes · {len(vendors)} model families · copy-ready <code>vllm serve</code> commands</p>
+    <p class="hero-meta">{len(recipes)} recipes · {len(vendors)} model families · """
+        f"""copy-ready <code>vllm serve</code> commands</p>
   </section>
 
   <section class="vendors">
@@ -785,34 +814,48 @@ def render_index(recipes: list[Recipe], meta: SiteMeta, vendors: list[str]) -> s
     <div class="controls">
       <label class="search">
         <span class="search-icon" aria-hidden="true">⌕</span>
-        <input id="search" type="search" placeholder="Search model, precision, hardware…" autocomplete="off" spellcheck="false" aria-label="Search recipes">
+        <input id="search" type="search" """
+        f"""placeholder="Search model, precision, hardware…" autocomplete="off" """
+        """spellcheck="false" aria-label="Search recipes">
         <kbd>/</kbd>
       </label>
       <label class="select"><span>Family</span>
         <select id="filter-vendor" data-key="vendor"><option value="">All</option>
-          {"".join(f'<option value="{esc(v)}">{esc(vendor_label(v))}</option>' for v in vendors)}
+          """
+        f"""{
+            "".join(
+                f'<option value="{esc(v)}">{esc(vendor_label(v))}</option>'
+                for v in vendors
+            )
+        }
         </select>
       </label>
       <label class="select"><span>Precision</span>
-        <select id="filter-precision" data-key="precision"><option value="">All</option>{options("precision")}</select>
+        <select id="filter-precision" data-key="precision">"""
+        f"""<option value="">All</option>{options("precision")}</select>
       </label>
       <label class="select"><span>Architecture</span>
-        <select id="filter-arch" data-key="arch"><option value="">All</option>{options("arch")}</select>
+        <select id="filter-arch" data-key="arch">"""
+        f"""<option value="">All</option>{options("arch")}</select>
       </label>
       <label class="select"><span>Modality</span>
-        <select id="filter-task" data-key="task"><option value="">All</option>{options("task")}</select>
+        <select id="filter-task" data-key="task">"""
+        f"""<option value="">All</option>{options("task")}</select>
       </label>
       <label class="select"><span>Spec. decoding</span>
-        <select id="filter-spec" data-key="spec"><option value="">All</option>{options("spec")}</select>
+        <select id="filter-spec" data-key="spec">"""
+        f"""<option value="">All</option>{options("spec")}</select>
       </label>
       <button class="ghost-btn reset-btn" type="button" id="reset">Reset</button>
     </div>
     <div class="grid" id="grid">
 {cards}
     </div>
-    <p class="empty" id="empty" hidden>No recipe matches those filters. Try clearing the search.</p>
+    <p class="empty" id="empty" hidden>"""
+        """No recipe matches those filters. Try clearing the search.</p>
   </section>
 </main>"""
+    )
     return shell(
         page=page,
         title=meta.name,
@@ -829,19 +872,28 @@ def render_vendor(
     page = f"{vendor}/index.html"
     cards = "\n".join(card(recipe, page) for recipe in recipes)
     blurb = VENDOR_BLURB.get(vendor, "")
-    body = f"""<main class="wrap">
+    body = (
+        f"""<main class="wrap">
   <nav class="crumbs" aria-label="Breadcrumb">
-    <a href="../index.html">Recipes</a><span aria-hidden="true">/</span><span>{esc(vendor_label(vendor))}</span>
+    <a href="../index.html">Recipes</a>"""
+        f"""<span aria-hidden="true">/</span><span>{esc(vendor_label(vendor))}</span>
   </nav>
   <section class="page-head">
     <h1>{esc(vendor_label(vendor))}</h1>
-    <p class="hero-sub">{esc(blurb or f"{len(recipes)} serving recipes for {vendor_label(vendor)} on S5000.")}</p>
+    <p class="hero-sub">{
+            esc(
+                blurb
+                or f"{len(recipes)} serving recipes for "
+                f"{vendor_label(vendor)} on S5000."
+            )
+        }</p>
     <p class="hero-meta">{len(recipes)} recipe{"s" if len(recipes) != 1 else ""}</p>
   </section>
   <div class="grid">
 {cards}
   </div>
 </main>"""
+    )
     return shell(
         page=page,
         title=vendor_label(vendor),
@@ -858,7 +910,8 @@ def toc_html(tokens: list[dict]) -> str:
         for item in items:
             children = walk(item.get("children") or [])
             parts.append(
-                f'<li><a href="#{esc(item["id"])}">{esc(plain(item["name"]))}</a>{children}</li>'
+                f'<li><a href="#{esc(item["id"])}">{esc(plain(item["name"]))}</a>'
+                f"{children}</li>"
             )
         return f"<ul>{''.join(parts)}</ul>" if parts else ""
 
@@ -913,7 +966,8 @@ def render_recipe(
             f"{meta.repo_url}/blob/{meta.ref}/docs/cookbook/{recipe.source_path}"
         )
     edit_url = (
-        f"{meta.repo_url}/edit/{meta.ref or meta.commit}/docs/cookbook/{recipe.source_path}"
+        f"{meta.repo_url}/edit/{meta.ref or meta.commit}/docs/cookbook/"
+        f"{recipe.source_path}"
         if meta.ref or meta.commit
         else ""
     )
@@ -931,10 +985,13 @@ def render_recipe(
     intro_html, _ = render_markdown(recipe.overview_md or recipe.overview)
     intro_html = decorate_html(intro_html, [], -1)
 
-    body = f"""<main class="wrap recipe-layout">
+    body = (
+        f"""<main class="wrap recipe-layout">
   <nav class="crumbs" aria-label="Breadcrumb">
-    <a href="{esc(rel_link(page, "index.html"))}">Recipes</a><span aria-hidden="true">/</span>
-    <a href="{esc(rel_link(page, f"{recipe.vendor}/index.html"))}">{esc(vendor_label(recipe.vendor))}</a><span aria-hidden="true">/</span>
+    <a href="{esc(rel_link(page, "index.html"))}">Recipes</a>"""
+        f"""<span aria-hidden="true">/</span>
+    <a href="{esc(rel_link(page, f"{recipe.vendor}/index.html"))}">"""
+        f"""{esc(vendor_label(recipe.vendor))}</a><span aria-hidden="true">/</span>
     <span>{esc(recipe.title)}</span>
   </nav>
   <div class="recipe-grid">
@@ -957,13 +1014,20 @@ def render_recipe(
         <h2 class="aside-title">At a glance</h2>
         {glance_html(recipe)}
       </div>
-      {'<button class="primary-btn copy-command" type="button" id="copy-command">Copy launch command</button>' if has_command else ""}
+      {
+            '<button class="primary-btn copy-command" type="button" '
+            'id="copy-command">Copy launch command</button>'
+            if has_command
+            else ""
+        }
       <div class="aside-card">
         <h2 class="aside-title">On this page</h2>
-        <nav class="toc">{toc_html(recipe.toc) or "<p class='muted'>No sections</p>"}</nav>
+        <nav class="toc">"""
+        f"""{toc_html(recipe.toc) or "<p class='muted'>No sections</p>"}</nav>
       </div>
       <div class="aside-links">
-        <a href="{esc(source_url)}" target="_blank" rel="noopener">View markdown source ↗</a>
+        <a href="{esc(source_url)}" target="_blank" rel="noopener">"""
+        f"""View markdown source ↗</a>
         {edit_link}
         <a href="{esc(json_url)}">Recipe JSON</a>
         <a href="{esc(rel_link(page, "index.html"))}#catalog">All recipes</a>
@@ -971,6 +1035,7 @@ def render_recipe(
     </aside>
   </div>
 </main>"""
+    )
     return shell(
         page=page,
         title=recipe.title,
@@ -1007,15 +1072,18 @@ def render_readme(
         for v in vendors
         if v in by_vendor
     )
-    body = f"""<main class="wrap recipe-layout">
+    body = (
+        f"""<main class="wrap recipe-layout">
   <nav class="crumbs" aria-label="Breadcrumb">
-    <a href="index.html">Recipes</a><span aria-hidden="true">/</span><span>Getting started</span>
+    <a href="index.html">Recipes</a>"""
+        """<span aria-hidden="true">/</span><span>Getting started</span>
   </nav>
   <div class="recipe-grid">
     <article class="recipe">
       <header class="recipe-head">
         <h1>Getting started</h1>
-        <p class="hero-sub">How to read a recipe, pick the image, and validate a server before you trust a profile.</p>
+        <p class="hero-sub">How to read a recipe, pick the image, and validate a """
+        f"""server before you trust a profile.</p>
       </header>
       <div class="prose">
 {body_html}
@@ -1037,13 +1105,16 @@ def render_readme(
     </aside>
   </div>
 </main>"""
+    )
     return shell(
         page=page,
         title="Getting started",
         body=body,
         meta=meta,
         vendors=vendors,
-        description="How to read a vLLM-MUSA serving recipe and validate a deployment on S5000.",
+        description=(
+            "How to read a vLLM-MUSA serving recipe and validate a deployment on S5000."
+        ),
     )
 
 
@@ -1318,7 +1389,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ref",
         default=None,
-        help="label for the built ref (default: the git ref, the source commit, or 'main')",
+        help=(
+            "label for the built ref (default: the git ref, the source commit, "
+            "or 'main')"
+        ),
     )
     parser.add_argument("--hardware", default=DEFAULT_HARDWARE, help="hardware label")
     args = parser.parse_args(argv)
@@ -1372,7 +1446,8 @@ def main(argv: list[str] | None = None) -> int:
     if untitled:
         for path in untitled:
             print(
-                f"::error file={path.relative_to(root)}::recipe is missing a '# Title' heading"
+                f"::error file={path.relative_to(root)}::recipe is missing a "
+                "'# Title' heading"
             )
         sys.exit(f"error: {len(untitled)} recipe(s) without an H1 title")
     recipes = [parse_recipe(root, path) for path in sources]

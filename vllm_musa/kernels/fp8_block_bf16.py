@@ -96,7 +96,8 @@ def _dequant(
 def fp8_block_bf16_supported(
     weight: torch.Tensor, weight_scale: torch.Tensor, rows: int
 ) -> bool:
-    """Whether ``rows`` activation rows run the BF16 GEMM on a 32x32 block-FP8 weight."""
+    """Whether ``rows`` activation rows run the BF16 GEMM on a 32x32 block-FP8
+    weight."""
     if not _ENABLED or weight.dim() != 2:
         return False
     n, k = weight.shape

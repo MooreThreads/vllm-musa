@@ -98,7 +98,8 @@ def test_guard_declines_unsupported_dtypes_and_layouts() -> None:
 @requires_musa
 def test_served_calls_are_counted_so_a_dead_kernel_is_visible() -> None:
     """A kernel that never runs and a kernel that runs bitwise-identically look the
-    same from the output side; only the counter (and the one-shot log) tell them apart."""
+    same from the output side; only the counter (and the one-shot log) tell them apart.
+    """
     before = rg.activation_count()
     x = torch.randn((7, HIDDEN), dtype=torch.bfloat16, device="musa")
     w = torch.randn((EXPERTS, HIDDEN), dtype=torch.float32, device="musa")

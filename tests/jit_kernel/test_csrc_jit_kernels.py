@@ -530,7 +530,7 @@ def test_csrc_topk_fuses_qwen_shared_gate(dtype: torch.dtype) -> None:
 
 
 def test_csrc_jit_integration_imports() -> None:
-    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as topk_router
+    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as topk_router  # noqa: E501
     import vllm_musa.model_executor.layers.layernorm as layernorm
     from vllm_musa.jit_kernel.csrc import rope as rope_kernel
 

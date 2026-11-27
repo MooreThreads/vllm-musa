@@ -72,7 +72,8 @@ def _tile(n: int, k: int, routed: bool = False, rows: int = 1) -> tuple[int, int
 
 
 def _rows_tile(n: int, k: int, rows: int) -> tuple[int, int, int, int] | None:
-    """(ROWS, BLOCK_N, BLOCK_K, num_warps) for the multi-row dense GEMV, or None for one row each.
+    """(ROWS, BLOCK_N, BLOCK_K, num_warps) for the multi-row dense GEMV, or None
+    for one row each.
 
     Measured on MTT S5000: sharing a weight tile across rows wins for the K=5120
     DeepSeek-V4.1 TP8 projections from 4 rows on; elsewhere one row per program wins.
@@ -110,7 +111,8 @@ def _fp8_block_gemv_scaled_activation(
     FP8_MAX: tl.constexpr,
     QUANT_EPS: tl.constexpr,
 ):
-    """One BLOCK_K slice of an activation row, dequantized and scaled by the weight scales."""
+    """One BLOCK_K slice of an activation row, dequantized and scaled by the
+    weight scales."""
     k = k0 + tl.arange(0, BLOCK_K)
     k_mask = k < K
     a = tl.load(a_ptr + a_row * stride_am + k, mask=k_mask, other=0.0).to(tl.float32)
@@ -224,7 +226,8 @@ def _fp8_block_gemv_rows_kernel(
     FP8_MAX: tl.constexpr,
     QUANT_EPS: tl.constexpr,
 ):
-    """``ROWS`` activation rows per program against one weight tile, read once per K slice."""
+    """``ROWS`` activation rows per program against one weight tile, read once
+    per K slice."""
     pid_n = tl.program_id(0)
     row0 = tl.program_id(1).to(tl.int64) * ROWS
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
@@ -307,7 +310,8 @@ def _fp8_block_gemv_kernel(
     FP8_MAX: tl.constexpr,
     QUANT_EPS: tl.constexpr,
 ):
-    """One output row per program row; with ``SUM_TOPK`` a token row sums its ``SLOTS`` routed rows."""
+    """One output row per program row; with ``SUM_TOPK`` a token row sums its
+    ``SLOTS`` routed rows."""
     pid_n = tl.program_id(0)
     out_row = tl.program_id(1).to(tl.int64)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
@@ -583,7 +587,8 @@ def fp8_block_gemv_quant(
     group_size: int,
     swiglu_limit: float | None = None,
 ) -> torch.Tensor:
-    """``fp8_block_gemv`` of ``per_token_group_quant_fp8(x, group_size)``, quantized in-kernel.
+    """``fp8_block_gemv`` of ``per_token_group_quant_fp8(x, group_size)``,
+    quantized in-kernel.
 
     With ``swiglu_limit``, ``x`` is a ``[gate | up]`` row and the GEMV input is its
     clamped SwiGLU.
@@ -635,7 +640,8 @@ def fp8_block_moe_gemv(
     sum_topk: int = 0,
     swiglu_limit: float | None = None,
 ) -> torch.Tensor:
-    """Per routed row ``r``: ``output[r] = a[r // a_rows_per_token] @ weight[expert_ids[r]].T``.
+    """Per routed row ``r``:
+    ``output[r] = a[r // a_rows_per_token] @ weight[expert_ids[r]].T``.
 
     Rows routed to an expert outside ``[0, E)`` contribute zeros. With
     ``routed_weights`` each row is scaled by its router weight. Without

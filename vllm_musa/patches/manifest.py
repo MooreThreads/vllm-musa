@@ -9,7 +9,8 @@ Six categories:
   3  CSRC-FILE  MUSA-owned whole-file rewrite (diff vs upstream)   (build, pre-compile)
   4a MOD-COPY   genuine modified-copy module (drift-tripwire only) (runtime, none)
   4b MOD-COPY   single-method rebind → build-applied diff          (build, pre-install)
-  5  NEW-MOD    genuinely-new MUSA module/csrc (tracked source)    (runtime / direct compile)
+  5  NEW-MOD    genuinely-new MUSA module/csrc (tracked source)    (runtime /
+                                                                    direct compile)
   6  RUNTIME-OBJ live-object monkey patch (def apply())            (runtime)
 
 **Plain Python, stdlib-only** (``dataclasses`` + ``pathlib``) so it can be loaded
@@ -25,8 +26,8 @@ MDM phases; ``musa_sync`` and the census doc both read ENTRIES.
 # annotations a @dataclass whose fields are string annotations makes dataclasses
 # look up ``sys.modules[cls.__module__]`` — which is absent when this file is
 # loaded BY PATH at build time (setup.py / musa_sync), raising AttributeError.
-# Real annotations + ``typing.Optional`` (not ``X | None``) keep both the 3.9
-# floor and the by-path load working.
+# Real annotations (which the ``X | None`` form still is) keep the by-path load
+# working; only string annotations break it.
 import contextlib
 import re
 import stat
@@ -305,7 +306,9 @@ _CAT6: list[DivSpec] = [
         upstream_path=None,
         apply_phase="runtime",
         required=False,
-        intent="mark torch-wrap Tensor methods AOT-cache safe on torch 2.9 (compile cache)",
+        intent=(
+            "mark torch-wrap Tensor methods AOT-cache safe on torch 2.9 (compile cache)"
+        ),
     ),
     DivSpec(
         id="vllm__compilation__backends",

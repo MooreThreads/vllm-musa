@@ -523,7 +523,8 @@ def _mhc_pre_delayed_decode_norm_fuse(
     norm_weight: torch.Tensor,
     norm_eps: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Split-K prenorm GEMM plus one kernel for the mixes, next pre-mix and normed input."""
+    """Split-K prenorm GEMM plus one kernel for the mixes, next pre-mix and normed
+    input."""
     num_tokens, hc_mult, hidden_size = residual.shape
     hc_mult3 = hc_mult * (2 + hc_mult)
     if (

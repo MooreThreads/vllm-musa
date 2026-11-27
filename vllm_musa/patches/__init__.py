@@ -115,7 +115,8 @@ def _get_patch_files():
         # Format: module.name.patch.py -> module.name
         module_name = patch_file.stem.rsplit(".patch", 1)[0]
         # Convert filename format to module format
-        # vllm__attention__ops__triton_unified_attention -> vllm.attention.ops.triton_unified_attention
+        # vllm__attention__ops__triton_unified_attention ->
+        # vllm.attention.ops.triton_unified_attention
         module_name = module_name.replace("__", ".")
         patch_files.append((module_name, patch_file))
 

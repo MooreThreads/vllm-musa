@@ -1313,8 +1313,9 @@ class FlashAttentionImpl(AttentionImpl):
                 )
 
                 if use_decode_fast_path:
-                    # MUSA branch 1/4 - pure decode batch (no prefill, 1 query token per
-                    # seq): whole batch attends through the paged KV cache decode kernel.
+                    # MUSA branch 1/4 - pure decode batch (no prefill, 1 query
+                    # token per seq): whole batch attends through the paged KV
+                    # cache decode kernel.
                     decode_descale_shape = (num_decodes, self.num_kv_heads)
                     decode_output = flash_attn_with_kvcache(
                         q=query[:num_decode_tokens].view(
@@ -1345,9 +1346,10 @@ class FlashAttentionImpl(AttentionImpl):
                     and not attn_metadata.use_cascade
                     and self._mubin_prefill_ok
                 ):
-                    # MUSA branch 2/4 - pure prefill with no cached prefix: attend the
-                    # contiguous new K/V (no block_table/seqused_k) so mate routes to the
-                    # fast mubin varlen_causal TCE kernel, not the slow paged FmhaFwd.
+                    # MUSA branch 2/4 - pure prefill with no cached prefix:
+                    # attend the contiguous new K/V (no block_table/seqused_k) so
+                    # mate routes to the fast mubin varlen_causal TCE kernel, not
+                    # the slow paged FmhaFwd.
                     flash_attn_varlen_func(
                         q=query[:num_actual_tokens].view(
                             -1, self.num_heads, self.head_size
@@ -1383,12 +1385,13 @@ class FlashAttentionImpl(AttentionImpl):
                     and attn_metadata.decode_query_start_loc is not None
                     and attn_metadata.prefill_query_start_loc is not None
                 ):
-                    # MUSA branch 3/4 - mixed decode+prefill step: split the query into
-                    # [decode | prefill] (decode tokens come first). Attend decode tokens through the
-                    # paged KV cache and the no-prefix prefill tokens against their
-                    # contiguous new K/V (no block_table) so mate routes prefill to the
-                    # mubin TCE kernel instead of the slow paged FmhaFwd used for the
-                    # whole batch when decode and prefill share a step.
+                    # MUSA branch 3/4 - mixed decode+prefill step: split the query
+                    # into [decode | prefill] (decode tokens come first). Attend
+                    # decode tokens through the paged KV cache and the no-prefix
+                    # prefill tokens against their contiguous new K/V (no
+                    # block_table) so mate routes prefill to the mubin TCE kernel
+                    # instead of the slow paged FmhaFwd used for the whole batch
+                    # when decode and prefill share a step.
                     decode_descale_shape = (num_decodes, self.num_kv_heads)
                     # MUSA: no scheduler_metadata here. It is built for the full
                     # num_reqs (decode+prefill) layout and does not match this
@@ -1435,11 +1438,12 @@ class FlashAttentionImpl(AttentionImpl):
                         num_splits=attn_metadata.max_num_splits,
                     )
                 else:
-                    # MUSA branch 4/4 - paged fallback for every other case: cascade
-                    # attention, prefill with a cached prefix (chunked/extend), spec/Eagle
-                    # verify (multiple query tokens per seq), or layers ineligible for the
-                    # mubin fast path (sliding-window/softcap/fp8/sinks). All tokens attend
-                    # through the paged KV cache with the original query_start_loc layout.
+                    # MUSA branch 4/4 - paged fallback for every other case:
+                    # cascade attention, prefill with a cached prefix
+                    # (chunked/extend), spec/Eagle verify (multiple query tokens per
+                    # seq), or layers ineligible for the mubin fast path
+                    # (sliding-window/softcap/fp8/sinks). All tokens attend through
+                    # the paged KV cache with the original query_start_loc layout.
                     use_fused_kv_verify = (
                         num_decodes > 0
                         and num_prefills == 0

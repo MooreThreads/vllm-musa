@@ -22,7 +22,8 @@ _HOOKS_INSTALLED = False
 
 
 def _musa_use_fp8_e4b15(device: int = 0) -> int:
-    # XXX (MUSA): The e4b15 dtype is supported in later Triton versions, please refer to JIRA#79331
+    # XXX (MUSA): The e4b15 dtype is supported in later Triton versions, please
+    # refer to JIRA#79331
     return 0
 
 

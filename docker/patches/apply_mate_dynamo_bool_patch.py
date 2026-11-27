@@ -45,7 +45,8 @@ def apply_patch(patch_file: Path) -> None:
         raise RuntimeError(f"MATE patch appears partially applied: {target}")
     if not has_old_marker:
         raise RuntimeError(
-            f"MATE {mate_version} source does not match the expected pre-{MATE_FIX_VERSION} "
+            f"MATE {mate_version} source does not match the expected "
+            f"pre-{MATE_FIX_VERSION} "
             f"layout: {target}"
         )
 

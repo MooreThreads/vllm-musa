@@ -45,7 +45,8 @@ try:
     is_vllm_fa = True
 except ImportError as e:
     raise ImportError(
-        "MUSA platform requires MATE and flash_attn_3 to be installed. Please install them first."
+        "MUSA platform requires MATE and flash_attn_3 to be installed. "
+        "Please install them first."
     ) from e
 
 

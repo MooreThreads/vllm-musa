@@ -940,10 +940,10 @@ class _MusaJitCustomAllreduceImpl:
             != expected_meta_total
         ):
             return (
-                "graph staging arena totals differ from descriptor manifest: "
-                f"data={self._graph_staging_data_offset - self._graph_staging_data_start}"
-                f"/{expected_data_total}, "
-                f"meta={self._graph_staging_meta_offset - self._graph_staging_meta_start}"
+                "graph staging arena totals differ from descriptor manifest: data="
+                f"{self._graph_staging_data_offset - self._graph_staging_data_start}"
+                f"/{expected_data_total}, meta="
+                f"{self._graph_staging_meta_offset - self._graph_staging_meta_start}"
                 f"/{expected_meta_total}"
             )
         return None
@@ -1229,7 +1229,10 @@ class _MusaJitCustomAllreduceImpl:
             return f"dim mismatch: input_dim={inp.dim()} weight_dim={weight.dim()}"
         hidden_size = inp.shape[-1]
         if hidden_size <= 0 or hidden_size != weight.numel():
-            return f"hidden/weight mismatch: hidden={hidden_size} weight_numel={weight.numel()}"
+            return (
+                f"hidden/weight mismatch: hidden={hidden_size} "
+                f"weight_numel={weight.numel()}"
+            )
         if hidden_size % 8 != 0 or hidden_size > 32768:
             return f"unsupported hidden size: hidden={hidden_size}"
         if inp.dtype not in (torch.float16, torch.bfloat16):

@@ -19,8 +19,8 @@ def _read_patch(path: Path) -> str:
 
 def test_modelopt_fp8_uses_musa_capability_floor() -> None:
     patch_path = (
-        Path(__file__).parent.parent
-        / "vllm_musa/patches/series/0090-MUSA-allow-ModelOpt-FP8-on-MUSA-capability.patch"
+        Path(__file__).parent.parent / "vllm_musa/patches/series/"
+        "0090-MUSA-allow-ModelOpt-FP8-on-MUSA-capability.patch"
     )
     section = _patch_section(
         patch_path.read_text(),

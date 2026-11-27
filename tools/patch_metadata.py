@@ -224,7 +224,8 @@ def validate(series: Path, metadata: Path) -> Result:
         ):
             if dependency not in ids or dependency == group.get("id"):
                 errors.append(
-                    f"{group.get('id')}: unknown dependency or self-dependency {dependency!r}"
+                    f"{group.get('id')}: unknown dependency or self-dependency "
+                    f"{dependency!r}"
                 )
     remaining = {
         group["id"]: set(group["depends_on"])

@@ -104,8 +104,8 @@ def test_mrv2_rejection_avoids_chained_runtime_predicates() -> None:
     source = _series_patch(109)
 
     assert (
-        "+    if USE_BLOCK_VERIFICATION and ((not is_greedy) & (accepted_length < num_draft_tokens)):"
-        in source
+        "+    if USE_BLOCK_VERIFICATION and ((not is_greedy) & "
+        "(accepted_length < num_draft_tokens)):" in source
     )
 
 

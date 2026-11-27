@@ -618,7 +618,8 @@ class TestMUSAPlatformBase:
         ids=["3.2", "4.0", "2.2", "probe-none", "mtml-probe-failure"],
     )
     def test_supports_fp8_only_on_table_fp8_archs(self, capability):
-        """FP8 is an exact match on the torchada table's FP8 rows; the rest fail closed."""
+        """FP8 is an exact match on the torchada table's FP8 rows; the rest fail
+        closed."""
         from vllm.platforms.interface import DeviceCapability
 
         from vllm_musa.platform import MUSAPlatformBase
@@ -732,7 +733,8 @@ class TestMUSAPlatformBase:
 
         assert (
             AttentionBackendEnum.TURBOQUANT.get_path()
-            == "vllm_musa.v1.attention.backends.turboquant.MUSATurboQuantAttentionBackend"
+            == "vllm_musa.v1.attention.backends.turboquant."
+            "MUSATurboQuantAttentionBackend"
         )
 
     def test_get_valid_backends_includes_turboquant_for_non_mla(self):

@@ -67,8 +67,9 @@ Subcommands::
         ``.``/``-`` stripped, 52 characters), an ``index`` line whenever the
         entry has a hunk, LF-terminated *structural* lines with a final newline
         (a CR that is content — an added line of a CRLF file — is legitimate),
-        a diff ``git apply --stat`` can parse — the numbering must be unique and contiguous from
-        ``0001`` in each directory, no two entries may share a diff body,
+        a diff ``git apply --stat`` can parse — the numbering must be unique and
+        contiguous from ``0001`` in each directory, no two entries may share a
+        diff body,
         ``upstream/`` must start with a ``git cherry-pick -x`` commit, and a
         MUSA entry must not be one. ``--repo``
         additionally resolves the blobs those ``index`` lines declare to
@@ -2400,9 +2401,9 @@ def _format_series(
     them, the commits above the first cherry-pick that change a file those
     commits change. Any other commit above the first cherry-pick is a MUSA
     entry: it shares no file with ``upstream/``, so its patch is the same
-    when it applies before them. Each directory is numbered from 0001, with the canonical
-    author and a fixed ``core.abbrev``, so the ``index`` lines do not depend
-    on how many objects the repository holds.
+    when it applies before them. Each directory is numbered from 0001, with the
+    canonical author and a fixed ``core.abbrev``, so the ``index`` lines do not
+    depend on how many objects the repository holds.
     Returns ``(entries in apply order, error)``.
     """
     split = _split_stack(repo, base)
@@ -3085,7 +3086,8 @@ def cmd_report(args) -> int:
         ]
         print(f"  unresolved/opportunity: {', '.join(unresolved) or 'none'}")
         print(
-            "  Required checks are not pass claims; MUSA/model validation needs separate evidence."
+            "  Required checks are not pass claims; MUSA/model validation needs "
+            "separate evidence."
         )
         return 0
     by_cat: dict[str, int] = {}
@@ -3101,7 +3103,8 @@ def cmd_report(args) -> int:
             )
         return 0
     print(
-        f"MDM manifest: {len(manifest.ENTRIES)} divergences by category {dict(sorted(by_cat.items()))}"
+        f"MDM manifest: {len(manifest.ENTRIES)} divergences by category "
+        f"{dict(sorted(by_cat.items()))}"
     )
     prefix = manifest.UPSTREAM_SUBDIR + "/"
     upstream = [e for e in manifest.ENTRIES if e.id.startswith(prefix)]

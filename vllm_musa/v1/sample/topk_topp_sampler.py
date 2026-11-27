@@ -610,7 +610,7 @@ def _musa_jit_pair_gather_available() -> bool:
     try:
         from vllm.distributed.parallel_state import get_tp_group
 
-        from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (
+        from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (  # noqa: E501
             MusaJitCustomAllreduce,
         )
 

@@ -1,4 +1,5 @@
-"""DeepSeek-V4 sqrt-softplus top-k routing with an optional folded shared-expert slot."""
+"""DeepSeek-V4 sqrt-softplus top-k routing with an optional folded shared-expert
+slot."""
 
 from __future__ import annotations
 

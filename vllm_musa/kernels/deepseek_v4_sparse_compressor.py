@@ -75,7 +75,8 @@ def _guard_sparse_compressor(
     if contract is None:
         return (
             False,
-            f"native sparse path supports compress_ratio 4 or 128, got {compress_ratio}",
+            f"native sparse path supports compress_ratio 4 or 128, "
+            f"got {compress_ratio}",
         )
     expected_block, expected_width, expected_row = contract
     if int(state_block_size) != expected_block or int(state_width) != expected_width:
@@ -90,7 +91,8 @@ def _guard_sparse_compressor(
         expected_row,
     ):
         return False, (
-            f"state_cache must have shape [num_blocks, {expected_block}, {expected_row}], "
+            f"state_cache must have shape "
+            f"[num_blocks, {expected_block}, {expected_row}], "
             f"got {tuple(state_cache.shape)}"
         )
     if (
@@ -107,7 +109,8 @@ def _guard_sparse_compressor(
     if not 0 < num_rows <= _MAX_DECODE_ROWS:
         return (
             False,
-            f"native sparse path supports 1..{_MAX_DECODE_ROWS} decode rows, got {num_rows}",
+            f"native sparse path supports 1..{_MAX_DECODE_ROWS} decode rows, "
+            f"got {num_rows}",
         )
     for name, tensor in (
         ("token_to_req_indices", token_to_req_indices),

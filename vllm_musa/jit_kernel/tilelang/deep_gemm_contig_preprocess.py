@@ -974,7 +974,8 @@ def _impl_bf16(
     config = _bf16_config(hidden_states.shape[1])
     if config is None:
         raise RuntimeError(
-            f"unsupported TileLang DeepGEMM bf16 preprocess hidden={hidden_states.shape[1]}"
+            "unsupported TileLang DeepGEMM bf16 preprocess hidden="
+            f"{hidden_states.shape[1]}"
         )
     if topk > 16:
         raise RuntimeError(f"unsupported TileLang DeepGEMM bf16 preprocess topk={topk}")

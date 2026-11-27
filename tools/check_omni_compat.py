@@ -1145,12 +1145,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     for record in imports["shimmed"]:
         print(
-            f"  SHIMMED  {record['module']}.{record['name']} <- {record['shim']['kind']} ({record['omni_file']})"
+            f"  SHIMMED  {record['module']}.{record['name']} <- "
+            f"{record['shim']['kind']} ({record['omni_file']})"
         )
     for record in imports["unshimmed"]:
         mark = "TYPING " if record["type_checking"] else "MISSING"
         print(
-            f"  {mark}  {record['module']}.{record['name']} ({record['omni_file']}:{record['lineno']})"
+            f"  {mark}  {record['module']}.{record['name']} "
+            f"({record['omni_file']}:{record['lineno']})"
         )
 
     target: VllmIndex | None = None
@@ -1160,23 +1162,27 @@ def main(argv: list[str] | None = None) -> int:
     attribute_uses = collect_module_attribute_uses(OMNI_ROOT)
     attributes = audit_module_attributes(attribute_uses, pin, table)
     print(
-        f"[attrs]     {attributes['status']}: {attributes['checked']} module attributes used, "
+        f"[attrs]     {attributes['status']}: {attributes['checked']} module "
+        f"attributes used, "
         f"{len(attributes['shimmed'])} shimmed, {len(attributes['missing'])} missing"
     )
     for record in attributes["shimmed"]:
         kind = record["shim"].get("kind")
         print(
-            f"  SHIMMED  {record['module']}.{record['attr']} <- {kind} ({record['omni_file']})"
+            f"  SHIMMED  {record['module']}.{record['attr']} <- {kind} "
+            f"({record['omni_file']})"
         )
     for record in attributes["missing"]:
         print(
-            f"  MISSING  {record['module']}.{record['attr']} ({record['omni_file']}:{record['lineno']})"
+            f"  MISSING  {record['module']}.{record['attr']} "
+            f"({record['omni_file']}:{record['lineno']})"
         )
 
     calls = audit_calls(omni_imports, pin, table, OMNI_ROOT)
     print(
         f"[calls]     {calls['status']}: {calls['calls']} calls to "
-        f"{calls['symbols']} pinned symbols, {len(calls['offences'])} the pin cannot accept, "
+        f"{calls['symbols']} pinned symbols, "
+        f"{len(calls['offences'])} the pin cannot accept, "
         f"{len(calls['declared_stale'])} declared stale in Omni"
     )
     for record in calls["declared_stale"]:
@@ -1196,19 +1202,22 @@ def main(argv: list[str] | None = None) -> int:
 
     staleness = audit_staleness(pin, table, target)
     print(
-        f"[staleness] {staleness['status']}: {len(staleness['active'])} entries still needed, "
+        f"[staleness] {staleness['status']}: {len(staleness['active'])} entries "
+        f"still needed, "
         f"{len(staleness['stale'])} stale"
     )
     for record in staleness["stale"]:
         print(
-            f"  STALE  {record['module']} ({record['kind']}): {record['why']} -- {record['remove_when']}"
+            f"  STALE  {record['module']} ({record['kind']}): {record['why']} "
+            f"-- {record['remove_when']}"
         )
 
     semantics = {"status": "skipped", "reason": "no --target-vllm"}
     if target is not None:
         semantics = audit_semantics(omni_imports, pin, target, table, OMNI_ROOT)
         print(
-            f"[semantics] {semantics['status']}: {semantics['compared']} symbols compared, "
+            f"[semantics] {semantics['status']}: {semantics['compared']} symbols "
+            f"compared, "
             f"{semantics['breaks']} breaking, {semantics['meaning']} changed meaning, "
             f"{semantics['latent']} latent"
         )
@@ -1238,7 +1247,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"           {call['omni_file']}:{call['lineno']}{extra}")
     else:
         print(
-            "[semantics] skipped: pass --target-vllm to diff signatures against the vLLM Omni targets"
+            "[semantics] skipped: pass --target-vllm to diff signatures against the "
+            "vLLM Omni targets"
         )
 
     unsupported = [

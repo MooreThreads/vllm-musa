@@ -388,7 +388,8 @@ def test_ar_unavailable_comm_is_fail_closed_and_pass_config_is_preserved(
     # is allowed to bypass the standard vLLM pass configuration.
     source = (
         __import__("pathlib").Path(__file__).parents[1]
-        / "vllm_musa/patches/series/0003-MUSA-vllm.compilation.passes.pass_manager.patch"
+        / "vllm_musa/patches/series"
+        / "0003-MUSA-vllm.compilation.passes.pass_manager.patch"
     ).read_text()
     assert (
         "if current_platform.is_musa() and self.pass_config.fuse_allreduce_rms"

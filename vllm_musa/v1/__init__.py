@@ -16,7 +16,8 @@ _V1_ADAPTERS_REGISTERED = False
 
 
 def register_v1_adapters() -> None:
-    """Install idempotent MUSA v1 attention, executor, sampler, and spec-decode hooks."""
+    """Install idempotent MUSA v1 attention, executor, sampler, and spec-decode
+    hooks."""
     global _V1_ADAPTERS_REGISTERED
     if _V1_ADAPTERS_REGISTERED:
         logger.debug("vllm_musa.v1 adapters already registered; skipping")

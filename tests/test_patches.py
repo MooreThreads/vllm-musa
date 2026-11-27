@@ -1262,7 +1262,7 @@ class TestMUSAFp8MoEPadding:
         monkeypatch.setattr(
             musa_fp8,
             "_ORIGINAL_FP8_MOE_MAYBE_ROUNDUP_SIZES",
-            lambda self, hidden_size, intermediate_size_per_partition, act_dtype, moe_parallel_config: (
+            lambda self, hidden_size, intermediate_size_per_partition, act_dtype, moe_parallel_config: (  # noqa: E501
                 hidden_size,
                 intermediate_size_per_partition,
             ),
@@ -1793,7 +1793,7 @@ class TestMUSAGroupedTopKRouter:
         )
 
     def test_no_bias_jit_path_applies_routed_scaling_factor(self, monkeypatch):
-        import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router_mod
+        import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router_mod  # noqa: E501
 
         hidden_states = torch.zeros((2, 4), dtype=torch.float32)
         router_logits = torch.zeros((2, 4), dtype=torch.float32)
@@ -1818,7 +1818,7 @@ class TestMUSAGroupedTopKRouter:
     def test_no_bias_fused_topk_fallback_applies_routed_scaling_factor(
         self, monkeypatch
     ):
-        import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router_mod
+        import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router_mod  # noqa: E501
 
         hidden_states = torch.zeros((2, 4), dtype=torch.float32)
         router_logits = torch.zeros((2, 4), dtype=torch.float32)

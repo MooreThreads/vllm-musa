@@ -1111,9 +1111,10 @@ def test_shipped_series_passes_the_format_gate(ms, capsys):
     out = capsys.readouterr().out
 
     assert rc == 0
-    # The gate's contract is "every shipped entry is clean and the numbering is contiguous",
-    # not a fixed size: derive the count from the directory so that adding a patch to the
-    # series (which regeneration does) does not redden this test.
+    # The gate's contract is "every shipped entry is clean and the numbering is
+    # contiguous", not a fixed size: derive the count from the directory so that
+    # adding a patch to the series (which regeneration does) does not redden this
+    # test.
     series_dir = ROOT / "vllm_musa" / "patches" / "series"
     expected = len(list(series_dir.glob("*.patch"))) + len(
         list((series_dir / "upstream").glob("*.patch"))
@@ -2209,7 +2210,7 @@ def test_different_failure_kinds_on_one_entry_are_both_reported(ms):
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
 def test_series_gate_accepts_subjects_git_itself_slugifies(ms, tmp_path):
-    """The gate's slug rule must agree with the real `git format-patch` on the
+    r"""The gate's slug rule must agree with the real `git format-patch` on the
     subjects that used to be rejected: a trailing '.', runs of '.', an RFC-2047
     encoded non-ASCII subject, and a subject longer than the 52-character cap.
 
@@ -3254,7 +3255,8 @@ def test_regen_and_rebase_report_a_verdict_on_the_paths_that_fail(
         _mailbox(
             "bogus",
             "diff --git a/never.txt b/never.txt\nindex 1111111111..2222222222 100644\n"
-            "--- a/never.txt\n+++ b/never.txt\n@@ -1 +1,2 @@\n-nothing here\n+something\n",
+            "--- a/never.txt\n+++ b/never.txt\n@@ -1 +1,2 @@\n"
+            "-nothing here\n+something\n",
         )
     )
     monkeypatch.setattr(ms.manifest, "series_apply_order", lambda: [bogus])

@@ -735,7 +735,7 @@ def test_grouped_topk_router_dispatches_tilelang(
 def test_grouped_topk_router_matches_cpu_fp64_and_forced_torch_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router
+    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router  # noqa: E501
 
     logits = _make_unique_logits(17, 160, torch.bfloat16)
     cpu_logits = logits.cpu()
@@ -798,7 +798,7 @@ def test_grouped_topk_router_does_not_dispatch_unsupported_semantics(
     has_bias: bool,
     num_fused_shared_experts: int,
 ) -> None:
-    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router
+    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router  # noqa: E501
 
     fallback_weights = torch.empty((1, 1), device="musa", dtype=torch.float32)
     fallback_ids = torch.empty((1, 1), device="musa", dtype=torch.int32)
@@ -840,7 +840,7 @@ def test_grouped_topk_router_does_not_dispatch_unsupported_semantics(
 def test_grouped_topk_router_falls_back_when_tilelang_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router
+    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router  # noqa: E501
 
     fallback_weights = torch.empty((1, 1), device="musa", dtype=torch.float32)
     fallback_ids = torch.empty((1, 1), device="musa", dtype=torch.int32)

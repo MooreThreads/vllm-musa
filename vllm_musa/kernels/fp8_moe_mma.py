@@ -41,8 +41,10 @@ def _moe_route_map_kernel(
     MAX_R: tl.constexpr,
     BLOCK_M: tl.constexpr,
 ):
-    """Distinct routed experts in first-use order. ``map[u] = [expert, rows, row_0, ...]``
-    with the routed rows of expert ``u`` packed from ``row_0``; ``map[MAX_R] = [count]``.
+    """Distinct routed experts in first-use order.
+
+    ``map[u] = [expert, rows, row_0, ...]`` with the routed rows of expert
+    ``u`` packed from ``row_0``; ``map[MAX_R] = [count]``.
     """
     offs_r = tl.arange(0, MAX_R)
     ids = tl.load(ids_ptr + offs_r, mask=offs_r < R, other=-1)
@@ -74,7 +76,8 @@ def _moe_route_map_kernel(
 def _expert_rows(
     map_ptr, u, TOPK: tl.constexpr, MAX_R: tl.constexpr, BLOCK_M: tl.constexpr
 ):
-    """(expert, distinct experts, routed rows, tokens, row valid) of distinct expert ``u``."""
+    """(expert, distinct experts, routed rows, tokens, row valid) of distinct
+    expert ``u``."""
     width = 2 + BLOCK_M
     n_uniq = tl.load(map_ptr + MAX_R * width)
     base = map_ptr + tl.minimum(u, MAX_R - 1) * width

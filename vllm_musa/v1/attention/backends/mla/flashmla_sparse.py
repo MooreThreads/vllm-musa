@@ -160,7 +160,8 @@ _HOOKS_INSTALLED = False
 
 
 def install_hooks() -> None:
-    """Rebind core sparse FlashMLA ops to MUSA ``flash_mla`` equivalents (idempotent)."""
+    """Rebind core sparse FlashMLA ops to MUSA ``flash_mla`` equivalents
+    (idempotent)."""
     global _HOOKS_INSTALLED
     if _HOOKS_INSTALLED:
         return

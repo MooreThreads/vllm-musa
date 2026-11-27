@@ -126,15 +126,18 @@ def load_jit(
     where `export_name` is the name used to called from Python,
     and `kernel_name` is the name of the kernel class in C++/CUDA source.
 
-    :param args: Unique marker of the JIT module. Must be distinct for different kernels.
+    :param args: Unique marker of the JIT module. Must be distinct for different
+        kernels.
     :type args: str
     :param cpp_files: A list of C++ source files.
     :type cpp_files: List[str] | None
     :param cuda_files: A list of CUDA source files.
     :type cuda_files: List[str] | None
-    :param cpp_wrappers: A list of C++ wrappers, defining the export name and kernel name.
+    :param cpp_wrappers: A list of C++ wrappers, defining the export name and
+        kernel name.
     :type cpp_wrappers: List[Tuple[str, str]] | None
-    :param cuda_wrappers: A list of CUDA wrappers, defining the export name and kernel name.
+    :param cuda_wrappers: A list of CUDA wrappers, defining the export name and
+        kernel name.
     :type cuda_wrappers: List[Tuple[str, str]] | None
     :param extra_cflags: Extra C++ compiler flags.
     :type extra_cflags: List[str] | None

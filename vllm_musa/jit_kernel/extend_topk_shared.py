@@ -1,12 +1,14 @@
 """Append a folded shared expert's routing column in one kernel.
 
-The routed topk output is (tokens, top_k); a folded shared expert rides the grouped GEMM as one
-extra always-selected slot, so the routing needs one more column carrying
-`sigmoid(shared_gate(x))` and the shared expert's id. Done with tensor ops that is a
-sigmoid + zeros_like + add + 2 cats per MoE layer; this writes all of it in a single pass.
+The routed topk output is (tokens, top_k); a folded shared expert rides the
+grouped GEMM as one extra always-selected slot, so the routing needs one more
+column carrying `sigmoid(shared_gate(x))` and the shared expert's id. Done with
+tensor ops that is a sigmoid + zeros_like + add + 2 cats per MoE layer; this
+writes all of it in a single pass.
 
-The shared weight stays out of any renormalization (the routed weights are already normalized
-among themselves when the caller runs this), matching the reference implementation.
+The shared weight stays out of any renormalization (the routed weights are
+already normalized among themselves when the caller runs this), matching the
+reference implementation.
 """
 
 import torch

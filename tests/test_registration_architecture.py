@@ -120,8 +120,13 @@ def test_pyproject_declares_native_vllm_plugin_entrypoints() -> None:
     assert entry_points["vllm.general_plugins"] == {
         "musa_out_of_tree": "vllm_musa:register_out_of_tree",
         "musa_attn_backends": "vllm_musa:register_attn_backends",
-        "lora_filesystem_resolver": "vllm.plugins.lora_resolvers.filesystem_resolver:register_filesystem_resolver",
-        "lora_hf_hub_resolver": "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_hub_resolver",
+        "lora_filesystem_resolver": (
+            "vllm.plugins.lora_resolvers.filesystem_resolver:"
+            "register_filesystem_resolver"
+        ),
+        "lora_hf_hub_resolver": (
+            "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_hub_resolver"
+        ),
     }
 
 
@@ -206,7 +211,8 @@ def test_compat_adapter_uses_explicit_idempotent_install_hooks(rel_path: str) ->
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
                 assert not isinstance(target, ast.Attribute), (
-                    f"{rel_path}:{stmt.lineno} mutates {ast.unparse(target)} at import time"
+                    f"{rel_path}:{stmt.lineno} mutates {ast.unparse(target)} "
+                    f"at import time"
                 )
         elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
             callee = ast.unparse(stmt.value.func)
@@ -424,7 +430,8 @@ for mod_name in (
         f"{mod_name}._HOOKS_INSTALLED is not True"
     )
 import vllm.v1.sample.ops.topk_topp_sampler as _vllm_topk_mod
-assert getattr(_vllm_topk_mod.TopKTopPSampler, "_musa_sampling_hooks_installed", False) is True
+assert getattr(_vllm_topk_mod.TopKTopPSampler, "_musa_sampling_hooks_installed", """
+        """False) is True
 print("PASS_RUNTIME_PLUGIN_STARTUP")
 """,
         env_overrides={"VLLM_PLUGINS": None},
