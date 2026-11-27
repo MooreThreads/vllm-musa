@@ -213,7 +213,7 @@
 -
 -import numpy as np
 +from types import ModuleType
-+from typing import Generic, TypeVar
++from typing import TypeVar
 +
  import torch
 -import torch.nn as nn
@@ -347,7 +347,8 @@
 +    is_vllm_fa = True
 +except ImportError as e:
 +    raise ImportError(
-+        "MUSA platform requires MATE and flash_attn_3 to be installed. Please install them first."
++        "MUSA platform requires MATE and flash_attn_3 to be installed. "
++        "Please install them first."
 +    ) from e
 +
 
@@ -366,7 +367,6 @@
 -
 -    Returns the appropriate QuantKey, or None if no quantization is needed.
 -    Detection is based on output dtype and which scale tensors are present.
-+M = TypeVar("M", bound=MLACommonMetadata)
 +A = TypeVar("A")
 +
 +
@@ -1593,7 +1593,7 @@
 +        out.copy_(out_new)
 +
 +
-+class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
++class MLACommonImpl[M: MLACommonMetadata](MLAAttentionImpl[M]):
      """
 -    layer_name = _resolve_layer_name(layer_name)
 -    attn_metadata, attn_layer, kv_cache, layer_slot_mapping = get_attention_context(
@@ -3499,7 +3499,7 @@
 
          # Use flashinfer's optimized concat_mla_k kernel when available.
          # The kernel is optimized for DeepSeek V3 dimensions:
-@@ -3333,9 +263,497 @@
+@@ -3333,9 +263,496 @@
              and (self.qk_rope_head_dim == 64)
          )
 
@@ -3516,13 +3516,12 @@
 +        # FA2 vs FA3
 +        self.flash_attn_varlen_func = flash_attn_varlen_func
 +        self.vllm_flash_attn_version = get_flash_attn_version()
-+        if self.vllm_flash_attn_version is not None:
-+            # ==================== MUSA ADAPTATION ====================
-+            if not current_platform.is_musa():
-+                self.flash_attn_varlen_func = functools.partial(
-+                    flash_attn_varlen_func, fa_version=self.vllm_flash_attn_version
-+                )
-+            # ========================== END ==========================
++        # ==================== MUSA ADAPTATION ====================
++        if self.vllm_flash_attn_version is not None and not current_platform.is_musa():
++            self.flash_attn_varlen_func = functools.partial(
++                flash_attn_varlen_func, fa_version=self.vllm_flash_attn_version
++            )
++        # ========================== END ==========================
 +
 +        # For MLA the v head dim is smaller than qk head dim so we pad out
 +        # v with 0s to match the qk head dim for attention backends that do
@@ -3864,7 +3863,7 @@
 +            )
 +            # workspace
 +            # |------- N tokens --------|--------- N*dcp_size tokens ----------|
-+            # |<- use for loca_gather ->|<--------- use for allgather -------->|
++            # |<- use for local gather ->|<-------- use for allgather -------->|
 +            allgather_offset = workspace.shape[0] // (dcp_world_size + 1)
 +            assert allgather_offset * (dcp_world_size + 1) == workspace.shape[0]
 +            assert toks <= allgather_offset
@@ -3998,7 +3997,7 @@
 
      @abstractmethod
      def forward_mqa(
-@@ -3346,3 +764,25 @@
+@@ -3346,3 +763,25 @@
          layer: AttentionLayer,
      ) -> tuple[torch.Tensor, torch.Tensor | None]:
          raise NotImplementedError
