@@ -1,4 +1,6 @@
+import subprocess
 from pathlib import Path
+from shutil import copyfile
 
 
 def test_spawn_is_baked_into_the_shared_musa_runtime_layer():
@@ -9,12 +11,73 @@ def test_spawn_is_baked_into_the_shared_musa_runtime_layer():
     assert dockerfile.count("VLLM_WORKER_MULTIPROC_METHOD") == 1
 
 
-def test_omni_image_restores_the_base_pinned_headless_opencv():
+def test_omni_image_installs_with_the_foundation_and_headless_wheels():
     dockerfile = (Path(__file__).parents[1] / "docker" / "omni.Dockerfile").read_text()
+    production = dockerfile.split("FROM omni-install AS omni\n", 1)[1]
+    development = dockerfile.split("FROM omni-install AS test\n", 1)[1].split(
+        "FROM omni-install AS omni\n", 1
+    )[0]
 
-    assert "opencv-python-headless==${OPENCV_HEADLESS}" in dockerfile
-    assert "opencv-python-headless==4.10.0.84" not in dockerfile
-    assert "opencv-python==4.10.0.84" in dockerfile
+    assert "--snapshot /opt/vllm-omni-foundation.txt" in dockerfile
+    assert "pip download --require-hashes" in dockerfile
+    assert "build_headless_wheels.py" in dockerfile
+    assert "FROM omni-base AS omni-wheel" in dockerfile
+    assert "/headless-wheels/*.whl /wheels/*.whl" in production
+    assert "from=omni-wheel," in production
+    assert "from=omni-wheel," not in development
+    assert "--mode wheel" in production
+    assert "-e /vllm-workspace/vllm-omni" in development
+    assert "--mode editable" in development
+    assert "python -m pip check" in production
+    assert "python -m pip check" in development
+    assert "pip uninstall" not in dockerfile
+    assert 'CMD ["/bin/bash"]' in dockerfile.split("FROM omni-install AS test", 1)[0]
+
+
+def test_omni_build_script_accepts_remote_refs(monkeypatch, tmp_path):
+    monkeypatch.delenv("VLLM_OMNI_CLONE", raising=False)
+    root = Path(__file__).resolve().parents[1]
+    for name in ("docker/build_omni_image.sh", "third_party/PINS"):
+        (tmp_path / name).parent.mkdir()
+        copyfile(root / name, tmp_path / name)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    command = [
+        "bash",
+        "docker/build_omni_image.sh",
+        "--base",
+        "example:base",
+        "--dry-run",
+    ]
+
+    for args, expected in (
+        ([], "origin/main"),
+        (["--omni-ref", "some-branch"], "some-branch"),
+    ):
+        result = subprocess.run(
+            command + args, cwd=tmp_path, check=True, capture_output=True, text=True
+        )
+        ref = next(
+            line
+            for line in result.stdout.splitlines()
+            if line.startswith("vllm-omni ref")
+        )
+        assert ref.split()[-1] == expected
 
 
 def test_production_image_installs_a_bundled_wheel_before_runtime_split():

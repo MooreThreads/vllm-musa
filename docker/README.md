@@ -80,19 +80,21 @@ bash docker/build_omni_image.sh \
   --tag "vllm-omni-musa:${OMNI_REF//\//-}"
 ```
 
-The script records the vLLM-MUSA and Omni revisions, stages an immutable Omni
-archive, copies the compatibility shim into the base image, and runs the import
-audit plus installed-tree shim verification during the build. The build uses
-driverless verification. A MUSA-enabled Docker host is required for the final
-hardware import check and model smoke. The resulting image inherits
-`VLLM_WORKER_MULTIPROC_METHOD=spawn` from the vLLM-MUSA base.
+The script accepts a branch, tag, or commit and defaults to `origin/main`.
+It records the resolved Omni commit in the image. The production target
+installs the Omni wheel, and `--target test` installs Omni in editable mode.
+Both targets activate the shim from the base wheel and run the installed
+compatibility audit and driverless shim verification. The resulting image
+inherits `VLLM_WORKER_MULTIPROC_METHOD=spawn` from the vLLM-MUSA base.
 
-After the build, record the image digest and run the model-specific smoke from
-the corresponding Omni documentation. For the current Qwen-Image diffusion
-path, the image-generation request is the required semantic check. A successful
-Docker build or server startup alone is not a model smoke.
+Set `OMNI_IMAGE` to the built image tag and check the serving options with
+`docker run --rm "$OMNI_IMAGE" vllm serve --omni --help`. For device selection,
+model setup, and an image-generation smoke, follow the
+[Qwen-Image cookbook](../docs/cookbook/qwen-image/README.md).
 
-With the defaults this produces:
+## Run the vLLM-MUSA base image
+
+With the defaults, `docker/build_image.sh` produces this tag.
 
 ```
 vllm-musa:ubuntu22.04_py3.12_musa_runtime_5.2_pytorch_release_2.13.0.post1_musa5.2.0

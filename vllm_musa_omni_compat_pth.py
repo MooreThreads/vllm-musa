@@ -23,8 +23,8 @@ vLLM only inside the functions they install.
 
 A top-level module rather than a submodule for the same reason: there is no way
 to reach ``vllm_musa.omni_compat`` without executing ``vllm_musa``. It is
-declared in ``pyproject.toml``'s ``py-modules`` so an editable install maps it;
-``docker/omni/stage_shim.py`` covers the base images built before it existed.
+declared in ``pyproject.toml``'s ``py-modules`` so both wheel and editable
+installs expose it.
 """
 
 from __future__ import annotations

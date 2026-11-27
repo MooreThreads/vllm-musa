@@ -5,9 +5,12 @@ on:
     paths:
       - '.github/workflows/omni-compat.yml'
       - 'vllm_musa/omni_compat/**'
+      - 'vllm_musa/v1/sample/**'
+      - 'vllm_musa/v1/__init__.py'
       - 'vllm_musa_omni_compat_pth.py'
       - 'tools/check_omni_compat.py'
       - 'tests/test_omni_compat.py'
+      - 'tests/test_omni_headless_wheels.py'
       - 'docker/omni/**'
       - 'docker/omni.Dockerfile'
       - 'docker/build_omni_image.sh'
@@ -17,9 +20,12 @@ on:
     paths:
       - '.github/workflows/omni-compat.yml'
       - 'vllm_musa/omni_compat/**'
+      - 'vllm_musa/v1/sample/**'
+      - 'vllm_musa/v1/__init__.py'
       - 'vllm_musa_omni_compat_pth.py'
       - 'tools/check_omni_compat.py'
       - 'tests/test_omni_compat.py'
+      - 'tests/test_omni_headless_wheels.py'
       - 'docker/omni/**'
       - 'docker/omni.Dockerfile'
       - 'docker/build_omni_image.sh'
@@ -39,9 +45,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install offline test runner
-        run: python -m pip install 'pytest>=8,<9'
+        run: python -m pip install 'pytest>=8,<9' packaging wheel
       # The shim, its bootstrap and its audit tool are standard library only,
       # and the suite builds the two vLLM layouts it needs on disk, so no step
       # here needs torch, torch_musa, vLLM or a GPU.
-      - name: Test the drift shim
-        run: python -m pytest -q tests/test_omni_compat.py
+      - name: Test the drift shim and headless wheels
+        run: python -m pytest -q tests/test_omni_compat.py tests/test_omni_headless_wheels.py

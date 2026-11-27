@@ -1,0 +1,3 @@
+# Original PyPI wheels for the private Omni image's headless OpenCV variants.
+cosmos-guardrail==0.3.2 --hash=sha256:611f7e270f8252da40d209e9274a906350e60edd6fff8ec613431c2fd16df1a3
+retinaface-py==0.0.2 --hash=sha256:d8cc969841714e4275c35f2cbcec951b88e23a583608588c6c4ecd985a71d66d

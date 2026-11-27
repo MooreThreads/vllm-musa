@@ -8,10 +8,9 @@ What this proves, in a driverless build:
   only that one runs before Omni's CLI binds the symbols it moved;
 * every ``RELOCATION`` and ``BACKPORT`` module the table declares really does
   import, and really does provide the names Omni imports from it;
-* every ``ADAPTER`` is still applied **after** vllm-musa has installed its own
-  patches over the same modules, which is the ordering that actually breaks --
-  except in a driverless build, where vllm-musa's sampler cannot be imported at
-  all, and the report says so through ``rebind_exercised``;
+* every ``ADAPTER`` is still applied after the MUSA sampler binds its function
+  when the sampler is importable. In driverless mode, a device-dependent
+  failure to import the sampler sets ``rebind_exercised`` to false;
 * the unsupported paths are reported rather than silently absent.
 
 What it deliberately does not prove: that ``import vllm_omni`` succeeds. That
@@ -25,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import inspect
 import json
 import sys
 
@@ -60,6 +60,17 @@ def _stale_adapter(applied: dict) -> str | None:
 def _needs_a_device(exc: BaseException) -> bool:
     """Whether an import failed for want of a GPU rather than for want of a shim."""
     return any(marker in str(exc) for marker in _DEVICE_MARKERS)
+
+
+def _exercise_sampler_rebind(name: str) -> None:
+    sampler = importlib.import_module("vllm.v1.sample.ops.topk_topp_sampler")
+    musa_sampler = importlib.import_module(name)
+    musa_impl = musa_sampler._apply_top_k_top_p
+    # Bind the MUSA sampler explicitly if import left it unbound.
+    if inspect.unwrap(sampler.apply_top_k_top_p) is not musa_impl:
+        musa_sampler.install_hooks()
+    if inspect.unwrap(sampler.apply_top_k_top_p) is not musa_impl:
+        raise RuntimeError("sampler hook did not bind the MUSA apply_top_k_top_p")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -131,32 +142,20 @@ def main(argv: list[str] | None = None) -> int:
             "missing": missing,
         }
 
-    # Let vllm-musa install its own patches first. This is the whole point of
-    # checking adapters at all: vllm_musa.v1.sample.topk_topp_sampler rebinds
-    # apply_top_k_top_p at module scope, strictly after the shim, and a check
-    # run before that has not tested anything. Importing it is what the MUSA
-    # plugin does in production; it reaches the device, so a driverless build
-    # cannot do it and says so rather than claiming the check passed.
-    result["musa_hooks_installed"] = {}
-    rebind_exercised = True
-    for name in ("vllm_musa.v1.sample",):
-        try:
-            importlib.import_module(name)
-            result["musa_hooks_installed"][name] = True
-        except Exception as exc:
-            detail = f"{type(exc).__name__}: {exc}"
-            result["musa_hooks_installed"][name] = detail
-            rebind_exercised = False
-            if args.driverless and _needs_a_device(exc):
-                # vllm-musa's sampler reaches into the device at import, so a
-                # driverless build cannot make it rebind. The adapter check
-                # below still runs, but it has not been put under the pressure
-                # it exists for; --require-omni on hardware is where it is.
-                continue
-            failures.append(
-                f"{name} could not be imported, so the adapters below were not "
-                f"checked against vllm-musa's own patching: {detail}"
-            )
+    # Check adapters after the production sampler installer binds its function.
+    # The sampler may need a MUSA device at import time.
+    sampler_name = "vllm_musa.v1.sample.topk_topp_sampler"
+    try:
+        _exercise_sampler_rebind(sampler_name)
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        result["musa_hooks_installed"] = {sampler_name: detail}
+        rebind_exercised = False
+        if not (args.driverless and _needs_a_device(exc)):
+            failures.append(f"could not exercise {sampler_name} rebind: {detail}")
+    else:
+        result["musa_hooks_installed"] = {sampler_name: True}
+        rebind_exercised = True
     result["rebind_exercised"] = rebind_exercised
 
     for entry in table.adapter_entries():
@@ -188,12 +187,7 @@ def main(argv: list[str] | None = None) -> int:
             failures.append(f"{entry.module}: {stale}")
             result["adapted"][entry.module] = "stale (the pin provides it)"
             continue
-        # The marker above only says the adapter *ran*. Ask the adapter what is
-        # adapted right now: vllm-musa rebinds one of these names at module
-        # scope, strictly later, and a marker left on the module cannot see
-        # that. When the rebind above was triggered, this is the check that fails
-        # if the adapter does not survive it; when it could not be (driverless),
-        # `rebind_exercised` records that this run did not test survival.
+        # The sampler can replace a binding after the adapter sets its marker.
         adapter = importlib.import_module(
             f"vllm_musa.omni_compat.adapters.{entry.adapter}"
         )
