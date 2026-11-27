@@ -77,7 +77,7 @@ index 57cef586f8..63d66f579f 100644
              prefill_len_np=batch_req_state.prefill_len_np,
              num_computed_prefill_tokens_np=batch_req_state.num_computed_prefill_tokens_np,
 diff --git a/vllm/v1/worker/gpu_input_batch.py b/vllm/v1/worker/gpu_input_batch.py
-index f89e5251c4..9a9beb4069 100644
+index f89e5251c4..c1019e31dc 100644
 --- a/vllm/v1/worker/gpu_input_batch.py
 +++ b/vllm/v1/worker/gpu_input_batch.py
 @@ -937,6 +937,19 @@ class InputBatch:
@@ -85,14 +85,14 @@ index f89e5251c4..9a9beb4069 100644
                      logprob_token_ids_by_index[req_index] = token_ids
  
 +        uniform_top_k = None
-+        if self.vocab_size in (151936, 248320) and not self.no_top_k and num_reqs > 0:
++        if self.vocab_size in (151936, 152064, 248320) and not self.no_top_k and num_reqs > 0:
 +            top_k_cpu = self.top_k_cpu[:num_reqs]
 +            candidate_top_k = int(top_k_cpu[0])
 +            if candidate_top_k == 50 and np.all(top_k_cpu == candidate_top_k):
 +                uniform_top_k = candidate_top_k
 +
 +        uniform_temperature = None
-+        if self.vocab_size in (151936, 248320) and self.all_random and num_reqs > 0:
++        if self.vocab_size in (151936, 152064, 248320) and self.all_random and num_reqs > 0:
 +            temperature_cpu = self.temperature_cpu[:num_reqs]
 +            if np.all(temperature_cpu == np.float32(1.0)):
 +                uniform_temperature = 1.0
