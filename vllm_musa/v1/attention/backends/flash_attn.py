@@ -4,7 +4,7 @@
 """Attention layer with FlashAttention."""
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, ClassVar
 
@@ -18,10 +18,7 @@ from vllm.config import (
     get_layers_from_vllm_config,
 )
 from vllm.config.cache import CacheDType
-from vllm.distributed.parallel_state import (
-    get_dcp_group,
-    get_dcp_world_size_and_rank,
-)
+from vllm.distributed.parallel_state import get_dcp_group, get_dcp_world_size_and_rank
 from vllm.logger import init_logger
 from vllm.model_executor.layers.attention import Attention
 from vllm.platforms import current_platform
@@ -694,14 +691,26 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         causal = common_attn_metadata.causal
 
         # ==================== MUSA ADAPTATION ====================
+        split_attn_metadata = common_attn_metadata
+        is_prefilling = common_attn_metadata.is_prefilling
+        if is_prefilling is not None and is_prefilling.shape[0] < num_reqs:
+            padded_is_prefilling = torch.zeros(
+                num_reqs,
+                dtype=is_prefilling.dtype,
+                device=is_prefilling.device,
+            )
+            padded_is_prefilling[: is_prefilling.shape[0]] = is_prefilling
+            split_attn_metadata = replace(
+                common_attn_metadata, is_prefilling=padded_is_prefilling
+            )
         num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens = (
             split_decodes_and_prefills(
-                common_attn_metadata,
+                split_attn_metadata,
                 decode_threshold=self.decode_threshold,
                 require_uniform=False,
                 treat_short_extends_as_decodes=(
                     self.num_speculative_tokens == 0
-                    or common_attn_metadata.is_prefilling is None
+                    or split_attn_metadata.is_prefilling is None
                 ),
             )
         )
@@ -1785,9 +1794,7 @@ class FlashAttentionImpl(AttentionImpl):
         gemma: bool = False,
     ) -> None:
         """Run the exact Qwen3 provider, falling back before cache fusion."""
-        from vllm_musa.jit_kernel.csrc.norm import (
-            fused_qk_rmsnorm_mrope_cache_out,
-        )
+        from vllm_musa.jit_kernel.csrc.norm import fused_qk_rmsnorm_mrope_cache_out
 
         positions_3d = (
             positions if positions.dim() == 2 else positions.unsqueeze(0).expand(3, -1)

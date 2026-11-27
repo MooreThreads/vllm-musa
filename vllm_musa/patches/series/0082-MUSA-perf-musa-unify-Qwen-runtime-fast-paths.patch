@@ -110,10 +110,10 @@ index f89e5251c4..9a9beb4069 100644
  
      def get_pooling_params(self) -> list[PoolingParams]:
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 4b5df27026..b7fea5a89b 100644
+index 85e9f0779b..8c178c8377 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -751,6 +751,32 @@ class GPUModelRunner(
+@@ -772,6 +772,32 @@ class GPUModelRunner(
              use_replayssm=self.cache_config.use_replayssm,
          )
  
@@ -146,7 +146,7 @@ index 4b5df27026..b7fea5a89b 100644
          # Separate cuda stream for overlapping transfer of sampled token ids from
          # GPU to CPU when async scheduling is enabled.
          self.async_output_copy_stream: torch.cuda.Stream | None = None
-@@ -1951,6 +1977,8 @@ class GPUModelRunner(
+@@ -1972,6 +1998,8 @@ class GPUModelRunner(
          self,
          scheduler_output: "SchedulerOutput",
          num_scheduled_tokens: np.ndarray,
@@ -155,7 +155,7 @@ index 4b5df27026..b7fea5a89b 100644
      ) -> tuple[
          torch.Tensor,
          SpecDecodeMetadata | None,
-@@ -2218,7 +2246,13 @@ class GPUModelRunner(
+@@ -2239,7 +2267,13 @@ class GPUModelRunner(
              # from these partial requests, we do so for simplicity.
              # We will ignore the sampled tokens from the partial requests.
              # TODO: Support prompt logprobs.
@@ -170,7 +170,7 @@ index 4b5df27026..b7fea5a89b 100644
              spec_decode_metadata = None
              num_sampled_tokens = np.ones(num_reqs, dtype=np.int32)
          else:
-@@ -4079,8 +4113,20 @@ class GPUModelRunner(
+@@ -4100,8 +4134,20 @@ class GPUModelRunner(
              max_num_scheduled_tokens = int(num_scheduled_tokens_np.max())
              num_tokens_unpadded = scheduler_output.total_num_scheduled_tokens
  

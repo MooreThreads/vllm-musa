@@ -5,8 +5,8 @@ Subject: [PATCH] MUSA: apply rejection sampling constraints
 
 ---
  tests/v1/sample/test_rejection_sampler.py | 55 +++++++++++++++++++++++
- vllm/v1/sample/rejection_sampler.py       | 32 +++++++++++--
- 2 files changed, 83 insertions(+), 4 deletions(-)
+ vllm/v1/sample/rejection_sampler.py       | 22 +++++++--
+ 2 files changed, 73 insertions(+), 4 deletions(-)
 
 diff --git a/tests/v1/sample/test_rejection_sampler.py b/tests/v1/sample/test_rejection_sampler.py
 index 231f6adbb2..adbd9d8099 100644
@@ -82,7 +82,7 @@ index 231f6adbb2..adbd9d8099 100644
  def test_frequency_penalties(rejection_sampler):
      """Test rejection sampling with frequency penalties."""
 diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
-index d5f01f0fb4..454b8fee41 100644
+index d5f01f0fb4..69fd45e242 100644
 --- a/vllm/v1/sample/rejection_sampler.py
 +++ b/vllm/v1/sample/rejection_sampler.py
 @@ -18,6 +18,7 @@ from vllm.model_executor.warmup.jit_warmup_triton_helper import (
@@ -101,7 +101,7 @@ index d5f01f0fb4..454b8fee41 100644
  from vllm.v1.sample.sampler import Sampler
  from vllm.v1.spec_decode.metadata import SpecDecodeMetadata
  from vllm.v1.spec_decode.utils import unconditional_to_conditional_rates
-@@ -451,7 +453,21 @@ def rejection_sample(
+@@ -451,7 +453,11 @@ def rejection_sample(
      if sampling_metadata.all_greedy:
          is_greedy = None
      else:
@@ -111,20 +111,10 @@ index d5f01f0fb4..454b8fee41 100644
 +        is_greedy = (
 +            sampling_metadata.temperature == GREEDY_TEMPERATURE
 +        ).to(torch.int32)
-+
-+    # MUSA Triton rejects the None-pointer handling for the
-+    # `synthetic_conditional_rates_ptr` kernel arg. Pass a 1-element
-+    # dummy tensor when synthetic mode is off; both rejection-sampler
-+    # kernels gate every read of it behind `SYNTHETIC_MODE: tl.constexpr`
-+    # so the dummy is never read.
-+    if synthetic_conditional_rates is None:
-+        synthetic_conditional_rates = torch.empty(
-+            1, dtype=torch.float32, device=device
-+        )
  
      # Generate uniform probabilities before either kernel because synthetic
      # mode needs them in the greedy kernel too.  Skip only when all requests
-@@ -575,6 +591,10 @@ def apply_sampling_constraints(
+@@ -575,6 +581,10 @@ def apply_sampling_constraints(
  
      # NOTE(woosuk): `apply_top_k_top_p` uses sorting to calculate the mask,
      # which is slow for large vocab sizes. This may cause performance issues.
@@ -135,7 +125,7 @@ index d5f01f0fb4..454b8fee41 100644
      return apply_top_k_top_p(logits, top_k, top_p)
  
  
-@@ -738,8 +758,10 @@ def rejection_greedy_sample_kernel(
+@@ -738,8 +748,10 @@ def rejection_greedy_sample_kernel(
      req_idx = tl.program_id(0)
      # FIXME(woosuk): Because is_greedy_ptr is not None at profiling run,
      # re-compilation may happen during runtime when is_greedy_ptr is None.
@@ -148,7 +138,7 @@ index d5f01f0fb4..454b8fee41 100644
          # Early exit for non-greedy sampling requests.
          return
  
-@@ -843,8 +865,10 @@ def rejection_random_sample_kernel(
+@@ -843,8 +855,10 @@ def rejection_random_sample_kernel(
      SYNTHETIC_MODE: tl.constexpr,
  ):
      req_idx = tl.program_id(0)

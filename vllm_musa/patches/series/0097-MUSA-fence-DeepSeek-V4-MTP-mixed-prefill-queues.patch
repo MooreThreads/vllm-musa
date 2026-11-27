@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: fence DeepSeek-V4 MTP mixed prefill queues
  1 file changed, 26 insertions(+)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index f9176bb068..b0c2bdd53f 100644
+index c44a1d5604..53c79232b1 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -4442,11 +4442,37 @@ class GPUModelRunner(
+@@ -4463,11 +4463,37 @@ class GPUModelRunner(
          )
          self.kv_connector_output = kv_connector_output
  

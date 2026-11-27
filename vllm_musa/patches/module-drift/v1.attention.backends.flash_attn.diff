@@ -8,7 +8,8 @@
 
  import copy
 -import functools
- from dataclasses import dataclass
+-from dataclasses import dataclass
++from dataclasses import dataclass, replace
 +from importlib.metadata import PackageNotFoundError, version
  from typing import Any, ClassVar
 
@@ -62,9 +63,15 @@
  import vllm.envs as envs
  from vllm.config import (
      VllmConfig,
-@@ -65,335 +23,270 @@
-     get_dcp_world_size_and_rank,
+@@ -60,340 +18,272 @@
+     get_layers_from_vllm_config,
  )
+ from vllm.config.cache import CacheDType
+-from vllm.distributed.parallel_state import (
+-    get_dcp_group,
+-    get_dcp_world_size_and_rank,
+-)
++from vllm.distributed.parallel_state import get_dcp_group, get_dcp_world_size_and_rank
  from vllm.logger import init_logger
 +from vllm.model_executor.layers.attention import Attention
 +from vllm.platforms import current_platform
@@ -634,7 +641,7 @@
          return True
 
      @classmethod
-@@ -408,8 +301,9 @@
+@@ -408,8 +298,9 @@
 
      @classmethod
      def supports_per_head_quant_scales(cls) -> bool:
@@ -646,7 +653,7 @@
 
      @staticmethod
      def get_impl_cls() -> type["FlashAttentionImpl"]:
-@@ -419,29 +313,60 @@
+@@ -419,29 +310,60 @@
      def get_builder_cls() -> type["FlashAttentionMetadataBuilder"]:
          return FlashAttentionMetadataBuilder
 
@@ -723,7 +730,7 @@
 
      @classmethod
      def supports_sink(cls) -> bool:
-@@ -451,7 +376,7 @@
+@@ -451,7 +373,7 @@
 
      @classmethod
      def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
@@ -732,7 +739,7 @@
 
      @classmethod
      def supports_combination(
-@@ -466,46 +391,11 @@
+@@ -466,46 +388,11 @@
          use_mm_prefix: bool,
          device_capability: DeviceCapability,
      ) -> str | None:
@@ -782,7 +789,7 @@
          return None
 
 
-@@ -527,69 +417,62 @@
+@@ -527,69 +414,62 @@
      block_table: torch.Tensor
      slot_mapping: torch.Tensor
 
@@ -891,7 +898,7 @@
 
 
  class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetadata]):
-@@ -618,18 +501,142 @@
+@@ -618,18 +498,142 @@
      )
      supports_update_block_table: bool = True
 
@@ -1037,7 +1044,7 @@
          batch_size: int,
          cu_query_lens: torch.Tensor,
          max_query_len: int,
-@@ -638,12 +645,16 @@
+@@ -638,12 +642,16 @@
          causal: bool | torch.Tensor,
          max_num_splits: int,
      ) -> torch.Tensor | None:
@@ -1059,7 +1066,7 @@
          else:
              qkv_dtype = self.kv_cache_dtype
          return get_scheduler_metadata(
-@@ -658,153 +669,9 @@
+@@ -658,153 +666,9 @@
              cu_seqlens_q=cu_query_lens,
              page_size=self.block_size,
              causal=causal,
@@ -1214,7 +1221,7 @@
 
      def build(
          self,
-@@ -812,7 +679,8 @@
+@@ -812,7 +676,8 @@
          common_attn_metadata: CommonAttentionMetadata,
          fast_build: bool = False,
      ) -> FlashAttentionMetadata:
@@ -1224,7 +1231,7 @@
          iterations i.e. spec-decode
          """
          num_reqs = common_attn_metadata.num_reqs
-@@ -825,11 +693,25 @@
+@@ -825,11 +690,37 @@
          slot_mapping = common_attn_metadata.slot_mapping
          causal = common_attn_metadata.causal
 
@@ -1234,14 +1241,26 @@
 -            self.aot_schedule and not fast_build and not envs.VLLM_BATCH_INVARIANT
 -        )
 +        # ==================== MUSA ADAPTATION ====================
++        split_attn_metadata = common_attn_metadata
++        is_prefilling = common_attn_metadata.is_prefilling
++        if is_prefilling is not None and is_prefilling.shape[0] < num_reqs:
++            padded_is_prefilling = torch.zeros(
++                num_reqs,
++                dtype=is_prefilling.dtype,
++                device=is_prefilling.device,
++            )
++            padded_is_prefilling[: is_prefilling.shape[0]] = is_prefilling
++            split_attn_metadata = replace(
++                common_attn_metadata, is_prefilling=padded_is_prefilling
++            )
 +        num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens = (
 +            split_decodes_and_prefills(
-+                common_attn_metadata,
++                split_attn_metadata,
 +                decode_threshold=self.decode_threshold,
 +                require_uniform=False,
 +                treat_short_extends_as_decodes=(
 +                    self.num_speculative_tokens == 0
-+                    or common_attn_metadata.is_prefilling is None
++                    or split_attn_metadata.is_prefilling is None
 +                ),
 +            )
 +        )
@@ -1255,7 +1274,7 @@
 
          if self.aot_sliding_window is None:
              self.aot_sliding_window = (-1, -1)
-@@ -857,100 +739,250 @@
+@@ -857,100 +748,250 @@
              # usage, because the intermediate buffers of size [num_splits,
              # num_heads, num_tokens, head_size] are allocated. Therefore,
              # we only set num_splits when using cuda graphs.
@@ -1580,7 +1599,7 @@
 
          attn_metadata = FlashAttentionMetadata(
              num_actual_tokens=num_actual_tokens,
-@@ -958,63 +990,88 @@
+@@ -958,63 +999,88 @@
              query_start_loc=query_start_loc,
              max_seq_len=max_seq_len,
              seq_lens=seq_lens,
@@ -1717,7 +1736,7 @@
 
      def update_block_table(
          self,
-@@ -1024,34 +1081,18 @@
+@@ -1024,34 +1090,18 @@
      ) -> FlashAttentionMetadata:
          new_metadata = copy.copy(metadata)
          new_metadata.block_table = blk_table
@@ -1757,7 +1776,7 @@
 
      def __init__(
          self,
-@@ -1090,89 +1131,57 @@
+@@ -1090,89 +1140,57 @@
          self.num_queries_per_kv = self.num_heads // self.num_kv_heads
 
          self.attn_type = attn_type
@@ -1873,7 +1892,7 @@
 
      def forward(
          self,
-@@ -1182,36 +1191,31 @@
+@@ -1182,36 +1200,31 @@
          value: torch.Tensor,
          kv_cache: torch.Tensor,
          attn_metadata: FlashAttentionMetadata,
@@ -1918,7 +1937,7 @@
 
          if output_scale is not None or output_block_scale is not None:
              raise NotImplementedError(
-@@ -1248,181 +1252,693 @@
+@@ -1248,181 +1261,691 @@
                  layer,
              )
 
@@ -2498,9 +2517,7 @@
 +        gemma: bool = False,
 +    ) -> None:
 +        """Run the exact Qwen3 provider, falling back before cache fusion."""
-+        from vllm_musa.jit_kernel.csrc.norm import (
-+            fused_qk_rmsnorm_mrope_cache_out,
-+        )
++        from vllm_musa.jit_kernel.csrc.norm import fused_qk_rmsnorm_mrope_cache_out
 +
 +        positions_3d = (
 +            positions if positions.dim() == 2 else positions.unsqueeze(0).expand(3, -1)
@@ -2780,7 +2797,7 @@
 
      def do_kv_cache_update(
          self,
-@@ -1437,9 +1953,7 @@
+@@ -1437,9 +1960,7 @@
              # we use direct Q, K, V tensors without caching
              return
 
@@ -2791,7 +2808,7 @@
          key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
          # Reshape the input keys and values and store them in the cache.
-@@ -1460,182 +1974,6 @@
+@@ -1460,182 +1981,6 @@
              layer._v_scale,
          )
 
@@ -2974,7 +2991,7 @@
      def _forward_encoder_attention(
          self,
          query: torch.Tensor,
-@@ -1654,14 +1992,13 @@
+@@ -1654,14 +1999,13 @@
              output: shape = [num_encoder_tokens, num_heads, head_size]
              attn_metadata: Encoder attention metadata
              layer: The attention layer
@@ -2993,7 +3010,7 @@
              raise NotImplementedError(
                  "quantization is not supported for encoder attention"
              )
-@@ -1672,203 +2009,198 @@
+@@ -1672,203 +2016,198 @@
          max_seqlen_q = attn_metadata.max_query_len
          max_seqlen_k = attn_metadata.max_query_len
 

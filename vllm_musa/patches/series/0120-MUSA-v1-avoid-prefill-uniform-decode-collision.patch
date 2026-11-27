@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: v1-avoid-prefill-uniform-decode-collision
  1 file changed, 9 insertions(+)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 1b9e0e72dd..18de4ba13b 100644
+index 5fd04424c9..bcc95ea214 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -3775,6 +3775,7 @@ class GPUModelRunner(
+@@ -3796,6 +3796,7 @@ class GPUModelRunner(
          num_tokens: int,
          num_reqs: int,
          force_uniform_decode: bool | None = None,
@@ -19,7 +19,7 @@ index 1b9e0e72dd..18de4ba13b 100644
      ) -> bool:
          """Checks if it's a decode batch with same amount scheduled tokens
          across all requests.
-@@ -3783,6 +3784,7 @@ class GPUModelRunner(
+@@ -3804,6 +3805,7 @@ class GPUModelRunner(
              (
                  (max_num_scheduled_tokens == uniform_decode_query_len)
                  and (num_tokens == max_num_scheduled_tokens * num_reqs)
@@ -27,7 +27,7 @@ index 1b9e0e72dd..18de4ba13b 100644
              )
              if force_uniform_decode is None
              else force_uniform_decode
-@@ -3856,12 +3858,19 @@ class GPUModelRunner(
+@@ -3877,12 +3879,19 @@ class GPUModelRunner(
          torch.Tensor | None,
          CUDAGraphStat | None,
      ]:
