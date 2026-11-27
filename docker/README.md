@@ -88,11 +88,13 @@ compatibility audit and driverless shim verification. The resulting image
 inherits `VLLM_WORKER_MULTIPROC_METHOD=spawn` from the vLLM-MUSA base.
 
 Set `OMNI_IMAGE` to the built image tag and check the serving options with
-`docker run --rm "$OMNI_IMAGE" vllm serve --omni --help`. For GPU arguments,
+`docker run --rm "$OMNI_IMAGE" vllm serve --omni --help`. For device selection,
 model setup, and an image-generation smoke, follow the
 [Qwen-Image cookbook](../docs/cookbook/qwen-image/README.md).
 
-With the defaults this produces:
+## Run the vLLM-MUSA base image
+
+With the defaults, `docker/build_image.sh` produces this tag.
 
 ```
 vllm-musa:ubuntu22.04_py3.12_musa_runtime_5.2_pytorch_release_2.13.0.post1_musa5.2.0

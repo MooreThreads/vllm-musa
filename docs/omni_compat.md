@@ -423,7 +423,8 @@ from that directory to preserve their upstream import paths.
 The `test` target installs Omni in editable mode from its checkout at
 `/vllm-workspace/vllm-omni`. Both targets default to Bash. Pass the serving
 command explicitly, using the same CLI as the
-[Qwen-Image cookbook](cookbook/qwen-image/README.md).
+[Qwen-Image cookbook](cookbook/qwen-image/README.md). Set `OMNI_IMAGE` to the
+tag printed by the build script.
 
 ```bash
 docker run --rm "$OMNI_IMAGE" vllm serve --omni --help
