@@ -106,7 +106,7 @@ def test_router_route_map_matches_the_moe_layout() -> None:
     kernel = TOPK_KERNEL.read_text(encoding="utf-8")
     mma = MOE_MMA.read_text(encoding="utf-8")
     assert "MAP_SLOTS = 64" in wrapper and "kMapSlots = 64" in kernel
-    assert "_MAX_ROUTED = 64" in mma
+    assert "_ROUTER_MAP_SLOTS = 64" in mma
     assert "MAP_WIDTH = 18" in wrapper and "kMapWidth = 2 + kMapRows" in kernel
     assert (
         "kMapRows = 16" in kernel and "_expert_rows(map_ptr, u, TOPK, MAX_R, 16)" in mma

@@ -68,6 +68,21 @@ def _moe_w2_gemv(
     )
 
 
+def _moe_route_prep(
+    ids: torch.Tensor,
+    route_map: torch.Tensor,
+    x: torch.Tensor,
+    xq: torch.Tensor,
+    xs: torch.Tensor,
+    num_experts: int,
+    map_slots: int,
+    quant_x: bool,
+) -> None:
+    _module().fp8_moe_route_prep(
+        ids, route_map, x, xq, xs, num_experts, map_slots, quant_x
+    )
+
+
 def _no_op(*args, **kwargs) -> None:
     return None
 
@@ -94,6 +109,12 @@ direct_register_custom_op(
     op_name="musa_fp8_moe_w2_gemv",
     op_func=_moe_w2_gemv,
     mutates_args=["out"],
+    fake_impl=_no_op,
+)
+direct_register_custom_op(
+    op_name="musa_fp8_moe_route_prep",
+    op_func=_moe_route_prep,
+    mutates_args=["route_map", "xq", "xs"],
     fake_impl=_no_op,
 )
 
@@ -159,3 +180,38 @@ def moe_w2_gemv(
         aq, a_scale, w2, w2_scale, expert_ids, routed_weights, out
     )
     return out
+
+
+def moe_route_prep(
+    ids: torch.Tensor,
+    x: torch.Tensor | None,
+    num_experts: int,
+    map_slots: int,
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+    """Build chunked 16-row MoE route map and optionally quantize ``x`` in 1 launch."""
+    device = ids.device
+    route_map = torch.empty(((map_slots + 1) * 18,), dtype=torch.int32, device=device)
+    x_quant: tuple[torch.Tensor, torch.Tensor] | None = None
+    if (
+        x is not None
+        and x.dim() == 2
+        and x.dtype == torch.bfloat16
+        and x.stride(-1) == 1
+        and x.shape[1] % GROUP == 0
+        and x.stride(0) % 8 == 0
+        and x.data_ptr() % 16 == 0
+    ):
+        xq = torch.empty(x.shape, dtype=torch.float8_e4m3fn, device=device)
+        xs = torch.empty(
+            (x.shape[0], x.shape[1] // GROUP), dtype=torch.float32, device=device
+        )
+        x_quant = (xq, xs)
+        torch.ops.vllm.musa_fp8_moe_route_prep(
+            ids, route_map, x, xq, xs, int(num_experts), int(map_slots), True
+        )
+    else:
+        empty = torch.empty((0,), dtype=torch.int32, device=device)
+        torch.ops.vllm.musa_fp8_moe_route_prep(
+            ids, route_map, empty, empty, empty, int(num_experts), int(map_slots), False
+        )
+    return route_map, x_quant
