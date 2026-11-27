@@ -4,14 +4,29 @@ Date: Tue, 27 Oct 2026 10:43:05 +0800
 Subject: [PATCH] MUSA: vllm.model_executor.kernels.linear
 
 ---
- .../model_executor/kernels/linear/__init__.py | 29 ++++++++++++++++++-
- 1 file changed, 28 insertions(+), 1 deletion(-)
+ .../model_executor/kernels/linear/__init__.py | 45 ++++++++++++++++++-
+ 1 file changed, 43 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
-index bb7adad164..258f08dd26 100644
+index bb7adad164..60a7264abc 100644
 --- a/vllm/model_executor/kernels/linear/__init__.py
 +++ b/vllm/model_executor/kernels/linear/__init__.py
-@@ -699,7 +699,34 @@ def choose_scaled_mm_linear_kernel(
+@@ -381,7 +381,13 @@ def _filter_kernels_by_backend(
+ ) -> list[type]:
+     """Prefer matching kernels, falling back to auto by layer type."""
+     backend_kernels = _LINEAR_BACKEND_KERNEL_MAP.get(backend, set())
+-    filtered = [kernel for kernel in kernels if kernel in backend_kernels]
++    _backend_tuple = tuple(backend_kernels)
++    filtered = [
++        kernel
++        for kernel in kernels
++        if kernel in backend_kernels
++        or (current_platform.is_musa() and issubclass(kernel, _backend_tuple))
++    ]
+     if not filtered:
+         logger.warning_once(
+             "--linear-backend=%s has no kernel for this linear layer type; "
+@@ -699,7 +705,42 @@ def choose_scaled_mm_linear_kernel(
              scope="global",
          )
  
@@ -31,12 +46,20 @@ index bb7adad164..258f08dd26 100644
 +            from vllm_musa.model_executor.kernels.linear.scaled_mm.torch_scaled_mm import (
 +                MUSAChannelWiseTorchFP8ScaledMMLinearKernel,
 +                MUSAPerTensorTorchFP8ScaledMMLinearKernel,
++                MUSARowWiseTorchFP8ScaledMMLinearKernel,
 +            )
 +
 +            platform_kernels = [
 +                MUSAPerTensorTorchFP8ScaledMMLinearKernel,
++                MUSARowWiseTorchFP8ScaledMMLinearKernel,
 +                MUSAChannelWiseTorchFP8ScaledMMLinearKernel,
 +            ]
++        elif possible_kernels is _POSSIBLE_INT8_KERNELS:
++            from vllm_musa.model_executor.kernels.linear.scaled_mm.torch_scaled_mm import (
++                MUSATorchInt8ScaledMMLinearKernel,
++            )
++
++            platform_kernels = [MUSATorchInt8ScaledMMLinearKernel]
 +
 +    if platform_kernels is None:
 +        raise ValueError(
