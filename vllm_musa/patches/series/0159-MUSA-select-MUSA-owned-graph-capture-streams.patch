@@ -4,9 +4,10 @@ Date: Tue, 27 Oct 2026 10:43:11 +0800
 Subject: [PATCH] MUSA: select MUSA-owned graph capture streams
 
 ---
- vllm/compilation/cuda_graph.py        | 9 ++++++++-
- vllm/v1/worker/gpu/cudagraph_utils.py | 8 +++++++-
- 2 files changed, 15 insertions(+), 2 deletions(-)
+ vllm/compilation/cuda_graph.py        |  9 ++++++++-
+ vllm/v1/worker/encoder_cudagraph.py   | 13 ++++++++++++-
+ vllm/v1/worker/gpu/cudagraph_utils.py |  8 +++++++-
+ 3 files changed, 27 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/compilation/cuda_graph.py b/vllm/compilation/cuda_graph.py
 index 2dea34e0ff..887836623b 100644
@@ -28,6 +29,37 @@ index 2dea34e0ff..887836623b 100644
                  ):
                      # `output` is managed by pytorch's cudagraph pool
                      output = self.runnable(*args, **kwargs)
+diff --git a/vllm/v1/worker/encoder_cudagraph.py b/vllm/v1/worker/encoder_cudagraph.py
+index 51c832001c..5062886d44 100644
+--- a/vllm/v1/worker/encoder_cudagraph.py
++++ b/vllm/v1/worker/encoder_cudagraph.py
+@@ -17,6 +17,7 @@ from vllm.distributed import (
+     tensor_model_parallel_all_gather,
+ )
+ from vllm.logger import init_logger
++from vllm.platforms import current_platform
+ from vllm.model_executor.models.interfaces import (
+     SupportsEncoderCudaGraph,
+ )
+@@ -327,7 +328,17 @@ class EncoderCudaGraphManager:
+         graph = torch.cuda.CUDAGraph()
+         with (
+             torch.inference_mode(),
+-            torch.cuda.graph(graph, pool=self.graph_pool, stream=current_stream()),
++            torch.cuda.graph(
++                graph,
++                pool=self.graph_pool,
++                # torch_musa selects a dedicated non-default capture stream when
++                # stream is None; capturing on the default stream raises.
++                stream=(
++                    None
++                    if current_platform.device_type == "musa"
++                    else current_stream()
++                ),
++            ),
+         ):
+             output = self.model.encoder_cudagraph_forward({**values}, path=path)
+             output_buffer.copy_(output)
 diff --git a/vllm/v1/worker/gpu/cudagraph_utils.py b/vllm/v1/worker/gpu/cudagraph_utils.py
 index 73be62319a..1a9e29fb53 100644
 --- a/vllm/v1/worker/gpu/cudagraph_utils.py

@@ -837,8 +837,8 @@ class MUSAPlatformBase(Platform):
     def get_supported_vit_attn_backends(cls) -> list["AttentionBackendEnum"]:
         return [
             AttentionBackendEnum.FLASH_ATTN,
-            AttentionBackendEnum.TRITON_ATTN,
             AttentionBackendEnum.TORCH_SDPA,
+            AttentionBackendEnum.TRITON_ATTN,
         ]
 
     @classmethod
@@ -860,7 +860,8 @@ class MUSAPlatformBase(Platform):
         cc = cls.get_device_capability()
         for vit_attn_backend in cls.get_supported_vit_attn_backends():
             if vit_attn_backend == AttentionBackendEnum.TORCH_SDPA:
-                continue
+                logger.info_once(f"Using backend {vit_attn_backend} for vit attention")
+                return vit_attn_backend
             try:
                 backend_class = vit_attn_backend.get_class()
                 is_backend_supported = backend_class.supports_head_size(
