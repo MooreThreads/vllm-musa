@@ -71,9 +71,9 @@ def _get_backend_priorities(
         ]
 
 
-def with_mtml_context(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+def with_mtml_context[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
     @wraps(fn)
-    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         pynvml.nvmlInit()
         try:
             return fn(*args, **kwargs)
@@ -139,9 +139,7 @@ def _will_capture_piecewise_cudagraph(vllm_config: Any) -> bool:
     if getattr(comp, "mode", None) == CompilationMode.NONE:
         return False
     cg_mode = getattr(comp, "cudagraph_mode", None)
-    if cg_mode is not None and not cg_mode.has_piecewise_cudagraphs():
-        return False
-    return True
+    return not (cg_mode is not None and not cg_mode.has_piecewise_cudagraphs())
 
 
 def _should_route_quantized_piecewise_ops_native(vllm_config: Any) -> bool:

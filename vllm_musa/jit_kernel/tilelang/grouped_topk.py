@@ -321,13 +321,15 @@ def _grouped_topk_serial_kernel(
                                     group_score[0] == previous_group_score[0]
                                     and group > previous_group[0]
                                 )
-                            ):
-                                if group_score[0] > best_group_score[0] or (
+                            ) and (
+                                group_score[0] > best_group_score[0]
+                                or (
                                     group_score[0] == best_group_score[0]
                                     and group < best_group[0]
-                                ):
-                                    best_group_score[0] = group_score[0]
-                                    best_group[0] = group
+                                )
+                            ):
+                                best_group_score[0] = group_score[0]
+                                best_group[0] = group
                         previous_group_score[0] = best_group_score[0]
                         previous_group[0] = best_group[0]
 
@@ -366,13 +368,15 @@ def _grouped_topk_serial_kernel(
                                         expert_score == previous_expert_score[0]
                                         and expert > previous_expert[0]
                                     )
-                                ):
-                                    if expert_score > best_expert_score[0] or (
+                                ) and (
+                                    expert_score > best_expert_score[0]
+                                    or (
                                         expert_score == best_expert_score[0]
                                         and expert < best_expert[0]
-                                    ):
-                                        best_expert_score[0] = expert_score
-                                        best_expert[0] = expert
+                                    )
+                                ):
+                                    best_expert_score[0] = expert_score
+                                    best_expert[0] = expert
 
                     previous_expert_score[0] = best_expert_score[0]
                     previous_expert[0] = best_expert[0]

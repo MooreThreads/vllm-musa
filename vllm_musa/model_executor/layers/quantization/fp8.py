@@ -247,7 +247,7 @@ def apply(
         layer._musa_shared_expert_id + 1 if folded_shared else layer.global_num_experts
     )
 
-    if ep_size != None and ep_size <= 1:
+    if ep_size is not None and ep_size <= 1:
         # the legacy fused_experts() path only computes routed
         # experts. For the no-overlap path used by DeepSeek-V2/V3 on MUSA, the
         # MoE runner computes shared experts separately and combines them with

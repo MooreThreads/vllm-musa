@@ -77,9 +77,8 @@ def musa_fused_gemv(
         "gemv only fused one activation (swigelu or rms_norm)!"
     )
 
-    if use_rms_norm:
-        if gamma is None:
-            assert False, "rms_norm gamm is None!"
+    if use_rms_norm and gamma is None:
+        raise AssertionError("rms_norm gamm is None!")
 
     # fp8 grouped matmul
     if qweight.dtype == torch.float8_e4m3fn:

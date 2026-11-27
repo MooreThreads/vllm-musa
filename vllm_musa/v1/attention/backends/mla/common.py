@@ -5,7 +5,7 @@ import functools
 from abc import abstractmethod
 from collections.abc import Callable
 from types import ModuleType
-from typing import Generic, TypeVar
+from typing import TypeVar
 
 import torch
 import vllm.envs as envs
@@ -200,7 +200,7 @@ def _v_up_proj(self, x: torch.Tensor, out: torch.Tensor):
         out.copy_(out_new)
 
 
-class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
+class MLACommonImpl[M: MLACommonMetadata](MLAAttentionImpl[M]):
     """
     NOTE: Please read the comment at the top of the file before trying to
     understand this class

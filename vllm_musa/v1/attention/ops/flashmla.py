@@ -36,7 +36,7 @@ else:
 _F = TypeVar("_F", bound=Callable[..., Any])
 
 
-def _identity_decorator(func: _F) -> _F:
+def _identity_decorator[F: Callable[..., Any]](func: F) -> F:
     return func
 
 

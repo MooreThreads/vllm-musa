@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ctypes
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -409,14 +409,10 @@ def _make_shared_buffer(
         return _SharedBuffer(pointers, opened_ipc_ptrs)
     except Exception:
         for ptr in opened_ipc_ptrs:
-            try:
+            with suppress(Exception):
                 lib.ipc_close_mem_handle(ctypes.c_void_p(ptr))
-            except Exception:
-                pass
-        try:
+        with suppress(Exception):
             lib.free(pointer)
-        except Exception:
-            pass
         raise
 
 
@@ -539,27 +535,19 @@ class _MusaJitCustomAllreduceImpl:
         except Exception:
             logger.exception("MUSA JIT custom allreduce initialization failed.")
             if self.meta_opened_ipc_ptrs:
-                try:
+                with suppress(Exception):
                     _close_ipc_handles(self.meta_opened_ipc_ptrs)
-                except Exception:
-                    pass
             if self.buffer_opened_ipc_ptrs:
-                try:
+                with suppress(Exception):
                     _close_ipc_handles(self.buffer_opened_ipc_ptrs)
-                except Exception:
-                    pass
             if self.meta_ptrs:
-                try:
+                with suppress(Exception):
                     _free_own_shared_buffer(self.meta_ptrs, group=group, rank=self.rank)
-                except Exception:
-                    pass
             if self.buffer_ptrs:
-                try:
+                with suppress(Exception):
                     _free_own_shared_buffer(
                         self.buffer_ptrs, group=group, rank=self.rank
                     )
-                except Exception:
-                    pass
             self.meta_ptrs = []
             self.meta_opened_ipc_ptrs = []
             self.buffer_ptrs = []
@@ -1752,10 +1740,8 @@ class _MusaJitCustomAllreduceImpl:
         self.disabled = True
 
     def __del__(self) -> None:
-        try:
+        with suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
 
 class MusaJitCustomAllreduce:
@@ -1931,10 +1917,8 @@ class MusaJitCustomAllreduce:
             self._jit_comm = None
 
     def __del__(self) -> None:
-        try:
+        with suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
 
 def maybe_musa_jit_logits_all_gather(

@@ -37,7 +37,8 @@ class EnvField:
             return self.parse(value)
         except ValueError as e:
             warnings.warn(
-                f'Invalid value for {self.name}: {e}, using default "{self.default}"'
+                f'Invalid value for {self.name}: {e}, using default "{self.default}"',
+                stacklevel=2,
             )
             return self.default
 

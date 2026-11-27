@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
-    TypeAlias,
     TypeVar,
 )
 
@@ -25,7 +24,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 logger = logging.getLogger(__name__)
 
 
-def cache_once(fn: F) -> F:
+def cache_once[F: Callable[..., Any]](fn: F) -> F:
     """
     NOTE: `functools.lru_cache` is not compatible with `torch.compile`
     So we manually implement a simple cache_once decorator to replace it.
@@ -72,7 +71,7 @@ KERNEL_PATH = _resolve_kernel_path()
 DEFAULT_INCLUDE = [str(KERNEL_PATH / "include")]
 DEFAULT_CFLAGS = ["-std=c++20", "-O3"]
 DEFAULT_LDFLAGS = []
-CPP_TEMPLATE_TYPE: TypeAlias = int | float | bool | torch.dtype
+type CPP_TEMPLATE_TYPE = int | float | bool | torch.dtype
 
 
 class CPPArgList(list[str]):

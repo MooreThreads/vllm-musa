@@ -27,6 +27,7 @@ MDM phases; ``musa_sync`` and the census doc both read ENTRIES.
 # loaded BY PATH at build time (setup.py / musa_sync), raising AttributeError.
 # Real annotations + ``typing.Optional`` (not ``X | None``) keep both the 3.9
 # floor and the by-path load working.
+import contextlib
 import re
 import stat
 from dataclasses import dataclass
@@ -116,10 +117,8 @@ def _mailbox_message(text: str) -> tuple:
                 subject += cont
             break
     if "=?" in subject:
-        try:
+        with contextlib.suppress(ValueError, LookupError, UnicodeError):
             subject = str(make_header(decode_header(subject)))
-        except (ValueError, LookupError, UnicodeError):
-            pass
     if subject.startswith("[PATCH] "):
         subject = subject[len("[PATCH] ") :]
     body = []
