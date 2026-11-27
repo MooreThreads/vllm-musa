@@ -24,7 +24,11 @@ FP8 on the DiT linears. This is the fastest of the four profiles in this section
 | Guidance | `true_cfg_scale` 1.0 |
 | Endpoint | `POST /v1/images/generations` |
 
-## Validation
+## Baseline validation
+
+The table records the previous recipe on Omni `31c8986250d`. See the
+[shared image build instructions](README.md#building-the-omni-image) for the
+revision required by the VAE compile flag.
 
 | Item | Value |
 |---|---|
@@ -44,11 +48,15 @@ export MUSA_VISIBLE_DEVICES=0
 
 vllm serve /models/Qwen-Image-2.1-Turbo --omni \
   --host 0.0.0.0 \
+  --additional-config '{"qwen_image_21_compile_vae_decoder":true}' \
   --port 8000 \
   --diffusion-quantization-config '{"transformer":{"method":"fp8"}}'
 ```
 
 ## Generating an image
+
+Use this request to [warm up the decoder](README.md#warming-up-the-vae-decoder)
+before measuring steady-state latency.
 
 ```bash
 curl -s -X POST http://localhost:8000/v1/images/generations \

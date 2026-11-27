@@ -24,7 +24,11 @@ the BF16 recipe; the image changes.
 | Guidance | `true_cfg_scale` 1.0 |
 | Endpoint | `POST /v1/images/generations` |
 
-## Validation
+## Baseline validation
+
+The table records the previous recipe on Omni `31c8986250d`. See the
+[shared image build instructions](README.md#building-the-omni-image) for the
+revision required by the VAE compile flag.
 
 | Item | Value |
 |---|---|
@@ -44,11 +48,15 @@ export MUSA_VISIBLE_DEVICES=0
 
 vllm serve /models/Qwen-Image-2.1 --omni \
   --host 0.0.0.0 \
+  --additional-config '{"qwen_image_21_compile_vae_decoder":true}' \
   --port 8000 \
   --diffusion-quantization-config '{"transformer":{"method":"fp8"}}'
 ```
 
 ## Generating an image
+
+Use this request to [warm up the decoder](README.md#warming-up-the-vae-decoder)
+before measuring steady-state latency.
 
 ```bash
 curl -s -X POST http://localhost:8000/v1/images/generations \
@@ -69,7 +77,7 @@ curl -s -X POST http://localhost:8000/v1/images/generations \
   see, and at the tail the composition itself changes. Judge it on your own prompt
   set before deploying, and keep the BF16 recipe for any request whose exact
   output is part of the contract.
-- **Use `fp8`, not `fp8_per_block`.** On the vLLM-Omni revision in the Validation
+- **Use `fp8`, not `fp8_per_block`.** On the vLLM-Omni revision in the baseline validation
   table, the block-scaled method fails at engine start with
   `AssertionError: <built-in function getitem> is not an OpOverload` raised from
   the Inductor lowering, so there is no working block-128 configuration to serve.
