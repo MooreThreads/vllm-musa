@@ -14,7 +14,7 @@ from packaging.version import Version
 
 BUNDLED_DISTRIBUTION = "vllm-musa"
 EXPECTED_METADATA_REWRITES = 5
-_VLLM_NATIVE_EXTENSIONS = {"_C", "_C_stable_libtorch", "_moe_C"}
+_VLLM_NATIVE_EXTENSIONS = {"_C", "_C_stable_libtorch", "_moe_C", "_deepselect_C"}
 
 _VLLM_METADATA_LOOKUP = re.compile(
     r"(?P<prefix>\b(?:importlib\.metadata\.)?"

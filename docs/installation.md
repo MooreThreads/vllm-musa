@@ -107,6 +107,19 @@ python -c "from vllm_musa.platform import mtml_available; print(mtml_available)"
 `requirements/musa_private.txt` is the source of truth for the MUSA stack; do
 not substitute a public CUDA wheel with the same package name.
 
+### DeepSelect backend
+
+Both `pip install .` and `pip install -e .` build `vllm._deepselect_C` through
+patched vLLM's CMake target. The wheel includes the compiled extension.
+The target fetches `MooreThreads/DeepSelect` at commit
+`b5b043b44b5f4ef51a24b4278e9f5c4dfe3b6f32`. The fetch goes through the same
+`VLLM_MUSA_GIT_PROXY` mirror as the other source fetches. Select the backend at
+serving time with `--sparse-indexer-topk-backend deep_select`.
+
+To use a local checkout, initialize its `csrc/3rdparty/mutlass` submodule
+and set `DEEPSELECT_SRC_DIR` to the checkout path. This only changes the
+source location. The installer builds the extension in both cases.
+
 ## Device visibility
 
 Set `MUSA_VISIBLE_DEVICES` before starting a server. It is the authoritative

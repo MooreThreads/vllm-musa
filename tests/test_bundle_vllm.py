@@ -13,6 +13,7 @@ import pytest
 
 from build_utils.bundle_vllm import (
     BUNDLED_DISTRIBUTION,
+    EXPECTED_METADATA_REWRITES,
     bundle_vllm_package,
     find_prebuilt_extensions,
 )
@@ -40,7 +41,7 @@ def fake_vllm(tmp_path: Path) -> Path:
         )
     )
     (package / "payload.json").write_text("{}\n")
-    for native_module in ("_C", "_C_stable_libtorch", "_moe_C"):
+    for native_module in ("_C", "_C_stable_libtorch", "_moe_C", "_deepselect_C"):
         (package / f"{native_module}{EXT_SUFFIX}").write_bytes(b"prebuilt")
         (package / f"{native_module}.so").write_bytes(b"untagged")
     (package / "_rust_tool_parser.abi3.so").write_bytes(b"rust")
@@ -69,6 +70,22 @@ def test_bundle_vllm_copies_payload_and_retargets_metadata(
     lookups = (destination / "metadata_lookups.py").read_text()
     assert lookups.count(BUNDLED_DISTRIBUTION) == 5
     assert 'version("vllm")' not in lookups
+
+
+def test_patched_vllm_metadata_rewrite_count(tmp_path: Path) -> None:
+    patched_repo = os.environ.get("PATCHED_VLLM_REPO")
+    if patched_repo is None:
+        pytest.skip(
+            "Set PATCHED_VLLM_REPO to the vLLM checkout with the series applied."
+        )
+
+    result = bundle_vllm_package(
+        Path(patched_repo) / "vllm",
+        tmp_path / "vllm",
+        tag=VLLM_TAG,
+        revision=VLLM_REVISION,
+    )
+    assert result.metadata_rewrites == EXPECTED_METADATA_REWRITES
 
 
 def test_bundle_vllm_writes_pinned_version_from_archive(

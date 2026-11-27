@@ -82,7 +82,7 @@ jobs:
           python tools/musa_sync.py check-series
       - name: Check patch contracts in runtime test modules
         run: |
-          python -m pytest -q tests/test_deepseek_v4_sparse_indexer_topk.py -k 'test_radix_topk_lives or test_radix_topk_short_rows or test_series_routes'
+          python -m pytest -q tests/kernels/test_deepseek_v4_sparse_indexer_topk.py -k 'test_radix_topk_lives or test_radix_topk_short_rows or test_series_routes'
           python -m pytest -q tests/test_dsv41_adaptive_verification.py -k 'test_series_'
           python -m pytest -q tests/test_dsv4_moe_shared_fold.py -k test_biased_dsv4_gates
       - name: Check v1 worker import order and registration contracts
@@ -101,7 +101,7 @@ jobs:
       - name: Check packaging contracts against the upstream pin
         run: |
           python -m pytest -q tests/test_musa_docker_contract.py \
-            tests/test_bundle_vllm.py tests/test_inplace_porting_contract.py \
+            tests/test_inplace_porting_contract.py \
             tests/test_packaging_sources.py tests/test_fp8_block_splitk_table_rows.py \
             -k 'not sdist'
       - name: Replay and verify against pristine pin
@@ -125,5 +125,6 @@ jobs:
           python tools/musa_sync.py check-series --repo third_party/vllm --round-trip
       - name: Check applied-tree source and sparse-indexer contracts
         run: |
+          PATCHED_VLLM_REPO=third_party/vllm python -m pytest -q tests/test_bundle_vllm.py
           python -m pytest -q tests/test_*source.py \
             tests/test_sparse_mqa_candidates.py tests/test_sparse_mqa_dispatch.py
