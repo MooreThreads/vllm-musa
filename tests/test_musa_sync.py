@@ -2698,7 +2698,7 @@ def test_replay_accepts_a_new_file_whose_content_already_exists(
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
-def test_postimage_is_checked_against_the_entrys_own_commit(
+def test_postimage_is_checked_against_the_entries_own_commit(
     ms, tmp_path, monkeypatch, capsys
 ):
     """Round 4: reachability was order-blind and therefore gameable.

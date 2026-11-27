@@ -621,7 +621,7 @@ class MLACommonImpl[M: MLACommonMetadata](MLAAttentionImpl[M]):
             )
             # workspace
             # |------- N tokens --------|--------- N*dcp_size tokens ----------|
-            # |<- use for loca_gather ->|<--------- use for allgather -------->|
+            # |<- use for local gather ->|<-------- use for allgather -------->|
             allgather_offset = workspace.shape[0] // (dcp_world_size + 1)
             assert allgather_offset * (dcp_world_size + 1) == workspace.shape[0]
             assert toks <= allgather_offset
