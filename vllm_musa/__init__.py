@@ -98,7 +98,7 @@ def _apply_object_patches() -> None:
 
         apply_object_patches()
     except Exception as e:
-        logger.error(f"Failed to apply object patches: {e}")
+        logger.error("Failed to apply object patches: %s", e)
 
 
 def patch_report() -> list[dict]:

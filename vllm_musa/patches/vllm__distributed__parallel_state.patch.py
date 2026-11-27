@@ -59,10 +59,10 @@ context manager this patch wires. It does NOT mutate parallel_state.py
 (`PATCHES = []`); the monkey-patch targets the spec-decode proposers.
 """
 
-PATCHES: list = []  # No file mutation; the monkey-patch install is the side effect.
-
 import logging
 import os
+
+PATCHES: list = []  # No file mutation; the monkey-patch install is the side effect.
 
 _log = logging.getLogger(__name__)
 

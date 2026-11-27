@@ -1596,9 +1596,8 @@ def _replay_rows(
             )
         _run_git(clone, "config", "user.email", "musa@local")
         _run_git(clone, "config", "user.name", "musa")
-        applied = 0
         made: dict[str, str | None] = {}
-        for patch in paths:
+        for applied, patch in enumerate(paths):
             name = build_apply.entry_name(patch)
             head_before = _git(clone, "rev-parse", "HEAD").stdout.strip()
             r = _git(clone, "am", "-3", "--keep-non-patch", str(patch))
@@ -1631,7 +1630,6 @@ def _replay_rows(
                         "is the mode for the maintenance state)"
                     )
                 return [(_safe_name(name), "replay-failed", detail)]
-            applied += 1
             made[name] = head_after
         return _unearned_exemption_rows(clone, paths, texts, made) + (
             _build_path_rows(tmp, repo, paths)

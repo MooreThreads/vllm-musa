@@ -275,13 +275,12 @@ class MLACommonImpl[M: MLACommonMetadata](MLAAttentionImpl[M]):
         # FA2 vs FA3
         self.flash_attn_varlen_func = flash_attn_varlen_func
         self.vllm_flash_attn_version = get_flash_attn_version()
-        if self.vllm_flash_attn_version is not None:
-            # ==================== MUSA ADAPTATION ====================
-            if not current_platform.is_musa():
-                self.flash_attn_varlen_func = functools.partial(
-                    flash_attn_varlen_func, fa_version=self.vllm_flash_attn_version
-                )
-            # ========================== END ==========================
+        # ==================== MUSA ADAPTATION ====================
+        if self.vllm_flash_attn_version is not None and not current_platform.is_musa():
+            self.flash_attn_varlen_func = functools.partial(
+                flash_attn_varlen_func, fa_version=self.vllm_flash_attn_version
+            )
+        # ========================== END ==========================
 
         # For MLA the v head dim is smaller than qk head dim so we pad out
         # v with 0s to match the qk head dim for attention backends that do

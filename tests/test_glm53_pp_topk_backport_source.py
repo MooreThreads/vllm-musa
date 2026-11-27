@@ -191,6 +191,25 @@ def test_non_dsa_empty(env):
     }
 
 
+def _make_consumer(rx, rows, receiver, expected, consumer_calls):
+    """The receiving rank's callback for one ``rows`` case.
+
+    The caller rebinds ``rows``/``receiver``/``expected`` on every iteration, so
+    they are parameters here rather than closure variables.
+    """
+
+    def consumer(pos, hidden, residual, scaling):
+        consumer_calls.append(rows)
+        assert rx._pp_buffers["topk_indices"] is receiver
+        assert receiver.events == [("copy", rows)]
+        assert receiver.storage[:rows] == expected
+        assert receiver.storage[rows:] == [[-999] * 3 for _ in range(12 - rows)]
+        receiver.events.append(("consumer", rows))
+        return hidden, residual
+
+    return consumer
+
+
 def test_poisoned_receiver_multiframe_actual_forward(env):
     group, ns = env
     group.split = 39
@@ -231,14 +250,7 @@ def test_poisoned_receiver_multiframe_actual_forward(env):
         receiver.events.clear()
         consumer_calls = []
 
-        def consumer(pos, hidden, residual, scaling):
-            consumer_calls.append(rows)
-            assert rx._pp_buffers["topk_indices"] is receiver
-            assert receiver.events == [("copy", rows)]
-            assert receiver.storage[:rows] == expected
-            assert receiver.storage[rows:] == [[-999] * 3 for _ in range(12 - rows)]
-            receiver.events.append(("consumer", rows))
-            return hidden, residual
+        consumer = _make_consumer(rx, rows, receiver, expected, consumer_calls)
 
         rx.layers = [Layer(consumer)]
         rx.norm = lambda h, r: (h, r)

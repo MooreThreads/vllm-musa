@@ -342,12 +342,12 @@ def test_native_reshape_cache_and_fallback_guards_are_env_invariant(monkeypatch)
         monkeypatch.setattr(
             fa_utils.musa_ops,
             "musa_reshape_and_cache_flash_nhd",
-            lambda *args: native_calls.append(args),
+            lambda *args, _calls=native_calls: _calls.append(args),
         )
         monkeypatch.setattr(
             fa_utils.ops,
             "reshape_and_cache_flash",
-            lambda *args: fallback_calls.append(args),
+            lambda *args, _calls=fallback_calls: _calls.append(args),
         )
         fa_utils.reshape_and_cache_flash(
             key, value, key_cache, value_cache, slots, "auto", scale, scale

@@ -11,33 +11,33 @@ Registers the sparse-MLA backend so the MLA selector can pick it for DSA
 from os import getenv
 
 import torch
+
+# MUSA: the upstream sparse backend imports FlashMLA ops from the core module,
+# which is backed by the CUDA `vllm._flashmla_C` (not built on MUSA). Rebind
+# those names in the core sparse module to the MUSA `flash_mla` equivalents so
+# the sparse metadata builder and impl execute on MUSA.
+import vllm.v1.attention.backends.mla.flashmla_sparse as _core_sparse
 from vllm.config.cache import CacheDType
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability
 from vllm.v1.attention.backends.mla.flashmla_sparse import FlashMLASparseBackend
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 
+from vllm_musa.v1.attention.ops.flashmla import FlashMLASchedMeta as _musa_sched_meta
 from vllm_musa.v1.attention.ops.flashmla import (
     flash_mla_sparse_fwd as _musa_flash_mla_sparse_fwd,
 )
-from vllm_musa.v1.attention.ops.flashmla import (
-    is_flashmla_sparse_supported,
-)
-
-logger = init_logger(__name__)
-# MUSA: the upstream sparse backend imports FlashMLA ops from the core module,
-# which is backed by the CUDA `vllm._flashmla_C` (not built on MUSA). Rebind
-# those names in the core sparse module to the MUSA `flash_mla` equivalents so
-# the sparse metadata builder and impl execute on MUSA.
-import vllm.v1.attention.backends.mla.flashmla_sparse as _core_sparse
-
-from vllm_musa.v1.attention.ops.flashmla import FlashMLASchedMeta as _musa_sched_meta
 from vllm_musa.v1.attention.ops.flashmla import (
     flash_mla_with_kvcache as _musa_mla_kvcache,
 )
 from vllm_musa.v1.attention.ops.flashmla import (
     get_mla_metadata as _musa_get_mla_metadata,
 )
+from vllm_musa.v1.attention.ops.flashmla import (
+    is_flashmla_sparse_supported,
+)
+
+logger = init_logger(__name__)
 
 
 def _is_power_of_two(value: int) -> bool:

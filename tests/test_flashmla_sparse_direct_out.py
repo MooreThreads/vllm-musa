@@ -298,9 +298,11 @@ def test_sparse_prefill_does_not_retry_after_private_launch_failure() -> None:
     fake = _FakeFlashMLA()
     adapter = _FakeAdapter(launch_error=RuntimeError("launch failed"))
 
-    with _direct_out_patches(adapter):
-        with pytest.raises(RuntimeError, match="launch failed"):
-            _call(fake, allow_direct_out=True)
+    with (
+        _direct_out_patches(adapter),
+        pytest.raises(RuntimeError, match="launch failed"),
+    ):
+        _call(fake, allow_direct_out=True)
 
     assert fake.public_calls == 0
     assert adapter.calls == 1

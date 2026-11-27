@@ -137,7 +137,7 @@ def _load_patch_module(patch_file: Path) -> ModuleType | None:
         spec.loader.exec_module(module)
         return module
     except Exception as e:
-        logger.warning(f"Failed to load patch config from {patch_file}: {e}")
+        logger.warning("Failed to load patch config from %s: %s", patch_file, e)
         return None
 
 
@@ -180,13 +180,15 @@ def _resolve_module_origin(module_name: str) -> str | None:
         spec = importlib.util.find_spec(module_name)
     except (ModuleNotFoundError, ImportError) as e:
         logger.debug(
-            f"Module {module_name} not found or has import issues: {e}, "
+            "Module %s not found or has import issues: %s, "
             "skipping patch (this is expected for version-specific patches "
-            "or when modules are not yet fully initialized)"
+            "or when modules are not yet fully initialized)",
+            module_name,
+            e,
         )
         return None
     if spec is None or spec.origin is None:
-        logger.debug(f"Module {module_name} not found, skipping patch")
+        logger.debug("Module %s not found, skipping patch", module_name)
         return None
     return spec.origin
 
@@ -306,10 +308,10 @@ def apply_object_patches(force: bool = False) -> list[dict]:
         }
         try:
             apply_fn()
-            logger.info(f"Applied object-patch {module_name}")
+            logger.info("Applied object-patch %s", module_name)
         except Exception as e:
             entry.update(status="error", error=str(e))
-            logger.warning(f"Failed to apply object-patch {module_name}: {e}")
+            logger.warning("Failed to apply object-patch %s: %s", module_name, e)
         results.append(entry)
 
     _object_patches_applied = True

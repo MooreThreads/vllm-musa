@@ -997,30 +997,26 @@ def audit_staleness(pin: VllmIndex, table, target: VllmIndex | None = None) -> d
         if not _version_ok(entry.applies_to, pin.version):
             continue
         reason = None
-        if entry.kind in (table.RELOCATION, table.BACKPORT):
-            if pin.has_module(entry.module):
-                reason = f"the pin provides {entry.module}"
-        elif entry.kind == table.ADAPTER:
+        if entry.kind in (table.RELOCATION, table.BACKPORT) and pin.has_module(
+            entry.module
+        ):
+            reason = f"the pin provides {entry.module}"
+        elif entry.kind == table.ADAPTER and target is not None:
             # An adapter is stale when the pin already has the shape Omni calls,
             # which needs the vLLM Omni targets to compare against. Two of the
             # three adapter cases are additive -- the pin does not have the
             # symbol at all -- so "absent from the pin" is the adapter working,
             # not a stale entry. At runtime _PatchingLoader catches the rest: an
             # adapter whose apply() patches nothing fails the import.
-            if target is not None:
-                matched = []
-                for name in entry.names:
-                    qualname = f"{entry.module}.{name}"
-                    pin_sig = pin.signatures.get(qualname)
-                    target_sig = target.signatures.get(qualname)
-                    if pin_sig is not None and target_sig is not None:
-                        matched.append(
-                            pin_sig["positional"] == target_sig["positional"]
-                        )
-                if matched and all(matched):
-                    reason = (
-                        f"the pin's {entry.module} already matches the targeted vLLM"
-                    )
+            matched = []
+            for name in entry.names:
+                qualname = f"{entry.module}.{name}"
+                pin_sig = pin.signatures.get(qualname)
+                target_sig = target.signatures.get(qualname)
+                if pin_sig is not None and target_sig is not None:
+                    matched.append(pin_sig["positional"] == target_sig["positional"])
+            if matched and all(matched):
+                reason = f"the pin's {entry.module} already matches the targeted vLLM"
         record = {
             "module": entry.module,
             "kind": entry.kind,
