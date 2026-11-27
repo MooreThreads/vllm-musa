@@ -11,10 +11,10 @@ Subject: [PATCH] MUSA: enable AWQ/GPTQ W4A16 via the Triton kernel
  4 files changed, 54 insertions(+), 16 deletions(-)
 
 diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
-index 258f08dd26..21d5419e10 100644
+index 60a7264abc..ec146619f8 100644
 --- a/vllm/model_executor/kernels/linear/__init__.py
 +++ b/vllm/model_executor/kernels/linear/__init__.py
-@@ -917,7 +917,15 @@ def choose_mp_linear_kernel(
+@@ -931,7 +931,15 @@ def choose_mp_linear_kernel(
          if _cc is not None:
              compute_capability = _cc[0] * 10 + _cc[1]
  
