@@ -39,31 +39,58 @@ def _identity_decorator[F: Callable[..., Any]](func: F) -> F:
 
 
 _MATE_SPARSE_DIRECT_OUT_IMPORT_ERROR: Exception | None = None
+_mate_raise_complete_if_dry_run = None
+_mate_skip_kernel_launch_if_dry_run = None
+_mate_optional_prefill_attn_sink = None
+_mate_require_token_lengths = None
+_mate_prep_strided_tensor = None
+_mate_validate_prefill_attn_sink = None
+_mate_validate_token_lengths = None
+_mate_jit_for_tensor_addressing = None
+_mate_tensor_byte_span = None
 try:
     from mate.api_logging import mate_api as _mate_api
-    from mate.execution_context import (
-        raise_complete_if_dry_run as _mate_raise_complete_if_dry_run,
-    )
     from mate.mate_runtime import resolve_num_mps as _mate_resolve_num_mps
     from mate.sparse_mla.tilelang.sparse_mla_model1_fwd_pipelined import (
         sparse_attention_fwd_kernel_model1 as _mate_sparse_model1_kernel,
     )
-    from mate.sparse_mla.tilelang.sparse_mla_prefill_common import (
-        optional_prefill_attn_sink as _mate_optional_prefill_attn_sink,
-    )
-    from mate.sparse_mla.tilelang.sparse_mla_prefill_common import (
-        require_token_lengths as _mate_require_token_lengths,
-    )
+
+    try:
+        from mate.execution_context import (
+            skip_kernel_launch_if_dry_run as _mate_skip_kernel_launch_if_dry_run,
+        )
+        from mate.sparse_mla.tilelang.sparse_mla_index_type import (
+            jit_for_tensor_addressing as _mate_jit_for_tensor_addressing,
+        )
+        from mate.sparse_mla.tilelang.sparse_mla_index_type import (
+            tensor_byte_span as _mate_tensor_byte_span,
+        )
+        from mate.sparse_mla.tilelang.sparse_mla_prefill_common import (
+            prepare_sparse_mla_strided_tensor as _mate_prep_strided_tensor,
+        )
+        from mate.sparse_mla.tilelang.sparse_mla_prefill_common import (
+            validate_prefill_attn_sink as _mate_validate_prefill_attn_sink,
+        )
+        from mate.sparse_mla.tilelang.sparse_mla_prefill_common import (
+            validate_token_lengths as _mate_validate_token_lengths,
+        )
+    except ImportError:
+        from mate.execution_context import (
+            raise_complete_if_dry_run as _mate_raise_complete_if_dry_run,
+        )
+        from mate.sparse_mla.tilelang.sparse_mla_prefill_common import (
+            optional_prefill_attn_sink as _mate_optional_prefill_attn_sink,
+        )
+        from mate.sparse_mla.tilelang.sparse_mla_prefill_common import (
+            require_token_lengths as _mate_require_token_lengths,
+        )
 except Exception as exc:
     # This is an optional private fast path. Missing symbols, shared libraries,
     # or incompatible TileLang/MATE imports must leave the public path usable.
     _MATE_SPARSE_DIRECT_OUT_IMPORT_ERROR = exc
     _mate_api = _identity_decorator
-    _mate_raise_complete_if_dry_run = None
     _mate_resolve_num_mps = None
     _mate_sparse_model1_kernel = None
-    _mate_optional_prefill_attn_sink = None
-    _mate_require_token_lengths = None
 
 try:
     from mate.sparse_mla.tilelang import (
@@ -72,13 +99,19 @@ try:
 except Exception:
     _mate_decode_common = None
 
+_VALIDATED_MATE_SPARSE_DIRECT_OUT_VERSIONS = frozenset(
+    {"0.2.4", "0.2.8", "0.2.8.post1"}
+)
 try:
-    _MATE_SPARSE_DIRECT_OUT_ABI_SUPPORTED = version("mate").split("+", 1)[0] == "0.2.4"
+    _MATE_SPARSE_DIRECT_OUT_ABI_SUPPORTED = (
+        version("mate").split("+", 1)[0] in _VALIDATED_MATE_SPARSE_DIRECT_OUT_VERSIONS
+    )
 except Exception:
     _MATE_SPARSE_DIRECT_OUT_ABI_SUPPORTED = False
 
 _DSV4_SPARSE_PREFILL_OVERLAP_TOKEN_THRESHOLD = 1024
 _DSV4_SPARSE_PREFILL_OVERLAP_BRANCHES = 3
+_MATE_SPARSE_PREFILL_LOG2E = 1.44269504
 
 _MATE_SPARSE_DIRECT_OUT_PARAM_NAMES = (
     "q_handle",
@@ -94,6 +127,33 @@ _MATE_SPARSE_DIRECT_OUT_PARAM_NAMES = (
     "lse_handle",
 )
 _MATE_SPARSE_DIRECT_OUT_RESULT_INDICES = (8, 9, 10)
+
+_MATE_SPARSE_DIRECT_OUT_V028_SINK_PARAM_NAMES = (
+    "q_handle",
+    "kv_handle",
+    "indices_handle",
+    "output_handle",
+    "max_logits_out_handle",
+    "lse_handle",
+    "topk_length_handle",
+    "attn_sink_handle",
+    "sm_scale",
+    "persistent_blocks",
+    "kv_span_bytes",
+)
+_MATE_SPARSE_DIRECT_OUT_V028_NOSINK_PARAM_NAMES = (
+    "q_handle",
+    "kv_handle",
+    "indices_handle",
+    "output_handle",
+    "max_logits_out_handle",
+    "lse_handle",
+    "topk_length_handle",
+    "sm_scale",
+    "persistent_blocks",
+    "kv_span_bytes",
+)
+_MATE_SPARSE_DIRECT_OUT_V028_RESULT_INDICES = (3, 4, 5)
 
 
 class _UnavailableFlashMLASchedMeta:
@@ -261,6 +321,25 @@ def _out_overlaps_inputs(
     )
 
 
+def _has_mate_sparse_direct_out_v024_helpers() -> bool:
+    return (
+        _mate_raise_complete_if_dry_run is not None
+        and _mate_optional_prefill_attn_sink is not None
+        and _mate_require_token_lengths is not None
+    )
+
+
+def _has_mate_sparse_direct_out_v028_helpers() -> bool:
+    return (
+        _mate_skip_kernel_launch_if_dry_run is not None
+        and _mate_prep_strided_tensor is not None
+        and _mate_validate_prefill_attn_sink is not None
+        and _mate_validate_token_lengths is not None
+        and _mate_jit_for_tensor_addressing is not None
+        and _mate_tensor_byte_span is not None
+    )
+
+
 def _can_use_dsv4_tp8_sparse_direct_out(
     q: torch.Tensor,
     kv: torch.Tensor,
@@ -275,11 +354,12 @@ def _can_use_dsv4_tp8_sparse_direct_out(
         allow_dsv4_tp8_mtp_direct_out
         and _MATE_SPARSE_DIRECT_OUT_IMPORT_ERROR is None
         and _MATE_SPARSE_DIRECT_OUT_ABI_SUPPORTED
-        and _mate_raise_complete_if_dry_run is not None
         and _mate_resolve_num_mps is not None
         and _mate_sparse_model1_kernel is not None
-        and _mate_optional_prefill_attn_sink is not None
-        and _mate_require_token_lengths is not None
+        and (
+            _has_mate_sparse_direct_out_v028_helpers()
+            or _has_mate_sparse_direct_out_v024_helpers()
+        )
         and out is not None
         and topk_length is not None
         and _is_musa_tensor(q)
@@ -329,28 +409,47 @@ def _can_use_dsv4_tp8_sparse_direct_out(
     )
 
 
-def _has_expected_mate_sparse_direct_out_abi(kernel: Any) -> bool:
+def _has_expected_mate_sparse_direct_out_abi(
+    kernel: Any,
+    *,
+    has_attn_sink: bool | None = None,
+) -> bool:
     adapter = getattr(kernel, "adapter", None)
     prim_func = getattr(kernel, "prim_func", None)
     params = getattr(prim_func, "params", ())
     param_names = tuple(getattr(param, "name", None) for param in params)
     result_indices = tuple(getattr(adapter, "result_idx", ()))
-    return (
-        getattr(kernel, "execution_backend", None) == "tvm_ffi"
-        and callable(getattr(adapter, "executable", None))
-        and param_names == _MATE_SPARSE_DIRECT_OUT_PARAM_NAMES
+    if getattr(kernel, "execution_backend", None) != "tvm_ffi" or not callable(
+        getattr(adapter, "executable", None)
+    ):
+        return False
+    if (
+        param_names == _MATE_SPARSE_DIRECT_OUT_PARAM_NAMES
         and result_indices == _MATE_SPARSE_DIRECT_OUT_RESULT_INDICES
-    )
+    ):
+        return True
+    if result_indices == _MATE_SPARSE_DIRECT_OUT_V028_RESULT_INDICES:
+        if has_attn_sink is True:
+            return param_names == _MATE_SPARSE_DIRECT_OUT_V028_SINK_PARAM_NAMES
+        if has_attn_sink is False:
+            return param_names == _MATE_SPARSE_DIRECT_OUT_V028_NOSINK_PARAM_NAMES
+        return param_names in (
+            _MATE_SPARSE_DIRECT_OUT_V028_SINK_PARAM_NAMES,
+            _MATE_SPARSE_DIRECT_OUT_V028_NOSINK_PARAM_NAMES,
+        )
+    return False
 
 
 def _dsv4_sparse_prefill_persistent_blocks(q: torch.Tensor) -> int:
     assert _mate_resolve_num_mps is not None
     num_mps = _mate_resolve_num_mps(q.device, None)
-    if q.shape[0] <= _DSV4_SPARSE_PREFILL_OVERLAP_TOKEN_THRESHOLD:
+    if (
+        not _has_mate_sparse_direct_out_v024_helpers()
+        or q.shape[0] <= _DSV4_SPARSE_PREFILL_OVERLAP_TOKEN_THRESHOLD
+    ):
         return num_mps
-    # Long DSV4 prefill overlaps q projection, KV compression, and the DSA
-    # indexer. Give the persistent DSA branch only its share of the MPs so the
-    # other full-device branches can always make forward progress.
+    # Legacy MATE 0.2.4 long DSV4 prefill partitions MPs across the 3 overlap
+    # branches so q projection and KV compression always make forward progress.
     return max(num_mps // _DSV4_SPARSE_PREFILL_OVERLAP_BRANCHES, 1)
 
 
@@ -364,58 +463,134 @@ def _flash_mla_sparse_fwd_direct_out(
     topk_length: torch.Tensor,
     out: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
-    assert _mate_raise_complete_if_dry_run is not None
     assert _mate_resolve_num_mps is not None
     assert _mate_sparse_model1_kernel is not None
-    assert _mate_optional_prefill_attn_sink is not None
-    assert _mate_require_token_lengths is not None
 
     seq_len, heads, dim = q.shape
-    normalized_topk_length = _mate_require_token_lengths(
-        topk_length,
-        seq_len,
-        indices.shape[-1],
-        q.device,
-        "topk_length",
+    persistent_blocks = _dsv4_sparse_prefill_persistent_blocks(q)
+
+    # Prefer v0.2.4 path when explicitly mocked in unit tests or running 0.2.4.
+    if _has_mate_sparse_direct_out_v024_helpers():
+        assert _mate_raise_complete_if_dry_run is not None
+        assert _mate_optional_prefill_attn_sink is not None
+        assert _mate_require_token_lengths is not None
+        normalized_topk_length = _mate_require_token_lengths(
+            topk_length,
+            seq_len,
+            indices.shape[-1],
+            q.device,
+            "topk_length",
+        )
+        kernel = _mate_sparse_model1_kernel(
+            heads,
+            dim,
+            has_extra=False,
+            kv_group=kv.shape[1],
+            sm_scale=sm_scale,
+            has_attn_sink=attn_sink is not None,
+            is_persistence=True,
+            persistent_blocks=persistent_blocks,
+        )
+        if not _has_expected_mate_sparse_direct_out_abi(kernel):
+            logger.warning_once(
+                "MATE sparse-prefill private ABI does not match the validated "
+                "0.2.4/0.2.8 layout; using the public FlashMLA path."
+            )
+            return None
+
+        _mate_raise_complete_if_dry_run()
+        attn_sink_arg, _ = _mate_optional_prefill_attn_sink(
+            attn_sink,
+            heads,
+            q.device,
+        )
+        max_logits = torch.empty((seq_len, heads), dtype=torch.float32, device=q.device)
+        lse = torch.empty((seq_len, heads), dtype=torch.float32, device=q.device)
+        kernel.adapter.executable(
+            q,
+            kv,
+            indices,
+            normalized_topk_length,
+            kv,
+            indices[:, :, :0],
+            normalized_topk_length,
+            attn_sink_arg,
+            out,
+            max_logits,
+            lse,
+        )
+        logger.info_once(
+            "Using caller-owned output for DeepSeek-V4 TP8 MATE sparse prefill."
+        )
+        return out, max_logits, lse
+
+    assert _mate_skip_kernel_launch_if_dry_run is not None
+    assert _mate_prep_strided_tensor is not None
+    assert _mate_validate_prefill_attn_sink is not None
+    assert _mate_validate_token_lengths is not None
+    assert _mate_jit_for_tensor_addressing is not None
+    assert _mate_tensor_byte_span is not None
+
+    q_norm, _ = _mate_prep_strided_tensor("q", q, multiple=8)
+    kv_norm, _ = _mate_prep_strided_tensor("kv", kv, multiple=8)
+    indices_norm, _ = _mate_prep_strided_tensor("indices", indices, multiple=8)
+    normalized_topk_length = _mate_validate_token_lengths(
+        topk_length, seq_len, "topk_length"
     )
-    kernel = _mate_sparse_model1_kernel(
+    normalized_attn_sink = _mate_validate_prefill_attn_sink(attn_sink, heads)
+    has_attn_sink = normalized_attn_sink is not None
+
+    kernel_factory = _mate_jit_for_tensor_addressing(
+        _mate_sparse_model1_kernel,
+        q_norm,
+        kv_norm,
+        indices_norm,
+    )
+    kernel = kernel_factory(
         heads,
         dim,
-        has_extra=False,
         kv_group=kv.shape[1],
-        sm_scale=sm_scale,
-        has_attn_sink=attn_sink is not None,
+        is_causal=True,
+        threads=640,
+        has_attn_sink=has_attn_sink,
+        has_topk_length=True,
         is_persistence=True,
-        persistent_blocks=_dsv4_sparse_prefill_persistent_blocks(q),
+        fused_groups=0,
     )
-    if not _has_expected_mate_sparse_direct_out_abi(kernel):
+    if not _has_expected_mate_sparse_direct_out_abi(
+        kernel, has_attn_sink=has_attn_sink
+    ):
         logger.warning_once(
             "MATE sparse-prefill private ABI does not match the validated "
-            "0.2.4 layout; using the public FlashMLA path."
+            "0.2.4/0.2.8 layout; using the public FlashMLA path."
         )
         return None
 
-    _mate_raise_complete_if_dry_run()
-    attn_sink_arg, _ = _mate_optional_prefill_attn_sink(
-        attn_sink,
-        heads,
-        q.device,
-    )
     max_logits = torch.empty((seq_len, heads), dtype=torch.float32, device=q.device)
     lse = torch.empty((seq_len, heads), dtype=torch.float32, device=q.device)
-    kernel.adapter.executable(
-        q,
-        kv,
-        indices,
-        normalized_topk_length,
-        kv,
-        indices[:, :, :0],
-        normalized_topk_length,
-        attn_sink_arg,
+    if _mate_skip_kernel_launch_if_dry_run():
+        return out, max_logits, lse
+
+    runtime_sm_scale = float(sm_scale) * _MATE_SPARSE_PREFILL_LOG2E
+    exec_args: list[Any] = [
+        q_norm,
+        kv_norm,
+        indices_norm,
         out,
         max_logits,
         lse,
+        normalized_topk_length,
+    ]
+    if normalized_attn_sink is not None:
+        exec_args.append(normalized_attn_sink)
+    exec_args.extend(
+        (
+            runtime_sm_scale,
+            int(persistent_blocks),
+            int(_mate_tensor_byte_span(kv_norm)),
+        )
     )
+    kernel.adapter.executable(*exec_args)
     logger.info_once(
         "Using caller-owned output for DeepSeek-V4 TP8 MATE sparse prefill."
     )
@@ -444,7 +619,7 @@ def flash_mla_sparse_fwd(
             )
         elif not _MATE_SPARSE_DIRECT_OUT_ABI_SUPPORTED:
             logger.warning_once(
-                "MATE sparse direct-out requires the validated 0.2.4 ABI; "
+                "MATE sparse direct-out requires the validated 0.2.4/0.2.8 ABI; "
                 "using the public FlashMLA path."
             )
 

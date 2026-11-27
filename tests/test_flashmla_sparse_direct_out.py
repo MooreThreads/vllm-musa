@@ -151,12 +151,37 @@ def test_dsv4_long_sparse_prefill_partitions_mps(
     expected: int,
 ) -> None:
     q = SimpleNamespace(shape=(8192, 64, 512), device="musa")
-    with patch.object(
-        flashmla,
-        "_mate_resolve_num_mps",
-        lambda device, requested: num_mps,
+    with (
+        patch.object(
+            flashmla,
+            "_mate_resolve_num_mps",
+            lambda device, requested: num_mps,
+        ),
+        patch.object(
+            flashmla,
+            "_has_mate_sparse_direct_out_v024_helpers",
+            lambda: True,
+        ),
     ):
         assert flashmla._dsv4_sparse_prefill_persistent_blocks(q) == expected
+
+
+@pytest.mark.parametrize("num_mps", [64, 60, 56, 48])
+def test_dsv4_long_sparse_prefill_v028_keeps_all_mps(num_mps: int) -> None:
+    q = SimpleNamespace(shape=(8192, 64, 512), device="musa")
+    with (
+        patch.object(
+            flashmla,
+            "_mate_resolve_num_mps",
+            lambda device, requested: num_mps,
+        ),
+        patch.object(
+            flashmla,
+            "_has_mate_sparse_direct_out_v024_helpers",
+            lambda: False,
+        ),
+    ):
+        assert flashmla._dsv4_sparse_prefill_persistent_blocks(q) == num_mps
 
 
 def test_dsv4_short_sparse_prefill_keeps_all_mps() -> None:
@@ -308,18 +333,97 @@ def test_sparse_prefill_does_not_retry_after_private_launch_failure() -> None:
     assert adapter.calls == 1
 
 
+@pytest.mark.parametrize("with_sink", [True, False])
+def test_dsv4_tp8_sparse_prefill_v028_abi_writes_directly_to_out(
+    with_sink: bool,
+) -> None:
+    fake = _FakeFlashMLA()
+    captured_args: list[tuple] = []
+
+    class _V028Adapter:
+        result_idx = [3, 4, 5]
+
+        def executable(self, *args):
+            captured_args.append(args)
+            out_t, max_t, lse_t = args[3], args[4], args[5]
+            out_t.fill_(9)
+            max_t.fill_(10)
+            lse_t.fill_(11)
+
+    param_names = (
+        flashmla._MATE_SPARSE_DIRECT_OUT_V028_SINK_PARAM_NAMES
+        if with_sink
+        else flashmla._MATE_SPARSE_DIRECT_OUT_V028_NOSINK_PARAM_NAMES
+    )
+    kernel = _fake_kernel(
+        _V028Adapter(),  # type: ignore[arg-type]
+        backend="tvm_ffi",
+        param_names=param_names,
+    )
+    q, kv, indices, topk_length, attn_sink, out = _inputs(64)
+    sink_arg = attn_sink if with_sink else None
+    with (
+        patch.multiple(
+            flashmla,
+            _MATE_SPARSE_DIRECT_OUT_IMPORT_ERROR=None,
+            _MATE_SPARSE_DIRECT_OUT_ABI_SUPPORTED=True,
+            _mate_raise_complete_if_dry_run=None,
+            _mate_optional_prefill_attn_sink=None,
+            _mate_require_token_lengths=None,
+            _mate_skip_kernel_launch_if_dry_run=lambda: False,
+            _mate_resolve_num_mps=lambda device, requested: 60,
+            _mate_sparse_model1_kernel=object(),
+            _mate_prep_strided_tensor=(
+                lambda name, tensor, multiple: (tensor, tuple(tensor.shape))
+            ),
+            _mate_validate_prefill_attn_sink=(lambda sink, heads: sink),
+            _mate_validate_token_lengths=(lambda lengths, seq_len, name: lengths),
+            _mate_jit_for_tensor_addressing=(
+                lambda fn, q_t, kv_t, idx_t: lambda *a, **kw: kernel
+            ),
+            _mate_tensor_byte_span=lambda tensor: 8192,
+            _is_musa_tensor=lambda tensor: True,
+            _is_current_stream_capturing=lambda: False,
+        ),
+        patch.object(flashmla, "_flash_mla", fake),
+    ):
+        result, max_logits, lse = flashmla.flash_mla_sparse_fwd(
+            q,
+            kv,
+            indices,
+            0.5,
+            attn_sink=sink_arg,
+            topk_length=topk_length,
+            out=out,
+            allow_dsv4_tp8_mtp_direct_out=True,
+        )
+
+    assert fake.public_calls == 0
+    assert len(captured_args) == 1
+    assert result is out
+    assert torch.all(out == 9)
+    assert torch.all(max_logits == 10)
+    assert torch.all(lse == 11)
+
+
 @pytest.mark.skipif(not _HAS_MUSA, reason="requires MUSA hardware")
-def test_dsv4_tp8_sparse_direct_out_matches_public_path_on_musa() -> None:
+@pytest.mark.parametrize("seq_len", [128, 1536])
+@pytest.mark.parametrize("with_sink", [True, False])
+def test_dsv4_tp8_sparse_direct_out_matches_public_path_on_musa(
+    seq_len: int,
+    with_sink: bool,
+) -> None:
     from flash_mla import flash_mla_sparse_fwd as public_flash_mla_sparse_fwd
 
     device = torch.device("musa")
-    seq_len = 128
     q = torch.randn((seq_len, 64, 512), dtype=torch.bfloat16, device=device)
     kv = torch.randn((seq_len, 1, 512), dtype=torch.bfloat16, device=device)
     indices = torch.arange(64, dtype=torch.int32, device=device)
     indices = indices.view(1, 1, 64).expand(seq_len, 1, 64).contiguous()
     topk_length = torch.full((seq_len,), 64, dtype=torch.int32, device=device)
-    attn_sink = torch.zeros((64,), dtype=torch.float32, device=device)
+    attn_sink = (
+        torch.zeros((64,), dtype=torch.float32, device=device) if with_sink else None
+    )
 
     public_out, public_max, public_lse = public_flash_mla_sparse_fwd(
         q=q,

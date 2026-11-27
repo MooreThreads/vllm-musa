@@ -4,11 +4,15 @@
 
 from __future__ import annotations
 
+import functools
+from importlib.metadata import PackageNotFoundError, version
+
 import torch
 from vllm.triton_utils import tl, triton
 
 _BLOCK_SIZE = 256
 _SINGLE_REQUEST_SCHEDULER_SIZE = 16
+_SUPPORTED_S5000_SM_COUNTS = frozenset({48, 56, 60, 64})
 _SUPPORTED_QWEN_GEOMETRIES = frozenset(
     {
         (12, 2, 128),
@@ -25,6 +29,15 @@ _SUPPORTED_QWEN_GEOMETRIES = frozenset(
 )
 
 
+@functools.cache
+def _use_fa3_wave_capacity() -> bool:
+    """MATE >= 0.2.8 scales blocks_per_mp denominator by split_waves."""
+    try:
+        return version("mate").split("+", 1)[0] != "0.2.4"
+    except PackageNotFoundError:
+        return True
+
+
 @triton.jit
 def _build_qwen_single_request_fa3_metadata_kernel(
     seq_lens_ptr,
@@ -33,6 +46,7 @@ def _build_qwen_single_request_fa3_metadata_kernel(
     scheduler_dst_size,
     NUM_HEADS_KV: tl.constexpr,
     MAX_NUM_SPLITS: tl.constexpr,
+    WAVE_CAPACITY: tl.constexpr,
     MAX_KV_BLOCKS_IN_L2: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
@@ -40,15 +54,19 @@ def _build_qwen_single_request_fa3_metadata_kernel(
     seq_len = tl.load(seq_lens_ptr)
     safe_seq_len = tl.where(seq_len > 0, seq_len, 1)
 
-    # Batch-one specialization of the MATE 0.2.4 metadata scheduler. Runtime
-    # gates fix BF16, causal decode, TileN/page size 64, pack-GQA and 60 active
-    # MPs. In this envelope num_m_blocks is one and global split-budget
-    # reduction is a no-op.
+    # Batch-one specialization of the MATE 0.2.4 / 0.2.8.x metadata scheduler.
+    # Runtime gates fix BF16, causal decode, TileN/page size 64, pack-GQA and
+    # validated S5000 full-card MP counts (48/56/60/64). In this envelope
+    # num_m_blocks is one and global split-budget reduction is a no-op.
     num_n_blocks = (safe_seq_len + 63) // 64
-    # MATE uses ceilf(n_blocks * 1.1f * nheads / 60). The host gate limits
-    # n_blocks to 64 and KV heads to 2/4/8, where this rational form is exactly
-    # equivalent and avoids backend-dependent float rounding in Triton.
-    blocks_per_mp = (num_n_blocks * 11 * NUM_HEADS_KV + 599) // 600
+    # MATE uses max(ceilf(n_blocks * 1.1f * nheads / wave_capacity), 1). Across
+    # n_blocks in 1..64, KV heads in {2, 4, 8} and S5000 MP bins {48,56,60,64},
+    # this integer rational form is bit-identical to IEEE-754 float32 ceilf.
+    blocks_per_mp = tl.maximum(
+        (num_n_blocks * 11 * NUM_HEADS_KV + 10 * WAVE_CAPACITY - 1)
+        // (10 * WAVE_CAPACITY),
+        1,
+    )
     split_count = (num_n_blocks + blocks_per_mp - 1) // blocks_per_mp
     split_count = tl.where(
         split_count <= MAX_NUM_SPLITS,
@@ -108,11 +126,13 @@ def _supports_qwen_fa3_scheduler_geometry(
     num_heads_kv: int,
     head_dim: int,
     max_num_splits: int,
+    sm_count: int = 60,
 ) -> bool:
     return (
-        1 <= max_seq_len <= 4096
+        sm_count in _SUPPORTED_S5000_SM_COUNTS
+        and 1 <= max_seq_len <= 4096
         and (num_heads_q, num_heads_kv, head_dim) in _SUPPORTED_QWEN_GEOMETRIES
-        and max_num_splits == (60 + num_heads_kv - 1) // num_heads_kv
+        and max_num_splits == (sm_count + num_heads_kv - 1) // num_heads_kv
     )
 
 
@@ -125,6 +145,7 @@ def supports_qwen_single_request_fa3_scheduler_lookup(
     num_heads_kv: int,
     head_dim: int,
     max_num_splits: int,
+    sm_count: int = 60,
 ) -> bool:
     tensors = (seq_lens, cu_seqlens_k, scheduler_dst)
     return (
@@ -134,6 +155,7 @@ def supports_qwen_single_request_fa3_scheduler_lookup(
             num_heads_kv,
             head_dim,
             max_num_splits,
+            sm_count=sm_count,
         )
         and seq_lens.device.type == "musa"
         and all(tensor.dtype == torch.int32 for tensor in tensors)
@@ -154,6 +176,7 @@ def try_build_qwen_single_request_fa3_metadata(
     num_heads_kv: int,
     head_dim: int,
     max_num_splits: int,
+    sm_count: int = 60,
 ) -> bool:
     """Build the exact-gated batch-one FA3 schedule and cu_seqlens_k."""
     if not supports_qwen_single_request_fa3_scheduler_lookup(
@@ -165,9 +188,16 @@ def try_build_qwen_single_request_fa3_metadata(
         num_heads_kv,
         head_dim,
         max_num_splits,
+        sm_count=sm_count,
     ):
         return False
 
+    split_waves = (
+        max((num_heads_kv * max_num_splits + sm_count - 1) // sm_count, 1)
+        if _use_fa3_wave_capacity()
+        else 1
+    )
+    wave_capacity = sm_count * split_waves
     grid = (triton.cdiv(scheduler_dst.numel(), _BLOCK_SIZE),)
     _build_qwen_single_request_fa3_metadata_kernel[grid](
         seq_lens,
@@ -176,6 +206,7 @@ def try_build_qwen_single_request_fa3_metadata(
         scheduler_dst.numel(),
         NUM_HEADS_KV=num_heads_kv,
         MAX_NUM_SPLITS=max_num_splits,
+        WAVE_CAPACITY=wave_capacity,
         MAX_KV_BLOCKS_IN_L2=96 if head_dim == 64 else 48,
         BLOCK_SIZE=_BLOCK_SIZE,
     )

@@ -573,11 +573,19 @@ class TestMUSAPlatformBase:
         monkeypatch.setattr(flash_attn, "version", versions.__getitem__)
         assert flash_attn._has_supported_fa3_scheduler_layout()
 
+        for v in ("0.2.8", "0.2.8.post1"):
+            versions["mate"] = v
+            versions["flash_attn_3"] = f"{v}+musa"
+            assert flash_attn._has_supported_fa3_scheduler_layout()
+            versions["flash_attn_3"] = v
+            assert flash_attn._has_supported_fa3_scheduler_layout()
+
         versions["mate"] = "0.2.5"
+        versions["flash_attn_3"] = "0.2.5+musa"
         assert not flash_attn._has_supported_fa3_scheduler_layout()
 
-        versions["mate"] = "0.2.4"
-        versions["flash_attn_3"] = "0.2.4+custom"
+        versions["mate"] = "0.2.8.post1"
+        versions["flash_attn_3"] = "0.2.8.post1+custom"
         assert not flash_attn._has_supported_fa3_scheduler_layout()
 
         def missing_package(_package):

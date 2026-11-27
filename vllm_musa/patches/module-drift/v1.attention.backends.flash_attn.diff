@@ -62,7 +62,7 @@
  import vllm.envs as envs
  from vllm.config import (
      VllmConfig,
-@@ -65,335 +23,270 @@
+@@ -65,335 +23,278 @@
      get_dcp_world_size_and_rank,
  )
  from vllm.logger import init_logger
@@ -238,17 +238,25 @@
 +    return _is_qwen_family_scheduler_lookup_base_config(vllm_config)
 +
 +
++_SUPPORTED_FA3_SCHEDULER_MATE_VERSIONS = frozenset({"0.2.4", "0.2.8", "0.2.8.post1"})
++_SUPPORTED_S5000_FA3_SM_COUNTS = frozenset({48, 56, 60, 64})
++
++
 +def _has_supported_fa3_scheduler_layout() -> bool:
-+    """The direct builder mirrors the pinned MATE 0.2.4 metadata layout."""
++    """The direct builder mirrors the validated MATE 0.2.4 / 0.2.8.x layout."""
 +    try:
 +        mate_version = version("mate")
 +        flash_attn_version = version("flash_attn_3")
 +    except PackageNotFoundError:
 +        return False
-+    return mate_version == "0.2.4" and flash_attn_version in {
-+        "0.2.4",
-+        "0.2.4+musa",
-+    }
++    return (
++        mate_version in _SUPPORTED_FA3_SCHEDULER_MATE_VERSIONS
++        and flash_attn_version
++        in {
++            mate_version,
++            f"{mate_version}+musa",
++        }
++    )
 +
 +
 +def _torch_reduce_scatter_dim(
@@ -634,7 +642,7 @@
          return True
 
      @classmethod
-@@ -408,8 +301,9 @@
+@@ -408,8 +309,9 @@
 
      @classmethod
      def supports_per_head_quant_scales(cls) -> bool:
@@ -646,7 +654,7 @@
 
      @staticmethod
      def get_impl_cls() -> type["FlashAttentionImpl"]:
-@@ -419,29 +313,60 @@
+@@ -419,29 +321,60 @@
      def get_builder_cls() -> type["FlashAttentionMetadataBuilder"]:
          return FlashAttentionMetadataBuilder
 
@@ -723,7 +731,7 @@
 
      @classmethod
      def supports_sink(cls) -> bool:
-@@ -451,7 +376,7 @@
+@@ -451,7 +384,7 @@
 
      @classmethod
      def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
@@ -732,7 +740,7 @@
 
      @classmethod
      def supports_combination(
-@@ -466,46 +391,11 @@
+@@ -466,46 +399,11 @@
          use_mm_prefix: bool,
          device_capability: DeviceCapability,
      ) -> str | None:
@@ -782,7 +790,7 @@
          return None
 
 
-@@ -527,69 +417,62 @@
+@@ -527,69 +425,62 @@
      block_table: torch.Tensor
      slot_mapping: torch.Tensor
 
@@ -891,7 +899,7 @@
 
 
  class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetadata]):
-@@ -618,18 +501,142 @@
+@@ -618,18 +509,142 @@
      )
      supports_update_block_table: bool = True
 
@@ -1037,7 +1045,7 @@
          batch_size: int,
          cu_query_lens: torch.Tensor,
          max_query_len: int,
-@@ -638,12 +645,16 @@
+@@ -638,12 +653,16 @@
          causal: bool | torch.Tensor,
          max_num_splits: int,
      ) -> torch.Tensor | None:
@@ -1059,7 +1067,7 @@
          else:
              qkv_dtype = self.kv_cache_dtype
          return get_scheduler_metadata(
-@@ -658,153 +669,9 @@
+@@ -658,153 +677,9 @@
              cu_seqlens_q=cu_query_lens,
              page_size=self.block_size,
              causal=causal,
@@ -1214,7 +1222,7 @@
 
      def build(
          self,
-@@ -812,7 +679,8 @@
+@@ -812,7 +687,8 @@
          common_attn_metadata: CommonAttentionMetadata,
          fast_build: bool = False,
      ) -> FlashAttentionMetadata:
@@ -1224,7 +1232,7 @@
          iterations i.e. spec-decode
          """
          num_reqs = common_attn_metadata.num_reqs
-@@ -825,11 +693,25 @@
+@@ -825,11 +701,25 @@
          slot_mapping = common_attn_metadata.slot_mapping
          causal = common_attn_metadata.causal
 
@@ -1255,7 +1263,7 @@
 
          if self.aot_sliding_window is None:
              self.aot_sliding_window = (-1, -1)
-@@ -857,100 +739,250 @@
+@@ -857,100 +747,251 @@
              # usage, because the intermediate buffers of size [num_splits,
              # num_heads, num_tokens, head_size] are allocated. Therefore,
              # we only set num_splits when using cuda graphs.
@@ -1488,8 +1496,8 @@
 +                and causal
 +                and self.aot_sliding_window == (-1, -1)
 +                and self._sm_count_query_succeeded
-+                and self._sm_count == 60
-+                and 1 <= max_num_splits <= 60
++                and self._sm_count in _SUPPORTED_S5000_FA3_SM_COUNTS
++                and 1 <= max_num_splits <= self._sm_count
 +                and 1 <= self.num_heads_kv <= 32
 +                and self.num_heads_q % self.num_heads_kv == 0
 +                and 1 <= self.num_heads_q // self.num_heads_kv <= 32
@@ -1512,6 +1520,7 @@
 +                    self.num_heads_kv,
 +                    self.headdim,
 +                    max_num_splits,
++                    sm_count=self._sm_count,
 +                )
 +                if direct_metadata_built:
 +                    cu_seqlens_k = buf[:2]
@@ -1580,7 +1589,7 @@
 
          attn_metadata = FlashAttentionMetadata(
              num_actual_tokens=num_actual_tokens,
-@@ -958,63 +990,87 @@
+@@ -958,63 +999,87 @@
              query_start_loc=query_start_loc,
              max_seq_len=max_seq_len,
              seq_lens=seq_lens,
@@ -1716,7 +1725,7 @@
 
      def update_block_table(
          self,
-@@ -1024,34 +1080,18 @@
+@@ -1024,34 +1089,18 @@
      ) -> FlashAttentionMetadata:
          new_metadata = copy.copy(metadata)
          new_metadata.block_table = blk_table
@@ -1756,7 +1765,7 @@
 
      def __init__(
          self,
-@@ -1090,51 +1130,21 @@
+@@ -1090,51 +1139,21 @@
          self.num_queries_per_kv = self.num_heads // self.num_kv_heads
 
          self.attn_type = attn_type
@@ -1812,7 +1821,7 @@
              )
 
          self.sinks = sinks
-@@ -1147,32 +1157,30 @@
+@@ -1147,32 +1166,30 @@
                  "heads in the layer"
              )
 
@@ -1864,7 +1873,7 @@
 
      def forward(
          self,
-@@ -1182,33 +1190,28 @@
+@@ -1182,33 +1199,28 @@
          value: torch.Tensor,
          kv_cache: torch.Tensor,
          attn_metadata: FlashAttentionMetadata,
@@ -1903,7 +1912,7 @@
          assert self.vllm_flash_attn_version is not None, (
              "FlashAttention version not detected."
          )
-@@ -1248,181 +1251,697 @@
+@@ -1248,181 +1260,697 @@
                  layer,
              )
 
@@ -2769,7 +2778,7 @@
 
      def do_kv_cache_update(
          self,
-@@ -1437,9 +1956,7 @@
+@@ -1437,9 +1965,7 @@
              # we use direct Q, K, V tensors without caching
              return
 
@@ -2780,7 +2789,7 @@
          key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
          # Reshape the input keys and values and store them in the cache.
-@@ -1460,182 +1977,6 @@
+@@ -1460,182 +1986,6 @@
              layer._v_scale,
          )
 
@@ -2963,7 +2972,7 @@
      def _forward_encoder_attention(
          self,
          query: torch.Tensor,
-@@ -1654,14 +1995,13 @@
+@@ -1654,14 +2004,13 @@
              output: shape = [num_encoder_tokens, num_heads, head_size]
              attn_metadata: Encoder attention metadata
              layer: The attention layer
@@ -2979,7 +2988,7 @@
              raise NotImplementedError(
                  "quantization is not supported for encoder attention"
              )
-@@ -1672,203 +2012,198 @@
+@@ -1672,203 +2021,198 @@
          max_seqlen_q = attn_metadata.max_query_len
          max_seqlen_k = attn_metadata.max_query_len
 

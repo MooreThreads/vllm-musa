@@ -163,17 +163,25 @@ def _is_qwen_family_scheduler_lookup_config(vllm_config: VllmConfig) -> bool:
     return _is_qwen_family_scheduler_lookup_base_config(vllm_config)
 
 
+_SUPPORTED_FA3_SCHEDULER_MATE_VERSIONS = frozenset({"0.2.4", "0.2.8", "0.2.8.post1"})
+_SUPPORTED_S5000_FA3_SM_COUNTS = frozenset({48, 56, 60, 64})
+
+
 def _has_supported_fa3_scheduler_layout() -> bool:
-    """The direct builder mirrors the pinned MATE 0.2.4 metadata layout."""
+    """The direct builder mirrors the validated MATE 0.2.4 / 0.2.8.x layout."""
     try:
         mate_version = version("mate")
         flash_attn_version = version("flash_attn_3")
     except PackageNotFoundError:
         return False
-    return mate_version == "0.2.4" and flash_attn_version in {
-        "0.2.4",
-        "0.2.4+musa",
-    }
+    return (
+        mate_version in _SUPPORTED_FA3_SCHEDULER_MATE_VERSIONS
+        and flash_attn_version
+        in {
+            mate_version,
+            f"{mate_version}+musa",
+        }
+    )
 
 
 def _torch_reduce_scatter_dim(
@@ -917,8 +925,8 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
                 and causal
                 and self.aot_sliding_window == (-1, -1)
                 and self._sm_count_query_succeeded
-                and self._sm_count == 60
-                and 1 <= max_num_splits <= 60
+                and self._sm_count in _SUPPORTED_S5000_FA3_SM_COUNTS
+                and 1 <= max_num_splits <= self._sm_count
                 and 1 <= self.num_heads_kv <= 32
                 and self.num_heads_q % self.num_heads_kv == 0
                 and 1 <= self.num_heads_q // self.num_heads_kv <= 32
@@ -941,6 +949,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
                     self.num_heads_kv,
                     self.headdim,
                     max_num_splits,
+                    sm_count=self._sm_count,
                 )
                 if direct_metadata_built:
                     cu_seqlens_k = buf[:2]
