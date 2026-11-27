@@ -153,8 +153,8 @@ def moe_w2_gemv(
     out: torch.Tensor,
 ) -> torch.Tensor:
     """``out[t] = sum_s routed_weights[t * K + s] * dequant(aq[t * K + s]) @
-    dequant(w2[expert_ids[t * K + s]]).T`` with ``K = expert_ids.numel() // out.shape[0]``,
-    rounded once per token."""
+    dequant(w2[expert_ids[t * K + s]]).T`` with
+    ``K = expert_ids.numel() // out.shape[0]``, rounded once per token."""
     torch.ops.vllm.musa_fp8_moe_w2_gemv(
         aq, a_scale, w2, w2_scale, expert_ids, routed_weights, out
     )

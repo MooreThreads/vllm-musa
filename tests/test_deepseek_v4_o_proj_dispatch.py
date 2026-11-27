@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 MODULE_PATH = (
     Path(__file__).resolve().parents[1]
     / "vllm_musa"
@@ -11,9 +10,7 @@ MODULE_PATH = (
     / "fp8_einsum.py"
 )
 GEMV_PATH = Path(__file__).resolve().parents[1] / "csrc" / "musa" / "gemv.mu"
-CUSTOM_OPS_PATH = (
-    Path(__file__).resolve().parents[1] / "vllm_musa" / "_custom_ops.py"
-)
+CUSTOM_OPS_PATH = Path(__file__).resolve().parents[1] / "vllm_musa" / "_custom_ops.py"
 
 
 def _module_tree() -> ast.Module:
@@ -28,8 +25,7 @@ def test_o_proj_uses_fixed_deepgemm_threshold() -> None:
         for node in tree.body
         if isinstance(node, ast.Assign)
         and any(
-            isinstance(target, ast.Name)
-            and target.id == "_DEEPGEMM_MIN_TOKENS"
+            isinstance(target, ast.Name) and target.id == "_DEEPGEMM_MIN_TOKENS"
             for target in node.targets
         )
     )

@@ -237,8 +237,7 @@ _CALIBRATED_THRESHOLDS.update(
             gemv_max_tokens=12,
             grouped_gemm_min_tokens=None,
             source=(
-                f"s5000-mp60-20260818-e256-n512-k4096-{graph_mode}-"
-                "block16-split32-m12"
+                f"s5000-mp60-20260818-e256-n512-k4096-{graph_mode}-block16-split32-m12"
             ),
         )
         for graph_mode in ("eager", "capture")
@@ -352,8 +351,7 @@ _CALIBRATED_THRESHOLDS.update(
             gemv_max_tokens=10,
             grouped_gemm_min_tokens=None,
             source=(
-                f"s5000-mp60-20260806-qwen35-bf16-folded-"
-                f"e257-n256-k3072-{graph_mode}"
+                f"s5000-mp60-20260806-qwen35-bf16-folded-e257-n256-k3072-{graph_mode}"
             ),
         )
         for graph_mode in ("eager", "capture")

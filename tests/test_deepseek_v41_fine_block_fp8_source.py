@@ -99,7 +99,8 @@ def test_series_lists_block_gemv_between_deepgemm_and_triton() -> None:
     text = _patch("0183")
     order = [
         text.index(
-            "MUSADeepGemmFp8BlockScaledMMKernel,\n+                MUSAFp8BlockGemvScaledMMKernel,"
+            "MUSADeepGemmFp8BlockScaledMMKernel,\n"
+            "+                MUSAFp8BlockGemvScaledMMKernel,"
         ),
         text.index("TritonFp8BlockScaledMMKernel,\n             ]"),
     ]

@@ -19,13 +19,15 @@ def _musa_worker_termination_timeout_s() -> float:
         timeout_s = float(value)
     except ValueError:
         logger.warning(
-            "Invalid VLLM_MUSA_WORKER_TERMINATION_TIMEOUT_S=%r; using default 4 seconds",
+            "Invalid VLLM_MUSA_WORKER_TERMINATION_TIMEOUT_S=%r; using default 4 "
+            "seconds",
             value,
         )
         return 4
     if timeout_s <= 0 or not isfinite(timeout_s):
         logger.warning(
-            "Invalid VLLM_MUSA_WORKER_TERMINATION_TIMEOUT_S=%r; value must be positive and finite; using default 4 seconds",
+            "Invalid VLLM_MUSA_WORKER_TERMINATION_TIMEOUT_S=%r; value must be "
+            "positive and finite; using default 4 seconds",
             value,
         )
         return 4
@@ -73,7 +75,8 @@ _HOOKS_INSTALLED = False
 
 
 def install_hooks() -> None:
-    """Install MUSA ``MultiprocExecutor._ensure_worker_termination`` hook (idempotent)."""
+    """Install MUSA ``MultiprocExecutor._ensure_worker_termination`` hook
+    (idempotent)."""
     global _HOOKS_INSTALLED
     if _HOOKS_INSTALLED:
         return

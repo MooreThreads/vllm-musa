@@ -6,7 +6,6 @@ from typing import Any
 
 import torch
 from torch import nn
-
 from vllm.logger import init_logger
 from vllm.model_executor.layers.rotary_embedding.common import ApplyRotaryEmb
 
@@ -112,9 +111,7 @@ class MusaVisionApplyRotaryEmb(ApplyRotaryEmb):
                 seq_len, device=output.device, dtype=torch.long
             ).expand(batch, -1)
             query = output
-        rotary_embedding(
-            positions, query, None, head_size, cache, self.is_neox_style
-        )
+        rotary_embedding(positions, query, None, head_size, cache, self.is_neox_style)
         return self._post_process(output, shape, dtype)
 
 
@@ -175,9 +172,7 @@ def install_vision_rotary(
         not active
         or (expected_blocks is not None and len(active) != expected_blocks)
         or any(
-            not isinstance(
-                getattr(attention, "apply_rotary_emb", None), ApplyRotaryEmb
-            )
+            not isinstance(getattr(attention, "apply_rotary_emb", None), ApplyRotaryEmb)
             for attention in active
         )
     ):
@@ -211,9 +206,18 @@ def install_mrope_rotary(
         rotary = getattr(attention, "rotary_emb", None)
         if (
             rotary is None
-            or (mrope_section is not None and tuple(getattr(rotary, "mrope_section", ()) or ()) != mrope_section)
-            or (head_size is not None and getattr(rotary, "head_size", None) != head_size)
-            or (rotary_dim is not None and getattr(rotary, "rotary_dim", None) != rotary_dim)
+            or (
+                mrope_section is not None
+                and tuple(getattr(rotary, "mrope_section", ()) or ()) != mrope_section
+            )
+            or (
+                head_size is not None
+                and getattr(rotary, "head_size", None) != head_size
+            )
+            or (
+                rotary_dim is not None
+                and getattr(rotary, "rotary_dim", None) != rotary_dim
+            )
         ):
             continue
         if set_neox_style:
@@ -299,17 +303,29 @@ def _ovis_qwen35_vision_geometry(config: object, dtype: object) -> bool:
         and tuple(
             getattr(text, name, None)
             for name in (
-                "hidden_size", "intermediate_size", "num_hidden_layers",
-                "num_attention_heads", "num_key_value_heads", "head_dim", "vocab_size",
+                "hidden_size",
+                "intermediate_size",
+                "num_hidden_layers",
+                "num_attention_heads",
+                "num_key_value_heads",
+                "head_dim",
+                "vocab_size",
             )
-        ) == (1024, 3584, 24, 8, 2, 256, 248320)
+        )
+        == (1024, 3584, 24, 8, 2, 256, 248320)
         and tuple(
             getattr(vision, name, None)
             for name in (
-                "hidden_size", "depth", "num_heads", "out_hidden_size",
-                "patch_size", "spatial_merge_size", "temporal_patch_size",
+                "hidden_size",
+                "depth",
+                "num_heads",
+                "out_hidden_size",
+                "patch_size",
+                "spatial_merge_size",
+                "temporal_patch_size",
             )
-        ) == (768, 12, 12, 1024, 16, 2, 2)
+        )
+        == (768, 12, 12, 1024, 16, 2, 2)
     )
 
 
@@ -319,7 +335,9 @@ def resolve_rotary_contract(
     """Select exact model rotary geometry without model rules in the resolver."""
     config = getattr(model_config, "hf_config", None)
     if getattr(config, "model_type", None) == "paddleocr_vl":
-        model = replace(contract.model, family=ModelFamily.PADDLEOCR_VL, role=ModelRole.TEXT)
+        model = replace(
+            contract.model, family=ModelFamily.PADDLEOCR_VL, role=ModelRole.TEXT
+        )
         geometry = _paddleocr_vl_geometry(config)
         enabled = (
             geometry[0] == 1152
@@ -327,10 +345,15 @@ def resolve_rotary_contract(
             and geometry[3:] == (16, 14, 384, 1024, 16, 2, (16, 24, 24))
             and getattr(torch.version, "musa", None) is not None
         )
-        features = frozenset({OptimizationFeature.PADDLEOCR_VL_ROTARY} if enabled else ())
+        features = frozenset(
+            {OptimizationFeature.PADDLEOCR_VL_ROTARY} if enabled else ()
+        )
         return replace(
-            contract, model=model, profile="paddleocr_vl",
-            supported_features=features, preferred_features=features,
+            contract,
+            model=model,
+            profile="paddleocr_vl",
+            supported_features=features,
+            preferred_features=features,
         )
     mineru = getattr(OptimizationFeature, "MINERU_QWEN2_VL_ROTARY", None)
     if (
@@ -380,15 +403,48 @@ def install_model_rotary(owner: nn.Module, vllm_config: object) -> bool:
     if paddle is not None and paddle in features:
         visual = getattr(getattr(owner, "visual", None), "vision_model", None)
         visual = getattr(getattr(visual, "encoder", None), "layers", ())
-        vision = ((getattr(layer, "self_attn", None) for layer in visual), {"expected_blocks": 27})
-        language = (getattr(getattr(getattr(owner, "language_model", None), "model", None), "layers", ()), {"set_neox_style": True})
+        vision = (
+            (getattr(layer, "self_attn", None) for layer in visual),
+            {"expected_blocks": 27},
+        )
+        language = (
+            getattr(
+                getattr(getattr(owner, "language_model", None), "model", None),
+                "layers",
+                (),
+            ),
+            {"set_neox_style": True},
+        )
     elif mineru is not None and mineru in features:
         visual = getattr(owner, "visual", None)
-        vision = ((getattr(block, "attn", None) for block in getattr(visual, "blocks", ())), {"expected_blocks": 32, "required_bf16_neox_shape": (80, 40)})
-        language = (getattr(getattr(getattr(owner, "language_model", None), "model", None), "layers", ()), {"mrope_section": (8, 12, 12), "qk_hidden_sizes": (896, 128), "head_size": 64, "rotary_dim": 64})
+        vision = (
+            (getattr(block, "attn", None) for block in getattr(visual, "blocks", ())),
+            {"expected_blocks": 32, "required_bf16_neox_shape": (80, 40)},
+        )
+        language = (
+            getattr(
+                getattr(getattr(owner, "language_model", None), "model", None),
+                "layers",
+                (),
+            ),
+            {
+                "mrope_section": (8, 12, 12),
+                "qk_hidden_sizes": (896, 128),
+                "head_size": 64,
+                "rotary_dim": 64,
+            },
+        )
     elif qwen35 is not None and qwen35 in features:
         visual = getattr(owner, "visual", None)
-        vision = ((getattr(block, "attn", None) for block in getattr(visual, "blocks", ())), {"expected_blocks": 12, "inplace": True, "flatten": True, "required_bf16_neox_shape": (64, 32)})
+        vision = (
+            (getattr(block, "attn", None) for block in getattr(visual, "blocks", ())),
+            {
+                "expected_blocks": 12,
+                "inplace": True,
+                "flatten": True,
+                "required_bf16_neox_shape": (64, 32),
+            },
+        )
         language = None
     else:
         config = getattr(getattr(vllm_config, "model_config", None), "hf_config", None)
@@ -398,7 +454,9 @@ def install_model_rotary(owner: nn.Module, vllm_config: object) -> bool:
     expected_blocks = vision[1]["expected_blocks"]
     if not install_vision_rotary(vision[0], **vision[1]):
         if qwen35 is not None and qwen35 in features:
-            logger.info_once("MUSA Qwen3.5 vision rotary skipped: incomplete visual blocks")
+            logger.info_once(
+                "MUSA Qwen3.5 vision rotary skipped: incomplete visual blocks"
+            )
         return False
     if language is not None:
         install_mrope_rotary(language[0], **language[1])

@@ -12,7 +12,10 @@ def test_contract_selected_gemv_block_reaches_custom_op_schema() -> None:
     custom_ops = _source("vllm_musa/_custom_ops.py")
     fused_moe = _source("vllm_musa/model_executor/layers/fused_moe/fused_moe.py")
 
-    assert "bool use_swigelu, int block_n=0, int block_k=0, float swiglu_limit=0.0) -> ()" in bindings
+    assert (
+        "bool use_swigelu, int block_n=0, int block_k=0, float swiglu_limit=0.0) -> ()"
+        in bindings
+    )
     assert "block_n: int = 0" in custom_ops
     assert "block_k: int = 0" in custom_ops
     assert "block_n,\n        block_k," in custom_ops

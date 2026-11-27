@@ -15,15 +15,26 @@ from vllm_musa.optimization_contract import (  # noqa: E402
 
 def _hf_config():
     return SimpleNamespace(
-        architectures=["Qwen3_5ForConditionalGeneration"], model_type="qwen3_5",
+        architectures=["Qwen3_5ForConditionalGeneration"],
+        model_type="qwen3_5",
         text_config=SimpleNamespace(
-            model_type="qwen3_5_text", hidden_size=1024, intermediate_size=3584,
-            num_hidden_layers=24, num_attention_heads=8, num_key_value_heads=2,
-            head_dim=256, vocab_size=248320,
+            model_type="qwen3_5_text",
+            hidden_size=1024,
+            intermediate_size=3584,
+            num_hidden_layers=24,
+            num_attention_heads=8,
+            num_key_value_heads=2,
+            head_dim=256,
+            vocab_size=248320,
         ),
         vision_config=SimpleNamespace(
-            hidden_size=768, depth=12, num_heads=12, out_hidden_size=1024,
-            patch_size=16, spatial_merge_size=2, temporal_patch_size=2,
+            hidden_size=768,
+            depth=12,
+            num_heads=12,
+            out_hidden_size=1024,
+            patch_size=16,
+            spatial_merge_size=2,
+            temporal_patch_size=2,
         ),
     )
 

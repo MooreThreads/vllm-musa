@@ -3,26 +3,14 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent.parent
 MOE_SOURCE = (
-    ROOT
-    / "vllm_musa"
-    / "model_executor"
-    / "layers"
-    / "fused_moe"
-    / "fused_moe.py"
+    ROOT / "vllm_musa" / "model_executor" / "layers" / "fused_moe" / "fused_moe.py"
 )
 PREPROCESS_SOURCE = (
-    ROOT
-    / "vllm_musa"
-    / "jit_kernel"
-    / "tilelang"
-    / "deep_gemm_contig_preprocess.py"
+    ROOT / "vllm_musa" / "jit_kernel" / "tilelang" / "deep_gemm_contig_preprocess.py"
 )
-WARMUP_SOURCE = (
-    ROOT / "vllm_musa" / "model_executor" / "warmup" / "deep_gemm_warmup.py"
-)
+WARMUP_SOURCE = ROOT / "vllm_musa" / "model_executor" / "warmup" / "deep_gemm_warmup.py"
 
 
 def test_bf16_deepgemm_prefill_uses_native_bf16_gemm_by_default():

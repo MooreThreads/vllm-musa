@@ -47,9 +47,9 @@ class TestCustomOpsRuntimePatches:
         _load_patch_module(patch_file).apply()
 
         assert vllm_ops.rms_norm is _shared.musa_safe_rms_norm
-        assert getattr(vllm_ops.rms_norm, "_musa_safe_rms_norm") is True
+        assert vllm_ops.rms_norm._musa_safe_rms_norm is True
         assert vllm_ops.rotary_embedding is _shared.musa_safe_rotary_embedding
-        assert getattr(vllm_ops.rotary_embedding, "_musa_safe_rotary_embedding") is True
+        assert vllm_ops.rotary_embedding._musa_safe_rotary_embedding is True
 
     def test_static_fp8_fallback_is_registered_on_vllm_custom_ops(self, monkeypatch):
         import vllm
@@ -71,7 +71,7 @@ class TestCustomOpsRuntimePatches:
         )
         patch_module.apply()
 
-        assert getattr(vllm_ops.scaled_fp8_quant, "_musa_static_fp8_fallback")
+        assert vllm_ops.scaled_fp8_quant._musa_static_fp8_fallback
         assert vllm_ops.scaled_fp8_quant(torch.ones((1, 1))) is delegated
 
         values = torch.tensor([[2.0, 4.0], [4.0, 4.0]])
@@ -1262,7 +1262,7 @@ class TestMUSAFp8MoEPadding:
         monkeypatch.setattr(
             musa_fp8,
             "_ORIGINAL_FP8_MOE_MAYBE_ROUNDUP_SIZES",
-            lambda self, hidden_size, intermediate_size_per_partition, act_dtype, moe_parallel_config: (
+            lambda self, hidden_size, intermediate_size_per_partition, act_dtype, moe_parallel_config: (  # noqa: E501
                 hidden_size,
                 intermediate_size_per_partition,
             ),
@@ -1583,7 +1583,7 @@ class TestObjectPatchPhase:
             mod = _load_patch_module(patch_file)
             if mod is not None and callable(getattr(mod, "apply", None)):
                 found[module_name] = patch_file.name
-        assert self._OBJECT_PATCH_MODULES <= set(found), (
+        assert set(found) >= self._OBJECT_PATCH_MODULES, (
             f"object-patch modules missing apply(): "
             f"{self._OBJECT_PATCH_MODULES - set(found)}"
         )
@@ -1631,7 +1631,7 @@ class TestObjectPatchPhase:
         r2 = apply_object_patches(force=True)
         assert isinstance(r1, list) and isinstance(r2, list)
         applied_mods = {e["module"] for e in r1}
-        assert self._OBJECT_PATCH_MODULES <= applied_mods, applied_mods
+        assert applied_mods >= self._OBJECT_PATCH_MODULES, applied_mods
         for e in r1 + r2:
             assert {"module", "file", "status"} <= set(e), e
             assert e["status"] in {"applied", "error"}, e
@@ -1793,7 +1793,7 @@ class TestMUSAGroupedTopKRouter:
         )
 
     def test_no_bias_jit_path_applies_routed_scaling_factor(self, monkeypatch):
-        import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router_mod
+        import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router_mod  # noqa: E501
 
         hidden_states = torch.zeros((2, 4), dtype=torch.float32)
         router_logits = torch.zeros((2, 4), dtype=torch.float32)
@@ -1818,7 +1818,7 @@ class TestMUSAGroupedTopKRouter:
     def test_no_bias_fused_topk_fallback_applies_routed_scaling_factor(
         self, monkeypatch
     ):
-        import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router_mod
+        import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router_mod  # noqa: E501
 
         hidden_states = torch.zeros((2, 4), dtype=torch.float32)
         router_logits = torch.zeros((2, 4), dtype=torch.float32)

@@ -26,7 +26,9 @@ def _added_by_file() -> dict[str, list[str]]:
         if line.startswith("+++ b/"):
             current = line[len("+++ b/") :]
             added[current] = []
-        elif current is not None and line.startswith("+") and not line.startswith("+++"):
+        elif (
+            current is not None and line.startswith("+") and not line.startswith("+++")
+        ):
             added[current].append(line[1:])
     return added
 

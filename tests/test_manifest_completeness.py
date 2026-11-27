@@ -49,7 +49,8 @@ def test_categories_and_phases_valid(m):
     for e in m.ENTRIES:
         assert e.category in m.VALID_CATEGORIES, e
         assert e.apply_phase in m.VALID_PHASES, e
-    # build-applied categories must be pre-install/pre-compile; 4a never applied; 5/6 runtime
+    # build-applied categories must be pre-install/pre-compile; 4a never applied;
+    # 5/6 runtime
     for e in m.ENTRIES:
         if e.category in m.BUILD_APPLIED_CATEGORIES:
             assert e.apply_phase in ("pre-install", "pre-compile"), e

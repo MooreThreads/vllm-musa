@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Source contracts for negative qk_mrope cache slots."""
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 import pytest
 
@@ -89,6 +89,8 @@ def test_generic_cache_kernel_guards_negative_slots_but_keeps_k_out() -> None:
     assert len(cache_write_blocks) == 2
     assert all("k_cache" in block for block in cache_write_blocks)
     for write in ("k_cache[", "k_cache +"):
-        assert body.count(write) == sum(block.count(write) for block in cache_write_blocks)
+        assert body.count(write) == sum(
+            block.count(write) for block in cache_write_blocks
+        )
     assert all("k_out" not in block for block in cache_write_blocks)
     assert body.count("if (k_out != nullptr)") == 2

@@ -82,7 +82,8 @@ def deepseek_v4_long_prefill_logits_budget_mb() -> int:
 
 
 def deepseek_v4_long_prefill_tp_partition_min_seq_len() -> int:
-    """Return the compressed-key length where Gloo TP sharding of indexer rows pays off."""
+    """Return the compressed-key length where Gloo TP sharding of indexer rows pays
+    off."""
     return _DEEPSEEK_V4_LONG_PREFILL_TP_PARTITION_MIN_SEQ_LEN
 
 

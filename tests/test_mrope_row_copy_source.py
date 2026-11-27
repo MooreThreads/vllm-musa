@@ -3,14 +3,13 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_musa_mrope_copy_uses_contiguous_rows_without_a_gate() -> None:
-    source = (
-        ROOT / "third_party/vllm/vllm/v1/worker/gpu_model_runner.py"
-    ).read_text(encoding="utf-8")
+    source = (ROOT / "third_party/vllm/vllm/v1/worker/gpu_model_runner.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "if self.uses_mrope:" in source
     assert "for row in range(self.mrope_positions.gpu.shape[0]):" in source

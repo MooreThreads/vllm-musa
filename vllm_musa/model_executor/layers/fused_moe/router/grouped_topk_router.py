@@ -266,7 +266,8 @@ def _grouped_topk_general(
     e_score_correction_bias: torch.Tensor | None = None,
     num_fused_shared_experts: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    # XXX (MUSA): Fixed the issue of incorrect accuracy when enabling graph on s5000 with the biased_grouped_topk
+    # XXX (MUSA): Fixed the issue of incorrect accuracy when enabling graph on
+    # s5000 with the biased_grouped_topk
     # For detailed problem description, please refer to JIRA#686
     # ==================== MUSA ADAPTATION ====================
     if hidden_states.dtype != torch.float32:
@@ -378,7 +379,7 @@ def _can_use_musa_tilelang_grouped_topk(
         and gating_output.dim() == 2
         and hidden_states.shape[0] == gating_output.shape[0]
         and gating_output.dtype in (torch.float16, torch.bfloat16, torch.float32)
-        and 0 < num_expert_group
+        and num_expert_group > 0
         and 0 < topk_group <= num_expert_group
         and gating_output.shape[1] % num_expert_group == 0
         and 0 < topk <= topk_group * (gating_output.shape[1] // num_expert_group)

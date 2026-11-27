@@ -3,7 +3,8 @@
 """The split-K rows a tune_fp8_block_splitk.py measurement gives a card, and their merge
 into vllm_musa/tuning/fp8_block_splitk.json. Needs no torch.
 
-    python benchmarks/kernels/fp8_block_splitk/table_rows.py RESULT.json [...] [--write [TABLE]]
+    python benchmarks/kernels/fp8_block_splitk/table_rows.py RESULT.json [...]
+    [--write [TABLE]]
 
 For a shape with a default row, the card gets its own row where its best config is
 CONFIG_GAIN faster than the default config, or a band edge moves by
@@ -287,7 +288,8 @@ def dumps(table: dict) -> str:
 
 
 def write(path: Path, reports: list[dict]) -> dict:
-    """Merge the rows of ``reports`` into the table at ``path``; validate before writing."""
+    """Merge the rows of ``reports`` into the table at ``path``; validate before
+    writing."""
     from vllm_musa import tuning
 
     text = path.read_text()

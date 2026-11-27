@@ -5,9 +5,12 @@ from __future__ import annotations
 import os
 
 import pytest
-import torchada  # noqa: F401
+
+# isort: off
+import torchada  # noqa: F401  # must patch before torch ecosystem imports
 import torch
 
+# isort: on
 from vllm.platforms import current_platform
 
 pytestmark = pytest.mark.skipif(
@@ -158,9 +161,9 @@ def _cpu_fp64_reference(
     for token_id in range(num_tokens):
         scores = torch.softmax(logits[token_id], dim=-1)
         group_scores = scores.reshape(num_expert_group, experts_per_group).amax(dim=-1)
-        selected_groups = torch.argsort(
-            group_scores, descending=True, stable=True
-        )[:topk_group]
+        selected_groups = torch.argsort(group_scores, descending=True, stable=True)[
+            :topk_group
+        ]
         group_mask = torch.zeros(num_expert_group, dtype=torch.bool)
         group_mask[selected_groups] = True
         expert_mask = group_mask.repeat_interleave(experts_per_group)
@@ -198,15 +201,17 @@ def _cpu_torch_topk_reference(
     scores = torch.softmax(logits, dim=-1)
     num_tokens, num_experts = scores.shape
     experts_per_group = num_experts // num_expert_group
-    group_scores = scores.reshape(
-        num_tokens, num_expert_group, experts_per_group
-    ).amax(dim=-1)
+    group_scores = scores.reshape(num_tokens, num_expert_group, experts_per_group).amax(
+        dim=-1
+    )
     group_idx = torch.topk(group_scores, k=topk_group, dim=-1, sorted=True).indices
     group_mask = torch.zeros_like(group_scores, dtype=torch.bool)
     group_mask.scatter_(1, group_idx, True)
-    score_mask = group_mask.unsqueeze(-1).expand(
-        num_tokens, num_expert_group, experts_per_group
-    ).reshape(num_tokens, num_experts)
+    score_mask = (
+        group_mask.unsqueeze(-1)
+        .expand(num_tokens, num_expert_group, experts_per_group)
+        .reshape(num_tokens, num_experts)
+    )
     tmp_scores = scores.masked_fill(~score_mask, float("-inf"))
     topk_weights, topk_ids = torch.topk(tmp_scores, k=topk, dim=-1, sorted=True)
     if renormalize:
@@ -264,7 +269,8 @@ def _assert_matches_cpu_reference(
     expected_weights, expected_ids = expected
     assert torch.equal(actual_ids.cpu().to(torch.int64), expected_ids)
     torch.testing.assert_close(
-        actual_weights.cpu().to(torch.float64), expected_weights.to(torch.float64),
+        actual_weights.cpu().to(torch.float64),
+        expected_weights.to(torch.float64),
         rtol=3e-5,
         atol=3e-6,
     )
@@ -308,9 +314,7 @@ def _assert_tie_compatible_with_cpu_reference(
         atol=3e-6,
     )
 
-    group_scores = logits.reshape(-1, num_expert_group, experts_per_group).amax(
-        dim=-1
-    )
+    group_scores = logits.reshape(-1, num_expert_group, experts_per_group).amax(dim=-1)
     group_cutoff = group_scores.topk(topk_group, dim=-1).values.amin(
         dim=-1, keepdim=True
     )
@@ -690,7 +694,9 @@ def test_grouped_topk_router_dispatches_tilelang(
     called = False
     original = tilelang_kernels.grouped_topk_softmax_tilelang
 
-    def traced_tilelang(*args: object, **kwargs: object) -> tuple[torch.Tensor, torch.Tensor]:
+    def traced_tilelang(
+        *args: object, **kwargs: object
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         nonlocal called
         called = True
         return original(*args, **kwargs)
@@ -701,9 +707,7 @@ def test_grouped_topk_router_dispatches_tilelang(
         traced_tilelang,
     )
     logits = _make_dispatch_logits(num_tokens, num_experts)
-    hidden_states = torch.empty(
-        (num_tokens, 1), device="musa", dtype=torch.bfloat16
-    )
+    hidden_states = torch.empty((num_tokens, 1), device="musa", dtype=torch.bfloat16)
     actual = grouped_topk(
         hidden_states,
         logits,
@@ -731,7 +735,7 @@ def test_grouped_topk_router_dispatches_tilelang(
 def test_grouped_topk_router_matches_cpu_fp64_and_forced_torch_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router
+    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router  # noqa: E501
 
     logits = _make_unique_logits(17, 160, torch.bfloat16)
     cpu_logits = logits.cpu()
@@ -794,7 +798,7 @@ def test_grouped_topk_router_does_not_dispatch_unsupported_semantics(
     has_bias: bool,
     num_fused_shared_experts: int,
 ) -> None:
-    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router
+    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router  # noqa: E501
 
     fallback_weights = torch.empty((1, 1), device="musa", dtype=torch.float32)
     fallback_ids = torch.empty((1, 1), device="musa", dtype=torch.int32)
@@ -836,7 +840,7 @@ def test_grouped_topk_router_does_not_dispatch_unsupported_semantics(
 def test_grouped_topk_router_falls_back_when_tilelang_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router
+    import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as router  # noqa: E501
 
     fallback_weights = torch.empty((1, 1), device="musa", dtype=torch.float32)
     fallback_ids = torch.empty((1, 1), device="musa", dtype=torch.int32)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Cold-L2 tuner for the split-K FP8 GEMM rows of vllm_musa/tuning/fp8_block_splitk.json.
+"""Cold-L2 tuner for the split-K FP8 GEMM rows of
+vllm_musa/tuning/fp8_block_splitk.json.
 
 Every timing runs the production linear (MUSAFp8BlockGemvScaledMMKernel.apply_weights)
 on a 32x32 block-FP8 weight of the per-rank shape. The split-K row for the shape is
@@ -273,7 +274,8 @@ class Bench:
         capture: bool,
         rounds: int | None = None,
     ) -> dict:
-        """Interleaved medians (ms) of split-K with ``config`` and of the dispatch without it."""
+        """Interleaved medians (ms) of split-K with ``config`` and of the dispatch
+        without it."""
         x = torch.randn((rows, k), device="musa").to(torch.bfloat16)
 
         def splitk():

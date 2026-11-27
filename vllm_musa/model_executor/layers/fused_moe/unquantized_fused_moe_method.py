@@ -98,9 +98,9 @@ class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             # to FusedMoE, so the runner never supplies a separate
             # shared_experts_input here; x is the shared expert's input, matching
             # the routed experts it now rides with.
-            assert (
-                shared_experts_input is None
-            ), "folded shared expert expects shared_experts=None"
+            assert shared_experts_input is None, (
+                "folded shared expert expects shared_experts=None"
+            )
             routed_topk = self.moe.experts_per_token
             if topk_ids.shape[-1] == routed_topk:
                 shared_logits, _ = layer._musa_shared_gate(x)

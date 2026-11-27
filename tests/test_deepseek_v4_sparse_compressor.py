@@ -44,7 +44,7 @@ def test_native_op_is_registered_and_built() -> None:
         in bindings
     )
     assert "def deepseek_v4_sparse_compress_cache(" in custom_ops
-    assert "kv_states: Optional[torch.Tensor] = None" in custom_ops
+    assert "kv_states: torch.Tensor | None = None" in custom_ops
     assert "deepseek_v4_sparse_compressor_kernel" in kernel
     assert "deepseek_v4_sparse_save_partial_kernel" in kernel
 
@@ -58,8 +58,8 @@ def test_kernel_uses_block_per_token_512d_geometry() -> None:
     assert "constexpr int64_t kScaleDim = 8;" in source
     assert "constexpr int64_t kThreadsPerBlock = 128;" in source
     assert (
-        "constexpr int kCompressRows = (1 + static_cast<int>(kOverlap)) * kCompressRatio;"
-        in source
+        "constexpr int kCompressRows = (1 + static_cast<int>(kOverlap)) * "
+        "kCompressRatio;" in source
     )
     assert "const int64_t token = static_cast<int64_t>(blockIdx.x);" in source
     assert "half_warp_reduce_max_u32" in source

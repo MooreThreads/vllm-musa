@@ -11,7 +11,8 @@ import shutil
 from pathlib import Path
 
 FALSE_VALUES = {"0", "false", "off", "no"}
-WRAPPER_SCRIPT = r"""#!/usr/bin/env bash
+WRAPPER_SCRIPT = (
+    r"""#!/usr/bin/env bash
 set -euo pipefail
 
 ccache_bin="${VLLM_MUSA_REAL_CCACHE:-ccache}"
@@ -64,7 +65,8 @@ for ((i = 0; i < ${#raw_args[@]}; i++)); do
       source_base="$(basename "${source_path}")"
       source_stem="${source_base%.*}"
       ccache_source="${source_dir}/${source_hash}_${source_stem}.cu"
-      if [[ ! -e "${ccache_source}" ]] || ! cmp -s "${source_path}" "${ccache_source}"; then
+      if [[ ! -e "${ccache_source}" ]] """
+    r"""|| ! cmp -s "${source_path}" "${ccache_source}"; then
         tmp_source="${ccache_source}.$$"
         cp "${source_path}" "${tmp_source}"
         mv "${tmp_source}" "${ccache_source}"
@@ -79,7 +81,8 @@ for ((i = 0; i < ${#raw_args[@]}; i++)); do
         source_base="$(basename "${source_path}")"
         source_stem="${source_base%.*}"
         ccache_source="${source_dir}/${source_hash}_${source_stem}.cu"
-        if [[ ! -e "${ccache_source}" ]] || ! cmp -s "${source_path}" "${ccache_source}"; then
+        if [[ ! -e "${ccache_source}" ]] """
+    r"""|| ! cmp -s "${source_path}" "${ccache_source}"; then
           tmp_source="${ccache_source}.$$"
           cp "${source_path}" "${tmp_source}"
           mv "${tmp_source}" "${ccache_source}"
@@ -106,6 +109,7 @@ fi
 
 exec "${ccache_bin}" "${compiler}" "${source_include_args[@]}" "${args[@]}"
 """
+)
 
 
 def _compiler_digest(path: str) -> str:

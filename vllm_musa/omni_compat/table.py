@@ -81,7 +81,8 @@ class ShimEntry:
     """``RELOCATION``: the module in the pinned vLLM that holds ``names``."""
 
     backport: str | None = None
-    """``BACKPORT``: module under ``omni_compat.backports`` implementing the missing module."""
+    """``BACKPORT``: module under ``omni_compat.backports`` implementing the missing
+    module."""
 
     adapter: str | None = None
     """``ADAPTER``: module under ``omni_compat.adapters`` patching the pinned module."""
@@ -139,7 +140,9 @@ ENTRIES: tuple[ShimEntry, ...] = (
             "API, so the alias is enough for imports and the config adapters below "
             "bridge the method called by Omni's subclass."
         ),
-        remove_when="the pin is >= 0.34, where vllm.config.utils defines CompileFactors.",
+        remove_when=(
+            "the pin is >= 0.34, where vllm.config.utils defines CompileFactors."
+        ),
         omni_refs=("vllm_omni/config/model.py",),
     ),
     ShimEntry(
@@ -213,8 +216,13 @@ ENTRIES: tuple[ShimEntry, ...] = (
         kind=RELOCATION,
         source="vllm.entrypoints.launchers.cli_args",
         applies_to="<0.33",
-        reason="0.33 moved the serve CLI argument surface from entrypoints.launchers to entrypoints.common.",
-        remove_when="the pin is >= 0.33, where vllm.entrypoints.common.cli_args exists.",
+        reason=(
+            "0.33 moved the serve CLI argument surface from entrypoints.launchers to "
+            "entrypoints.common."
+        ),
+        remove_when=(
+            "the pin is >= 0.33, where vllm.entrypoints.common.cli_args exists."
+        ),
         omni_refs=(
             "vllm_omni/config/omni_config.py",
             "vllm_omni/entrypoints/cli/serve.py",
@@ -242,15 +250,19 @@ ENTRIES: tuple[ShimEntry, ...] = (
         backport="kv_cache_planning",
         applies_to="<0.33",
         reason=(
-            "vLLM moved the planning logic out of kv_cache_utils into kv_cache_planning in "
-            "the v0.32.1 line, but get_global_kv_cache_groups only arrived in 0.33, and 0.33 "
-            "also gave get_kv_cache_configs a fourth parameter. The range tracks the symbol, "
-            "not the module: on a v0.32.1 pin the module exists, so this appended hook is "
-            "never consulted and the missing symbol surfaces as a plain ImportError. That is "
-            "a pin nobody builds; widening the range would not help, because serving a module "
-            "the pin already has is not something an appended finder can do."
+            "vLLM moved the planning logic out of kv_cache_utils into "
+            "kv_cache_planning in the v0.32.1 line, but get_global_kv_cache_groups "
+            "only arrived in 0.33, and 0.33 also gave get_kv_cache_configs a fourth "
+            "parameter. The range tracks the symbol, not the module: on a v0.32.1 pin "
+            "the module exists, so this appended hook is never consulted and the "
+            "missing symbol surfaces as a plain ImportError. That is a pin nobody "
+            "builds; widening the range would not help, because serving a module the "
+            "pin already has is not something an appended finder can do."
         ),
-        remove_when="the pin reaches a vLLM whose kv_cache_planning defines get_global_kv_cache_groups (0.33 or later).",
+        remove_when=(
+            "the pin reaches a vLLM whose kv_cache_planning defines "
+            "get_global_kv_cache_groups (0.33 or later)."
+        ),
         omni_refs=("vllm_omni/diffusion/diffusion_kv/initialization.py",),
     ),
     ShimEntry(
@@ -261,14 +273,17 @@ ENTRIES: tuple[ShimEntry, ...] = (
         applies_to="<0.32.1",
         reason=(
             "vLLM added has_topp_only_rows after v0.32.0, and Omni's Qwen3-Omni and "
-            "MiniCPM-o 4.5 talker samplers pass it by keyword, so every talker sampling step "
-            "raises TypeError on the pinned three-parameter function. Whichever "
-            "implementation is bound takes the full top-p path, which is what both values of "
-            "the hint select, so the adapter drops it. The adapter also has to survive "
-            "vllm_musa's own sampler, which rebinds this name at module scope strictly later; "
-            "see the adapter for how."
+            "MiniCPM-o 4.5 talker samplers pass it by keyword, so every talker "
+            "sampling step raises TypeError on the pinned three-parameter function. "
+            "Whichever implementation is bound takes the full top-p path, which is "
+            "what both values of the hint select, so the adapter drops it. The adapter "
+            "also has to survive vllm_musa's own sampler, which rebinds this name at "
+            "module scope strictly later; see the adapter for how."
         ),
-        remove_when="the pin reaches a vLLM whose apply_top_k_top_p takes the parameter (v0.32.1 or later).",
+        remove_when=(
+            "the pin reaches a vLLM whose apply_top_k_top_p takes the parameter "
+            "(v0.32.1 or later)."
+        ),
         omni_refs=(
             "vllm_omni/model_executor/models/minicpmo_4_5/talker_mrv2_sampling.py",
             "vllm_omni/model_executor/models/qwen3_omni/talker_sampler.py",
@@ -281,11 +296,12 @@ ENTRIES: tuple[ShimEntry, ...] = (
         adapter="attention_backends_utils",
         applies_to="<0.33",
         reason=(
-            "0.33 moved the PrefixLM range builder here from vllm.v1.worker.gpu.attn_utils and "
-            "changed its calling convention. vllm_omni/patch.py reads the attribute at import "
-            "time, so without it `import vllm_omni` raises AttributeError on the pin and no "
-            "model runs. The bridge is exact at the default arguments and refuses the two "
-            "newer ones, which the pin cannot express."
+            "0.33 moved the PrefixLM range builder here from "
+            "vllm.v1.worker.gpu.attn_utils and changed its calling convention. "
+            "vllm_omni/patch.py reads the attribute at import time, so without it "
+            "`import vllm_omni` raises AttributeError on the pin and no model runs. "
+            "The bridge is exact at the default arguments and refuses the two newer "
+            "ones, which the pin cannot express."
         ),
         remove_when="the pin is >= 0.33, which ships the function in this module.",
         omni_refs=("vllm_omni/patch.py", "vllm_omni/utils/mm_prefix.py"),
@@ -307,7 +323,9 @@ ENTRIES: tuple[ShimEntry, ...] = (
             "admitted. The current Omni main defaults to the v2 runner, so this "
             "limitation applies to the default img2img deployment."
         ),
-        remove_when="the pin is >= 0.33, which keeps the builder in the module Omni patches.",
+        remove_when=(
+            "the pin is >= 0.33, which keeps the builder in the module Omni patches."
+        ),
         unsupported=(
             "img2img PrefixLM on a stage with model_runner: v2 -- the ranges come out "
             "empty rather than failing. Omni's stage default is v1, which builds them "
@@ -323,15 +341,17 @@ ENTRIES: tuple[ShimEntry, ...] = (
         target="dispatch_cg_and_sync_dp",
         applies_to="<0.33",
         reason=(
-            "0.33 inserted allow_skip_drafts, which Omni's worker_v2 AR model runner passes by "
-            "keyword, so the pinned function raises TypeError. Unlike the top-k hint there is no "
-            "argument that dropping it preserves behaviour: it decides whether a data-parallel "
-            "rank may skip draft execution, and guessing wrong risks a rank divergence or a hang."
+            "0.33 inserted allow_skip_drafts, which Omni's worker_v2 AR model runner "
+            "passes by keyword, so the pinned function raises TypeError. Unlike the "
+            "top-k hint there is no argument that dropping it preserves behaviour: it "
+            "decides whether a data-parallel rank may skip draft execution, and "
+            "guessing wrong risks a rank divergence or a hang."
         ),
         remove_when="the pin is >= 0.33, or an adapter can argue a safe translation.",
         unsupported=(
             "the worker_v2 autoregressive model runner under data parallelism "
-            "(vllm_omni/worker_v2/omni_model_runner.py; diffusion pipelines do not use it)",
+            "(vllm_omni/worker_v2/omni_model_runner.py; diffusion pipelines do not use "
+            "it)",
         ),
         omni_refs=("vllm_omni/worker_v2/omni_model_runner.py",),
     ),
@@ -343,14 +363,18 @@ ENTRIES: tuple[ShimEntry, ...] = (
         applies_to="<0.33",
         reason=(
             "Same name and arity in both versions, different argument: 0.32 takes a "
-            "KVCacheConfig and reads .kv_cache_groups off it, 0.33 takes the group list "
-            "itself. Omni main passes the list, so the pinned method raises AttributeError "
-            "-- but only after its dcp_size <= 1 and NixlConnector early returns, so an "
-            "ordinary single-card run never reaches it."
+            "KVCacheConfig and reads .kv_cache_groups off it, 0.33 takes the group "
+            "list itself. Omni main passes the list, so the pinned method raises "
+            "AttributeError -- but only after its dcp_size <= 1 and NixlConnector "
+            "early returns, so an ordinary single-card run never reaches it."
         ),
-        remove_when="the pin is >= 0.33, or the backport adapts the method under an object patch.",
+        remove_when=(
+            "the pin is >= 0.33, or the backport adapts the method under an object "
+            "patch."
+        ),
         unsupported=(
-            "decode context parallelism (decode_context_parallel_size > 1) with a NixlConnector KV transfer",
+            "decode context parallelism (decode_context_parallel_size > 1) with a "
+            "NixlConnector KV transfer",
         ),
         omni_refs=("vllm_omni/diffusion/diffusion_kv/initialization.py",),
     ),

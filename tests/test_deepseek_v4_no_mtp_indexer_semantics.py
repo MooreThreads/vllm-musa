@@ -17,8 +17,8 @@ def test_dsv4_native_indexer_does_not_select_metadata_only_recent_path() -> None
         in patch
     )
     assert (
-        "-        # top candidate blocks here; later indexers mask their scores with it."
-        in patch
+        "-        # top candidate blocks here; later indexers mask their scores "
+        "with it." in patch
     )
 
 

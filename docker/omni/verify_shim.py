@@ -83,7 +83,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--driverless",
         action="store_true",
-        help="report a module that cannot import without a MUSA device as skipped, not failed",
+        help=(
+            "report a module that cannot import without a MUSA device as skipped, "
+            "not failed"
+        ),
     )
     parser.add_argument("--report", default=None)
     args = parser.parse_args(argv)
@@ -105,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if not result["installed"]:
         failures.append(
-            "no shim hook is installed; the .pth did not run and install() was not called"
+            "no shim hook is installed; the .pth did not run and install() was "
+            "not called"
         )
     elif not result["hooks"].get("startup"):
         # Any hook makes the imports resolve here, but only the .pth is early
@@ -178,7 +182,8 @@ def main(argv: list[str] | None = None) -> int:
         applied = getattr(module, "__vllm_musa_adapted__", None)
         if applied is None:
             failures.append(
-                f"{entry.module}: the adapter did not run; the hook was installed too late"
+                f"{entry.module}: the adapter did not run; the hook was installed "
+                "too late"
             )
             result["adapted"][entry.module] = "not adapted"
             continue
@@ -203,8 +208,8 @@ def main(argv: list[str] | None = None) -> int:
         missing = [name for name in applied["names"] if name not in live]
         if missing:
             failures.append(
-                f"{entry.module}: {', '.join(missing)} was adapted and is not any more; "
-                "something rebound it after the hook ran"
+                f"{entry.module}: {', '.join(missing)} was adapted and is not any "
+                "more; something rebound it after the hook ran"
             )
             result["adapted"][entry.module] = {
                 "ran": applied["names"],

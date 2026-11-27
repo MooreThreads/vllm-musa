@@ -1,7 +1,6 @@
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 VLLM_CSRC = ROOT / "third_party" / "vllm" / "csrc"
 
@@ -23,9 +22,9 @@ def test_cuda_utils_kernel_is_linked_into_stable_extension() -> None:
     regular_sources = setup_source.split("VLLM_CSRC_SOURCES = [", 1)[1].split(
         "VLLM_STABLE_CSRC_SOURCES = [", 1
     )[0]
-    stable_sources = setup_source.split("VLLM_STABLE_CSRC_SOURCES = [", 1)[
-        1
-    ].split("VLLM_MUSA_CSRC_SOURCES = [", 1)[0]
+    stable_sources = setup_source.split("VLLM_STABLE_CSRC_SOURCES = [", 1)[1].split(
+        "VLLM_MUSA_CSRC_SOURCES = [", 1
+    )[0]
     cuda_utils_source = '"csrc/cuda_utils_kernels.cu"'
     stable_bindings = (VLLM_CSRC / "torch_bindings.cpp").read_text()
 
@@ -68,9 +67,7 @@ def test_regular_moe_sources_use_resolvable_helper_includes() -> None:
 
 def test_vllm_editable_install_uses_pinned_release_version() -> None:
     setup_source = (ROOT / "setup.py").read_text()
-    override = (
-        'env.setdefault("VLLM_VERSION_OVERRIDE", _PINS["VLLM_TAG"].lstrip("v"))'
-    )
+    override = 'env.setdefault("VLLM_VERSION_OVERRIDE", _PINS["VLLM_TAG"].lstrip("v"))'
 
     assert override in setup_source
     assert setup_source.index(override) < setup_source.index("vllm_install_cmd = [")

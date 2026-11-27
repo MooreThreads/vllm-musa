@@ -42,8 +42,8 @@ def test_uniform_decode_patch_reuses_uploaded_request_indices() -> None:
     assert "+                logits_indices = query_start_loc[1:] - 1" in source
     assert "+            if use_cached_decode_logits_indices:" in source
     assert (
-        "+                logits_indices = self._musa_qwen_uniform_decode_logits_indices["
-        in source
+        "+                logits_indices = "
+        "self._musa_qwen_uniform_decode_logits_indices[" in source
     )
 
 

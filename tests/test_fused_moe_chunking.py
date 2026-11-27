@@ -511,8 +511,9 @@ def test_musa_dispatcher_routes_forced_backends(monkeypatch):
     monkeypatch.setattr(
         fused_moe,
         "fused_experts_impl",
-        lambda *args, **call_kwargs: native_calls.append((args, call_kwargs))
-        or sentinel,
+        lambda *args, **call_kwargs: (
+            native_calls.append((args, call_kwargs)) or sentinel
+        ),
     )
     monkeypatch.setattr(
         fused_moe,
@@ -554,13 +555,9 @@ def test_musa_dispatcher_auto_preserves_dsv4_fp8_gemv_threshold(
     monkeypatch.delenv("VLLM_MUSA_GEMV_MOE_BLOCK", raising=False)
     kwargs = _deepgemm_gate_kwargs(torch)
     kwargs.update(
-        hidden_states=torch.empty(
-            (tokens, 4096), device="meta", dtype=torch.bfloat16
-        ),
+        hidden_states=torch.empty((tokens, 4096), device="meta", dtype=torch.bfloat16),
         topk_ids=torch.empty((tokens, 6), device="meta", dtype=torch.int32),
-        topk_weights=torch.empty(
-            (tokens, 6), device="meta", dtype=torch.float32
-        ),
+        topk_weights=torch.empty((tokens, 6), device="meta", dtype=torch.float32),
     )
     native_output = torch.empty((1,), device="meta")
     upstream_output = torch.empty((2,), device="meta")
@@ -580,14 +577,16 @@ def test_musa_dispatcher_auto_preserves_dsv4_fp8_gemv_threshold(
     monkeypatch.setattr(
         fused_moe,
         "fused_experts_impl",
-        lambda *args, **call_kwargs: native_calls.append((args, call_kwargs))
-        or native_output,
+        lambda *args, **call_kwargs: (
+            native_calls.append((args, call_kwargs)) or native_output
+        ),
     )
     monkeypatch.setattr(
         fused_moe._upstream_fused_moe,
         "_musa_original_fused_experts_impl",
-        lambda *args, **call_kwargs: upstream_calls.append((args, call_kwargs))
-        or upstream_output,
+        lambda *args, **call_kwargs: (
+            upstream_calls.append((args, call_kwargs)) or upstream_output
+        ),
     )
 
     result = fused_moe._musa_fused_experts_impl_dispatch(**kwargs)
@@ -645,8 +644,9 @@ def test_musa_dispatcher_grouped_failure_and_capture_fall_back(monkeypatch):
     monkeypatch.setattr(
         fused_moe._upstream_fused_moe,
         "_musa_original_fused_experts_impl",
-        lambda *args, **call_kwargs: upstream_calls.append((args, call_kwargs))
-        or fallback,
+        lambda *args, **call_kwargs: (
+            upstream_calls.append((args, call_kwargs)) or fallback
+        ),
     )
     monkeypatch.setattr(
         fused_moe,
@@ -821,9 +821,7 @@ def test_musa_dispatcher_explicit_upstream_bypasses_deepgemm(monkeypatch):
 
 def _qwen36_bf16_moe_meta_inputs(tokens: int):
     return {
-        "hidden_states": torch.empty(
-            tokens, 4096, dtype=torch.bfloat16, device="meta"
-        ),
+        "hidden_states": torch.empty(tokens, 4096, dtype=torch.bfloat16, device="meta"),
         "w1": torch.empty(257, 2048, 4096, dtype=torch.bfloat16, device="meta"),
         "w2": torch.empty(257, 4096, 1024, dtype=torch.bfloat16, device="meta"),
     }

@@ -5,7 +5,7 @@ import functools
 from abc import abstractmethod
 from collections.abc import Callable
 from types import ModuleType
-from typing import Generic, TypeVar
+from typing import TypeVar
 
 import torch
 import vllm.envs as envs
@@ -45,13 +45,13 @@ try:
     is_vllm_fa = True
 except ImportError as e:
     raise ImportError(
-        "MUSA platform requires MATE and flash_attn_3 to be installed. Please install them first."
+        "MUSA platform requires MATE and flash_attn_3 to be installed. "
+        "Please install them first."
     ) from e
 
 
 logger = init_logger(__name__)
 
-M = TypeVar("M", bound=MLACommonMetadata)
 A = TypeVar("A")
 
 
@@ -200,7 +200,7 @@ def _v_up_proj(self, x: torch.Tensor, out: torch.Tensor):
         out.copy_(out_new)
 
 
-class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
+class MLACommonImpl[M: MLACommonMetadata](MLAAttentionImpl[M]):
     """
     NOTE: Please read the comment at the top of the file before trying to
     understand this class
@@ -276,13 +276,12 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         # FA2 vs FA3
         self.flash_attn_varlen_func = flash_attn_varlen_func
         self.vllm_flash_attn_version = get_flash_attn_version()
-        if self.vllm_flash_attn_version is not None:
-            # ==================== MUSA ADAPTATION ====================
-            if not current_platform.is_musa():
-                self.flash_attn_varlen_func = functools.partial(
-                    flash_attn_varlen_func, fa_version=self.vllm_flash_attn_version
-                )
-            # ========================== END ==========================
+        # ==================== MUSA ADAPTATION ====================
+        if self.vllm_flash_attn_version is not None and not current_platform.is_musa():
+            self.flash_attn_varlen_func = functools.partial(
+                flash_attn_varlen_func, fa_version=self.vllm_flash_attn_version
+            )
+        # ========================== END ==========================
 
         # For MLA the v head dim is smaller than qk head dim so we pad out
         # v with 0s to match the qk head dim for attention backends that do
@@ -623,7 +622,7 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             )
             # workspace
             # |------- N tokens --------|--------- N*dcp_size tokens ----------|
-            # |<- use for loca_gather ->|<--------- use for allgather -------->|
+            # |<- use for local gather ->|<-------- use for allgather -------->|
             allgather_offset = workspace.shape[0] // (dcp_world_size + 1)
             assert allgather_offset * (dcp_world_size + 1) == workspace.shape[0]
             assert toks <= allgather_offset

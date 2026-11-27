@@ -415,7 +415,7 @@ def should_defer_min_p_processor(
 
 
 def get_processor_min_p(processor: Any) -> torch.Tensor:
-    min_p = getattr(processor, "min_p")
+    min_p = processor.min_p
     return _squeeze_filter_tensor(min_p)
 
 
@@ -610,7 +610,7 @@ def _musa_jit_pair_gather_available() -> bool:
     try:
         from vllm.distributed.parallel_state import get_tp_group
 
-        from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (
+        from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (  # noqa: E501
             MusaJitCustomAllreduce,
         )
 
@@ -1301,9 +1301,7 @@ def can_use_worker_seeded_multinomial(
         return False
     if np.any(sampling_states.temperature.np[idx_mapping_np] <= _SAMPLING_EPS):
         return False
-    if getattr(sampling_states, "musa_generators", None) is None:
-        return False
-    return True
+    return getattr(sampling_states, "musa_generators", None) is not None
 
 
 def can_use_worker_sampler(
@@ -1318,9 +1316,7 @@ def can_use_worker_sampler(
         return False
     if has_worker_user_seed(sampling_states, idx_mapping_np):
         return False
-    if np.any(sampling_states.temperature.np[idx_mapping_np] <= _SAMPLING_EPS):
-        return False
-    return True
+    return not np.any(sampling_states.temperature.np[idx_mapping_np] <= _SAMPLING_EPS)
 
 
 def sample_worker_logits(

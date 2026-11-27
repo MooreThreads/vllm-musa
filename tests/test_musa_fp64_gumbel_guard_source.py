@@ -37,9 +37,9 @@ def test_guard_runs_before_the_rest_of_config_setup() -> None:
 def test_guard_names_the_flag_and_the_mudnn_limit() -> None:
     body = _check_and_update_config_body()
     assert "--use-fp64-gumbel is not supported on MUSA" in body
-    assert (
-        "ReduceIndicesOnlyCall MUDNN failed in: RunIndices" in body
-    ), "the message must quote the concrete failure so users can search it"
+    assert "ReduceIndicesOnlyCall MUDNN failed in: RunIndices" in body, (
+        "the message must quote the concrete failure so users can search it"
+    )
     assert "argmax" in body, "the message must name the failing op"
 
 

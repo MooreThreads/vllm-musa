@@ -66,27 +66,86 @@ vllm_musa = [
     "tuning/*.json",
 ]
 
-[tool.ruff]
-line-length = 88
-target-version = "py39"
-
+# Mirrors upstream vLLM's `[tool.ruff]` block, which has no top-level section:
+# `line-length` is ruff's 88 default and `target-version` is inferred from
+# `requires-python` (3.12), so the pyupgrade rules may use 3.12-only syntax.
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP"]
-ignore = ["E501"]
-per-file-ignores = {"setup.py" = ["E402"]}
+select = [
+    # pycodestyle
+    "E",
+    # Pyflakes
+    "F",
+    # pyupgrade
+    "UP",
+    # flake8-bugbear
+    "B",
+    # flake8-implicit-str-concat
+    "ISC",
+    # flake8-simplify
+    "SIM",
+    # isort
+    "I",
+    # flake8-logging-format
+    "G",
+]
+ignore = [
+    # star imports
+    "F405",
+    "F403",
+    # lambda expression assignment
+    "E731",
+    # zip without `strict=`
+    "B905",
+    # Loop control variable not used within loop body
+    "B007",
+    # f-string format
+    "UP032",
+    # `StrEnum` changes `str()` and `format()` output of members
+    "UP042",
+]
+
+[tool.ruff.format]
+docstring-code-format = true
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 
-[tool.isort]
-profile = "black"
-line_length = 88
-known_first_party = ["vllm_musa"]
-skip_gitignore = true
+[tool.typos.files]
+# Upstream mailbox patches and the recorded drift diffs: patch context splits
+# words mid-identifier, so every hit there is noise. `third_party` holds the
+# pinned vLLM checkout.
+extend-exclude = [
+    "vllm_musa/patches/series/*",
+    "vllm_musa/patches/module-drift/*",
+    "third_party/*",
+    ".git/*",
+]
 
-[tool.black]
-line-length = 88
-target-version = ["py39", "py310", "py311", "py312"]
+[tool.typos.default]
+# `use_ue8m0=` / `ue8m0`: the UE8M0 scale format, not the word "use".
+extend-ignore-identifiers-re = [".*[Uu][Ee][0-9][Mm][0-9].*"]
+
+[tool.typos.default.extend-identifiers]
+cudaDevAttrMaxSharedMemoryPerBlockOptin = "cudaDevAttrMaxSharedMemoryPerBlockOptin"
+sharedMemPerBlockOptin = "sharedMemPerBlockOptin"
+
+[tool.typos.default.extend-words]
+# torch.arange and Triton/TileLang vocabulary shared with upstream vLLM.
+arange = "arange"
+ba = "ba"
+dout = "dout"
+eles = "eles"
+indx = "indx"
+tme = "tme"
+TME = "TME"
+# MUSA terms.
+bse = "bse"  # stride_bse: batch x seq x expert strides
+muh = "muh"  # MUSA kernel header extension
+nativ = "nativ"  # a patch file name is truncated to "...-to-nativ.patch"
+mis = "mis"  # "mis-resolves", "mis-handle"
+ot = "ot"  # out-token stride
+caf = "caf"  # first three bytes of the `caf\xe9` path fixtures
+nothink = "nothink"  # GLM template name used in the recipe commands

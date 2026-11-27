@@ -68,7 +68,8 @@ def _normalize_weight(
     if scales.shape != (groups, out_blocks, in_blocks):
         raise ValueError(
             "DeepSeek-V4 FP8 GEMV provider scale shape mismatch: "
-            f"scale_shape={tuple(weight_scale.shape)}, normalized={tuple(scales.shape)}, "
+            f"scale_shape={tuple(weight_scale.shape)}, "
+            f"normalized={tuple(scales.shape)}, "
             f"expected={(groups, out_blocks, in_blocks)}"
         )
 

@@ -5,7 +5,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -64,9 +63,7 @@ def _run_contract_checks() -> None:
     router_logits = torch.empty(2, 256)
     shared_logits = torch.empty(2, 1)
     with (
-        mock.patch.object(
-            grouped_router, "_can_use_musa_jit_topk", return_value=True
-        ),
+        mock.patch.object(grouped_router, "_can_use_musa_jit_topk", return_value=True),
         mock.patch.object(
             grouped_router, "_maybe_import_musa_jit_topk", return_value=fake_topk
         ),
@@ -100,9 +97,7 @@ def _run_contract_checks() -> None:
         raise AssertionError("unsupported shared shape must fall back")
 
     with (
-        mock.patch.object(
-            grouped_router, "_can_use_musa_jit_topk", return_value=True
-        ),
+        mock.patch.object(grouped_router, "_can_use_musa_jit_topk", return_value=True),
         mock.patch.object(
             grouped_router,
             "_maybe_import_musa_jit_topk",

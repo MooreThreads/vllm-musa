@@ -253,7 +253,7 @@ def _maybe_record_deepseek_v4_moe_shape_inventory(
         return
 
     max_records = _env_int(_MOE_SHAPE_INVENTORY_MAX_RECORDS_ENV, 64)
-    if max_records >= 0 and _MOE_SHAPE_INVENTORY_RECORDS >= max_records:
+    if max_records >= 0 and max_records <= _MOE_SHAPE_INVENTORY_RECORDS:
         return
 
     try:
@@ -411,7 +411,7 @@ def _can_use_musa_fp8_moe_grouped_gemm(
     if K % unpermute_block != 0 or unpermute_block & (unpermute_block - 1) != 0:
         return False
     return (
-        K == hidden_states.size(1)
+        hidden_states.size(1) == K
         and w2.shape == (E, K, N // 2)
         and w1_scale.shape == (E, N // 128, K // 128)
         and w2_scale.shape == (E, K // 128, (N // 2) // 128)
@@ -489,7 +489,7 @@ def _can_use_moe_deepgemm_prefill(
         E in (256, 257)
         and N % 256 == 0
         and K % 128 == 0
-        and K == hidden_states.size(1)
+        and hidden_states.size(1) == K
         and w2.shape == (E, K, N // 2)
         and w1_scale.shape == (E, N // 128, K // 128)
         and w2_scale.shape == (E, K // 128, (N // 2) // 128)
@@ -558,7 +558,7 @@ def _can_use_moe_deepgemm_bf16_prefill(
         E in (256, 257)
         and N % 256 == 0
         and K % 128 == 0
-        and K == hidden_states.size(1)
+        and hidden_states.size(1) == K
         and w2.shape == (E, K, N // 2)
     )
 
@@ -1976,15 +1976,15 @@ def fused_experts_impl(
             "w_mxfp6_e3m2_a_mxfp6_e3m2",
             "w_mxfp6_e2m3_a_mxfp6_e2m3",
         }:
-            assert (
-                hidden_states.size(1) == (w1.size(2) * 4) // 3
-            ), "hidden size mismatch"
+            assert hidden_states.size(1) == (w1.size(2) * 4) // 3, (
+                "hidden size mismatch"
+            )
         else:
             raise NotImplementedError(f"Unsupported ocp_mx_scheme={ocp_mx_scheme}")
     else:
-        assert hidden_states.size(1) == w1.size(
-            2
-        ), f"Hidden size mismatch {hidden_states.size(1)} != {w1.size(2)}"
+        assert hidden_states.size(1) == w1.size(2), (
+            f"Hidden size mismatch {hidden_states.size(1)} != {w1.size(2)}"
+        )
 
     assert topk_weights.size() == topk_ids.size(), "topk shape mismatch"
     assert hidden_states.is_contiguous(), "Hidden_states must be contiguous"

@@ -58,10 +58,10 @@ pytest tests/test_patches.py -v
 make pre-commit
 ```
 
-Install the hooks once:
+Install the hooks once (requires Python 3.12):
 
 ```bash
-pip install pre-commit
+pip install 'pre-commit==3.7.1'
 pre-commit install
 ```
 

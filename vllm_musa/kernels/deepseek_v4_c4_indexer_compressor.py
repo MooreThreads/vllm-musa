@@ -80,7 +80,11 @@ def _guard_c4_indexer_compressor(
         return False, "state_slot_mapping must be 1D"
     num_rows = state_slot_mapping.numel()
     if not 0 < num_rows <= _MAX_DECODE_ROWS:
-        return False, f"native C4 path supports 1..{_MAX_DECODE_ROWS} decode rows, got {num_rows}"
+        return (
+            False,
+            f"native C4 path supports 1..{_MAX_DECODE_ROWS} decode rows, "
+            f"got {num_rows}",
+        )
     for name, tensor in (
         ("token_to_req_indices", token_to_req_indices),
         ("positions", positions),
@@ -114,13 +118,11 @@ def _guard_c4_indexer_compressor(
 
     if rms_norm_weight.dtype not in (torch.float32, torch.bfloat16):
         return False, (
-            "rms_norm_weight must be float32 or bfloat16, got "
-            f"{rms_norm_weight.dtype}"
+            f"rms_norm_weight must be float32 or bfloat16, got {rms_norm_weight.dtype}"
         )
     if rms_norm_weight.dim() != 1 or rms_norm_weight.numel() != _HEAD_DIM:
         return False, (
-            "rms_norm_weight must have shape [128], got "
-            f"{tuple(rms_norm_weight.shape)}"
+            f"rms_norm_weight must have shape [128], got {tuple(rms_norm_weight.shape)}"
         )
     if not rms_norm_weight.is_contiguous():
         return False, "rms_norm_weight must be contiguous"

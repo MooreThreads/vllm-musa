@@ -1,3 +1,4 @@
+import torch
 from vllm.triton_utils import tl, triton
 
 
@@ -67,8 +68,6 @@ def eagle_prepare_next_token_padded_kernel(
 
         tl.store(valid_sampled_tokens_count_ptr + req_idx, valid_count)
 
-
-import torch
 
 # reproduction fix (2026-05-17): the upstream
 # `update_num_computed_tokens_for_batch_change` is wrapped with

@@ -38,7 +38,10 @@ def test_series_routes_small_topk_to_the_staged_radix_op() -> None:
         if line.startswith("+") and not line.startswith("+++")
     ]
     dispatch = added[added.index("if topk <= 512:") :]
-    fallback = "_musa_custom_ops.sparse_indexer_topk_decode(logits, row_lens, topk_indices, topk)"
+    fallback = (
+        "_musa_custom_ops.sparse_indexer_topk_decode("
+        "logits, row_lens, topk_indices, topk)"
+    )
     dispatch = dispatch[: dispatch.index(fallback) + 1]
     assert "_musa_custom_ops.deepseek_v4_sparse_indexer_topk_decode(" in dispatch
     assert dispatch.index("return") < dispatch.index(fallback)

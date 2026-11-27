@@ -26,9 +26,7 @@ def _added_lines() -> list[str]:
 def test_patch_only_changes_the_sparse_indexer() -> None:
     text = PATCH.read_text()
     changed = {
-        line[len("+++ b/") :]
-        for line in text.splitlines()
-        if line.startswith("+++ b/")
+        line[len("+++ b/") :] for line in text.splitlines() if line.startswith("+++ b/")
     }
     assert changed == {"vllm/model_executor/layers/sparse_attn_indexer.py"}
     assert "From: musa <musa@local>" in text

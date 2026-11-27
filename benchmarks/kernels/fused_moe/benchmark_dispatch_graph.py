@@ -143,9 +143,8 @@ def main() -> int:
         graph = torch.cuda.CUDAGraph()
         stream = torch.cuda.Stream()
         stream.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(stream):
-            with torch.cuda.graph(graph):
-                captured_output = fused_moe._musa_fused_experts_impl_dispatch(**kwargs)
+        with torch.cuda.stream(stream), torch.cuda.graph(graph):
+            captured_output = fused_moe._musa_fused_experts_impl_dispatch(**kwargs)
         torch.cuda.current_stream().wait_stream(stream)
         synchronize()
         capture_calls = dict(calls)
