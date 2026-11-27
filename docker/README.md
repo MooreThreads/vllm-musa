@@ -87,10 +87,10 @@ Both targets activate the shim from the base wheel and run the installed
 compatibility audit and driverless shim verification. The resulting image
 inherits `VLLM_WORKER_MULTIPROC_METHOD=spawn` from the vLLM-MUSA base.
 
-After the build, record the image digest and run the model-specific smoke from
-the corresponding Omni documentation. For the current Qwen-Image diffusion
-path, the image-generation request is the required semantic check. A successful
-Docker build or server startup alone is not a model smoke.
+Set `OMNI_IMAGE` to the built image tag and check the serving options with
+`docker run --rm "$OMNI_IMAGE" vllm serve --omni --help`. For GPU arguments,
+model setup, and an image-generation smoke, follow the
+[Qwen-Image cookbook](../docs/cookbook/qwen-image/README.md).
 
 With the defaults this produces:
 

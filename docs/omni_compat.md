@@ -421,8 +421,16 @@ and copies the selected revision's examples and benchmarks into
 `examples/` and `benchmarks/` under `/vllm-workspace/omni`. Run those assets
 from that directory to preserve their upstream import paths.
 The `test` target installs Omni in editable mode from its checkout at
-`/vllm-workspace/vllm-omni`. Both targets default to Bash. To see the serving
-options, run `docker run --rm <image> vllm-omni serve --omni --help`.
+`/vllm-workspace/vllm-omni`. Both targets default to Bash. Pass the serving
+command explicitly, using the same CLI as the
+[Qwen-Image cookbook](cookbook/qwen-image/README.md).
+
+```bash
+docker run --rm "$OMNI_IMAGE" vllm serve --omni --help
+```
+
+The `--omni` flag delegates to the installed Omni CLI. See the cookbook for
+the GPU and model arguments for `vllm serve <model> --omni`.
 
 Omni installation constrains the Python packages in the base interpreter's
 `purelib` and `platlib` so Torch, MUSA packages, and NumPy keep their base
