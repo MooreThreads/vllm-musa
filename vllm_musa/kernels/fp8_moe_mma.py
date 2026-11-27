@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Small-token FP8 MoE on FP8 dots, reading each routed expert's weights once.
+"""Small-token FP8 MoE on FP8 dots, reading each routed expert's weights once per
+16-row work-unit.
 
-Consecutive decode or verify tokens share many routed experts. Each program owns
-one distinct expert of the batch, gathers the routed rows sent to it (at most 16
-rows of the MMA tile) and multiplies them by that expert's weight tile, one
-32-wide scale group per FP8 dot. The gate/up projection quantizes the hidden
-states per 32-wide group in-kernel and splits K; a second kernel sums the K
-splits, rounds gate and up to BF16 and quantizes their clamped SwiGLU for the
-down projection. The down projection writes one partial per routed row and a
-last kernel sums each token's routed rows and rounds once.
+Consecutive decode or verify tokens share many routed experts (and always share
+folded shared experts). Each program owns one 16-row expert work-unit of the batch,
+gathers the routed rows assigned to that chunk (at most 16 rows of the MMA tile)
+and multiplies them by that expert's weight tile, one 32-wide scale group per FP8
+dot. When the router has not already built the 64-slot route map and quantized
+activation, a fused preparation kernel builds the chunked route map on CTA 0 while
+quantizing the BF16 hidden states once per 32-wide group across the remaining CTAs.
 """
 
 from __future__ import annotations
@@ -20,16 +20,35 @@ from vllm.triton_utils import tl, triton
 
 _FP8_MAX = 448.0
 _QUANT_EPS = 1e-10
-_MAX_ROUTED = 64
+_ROUTER_MAP_SLOTS = 64
+_MAX_TOKENS = 40
+_MAX_ROUTED = 280
 # Below four tokens the routed-row GEMVs win unless the router supplies the route map
 # and the quantized activation.
 MIN_TOKENS = 4
 _ENABLED = os.environ.get("VLLM_MUSA_FP8_MOE_MMA", "1") != "0"
+_NATIVE_ROUTE_PREP = os.environ.get("VLLM_MUSA_FP8_MOE_ROUTE_PREP", "1") != "0"
 
 # (SPLIT, BLOCK_N, num_warps) for the gate/up projection and (BLOCK_N, num_warps)
 # for the down projection, measured on MTT S5000 for the DeepSeek-V4.1 TP8 experts.
 _W1_CONFIG = (8, 64, 4)
 _W2_CONFIG = (64, 4)
+
+
+def _map_slots(rows: int) -> int:
+    if rows <= 64:
+        return 64
+    if rows <= 128:
+        return 128
+    if rows <= 256:
+        return 256
+    return 512
+
+
+def _max_work_units(rows: int, num_experts: int) -> int:
+    """Upper bound on 16-row expert work-units for ``rows`` routed slots across
+    ``num_experts`` experts without device-to-host synchronization."""
+    return min(rows, num_experts + max(0, rows - num_experts) // 16)
 
 
 @triton.jit
@@ -41,33 +60,34 @@ def _moe_route_map_kernel(
     MAX_R: tl.constexpr,
     BLOCK_M: tl.constexpr,
 ):
-    """Distinct routed experts in first-use order.
+    """Chunked 16-row expert work-units in first-use order.
 
-    ``map[u] = [expert, rows, row_0, ...]`` with the routed rows of expert
-    ``u`` packed from ``row_0``; ``map[MAX_R] = [count]``.
+    ``map[u] = [expert, chunk_rows, row_0, ...]`` with up to ``BLOCK_M`` routed
+    rows of ``expert`` packed from ``row_0``; ``map[MAX_R] = [num_units]``.
+    Experts receiving more than ``BLOCK_M`` rows emit multiple disjoint chunks.
     """
     offs_r = tl.arange(0, MAX_R)
     ids = tl.load(ids_ptr + offs_r, mask=offs_r < R, other=-1)
     valid = (offs_r < R) & (ids >= 0) & (ids < E)
     eq = (ids[:, None] == ids[None, :]) & valid[:, None] & valid[None, :]
     earlier = offs_r[None, :] < offs_r[:, None]
-    first = valid & (tl.sum((eq & earlier).to(tl.int32), axis=1) == 0)
-    uniq = tl.cumsum(first.to(tl.int32), axis=0) - 1
-    # rank of each row among the rows of its expert
     rank = tl.sum((eq & earlier).to(tl.int32), axis=1)
-    # the distinct-expert index of each row = index of the first row with its expert
+    slot = rank % BLOCK_M
+    first = valid & (slot == 0)
+    uniq = tl.cumsum(first.to(tl.int32), axis=0) - 1
+    chunk_base = rank - slot
     owner = tl.sum(
         tl.where(
-            eq & (earlier | (offs_r[None, :] == offs_r[:, None])) & first[None, :],
+            eq & (rank[None, :] == chunk_base[:, None]),
             uniq[None, :],
             0,
         ),
         axis=1,
     )
     width = 2 + BLOCK_M
-    tl.store(map_ptr + owner * width + 2 + rank, offs_r, mask=valid & (rank < BLOCK_M))
+    tl.store(map_ptr + owner * width + 2 + slot, offs_r, mask=valid)
     tl.store(map_ptr + uniq * width, ids, mask=first)
-    count = tl.sum(eq.to(tl.int32), axis=1)
+    count = tl.minimum(tl.sum(eq.to(tl.int32), axis=1) - rank, BLOCK_M)
     tl.store(map_ptr + uniq * width + 1, count, mask=first)
     tl.store(map_ptr + MAX_R * width, tl.sum(first.to(tl.int32), axis=0))
 
@@ -76,15 +96,15 @@ def _moe_route_map_kernel(
 def _expert_rows(
     map_ptr, u, TOPK: tl.constexpr, MAX_R: tl.constexpr, BLOCK_M: tl.constexpr
 ):
-    """(expert, distinct experts, routed rows, tokens, row valid) of distinct
-    expert ``u``."""
+    """(expert, num work-units, routed rows, tokens, row valid) of work-unit ``u``."""
     width = 2 + BLOCK_M
     n_uniq = tl.load(map_ptr + MAX_R * width)
+    active = u < n_uniq
     base = map_ptr + tl.minimum(u, MAX_R - 1) * width
-    expert = tl.load(base)
-    count = tl.load(base + 1)
+    expert = tl.load(base, mask=active, other=0)
+    count = tl.load(base + 1, mask=active, other=0)
     offs_i = tl.arange(0, BLOCK_M)
-    row_valid = (offs_i < count) & (u < n_uniq)
+    row_valid = active & (offs_i < count)
     row = tl.load(base + 2 + offs_i, mask=row_valid, other=0)
     return expert, n_uniq, row, row // TOPK, row_valid
 
@@ -308,7 +328,7 @@ def fp8_moe_mma_supported(
     w2_scale: torch.Tensor,
     topk_ids: torch.Tensor,
 ) -> bool:
-    """Shapes this path handles: 32x32 blocks, at most 64 routed rows, K and N tiled."""
+    """Shapes handled: 32x32 blocks, chunked 16-row expert tiles, K and N tiled."""
     if not _ENABLED or topk_ids.dim() != 2:
         return False
     tokens, top_k = topk_ids.shape
@@ -318,7 +338,7 @@ def fp8_moe_mma_supported(
     block_n2, _ = _W2_CONFIG
     return (
         0 < tokens * top_k <= _MAX_ROUTED
-        and tokens <= 16
+        and tokens <= _MAX_TOKENS
         and hidden_states.dtype == torch.bfloat16
         and hidden_states.stride(-1) == 1
         and w2.shape == (e, h, inter)
@@ -347,7 +367,7 @@ def fp8_moe_mma(
     w2_scale: torch.Tensor,
     swiglu_limit: float,
 ) -> torch.Tensor:
-    """FP8 MoE with the clamped SwiGLU for at most 64 routed rows."""
+    """FP8 MoE with the clamped SwiGLU and chunked 16-row expert work-units."""
     tokens, top_k = topk_ids.shape
     e, n1, h = w1.shape
     inter = n1 // 2
@@ -357,22 +377,49 @@ def fp8_moe_mma(
     weights = topk_weights.reshape(-1).to(torch.float32).contiguous()
     split, block_n1, warps1 = _W1_CONFIG
     block_n2, warps2 = _W2_CONFIG
+    max_units = _max_work_units(rows, e)
 
-    # The MUSA sqrt-softplus router writes this map along with the ids.
+    # The MUSA sqrt-softplus router writes the 64-slot map along with the ids.
     route_map = getattr(topk_ids, "musa_route_map", None)
-    if route_map is None:
-        route_map = torch.empty(
-            ((_MAX_ROUTED + 1) * (2 + 16),), dtype=torch.int32, device=device
-        )
-        _moe_route_map_kernel[(1,)](
-            ids, route_map, rows, e, MAX_R=_MAX_ROUTED, BLOCK_M=16, num_warps=4
-        )
-    part1 = torch.empty((split, rows, n1), dtype=torch.float32, device=device)
-    # The router may have quantized this activation already.
     route_x = getattr(topk_ids, "musa_route_x", None)
-    if route_x is not None and route_x[0] is hidden_states:
-        xq, xs = route_x[1], route_x[2]
-        _moe_w1_mma_fp8_kernel[(rows, n1 // block_n1, split)](
+    x_quant: tuple[torch.Tensor, torch.Tensor] | None = (
+        (route_x[1], route_x[2])
+        if route_x is not None and route_x[0] is hidden_states
+        else None
+    )
+    if route_map is not None:
+        map_slots = _ROUTER_MAP_SLOTS
+    else:
+        map_slots = _map_slots(rows)
+        if _NATIVE_ROUTE_PREP and device.type == "musa" and map_slots <= 512:
+            from vllm_musa.jit_kernel.csrc import fp8_block_gemv as native
+
+            route_map, prep_quant = native.moe_route_prep(
+                ids,
+                hidden_states if x_quant is None else None,
+                e,
+                map_slots,
+            )
+            if x_quant is None:
+                x_quant = prep_quant
+        else:
+            route_map = torch.empty(
+                ((map_slots + 1) * (2 + 16),), dtype=torch.int32, device=device
+            )
+            _moe_route_map_kernel[(1,)](
+                ids,
+                route_map,
+                rows,
+                e,
+                MAX_R=map_slots,
+                BLOCK_M=16,
+                num_warps=min(max(4, map_slots // 32), 16),
+            )
+
+    part1 = torch.empty((split, rows, n1), dtype=torch.float32, device=device)
+    if x_quant is not None:
+        xq, xs = x_quant
+        _moe_w1_mma_fp8_kernel[(max_units, n1 // block_n1, split)](
             xq,
             xs,
             w1,
@@ -389,14 +436,14 @@ def fp8_moe_mma(
             w1_scale.stride(0),
             w1_scale.stride(1),
             TOPK=top_k,
-            MAX_R=_MAX_ROUTED,
+            MAX_R=map_slots,
             K_PER=h // split,
             BLOCK_N=block_n1,
             num_warps=warps1,
             num_stages=1,
         )
     else:
-        _moe_w1_mma_kernel[(rows, n1 // block_n1, split)](
+        _moe_w1_mma_kernel[(max_units, n1 // block_n1, split)](
             hidden_states,
             w1,
             w1_scale,
@@ -411,7 +458,7 @@ def fp8_moe_mma(
             w1_scale.stride(0),
             w1_scale.stride(1),
             TOPK=top_k,
-            MAX_R=_MAX_ROUTED,
+            MAX_R=map_slots,
             K_PER=h // split,
             BLOCK_N=block_n1,
             FP8_MAX=_FP8_MAX,
@@ -435,7 +482,7 @@ def fp8_moe_mma(
         num_warps=1,
     )
     part2 = torch.empty((rows, h), dtype=torch.float32, device=device)
-    _moe_w2_mma_kernel[(rows, h // block_n2)](
+    _moe_w2_mma_kernel[(max_units, h // block_n2)](
         aq,
         a_scale,
         w2,
@@ -452,7 +499,7 @@ def fp8_moe_mma(
         w2_scale.stride(1),
         K=inter,
         TOPK=top_k,
-        MAX_R=_MAX_ROUTED,
+        MAX_R=map_slots,
         BLOCK_N=block_n2,
         num_warps=warps2,
     )

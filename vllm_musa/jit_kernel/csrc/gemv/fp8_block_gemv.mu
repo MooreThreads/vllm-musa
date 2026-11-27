@@ -31,6 +31,10 @@ constexpr int kGroup = 32;
 constexpr float kFp8Max = 448.0f;
 constexpr float kQuantEps = 1e-10f;
 constexpr int kMaxSmemBytes = 160 * 1024;
+constexpr int kMaxMapSlots = 512;
+constexpr int kMapWarps = kMaxMapSlots / kWarpSize;
+constexpr int kMapRows = 16;
+constexpr int kMapWidth = 2 + kMapRows;
 
 typedef _Float16 half4_t __attribute__((ext_vector_type(4)));
 using fp8x4_t = unsigned char __attribute__((vector_size(4)));
@@ -139,6 +143,125 @@ __global__ void __launch_bounds__(128)
   *reinterpret_cast<uint4*>(xq + m * xq_stride + k) =
       make_uint4(packed[0], packed[1], packed[2], packed[3]);
   if ((lane & 1) == 0) xs[m * xs_stride + k / kGroup] = s;
+}
+
+// CTA 0 partitions up to kMaxMapSlots routed expert ids into disjoint 16-row MMA
+// work-units in first-use order: map[u * 18] = [expert, chunk_rows, row_0, ...] and
+// map[map_slots * 18] = num_units. CTAs past CTA 0 concurrently quantize the [M, K]
+// BF16 MoE input per 32-wide group.
+__global__ void __launch_bounds__(kMaxMapSlots)
+    moe_route_prep_kernel(const int32_t* __restrict__ ids, int total_rows, int num_experts,
+                          int map_slots, int32_t* __restrict__ route_map,
+                          const uint16_t* __restrict__ x, int64_t x_stride,
+                          uint8_t* __restrict__ xq, int64_t xq_stride,
+                          float* __restrict__ xs, int64_t xs_stride, int m_rows, int K,
+                          int chunks) {
+  const int lane = threadIdx.x % kWarpSize;
+  const int warp = threadIdx.x / kWarpSize;
+  if (blockIdx.x > 0) {
+    const int gw = (blockIdx.x - 1) * kMapWarps + warp;
+    const int m = gw / chunks;
+    const int k = (gw - m * chunks) * kStep + lane * kVec;
+    const bool active = m < m_rows && k < K;
+    float v[kVec];
+    if (active) {
+      const uint4* src = reinterpret_cast<const uint4*>(x + m * x_stride + k);
+#pragma unroll
+      for (int i = 0; i < 2; ++i) {
+        const uint4 raw = src[i];
+        const uint32_t w4[4] = {raw.x, raw.y, raw.z, raw.w};
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+          v[i * 8 + j * 2] = __uint_as_float(w4[j] << 16);
+          v[i * 8 + j * 2 + 1] = __uint_as_float(w4[j] & 0xffff0000u);
+        }
+      }
+    } else {
+#pragma unroll
+      for (int i = 0; i < kVec; ++i) v[i] = 0.0f;
+    }
+    float amax = 0.0f;
+#pragma unroll
+    for (int i = 0; i < kVec; ++i) amax = fmaxf(amax, fabsf(v[i]));
+    amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, 1));
+    if (!active) return;
+    const float s = fmaxf(amax, kQuantEps) / kFp8Max;
+    uint32_t packed[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+      float4 f4;
+      f4.x = fminf(fmaxf(div_rn(v[i * 4], s), -kFp8Max), kFp8Max);
+      f4.y = fminf(fmaxf(div_rn(v[i * 4 + 1], s), -kFp8Max), kFp8Max);
+      f4.z = fminf(fmaxf(div_rn(v[i * 4 + 2], s), -kFp8Max), kFp8Max);
+      f4.w = fminf(fmaxf(div_rn(v[i * 4 + 3], s), -kFp8Max), kFp8Max);
+      packed[i] = __musa_cvt_float4_to_fp8x4(f4, __MT_SATFINITE, __MT_E4M3);
+    }
+    *reinterpret_cast<uint4*>(xq + m * xq_stride + k) =
+        make_uint4(packed[0], packed[1], packed[2], packed[3]);
+    if ((lane & 1) == 0) xs[m * xs_stride + k / kGroup] = s;
+    return;
+  }
+
+  __shared__ int s_ids[kMaxMapSlots];
+  __shared__ int s_uniq[kMaxMapSlots];
+  __shared__ unsigned s_first[kMapWarps];
+
+  const int r = threadIdx.x;
+  int id = (r < total_rows) ? ids[r] : -1;
+  if (id < 0 || id >= num_experts) {
+    id = -1;
+  }
+  s_ids[r] = id;
+  __syncthreads();
+
+  int earlier = 0;
+  int count = 0;
+  int leader_row = r;
+  const bool valid = (r < total_rows) && (id >= 0);
+  if (valid) {
+    for (int q = 0; q < total_rows; ++q) {
+      if (s_ids[q] == id) {
+        if (q <= r && (count % kMapRows) == 0) {
+          leader_row = q;
+        }
+        if (q == r) {
+          earlier = count;
+        }
+        ++count;
+      }
+    }
+  }
+  const int slot = earlier % kMapRows;
+  const bool first_unit = valid && (slot == 0);
+  const unsigned first_mask = __ballot_sync(0xffffffffu, first_unit);
+  if (lane == 0) {
+    s_first[warp] = first_mask;
+  }
+  __syncthreads();
+
+  int uniq = __popc(first_mask & ((1u << lane) - 1u));
+  for (int w = 0; w < warp; ++w) {
+    uniq += __popc(s_first[w]);
+  }
+  if (first_unit) {
+    s_uniq[r] = uniq;
+    route_map[uniq * kMapWidth] = id;
+    const int rem = count - earlier;
+    route_map[uniq * kMapWidth + 1] = rem < kMapRows ? rem : kMapRows;
+  }
+  __syncthreads();
+
+  if (valid) {
+    route_map[s_uniq[leader_row] * kMapWidth + 2 + slot] = r;
+  }
+  if (r == 0) {
+    int total_units = 0;
+#pragma unroll
+    for (int w = 0; w < kMapWarps; ++w) {
+      total_units += __popc(s_first[w]);
+    }
+    route_map[map_slots * kMapWidth] = total_units;
+  }
 }
 
 // out[m, n] = sum_k dequant(xq[m, k]) * dequant(w[n, k]) for M rows, activation read
@@ -764,7 +887,56 @@ void fp8_moe_w2_gemv(ffi::TensorView aq, ffi::TensorView as, ffi::TensorView w, 
   TVM_FFI_THROW(ValueError) << "unsupported MoE down shape: top_k " << topk << ", K " << k;
 }
 
+void fp8_moe_route_prep(ffi::TensorView ids, ffi::TensorView route_map, ffi::TensorView x,
+                        ffi::TensorView xq, ffi::TensorView xs, int64_t num_experts,
+                        int64_t map_slots, bool quant_x) {
+  ffi::MUSADeviceGuard device_guard(ids.device().device_id);
+  const int total_rows = static_cast<int>(ids.size(0));
+  const int slots = static_cast<int>(map_slots);
+  TVM_FFI_ICHECK_EQ(ids.stride(0), 1);
+  TVM_FFI_ICHECK_EQ(route_map.stride(0), 1);
+  TVM_FFI_ICHECK_GE(slots, total_rows);
+  TVM_FFI_ICHECK_LE(slots, kMaxMapSlots);
+  TVM_FFI_ICHECK_GE(route_map.size(0), (slots + 1) * kMapWidth);
+
+  int m_rows = 0;
+  int K = 0;
+  int chunks = 1;
+  int quant_ctas = 0;
+  const uint16_t* xp = nullptr;
+  int64_t x_stride = 0;
+  uint8_t* qp = nullptr;
+  int64_t xq_stride = 0;
+  float* sp = nullptr;
+  int64_t xs_stride = 0;
+  if (quant_x) {
+    m_rows = static_cast<int>(xq.size(0));
+    K = static_cast<int>(xq.size(1));
+    TVM_FFI_ICHECK_EQ(K % kGroup, 0);
+    TVM_FFI_ICHECK_EQ(x.size(0), m_rows);
+    TVM_FFI_ICHECK_EQ(x.size(1), K);
+    TVM_FFI_ICHECK_EQ(x.stride(1), 1);
+    TVM_FFI_ICHECK_EQ(x.stride(0) % 8, 0);
+    TVM_FFI_ICHECK_EQ(reinterpret_cast<uintptr_t>(x.data_ptr()) % 16, 0);
+    chunks = (K + kStep - 1) / kStep;
+    quant_ctas = (m_rows * chunks + kMapWarps - 1) / kMapWarps;
+    xp = static_cast<const uint16_t*>(x.data_ptr());
+    x_stride = x.stride(0);
+    qp = static_cast<uint8_t*>(xq.data_ptr());
+    xq_stride = xq.stride(0);
+    sp = static_cast<float*>(xs.data_ptr());
+    xs_stride = xs.stride(0);
+  }
+  const dim3 grid(1 + quant_ctas);
+  moe_route_prep_kernel<<<grid, kMaxMapSlots, 0, stream_of(ids)>>>(
+      static_cast<const int32_t*>(ids.data_ptr()), total_rows, static_cast<int>(num_experts),
+      slots, static_cast<int32_t*>(route_map.data_ptr()), xp, x_stride, qp, xq_stride, sp,
+      xs_stride, m_rows, K, chunks);
+  check_launch("fp8_moe_route_prep");
+}
+
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(fp8_act_quant, fp8_act_quant);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(fp8_dense_gemv, fp8_dense_gemv);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(fp8_moe_w1_gemv, fp8_moe_w1_gemv);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(fp8_moe_w2_gemv, fp8_moe_w2_gemv);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(fp8_moe_route_prep, fp8_moe_route_prep);

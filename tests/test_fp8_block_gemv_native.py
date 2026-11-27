@@ -138,6 +138,7 @@ def test_custom_ops_mutate_only_their_outputs() -> None:
         ("musa_fp8_dense_gemv", '["out"]'),
         ("musa_fp8_moe_w1_gemv", '["out"]'),
         ("musa_fp8_moe_w2_gemv", '["out"]'),
+        ("musa_fp8_moe_route_prep", '["route_map", "xq", "xs"]'),
     ):
         block = source[source.index(f'op_name="{op}"') :]
         assert f"mutates_args={mutated}" in block[: block.index(")")]
@@ -367,7 +368,7 @@ def test_moe_dot_path_reads_each_expert_once_and_bounds_rows() -> None:
     assert "_moe_route_map_kernel" in source
     supported = _function(MOE_MMA, "fp8_moe_mma_supported")
     assert "tokens * top_k <= _MAX_ROUTED" in supported
-    assert "tokens <= 16" in supported
+    assert "tokens <= _MAX_TOKENS" in supported
     body = _function(FUSED_MOE, "_musa_fp8_block_moe_gemv")
     assert body.index("_fp8_moe_mma_eligible") < body.index("native.act_quant")
     gate = _function(FUSED_MOE, "_fp8_moe_mma_eligible")
