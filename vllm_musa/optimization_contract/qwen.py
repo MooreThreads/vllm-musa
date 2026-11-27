@@ -64,8 +64,11 @@ def matches_qwen35_moe_bf16_prefill_layer(
     *,
     min_tokens: int,
 ) -> bool:
-    """Match the layer-bound Qwen3.5/3.6-35B-A3B prefill signature.
+    """Match the layer-bound Qwen3.5/3.6-35B-A3B TP4 BF16 prefill signature.
 
+    With shared expert folding (enabled by default on Qwen3.5/3.6 MoE), TP4
+    local weights have ``E=257`` and ``top_k=9``; without folding they have
+    ``E=256`` and ``top_k=8``.  Both share the same local ``N/K/V`` dimensions.
     The caller is the generic fused-MoE custom-op boundary, so tensor and
     layout checks remain here rather than attempting to recover model config
     from global runtime state on every token.
@@ -75,20 +78,25 @@ def matches_qwen35_moe_bf16_prefill_layer(
         return str(value).lower().removeprefix("torch.")
 
     try:
+        folded = global_num_experts == 257
+        unfolded = global_num_experts == 256
+        expected_experts = 257 if folded else 256
+        expected_top_k = 9 if folded else 8
         return (
-            global_num_experts == 256
+            (folded or unfolded)
             and hidden_states.ndim == 2
             and dtype_name(hidden_states.dtype) == "bfloat16"
             and dtype_name(w1.dtype) == "bfloat16"
             and dtype_name(w2.dtype) == "bfloat16"
             and hidden_states.shape[0] >= min_tokens
             and hidden_states.shape[1] == 2048
-            and tuple(w1.shape) == (256, 256, 2048)
-            and tuple(w2.shape) == (256, 2048, 128)
+            and tuple(w1.shape) == (expected_experts, 256, 2048)
+            and tuple(w2.shape) == (expected_experts, 2048, 128)
             and topk_weights.ndim == 2
             and topk_ids.ndim == 2
             and topk_weights.shape == topk_ids.shape
-            and topk_ids.shape[1] == 8
+            and topk_ids.shape[0] == hidden_states.shape[0]
+            and topk_ids.shape[1] == expected_top_k
         )
     except (AttributeError, IndexError, TypeError, ValueError):
         return False

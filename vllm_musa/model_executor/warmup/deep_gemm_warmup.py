@@ -34,6 +34,80 @@ def _bf16_warmup_token_points(max_tokens: int) -> list[int]:
     return sorted(point for point in points if point <= max(1024, int(max_tokens)))
 
 
+class _ShapeProxy:
+    def __init__(self, shape: tuple[int, ...], dtype) -> None:
+        self.shape = shape
+        self.ndim = len(shape)
+        self.dtype = dtype
+
+
+def _effective_moe_routing_counts(
+    module: torch.nn.Module, num_experts: int
+) -> tuple[int, int]:
+    """Return ``(top_k, global_num_experts)`` seen by ``fused_experts`` at runtime.
+
+    When ``_fold_shared_expert_weights`` appends the Qwen3.5 shared expert to
+    ``w13_weight`` (`256 -> 257`), ``module.top_k`` (`8`) and
+    ``module.global_num_experts`` (`256`) still reflect the routed-only config,
+    while ``forward_oot`` extends ``topk_ids`` to ``top_k + 1`` (`9`) and passes
+    ``global_num_experts = _musa_shared_expert_id + 1`` (`257`).
+    """
+    folded = bool(getattr(module, "_musa_shared_folded", False))
+    if folded:
+        routed_top_k = int(getattr(module, "top_k", 8))
+        shared_id = int(getattr(module, "_musa_shared_expert_id", num_experts - 1))
+        return routed_top_k + 1, shared_id + 1
+    default_top_k = 9 if num_experts == 257 else 8
+    top_k = int(getattr(module, "top_k", default_top_k))
+    global_num_experts = int(getattr(module, "global_num_experts", num_experts))
+    return top_k, global_num_experts
+
+
+def _module_prefers_upstream_qwen_bf16_prefill(
+    module: torch.nn.Module,
+    w1,
+    w2,
+    top_k: int,
+    global_num_experts: int,
+    min_tokens: int = 1024,
+) -> bool:
+    """Return True when ``fused_moe`` routes ``module`` away from DeepGEMM prefill."""
+    from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
+        MusaFusedMoeBackend,
+        parse_dispatch_backend,
+    )
+    from vllm_musa.optimization_contract.qwen import (
+        matches_qwen35_moe_bf16_prefill_layer,
+    )
+
+    if parse_dispatch_backend() != MusaFusedMoeBackend.AUTO:
+        return False
+    activation = getattr(module, "activation", "silu")
+    act_name = getattr(activation, "value", activation)
+    if str(act_name).strip().lower() != "silu":
+        return False
+    if bool(getattr(module, "apply_router_weight_on_input", False)):
+        return False
+    if getattr(module, "swiglu_limit", None) is not None:
+        return False
+    if getattr(module, "gemm1_clamp_limit", None) is not None:
+        return False
+
+    _, _, hidden_size = map(int, w1.shape)
+    hidden_proxy = _ShapeProxy((min_tokens, hidden_size), torch.bfloat16)
+    topk_weights_proxy = _ShapeProxy((min_tokens, top_k), torch.float32)
+    topk_ids_proxy = _ShapeProxy((min_tokens, top_k), torch.int32)
+    return matches_qwen35_moe_bf16_prefill_layer(
+        hidden_proxy,
+        w1,
+        w2,
+        topk_weights_proxy,
+        topk_ids_proxy,
+        global_num_experts,
+        min_tokens=min_tokens,
+    )
+
+
 def _warmup_bf16_grouped_moe(model: torch.nn.Module, max_tokens: int) -> None:
     """Precompile the MUSA BF16 grouped-MoE kernels used by large prefill.
 
@@ -43,6 +117,14 @@ def _warmup_bf16_grouped_moe(model: torch.nn.Module, max_tokens: int) -> None:
     of seconds compiling on the host.  Warm a bounded set of scheduler-sized
     shapes, matching the serving path's scheduler-sized bucket contract.
     """
+    from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
+        MusaFusedMoeBackend,
+        parse_dispatch_backend,
+    )
+
+    if parse_dispatch_backend() != MusaFusedMoeBackend.AUTO:
+        return
+
     import deep_gemm
 
     block_m = _alignment_m()
@@ -65,7 +147,11 @@ def _warmup_bf16_grouped_moe(model: torch.nn.Module, max_tokens: int) -> None:
             or tuple(w2.shape) != (num_experts, hidden_size, intermediate_size // 2)
         ):
             continue
-        top_k = int(getattr(module, "top_k", 9))
+        top_k, global_num_experts = _effective_moe_routing_counts(module, num_experts)
+        if _module_prefers_upstream_qwen_bf16_prefill(
+            module, w1, w2, top_k, global_num_experts
+        ):
+            continue
         cache_key = (w1.shape, w2.shape, top_k, int(max_tokens))
         if cache_key in _BF16_WARMUP_CACHE:
             continue
