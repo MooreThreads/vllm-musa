@@ -225,11 +225,25 @@ def test_mp56_dsv41_folded_triton_configs_cover_verify_and_prefill_batches():
         )
 
 
-def test_dsv41_folded_triton_configs_are_isolated_to_mp56():
-    for multiprocessor_count in (48, 60):
+def test_dsv41_folded_triton_configs_fallback_across_full_s5000_bins_and_reject_mpx():
+    expected = POLICY._DSV41_TP8_FOLDED_MP56_TABLES[(385, 7)][40]
+    for multiprocessor_count in (48, 56, 60, 64):
         shape = _dsv41_folded_shape(385, 7, multiprocessor_count, "capture")
-        assert POLICY.triton_config_for_shape(shape, 40) is None
-    # The unfolded top-6 shape on MP56 has no table either.
+        assert POLICY.triton_config_for_shape(shape, 40) == expected
+    # Virtualized <48-MP MPX slices and non-(3, 1) capabilities must not inherit
+    # full-card S5000 launch configs.
+    for mpx_count in (16, 24, 30):
+        mpx_shape = _dsv41_folded_shape(385, 7, mpx_count, "capture")
+        assert POLICY.triton_config_for_shape(mpx_shape, 40) is None
+    other_arch = _shape(
+        **{
+            **_dsv41_folded_shape(385, 7, 60, "capture").__dict__,
+            "device_capability": (4, 0),
+        }
+    )
+    assert POLICY.triton_config_for_shape(other_arch, 40) is None
+    # Unfolded top-6 on MP56 resolves the unfolded MP60 table, never the folded
+    # (385, 7) table; mismatched (384, 7) stays uncalibrated.
     unfolded = _dsv41_folded_shape(384, 6, 56, "capture")
     unfolded = _shape(
         **{
@@ -238,7 +252,12 @@ def test_dsv41_folded_triton_configs_are_isolated_to_mp56():
             "w2_scale_shape": (384, 160, 9),
         }
     )
-    assert POLICY.triton_config_for_shape(unfolded, 40) is None
+    assert (
+        POLICY.triton_config_for_shape(unfolded, 40)
+        == POLICY._DSV41_TP8_MP60_TRITON_CONFIGS[32]
+    )
+    mismatched = _shape(**{**unfolded.__dict__, "top_k": 7})
+    assert POLICY.triton_config_for_shape(mismatched, 40) is None
 
 
 def test_triton_config_lookup_uses_nearest_entry_and_returns_a_copy():
@@ -251,11 +270,17 @@ def test_triton_config_lookup_uses_nearest_entry_and_returns_a_copy():
     assert table[25]["BLOCK_SIZE_M"] == 16
 
 
-def test_triton_configs_are_isolated_to_the_calibrated_mp56_shape():
-    for multiprocessor_count in (48, 60):
+def test_triton_configs_fallback_across_full_s5000_bins_and_reject_mpx():
+    expected = POLICY._CALIBRATED_TRITON_CONFIGS[_dsv4_tp8_shape(56, "eager")][25]
+    for multiprocessor_count in (48, 56, 60, 64):
         for graph_mode in ("eager", "capture"):
             shape = _dsv4_tp8_shape(multiprocessor_count, graph_mode)
-            assert POLICY.triton_config_for_shape(shape, 25) is None
+            assert POLICY.triton_config_for_shape(shape, 25) == expected
+    for mpx_count in (24, 32):
+        assert (
+            POLICY.triton_config_for_shape(_dsv4_tp8_shape(mpx_count, "eager"), 25)
+            is None
+        )
     unrelated = _shape(**{**_dsv4_tp8_shape(56, "eager").__dict__, "top_k": 8})
     assert POLICY.triton_config_for_shape(unrelated, 25) is None
 
@@ -344,9 +369,13 @@ def test_calibrated_threshold_boundaries_and_device_identity(monkeypatch):
     assert thresholds_for_shape(_shape(device_capability=(4, 0))).source == (
         "uncalibrated-shape"
     )
-    assert thresholds_for_shape(_shape(multiprocessor_count=56)).source == (
+    assert thresholds_for_shape(_shape(multiprocessor_count=24)).source == (
         "uncalibrated-shape"
     )
+    fallback_mp56 = thresholds_for_shape(_shape(multiprocessor_count=56))
+    assert fallback_mp56.gemv_max_tokens == 4
+    assert fallback_mp56.grouped_gemm_min_tokens == 16
+    assert fallback_mp56.source == "test-calibration-mp64-fallback-mp56"
 
 
 def test_every_calibrated_shape_passes_the_dimension_prefilter():
@@ -474,7 +503,7 @@ def test_s5000_calibrated_shapes_use_route_worst_boundaries():
     assert thresholds_for_shape(dsv2_capture).grouped_gemm_min_tokens is None
 
 
-def test_s5000_calibration_remains_exact_for_layout_and_mp_count():
+def test_s5000_calibration_full_card_mp_fallback_and_layout_isolation():
     shape = _shape(
         multiprocessor_count=60,
         local_experts=64,
@@ -486,29 +515,74 @@ def test_s5000_calibration_remains_exact_for_layout_and_mp_count():
         w2_scale_shape=(64, 16, 11),
     )
 
+    for mp_bin in (48, 56, 64):
+        resolved = thresholds_for_shape(
+            _shape(**{**shape.__dict__, "multiprocessor_count": mp_bin})
+        )
+        assert resolved.gemv_max_tokens == 3
+        assert resolved.source.endswith(f"-mp60-fallback-mp{mp_bin}")
+    # Exact MP entries always take precedence over adjacent full-card bins.
+    assert thresholds_for_shape(_dsv4_tp8_shape(48, "eager")).gemv_max_tokens == 12
+    assert thresholds_for_shape(_dsv4_tp8_shape(56, "eager")).gemv_max_tokens == 8
+    assert thresholds_for_shape(_dsv4_tp8_shape(60, "eager")).gemv_max_tokens == 12
+    mp64_dsv4 = thresholds_for_shape(_dsv4_tp8_shape(64, "eager"))
+    assert mp64_dsv4.gemv_max_tokens == 12
+    assert mp64_dsv4.source.endswith("-mp60-fallback-mp64")
+    # 24-MP MPX slices and transposed scale layouts stay uncalibrated.
     assert thresholds_for_shape(
-        _shape(**{**shape.__dict__, "multiprocessor_count": 64})
+        _shape(**{**shape.__dict__, "multiprocessor_count": 24})
     ).source == ("uncalibrated-shape")
     assert thresholds_for_shape(
         _shape(**{**shape.__dict__, "w1_scale_shape": (64, 16, 22)})
     ).source == ("uncalibrated-shape")
 
 
-def test_pr113_folded_qwen_shape_requires_fresh_calibration():
-    folded_qwen = _shape(
-        multiprocessor_count=60,
-        local_experts=257,
-        w1_output_size=256,
-        w2_input_size=128,
-        hidden_size=2048,
-        top_k=9,
-        w1_scale_shape=(257, 2, 16),
-        w2_scale_shape=(257, 16, 1),
-    )
-
-    # Shared-expert folding appends one expert and one route column.  The old
-    # E=256/topk=8 threshold must not be reused without a new sweep.
-    assert thresholds_for_shape(folded_qwen).source == "uncalibrated-shape"
+def test_pr113_folded_qwen_fp8_shapes_use_measured_tp1_tp2_tp4_boundaries():
+    expected_by_tp_w1 = {
+        1024: 3,  # TP1
+        512: 7,  # TP2
+        256: 13,  # TP4
+    }
+    for w1_output_size, expected_max in expected_by_tp_w1.items():
+        w2_input_size = w1_output_size // 2
+        for mp_bin in (48, 56, 60, 64):
+            for graph_mode in ("eager", "capture"):
+                folded_qwen = _shape(
+                    multiprocessor_count=mp_bin,
+                    local_experts=257,
+                    w1_output_size=w1_output_size,
+                    w2_input_size=w2_input_size,
+                    hidden_size=2048,
+                    top_k=9,
+                    w1_scale_shape=(257, w1_output_size // 128, 16),
+                    w2_scale_shape=(257, 16, w2_input_size // 128),
+                    graph_mode=graph_mode,
+                )
+                policy = thresholds_for_shape(folded_qwen)
+                assert policy.gemv_max_tokens == expected_max
+                assert policy.grouped_gemm_min_tokens is None
+                if mp_bin == 64:
+                    assert policy.source.startswith(
+                        f"s5000-mp64-20261127-folded-e257-n{w1_output_size}-k2048-{graph_mode}-"
+                    )
+                else:
+                    assert policy.source.endswith(f"-mp64-fallback-mp{mp_bin}")
+        # 24-MP MPX slices and mismatched top-k stay uncalibrated.
+        mpx_qwen = _shape(
+            multiprocessor_count=24,
+            local_experts=257,
+            w1_output_size=w1_output_size,
+            w2_input_size=w2_input_size,
+            hidden_size=2048,
+            top_k=9,
+            w1_scale_shape=(257, w1_output_size // 128, 16),
+            w2_scale_shape=(257, 16, w2_input_size // 128),
+        )
+        assert thresholds_for_shape(mpx_qwen).source == "uncalibrated-shape"
+        wrong_topk = _shape(
+            **{**mpx_qwen.__dict__, "multiprocessor_count": 64, "top_k": 8}
+        )
+        assert thresholds_for_shape(wrong_topk).source == "uncalibrated-shape"
 
 
 def test_qwen35_bf16_decode_gemv_uses_tp4_local_crossover():

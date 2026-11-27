@@ -9,11 +9,12 @@ entries below; unknown shapes keep the established upstream backend.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Final
 
 MUSA_FUSED_MOE_DISPATCH_ENV: Final = "VLLM_MUSA_FUSED_MOE_DISPATCH"
+_S5000_FULL_CARD_MP_BINS: Final[tuple[int, ...]] = (48, 56, 60, 64)
 
 
 class MusaFusedMoeBackend(str, Enum):
@@ -314,6 +315,39 @@ _CALIBRATED_THRESHOLDS.update(
                 f"s5000-mp60-20260721-e64-n2816-k2048-{graph_mode}-"
                 f"{'m1-' if graph_mode == 'capture' else ''}serving-gated"
             ),
+        )
+        for graph_mode in ("eager", "capture")
+    }
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
+        _s5000_fp8_shape(
+            multiprocessor_count=64,
+            local_experts=257,
+            w1_output_size=w1_output_size,
+            w2_input_size=w1_output_size // 2,
+            hidden_size=2048,
+            top_k=9,
+            w1_scale_shape=(257, w1_output_size // 128, 16),
+            w2_scale_shape=(257, 16, (w1_output_size // 2) // 128),
+            gemv_block="auto",
+            graph_mode=graph_mode,
+        ): _thresholds(
+            # Folded Qwen3.5-35B-A3B-FP8 (256 routed + 1 shared expert, top-9)
+            # across TP1 (w1=1024), TP2 (w1=512), and TP4 (w1=256), using the
+            # route-worst boundary across balanced, unique-random, and hot
+            # routes with three seeds plus 8-replay bitwise CUDAGraph parity.
+            gemv_max_tokens=gemv_max_tokens,
+            grouped_gemm_min_tokens=None,
+            source=(
+                f"s5000-mp64-20261127-folded-e257-n{w1_output_size}-k2048-"
+                f"{graph_mode}-dense-v1"
+            ),
+        )
+        for w1_output_size, gemv_max_tokens in (
+            (1024, 3),
+            (512, 7),
+            (256, 13),
         )
         for graph_mode in ("eager", "capture")
     }
@@ -631,8 +665,39 @@ def parse_dispatch_backend(value: str | None = None) -> MusaFusedMoeBackend:
         ) from exc
 
 
+def _s5000_fallback_mp_bins(multiprocessor_count: int) -> tuple[int, ...]:
+    return tuple(
+        mp
+        for mp in sorted(
+            _S5000_FULL_CARD_MP_BINS,
+            key=lambda candidate: (abs(candidate - multiprocessor_count), -candidate),
+        )
+        if mp != multiprocessor_count
+    )
+
+
 def thresholds_for_shape(shape: MusaFusedMoeShape) -> MusaFusedMoeThresholds:
-    return _CALIBRATED_THRESHOLDS.get(shape, _DEFAULT_THRESHOLDS)
+    exact = _CALIBRATED_THRESHOLDS.get(shape)
+    if exact is not None:
+        return exact
+    if (
+        shape.device_capability == (3, 1)
+        and shape.multiprocessor_count in _S5000_FULL_CARD_MP_BINS
+    ):
+        for candidate_mp in _s5000_fallback_mp_bins(shape.multiprocessor_count):
+            fallback = _CALIBRATED_THRESHOLDS.get(
+                replace(shape, multiprocessor_count=candidate_mp)
+            )
+            if fallback is not None:
+                return MusaFusedMoeThresholds(
+                    gemv_max_tokens=fallback.gemv_max_tokens,
+                    grouped_gemm_min_tokens=fallback.grouped_gemm_min_tokens,
+                    source=(
+                        f"{fallback.source}-mp{candidate_mp}-fallback-"
+                        f"mp{shape.multiprocessor_count}"
+                    ),
+                )
+    return _DEFAULT_THRESHOLDS
 
 
 def triton_config_for_shape(
@@ -641,6 +706,17 @@ def triton_config_for_shape(
     """Return the calibrated Triton config nearest ``num_tokens``, if any."""
 
     table = _CALIBRATED_TRITON_CONFIGS.get(shape)
+    if (
+        table is None
+        and shape.device_capability == (3, 1)
+        and shape.multiprocessor_count in _S5000_FULL_CARD_MP_BINS
+    ):
+        for candidate_mp in _s5000_fallback_mp_bins(shape.multiprocessor_count):
+            table = _CALIBRATED_TRITON_CONFIGS.get(
+                replace(shape, multiprocessor_count=candidate_mp)
+            )
+            if table is not None:
+                break
     if not table or not min(table) <= num_tokens <= max(table):
         return None
     key = min(table, key=lambda tokens: (abs(tokens - num_tokens), tokens))
