@@ -11,15 +11,12 @@ from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
-    TypeVar,
 )
 
 import torch
 
 if TYPE_CHECKING:
     from tvm_ffi import Module
-
-F = TypeVar("F", bound=Callable[..., Any])
 
 logger = logging.getLogger(__name__)
 

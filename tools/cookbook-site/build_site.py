@@ -28,7 +28,7 @@ Usage
     ./build_site.py --git-repo ../vllm-musa --git-ref xd/nemotron35-mtp6-cookbook \
                     --out site
 
-Requirements: python3.10+, ``markdown`` (3.x) and ``pygments`` (2.x).
+Requirements: python3.11+, ``markdown`` (3.x) and ``pygments`` (2.x).
 """
 
 from __future__ import annotations

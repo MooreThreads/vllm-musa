@@ -44,7 +44,7 @@ def test_native_op_is_registered_and_built() -> None:
         in bindings
     )
     assert "def deepseek_v4_sparse_compress_cache(" in custom_ops
-    assert "kv_states: Optional[torch.Tensor] = None" in custom_ops
+    assert "kv_states: torch.Tensor | None = None" in custom_ops
     assert "deepseek_v4_sparse_compressor_kernel" in kernel
     assert "deepseek_v4_sparse_save_partial_kernel" in kernel
 

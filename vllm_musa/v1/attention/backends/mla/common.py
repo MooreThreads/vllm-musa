@@ -51,7 +51,6 @@ except ImportError as e:
 
 logger = init_logger(__name__)
 
-M = TypeVar("M", bound=MLACommonMetadata)
 A = TypeVar("A")
 
 

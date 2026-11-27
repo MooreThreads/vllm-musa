@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
+# isort: off
+import torchada  # noqa: F401  # must patch before torch ecosystem imports
 import torch
-import torchada  # noqa: F401
+
+# isort: on
 
 from vllm_musa.utils.environ import envs
 from vllm_musa.v1.sample import topk_topp_sampler as sampler

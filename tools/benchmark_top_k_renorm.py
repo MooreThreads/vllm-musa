@@ -8,8 +8,8 @@ import json
 import math
 import random
 import statistics
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 
 import torchada  # noqa: F401
 import torch

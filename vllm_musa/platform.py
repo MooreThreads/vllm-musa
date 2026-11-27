@@ -8,7 +8,7 @@ import os
 from collections.abc import Callable
 from functools import cache, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from packaging.version import Version
 
@@ -18,7 +18,6 @@ import torch
 
 # isort: on
 from torchada import arch as musa_arch
-from typing_extensions import ParamSpec
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability, Platform, PlatformEnum
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
@@ -44,10 +43,6 @@ _QWEN3_VL_ARCHITECTURES = {"Qwen3VLForConditionalGeneration"}
 
 def _is_torch_211_or_newer() -> bool:
     return Version(torch.__version__.split("+", 1)[0]) >= Version("2.11")
-
-
-_P = ParamSpec("_P")
-_R = TypeVar("_R")
 
 
 @cache

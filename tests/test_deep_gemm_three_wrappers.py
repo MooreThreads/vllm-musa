@@ -7,8 +7,12 @@ import inspect
 from typing import Any
 
 import pytest
+
+# isort: off
+import torchada  # noqa: F401  # must patch before torch ecosystem imports
 import torch
-import torchada  # noqa: F401
+
+# isort: on
 from vllm.utils import deep_gemm
 
 GROUPED_WRAPPERS = (

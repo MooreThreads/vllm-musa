@@ -4,7 +4,7 @@
 import contextlib
 from collections.abc import Callable, Iterator
 from importlib.metadata import version
-from typing import Any, TypeVar
+from typing import Any
 
 import torch
 from vllm.logger import init_logger
@@ -32,8 +32,6 @@ else:
             )
             _flash_mla = None
             break
-
-_F = TypeVar("_F", bound=Callable[..., Any])
 
 
 def _identity_decorator[F: Callable[..., Any]](func: F) -> F:
