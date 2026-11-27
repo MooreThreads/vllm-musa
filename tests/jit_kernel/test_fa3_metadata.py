@@ -14,7 +14,11 @@ from vllm_musa.jit_kernel import fa3_metadata
 
 def _mate_scheduler_golden_is_current() -> bool:
     try:
-        return version("mate").split("+", 1)[0] == "0.2.4"
+        return version("mate").split("+", 1)[0] in {
+            "0.2.4",
+            "0.2.8",
+            "0.2.8.post1",
+        }
     except PackageNotFoundError:
         return False
 
@@ -113,8 +117,8 @@ def test_qwen_fa3_scheduler_lookup_builder_direct_and_fallback(monkeypatch):
     direct_calls = []
     mate_calls = []
 
-    def direct_builder(seq_lens, cu_seqlens_k, scheduler_dst, *args):
-        direct_calls.append((seq_lens.clone(), args))
+    def direct_builder(seq_lens, cu_seqlens_k, scheduler_dst, *args, sm_count=60):
+        direct_calls.append((seq_lens.clone(), args, sm_count))
         if not direct_enabled:
             return False
         scheduler_dst.zero_()
@@ -143,6 +147,7 @@ def test_qwen_fa3_scheduler_lookup_builder_direct_and_fallback(monkeypatch):
     direct_result = builder.build(0, common_metadata)
     assert len(direct_calls) == 1
     assert direct_calls[0][1] == (128, 16, 8, 128, 8)
+    assert direct_calls[0][2] == 60
     assert not mate_calls
     assert direct_result.scheduler_metadata.tolist() == [
         2,
@@ -173,7 +178,17 @@ def test_qwen_fa3_scheduler_lookup_builder_direct_and_fallback(monkeypatch):
     assert fallback_result.cu_seqlens_k.tolist() == [0, 128]
     assert builder.scheduler_metadata[16].item() == 0
 
-    builder._sm_count = 56
+    for valid_sm in (48, 56, 60, 64):
+        direct_enabled = True
+        builder._sm_count = valid_sm
+        direct_calls.clear()
+        mate_calls.clear()
+        builder.build(0, common_metadata)
+        assert len(direct_calls) == 1
+        assert direct_calls[0][2] == valid_sm
+        assert not mate_calls
+
+    builder._sm_count = 24
     direct_calls.clear()
     mate_calls.clear()
     builder.build(0, common_metadata)
@@ -247,7 +262,7 @@ def test_qwen_fa3_scheduler_lookup_builder_direct_and_fallback(monkeypatch):
             {"builder": {"_sm_count_query_succeeded": False}},
             id="mp-query-failed",
         ),
-        pytest.param({"builder": {"_sm_count": 56}}, id="wrong-mp-count"),
+        pytest.param({"builder": {"_sm_count": 24}}, id="wrong-mp-count"),
         pytest.param(
             {"builder": {"max_cudagraph_size": 0}},
             id="zero-split-budget",
@@ -322,6 +337,7 @@ def test_qwen_fa3_scheduler_lookup_runtime_gate_fallback(monkeypatch, case):
         num_heads_kv,
         head_dim,
         max_num_splits,
+        sm_count=60,
     ):
         direct_calls.append(
             (max_seq_len, num_heads_q, num_heads_kv, head_dim, max_num_splits)
@@ -332,6 +348,7 @@ def test_qwen_fa3_scheduler_lookup_runtime_gate_fallback(monkeypatch, case):
             num_heads_kv,
             head_dim,
             max_num_splits,
+            sm_count=sm_count,
         )
         return False
 
@@ -371,6 +388,18 @@ def test_qwen_single_request_fa3_scheduler_lookup_support_gate():
     scheduler_dst = torch.zeros(17, dtype=torch.int32)
 
     assert fa3_metadata._supports_qwen_fa3_scheduler_geometry(4096, 16, 8, 128, 8)
+    assert fa3_metadata._supports_qwen_fa3_scheduler_geometry(
+        4096, 16, 8, 128, 8, sm_count=64
+    )
+    assert fa3_metadata._supports_qwen_fa3_scheduler_geometry(
+        4096, 16, 8, 128, 7, sm_count=56
+    )
+    assert fa3_metadata._supports_qwen_fa3_scheduler_geometry(
+        4096, 16, 8, 128, 6, sm_count=48
+    )
+    assert not fa3_metadata._supports_qwen_fa3_scheduler_geometry(
+        4096, 16, 8, 128, 3, sm_count=24
+    )
     assert not fa3_metadata._supports_qwen_fa3_scheduler_geometry(4097, 16, 8, 128, 8)
     assert not fa3_metadata._supports_qwen_fa3_scheduler_geometry(128, 16, 8, 256, 8)
     assert not fa3_metadata._supports_qwen_fa3_scheduler_geometry(128, 8, 2, 256, 30)
@@ -401,17 +430,25 @@ def test_qwen_single_request_fa3_scheduler_lookup_launches_once(monkeypatch):
     monkeypatch.setattr(
         fa3_metadata,
         "supports_qwen_single_request_fa3_scheduler_lookup",
-        lambda *args: True,
+        lambda *args, **kwargs: True,
     )
     seq_lens = torch.zeros(1, dtype=torch.int32)
     cu_seqlens_k = torch.zeros(2, dtype=torch.int32)
     scheduler_dst = torch.zeros(513, dtype=torch.int32)
 
+    monkeypatch.setattr(fa3_metadata, "_use_fa3_wave_capacity", lambda: True)
     assert fa3_metadata.try_build_qwen_single_request_fa3_metadata(
-        seq_lens, cu_seqlens_k, scheduler_dst, 128, 16, 8, 128, 8
+        seq_lens, cu_seqlens_k, scheduler_dst, 128, 16, 8, 128, 8, sm_count=60
     )
     assert len(launches) == 1
     assert launches[0][0] == (3,)
+    assert launches[0][2]["WAVE_CAPACITY"] == 120
+
+    monkeypatch.setattr(fa3_metadata, "_use_fa3_wave_capacity", lambda: False)
+    assert fa3_metadata.try_build_qwen_single_request_fa3_metadata(
+        seq_lens, cu_seqlens_k, scheduler_dst, 128, 16, 8, 128, 8, sm_count=60
+    )
+    assert launches[1][2]["WAVE_CAPACITY"] == 60
 
 
 @pytest.mark.skipif(
@@ -449,7 +486,8 @@ def test_qwen_single_request_fa3_scheduler_lookup_values(
 ):
     from vllm_musa.v1.attention.backends.fa_utils import get_scheduler_metadata
 
-    max_num_splits = (60 + num_heads_kv - 1) // num_heads_kv
+    sm_count = torch.musa.get_device_properties(0).multi_processor_count
+    max_num_splits = (sm_count + num_heads_kv - 1) // num_heads_kv
     seq_lens = torch.tensor([seq_len], dtype=torch.int32, device="musa")
     cu_seqlens_q = torch.tensor([0, 1], dtype=torch.int32, device="musa")
     cu_seqlens_k = torch.full((2,), -1, dtype=torch.int32, device="musa")
@@ -479,6 +517,7 @@ def test_qwen_single_request_fa3_scheduler_lookup_values(
         num_heads_kv,
         head_dim,
         max_num_splits,
+        sm_count=sm_count,
     )
     torch.musa.synchronize()
 
