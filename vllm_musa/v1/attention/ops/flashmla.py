@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from importlib.metadata import version
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 import torch
 from vllm.logger import init_logger

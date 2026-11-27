@@ -74,7 +74,9 @@ def _constant_capabilities(path: Path) -> dict[str, bool]:
     tree = ast.parse(path.read_text())
     out: dict[str, bool] = {}
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.FunctionDef) and node.name.startswith("supports_")):
+        if not (
+            isinstance(node, ast.FunctionDef) and node.name.startswith("supports_")
+        ):
             continue
         body = [
             stmt
@@ -102,9 +104,9 @@ def _shadow_entries():
 def test_there_is_something_to_check():
     entries = _shadow_entries()
     assert entries, "no cat-4a module shadows found; the manifest changed shape"
-    assert any(
-        _shadow_path(e).exists() for e in entries
-    ), "no shadow file exists on disk; the id -> path mapping is wrong"
+    assert any(_shadow_path(e).exists() for e in entries), (
+        "no shadow file exists on disk; the id -> path mapping is wrong"
+    )
 
 
 def test_every_musa_shadow_declares_every_upstream_capability():

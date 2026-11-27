@@ -38,9 +38,7 @@ def test_burst_and_aggressive_helpers_keep_validated_flags():
     assert burst["reduce_burst"] is True
     assert burst["disable_host_asserts"] is True
 
-    aggressive = kernel_common._tilelang_musa_aggressive_pass_configs(
-        _TileLangStub()
-    )
+    aggressive = kernel_common._tilelang_musa_aggressive_pass_configs(_TileLangStub())
     assert aggressive["disable_thread_storage_sync"] is True
     assert aggressive["disable_safe_memory"] is True
     assert aggressive["lower_ldgstg"] is True

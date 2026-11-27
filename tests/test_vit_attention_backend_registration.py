@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 PLATFORM = Path(__file__).parents[1] / "vllm_musa" / "platform.py"
 
 

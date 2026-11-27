@@ -258,12 +258,16 @@ def _run(
     shim is process-global by design, so in-process tests would leak into each
     other.
     """
-    script = textwrap.dedent("""
+    script = (
+        textwrap.dedent("""
         import json, sys
         import vllm_musa.omni_compat as compat
         compat.install()
         result = {"installed": compat.is_installed()}
-        """) + textwrap.dedent(body) + "\nprint('@@' + json.dumps(result))\n"
+        """)
+        + textwrap.dedent(body)
+        + "\nprint('@@' + json.dumps(result))\n"
+    )
     env = {
         "PYTHONPATH": f"{site}:{ROOT}",
         "PATH": "/usr/bin:/bin",
@@ -298,9 +302,9 @@ def next_site(tmp_path_factory) -> Path:
 # Table integrity
 # --------------------------------------------------------------------------- #
 def test_every_entry_is_well_formed():
-    assert (
-        compat_table.ENTRIES
-    ), "the table must not be empty while the pin predates Omni main"
+    assert compat_table.ENTRIES, (
+        "the table must not be empty while the pin predates Omni main"
+    )
     for entry in compat_table.ENTRIES:
         assert entry.kind in compat_table.KINDS
         assert entry.reason.strip() and entry.remove_when.strip()
@@ -317,17 +321,17 @@ def test_every_entry_is_well_formed():
             module = importlib.import_module(
                 f"vllm_musa.omni_compat.adapters.{entry.adapter}"
             )
-            assert callable(
-                module.apply
-            ), f"adapter {entry.adapter} must expose apply(module)"
-            assert callable(
-                module.is_applied
-            ), f"adapter {entry.adapter} must expose is_applied(module)"
+            assert callable(module.apply), (
+                f"adapter {entry.adapter} must expose apply(module)"
+            )
+            assert callable(module.is_applied), (
+                f"adapter {entry.adapter} must expose is_applied(module)"
+            )
             # Without this the loader cannot tell "the pin serves this already"
             # from "the adapter matched nothing", and fails closed on both.
-            assert callable(
-                module.is_satisfied
-            ), f"adapter {entry.adapter} must expose is_satisfied(module)"
+            assert callable(module.is_satisfied), (
+                f"adapter {entry.adapter} must expose is_satisfied(module)"
+            )
 
 
 @pytest.mark.parametrize(
@@ -819,12 +823,12 @@ def test_bootstrap_imports_nothing_heavy(pin_site):
     result = json.loads(
         [ln for ln in proc.stdout.splitlines() if ln.startswith("@@")][-1][2:]
     )
-    assert (
-        result["heavy"] == []
-    ), "the startup hook must not import torch, vllm or vllm_musa"
-    assert (
-        result["installed"] == 2
-    ), "one deferring hook to serve modules, one to adapt them"
+    assert result["heavy"] == [], (
+        "the startup hook must not import torch, vllm or vllm_musa"
+    )
+    assert result["installed"] == 2, (
+        "one deferring hook to serve modules, one to adapt them"
+    )
     assert result["is_last"] is True
     assert result["is_first"] is True
 
@@ -1703,11 +1707,15 @@ def test_a_skipped_semantics_pass_says_so_in_the_verdict(tmp_path, capsys):
 # --------------------------------------------------------------------------- #
 def _bootstrap(site: Path, body: str, *, version: str = PIN_VERSION) -> dict:
     """Run ``body`` after the ``.pth`` bootstrap, which is what the image runs."""
-    script = textwrap.dedent("""
+    script = (
+        textwrap.dedent("""
         import json, sys
         import vllm_musa_omni_compat_pth  # noqa: F401  -- installs the hook
         result = {}
-        """) + textwrap.dedent(body) + "\nprint('@@' + json.dumps(result))\n"
+        """)
+        + textwrap.dedent(body)
+        + "\nprint('@@' + json.dumps(result))\n"
+    )
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,

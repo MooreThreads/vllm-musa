@@ -68,9 +68,9 @@ def _verify_native_modules(wheel: Path, names: set[str]) -> None:
             for name in names
             if name.startswith(f"{module}.") and name.endswith(".so")
         }
-        assert actual == {
-            expected
-        }, f"{module}: expected {expected}, found {sorted(actual)}"
+        assert actual == {expected}, (
+            f"{module}: expected {expected}, found {sorted(actual)}"
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,7 +115,7 @@ def main() -> None:
         assert dist_info_dir.startswith("vllm_musa-"), dist_info_dir
         record = archive.read(f"{dist_info_dir}/RECORD").decode()
         recorded = {path for path, _, _ in csv.reader(record.splitlines())}
-        assert REQUIRED_FILES <= recorded, sorted(REQUIRED_FILES - recorded)
+        assert recorded >= REQUIRED_FILES, sorted(REQUIRED_FILES - recorded)
 
         metadata = Parser().parsestr(archive.read(f"{dist_info_dir}/METADATA").decode())
         assert canonicalize_name(metadata["Name"]) == "vllm-musa"
@@ -152,9 +152,9 @@ def main() -> None:
         version = re.search(
             r"^__version__ = version = ['\"]([^'\"]+)['\"]", version_module, re.M
         )
-        assert (
-            version and not Version(version[1]).is_devrelease
-        ), "missing vLLM release version"
+        assert version and not Version(version[1]).is_devrelease, (
+            "missing vLLM release version"
+        )
 
         old_metadata_lookups = []
         for name in names:

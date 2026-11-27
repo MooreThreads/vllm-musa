@@ -9,7 +9,7 @@ import math
 import random
 import statistics
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 import torchada  # noqa: F401
 import torch

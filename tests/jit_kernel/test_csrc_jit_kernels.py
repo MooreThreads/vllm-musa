@@ -685,9 +685,8 @@ def _check_rope_captured_jit_parity(shape: RopeShape) -> None:
     graph = torch.cuda.CUDAGraph()
     stream = torch.cuda.Stream()
     stream.wait_stream(torch.cuda.current_stream())
-    with torch.cuda.stream(stream):
-        with torch.cuda.graph(graph):
-            fn()
+    with torch.cuda.stream(stream), torch.cuda.graph(graph):
+        fn()
     torch.cuda.current_stream().wait_stream(stream)
 
     q_buf.copy_(query)
@@ -720,9 +719,8 @@ def _check_rope_multi_replay(shape: RopeShape, n_replays: int = 32) -> None:
     graph = torch.cuda.CUDAGraph()
     stream = torch.cuda.Stream()
     stream.wait_stream(torch.cuda.current_stream())
-    with torch.cuda.stream(stream):
-        with torch.cuda.graph(graph):
-            fn()
+    with torch.cuda.stream(stream), torch.cuda.graph(graph):
+        fn()
     torch.cuda.current_stream().wait_stream(stream)
 
     for _ in range(n_replays):

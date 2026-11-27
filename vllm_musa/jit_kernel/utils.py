@@ -5,19 +5,14 @@ import importlib.util
 import logging
 import os
 import pathlib
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
     TypeAlias,
     TypeVar,
-    Union,
 )
 
 import torch
@@ -47,7 +42,7 @@ def cache_once(fn: F) -> F:
     return wrapper  # type: ignore
 
 
-def _make_wrapper(tup: Tuple[str, str]) -> str:
+def _make_wrapper(tup: tuple[str, str]) -> str:
     export_name, kernel_name = tup
     return f"TVM_FFI_DLL_EXPORT_TYPED_FUNC({export_name}, ({kernel_name}));"
 
@@ -77,7 +72,7 @@ KERNEL_PATH = _resolve_kernel_path()
 DEFAULT_INCLUDE = [str(KERNEL_PATH / "include")]
 DEFAULT_CFLAGS = ["-std=c++20", "-O3"]
 DEFAULT_LDFLAGS = []
-CPP_TEMPLATE_TYPE: TypeAlias = Union[int, float, bool, torch.dtype]
+CPP_TEMPLATE_TYPE: TypeAlias = int | float | bool | torch.dtype
 
 
 class CPPArgList(list[str]):
@@ -117,15 +112,15 @@ def make_cpp_args(*args: CPP_TEMPLATE_TYPE) -> CPPArgList:
 
 def load_jit(
     *args: str,
-    cpp_files: List[str] | None = None,
-    cuda_files: List[str] | None = None,
-    cpp_wrappers: List[Tuple[str, str]] | None = None,
-    cuda_wrappers: List[Tuple[str, str]] | None = None,
-    extra_cflags: List[str] | None = None,
-    extra_cuda_cflags: List[str] | None = None,
-    extra_ldflags: List[str] | None = None,
-    extra_include_paths: List[str] | None = None,
-    extra_dependencies: List[str] | None = None,
+    cpp_files: list[str] | None = None,
+    cuda_files: list[str] | None = None,
+    cpp_wrappers: list[tuple[str, str]] | None = None,
+    cuda_wrappers: list[tuple[str, str]] | None = None,
+    extra_cflags: list[str] | None = None,
+    extra_cuda_cflags: list[str] | None = None,
+    extra_ldflags: list[str] | None = None,
+    extra_include_paths: list[str] | None = None,
+    extra_dependencies: list[str] | None = None,
     build_directory: str | None = None,
     header_only: bool = True,
 ) -> Module:
@@ -262,7 +257,7 @@ def _jit_compile_context():
 
 
 # NOTE: this might also be used in __main__.py for compile flags export
-def _get_default_target_flags() -> List[str]:
+def _get_default_target_flags() -> list[str]:
     if is_hip_runtime():
         return ["-DUSE_ROCM", "-std=c++20", "-O3"]
     else:
@@ -298,7 +293,7 @@ def is_arch_support_pdl() -> bool:
     return get_jit_cuda_arch().major >= 9
 
 
-def _find_package_root(package: str) -> Optional[pathlib.Path]:
+def _find_package_root(package: str) -> pathlib.Path | None:
     spec = importlib.util.find_spec(package)
     if spec is None or spec.origin is None:
         return None
@@ -306,11 +301,11 @@ def _find_package_root(package: str) -> Optional[pathlib.Path]:
 
 
 # NOTE: this might also be used in __main__.py for compile flags export
-_REGISTERED_DEPENDENCIES: Dict[str, Callable[[], List[str]]] = {}
+_REGISTERED_DEPENDENCIES: dict[str, Callable[[], list[str]]] = {}
 
 
 def register_dependency(name: str):
-    def decorator(f: Callable[[], List[str]]) -> Callable[[], List[str]]:
+    def decorator(f: Callable[[], list[str]]) -> Callable[[], list[str]]:
         if name in _REGISTERED_DEPENDENCIES:
             raise ValueError(f"Dependency {name} already registered")
         _REGISTERED_DEPENDENCIES[name] = f
@@ -320,8 +315,8 @@ def register_dependency(name: str):
 
 
 @register_dependency("flashinfer")
-def get_flashinfer_include_paths() -> List[str]:
-    include_paths: List[str] = []
+def get_flashinfer_include_paths() -> list[str]:
+    include_paths: list[str] = []
     flashinfer_root = _find_package_root("flashinfer")
     if flashinfer_root is None:
         raise RuntimeError(
@@ -349,8 +344,8 @@ def get_flashinfer_include_paths() -> List[str]:
 
 
 @register_dependency("cutlass")
-def get_cutlass_include_paths() -> List[str]:
-    include_paths: List[str] = []
+def get_cutlass_include_paths() -> list[str]:
+    include_paths: list[str] = []
 
     flashinfer_root = _find_package_root("flashinfer")
     if flashinfer_root is not None:

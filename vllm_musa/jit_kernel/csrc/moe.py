@@ -29,9 +29,12 @@ def _moe_module():
             "-Wno-error=address-of-temporary",
             "-fmusa-flush-denormals-to-zero",
             "-fno-signed-zeros",
-            "-mllvm", "-mtgpu-opt-level=1",
-            "-mllvm", "-mtgpu-load-store-opt=1",
-            "-mllvm", "-mtgpu-fold-global-ldst=1",
+            "-mllvm",
+            "-mtgpu-opt-level=1",
+            "-mllvm",
+            "-mtgpu-load-store-opt=1",
+            "-mllvm",
+            "-mtgpu-fold-global-ldst=1",
         ),
     )
 
@@ -44,7 +47,9 @@ def _moe_available() -> bool:
         _moe_module()
         return True
     except Exception:
-        logger.warning("native MUSA MoE glue unavailable; using eager kernels", exc_info=True)
+        logger.warning(
+            "native MUSA MoE glue unavailable; using eager kernels", exc_info=True
+        )
         return False
 
 
@@ -66,8 +71,12 @@ def _dummy_expert_ids(device: torch.device) -> torch.Tensor:
 def _silu_and_mul_custom(out: torch.Tensor, x: torch.Tensor) -> None:
     rows = x.numel() // x.shape[-1]
     _moe_module().sgl_musa_moe_act_and_mul(
-        x.view(rows, x.shape[-1]), out.view(rows, out.shape[-1]),
-        _dummy_expert_ids(x.device), max(rows, 1), _SILU, 1,
+        x.view(rows, x.shape[-1]),
+        out.view(rows, out.shape[-1]),
+        _dummy_expert_ids(x.device),
+        max(rows, 1),
+        _SILU,
+        1,
     )
 
 
@@ -127,7 +136,12 @@ def maybe_fast_moe_sum(x: torch.Tensor, out: torch.Tensor) -> bool:
         return False
     if x.dtype not in _FAST_DTYPES:
         return False
-    if x.dim() != 3 or out.dim() != 2 or x.shape[0] != out.shape[0] or x.shape[2] != out.shape[1]:
+    if (
+        x.dim() != 3
+        or out.dim() != 2
+        or x.shape[0] != out.shape[0]
+        or x.shape[2] != out.shape[1]
+    ):
         return False
     torch.ops.vllm.musa_fast_moe_sum(out, x)
     return True

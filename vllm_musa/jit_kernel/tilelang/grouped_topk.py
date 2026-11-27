@@ -54,7 +54,7 @@ def _check_config(
     return routed_topk
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 @tilelang.jit(
     out_idx=[],
     target="musa",
@@ -228,7 +228,7 @@ def _grouped_topk_parallel_kernel(
     return grouped_topk_parallel
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 @tilelang.jit(
     out_idx=[],
     target="musa",

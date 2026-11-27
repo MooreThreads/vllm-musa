@@ -3,7 +3,6 @@
 
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PATCH = next(
     (REPO_ROOT / "vllm_musa/patches/series").glob(
@@ -46,8 +45,7 @@ def test_patch_has_no_score_cast_reuse_dependency():
 
 def test_live_helper_prefers_fp32_capable_plain_deepgemm():
     source = (
-        REPO_ROOT
-        / "third_party/vllm/vllm/models/deepseek_v4/attention.py"
+        REPO_ROOT / "third_party/vllm/vllm/models/deepseek_v4/attention.py"
     ).read_text()
     helper = source[
         source.index("def _musa_deepseek_v4_linear_out_dtype(") : source.index(
@@ -55,7 +53,5 @@ def test_live_helper_prefers_fp32_capable_plain_deepgemm():
         )
     ]
 
-    assert helper.index("import deep_gemm") < helper.index(
-        "from mate import deep_gemm"
-    )
+    assert helper.index("import deep_gemm") < helper.index("from mate import deep_gemm")
     assert "deep_gemm.bf16_gemm_nt(a, weight, output)" in helper

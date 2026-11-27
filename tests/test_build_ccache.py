@@ -30,9 +30,7 @@ _CONFIGURE_ENV_KEYS = (
 @pytest.fixture(autouse=True)
 def _restore_compiler_cache_environment():
     before = {
-        name: os.environ[name]
-        for name in _CONFIGURE_ENV_KEYS
-        if name in os.environ
+        name: os.environ[name] for name in _CONFIGURE_ENV_KEYS if name in os.environ
     }
     yield
     for name in _CONFIGURE_ENV_KEYS:
@@ -86,7 +84,7 @@ def test_host_compiler_fallback_uses_real_compiler_path(monkeypatch, tmp_path):
     mcc = bin_dir / "mcc"
     _write_executable(
         ccache,
-        "#!/usr/bin/env bash\n" f"printf '%s\\n' \"$@\" > {arg_log}\n" "exit 0\n",
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {arg_log}\nexit 0\n",
     )
     for compiler_name in ("cc", "c++", "gcc", "g++", "mcc"):
         _write_executable(bin_dir / compiler_name, "#!/usr/bin/env bash\nexit 0\n")
@@ -123,7 +121,7 @@ def test_mcc_wrapper_presents_musa_sources_as_cu_to_ccache(monkeypatch, tmp_path
     mcc = bin_dir / "mcc"
     _write_executable(
         ccache,
-        "#!/usr/bin/env bash\n" f"printf '%s\\n' \"$@\" > {arg_log}\n" "exit 0\n",
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {arg_log}\nexit 0\n",
     )
     _write_executable(mcc, "#!/usr/bin/env bash\nexit 0\n")
 
@@ -178,7 +176,7 @@ def test_mcc_wrapper_only_strips_musa_language_flag(monkeypatch, tmp_path):
     mcc = bin_dir / "mcc"
     _write_executable(
         ccache,
-        "#!/usr/bin/env bash\n" f"printf '%s\\n' \"$@\" > {arg_log}\n" "exit 0\n",
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {arg_log}\nexit 0\n",
     )
     _write_executable(mcc, "#!/usr/bin/env bash\nexit 0\n")
 

@@ -278,7 +278,7 @@ def test_splitk_configs_tile_k_and_keep_one_row_on_the_gemv() -> None:
         split, block_n, warps, unroll, min_rows, max_rows, tile_m = config
         assert k % (split * 32 * unroll) == 0
         assert 2 <= min_rows <= 16 <= max_rows
-        assert 16 <= eager_max_rows
+        assert eager_max_rows >= 16
         assert tile_m in (16, 32)
     source = _function(SPLITK, "fp8_block_splitk_config")
     assert "config[4] <= rows <= max_rows" in source

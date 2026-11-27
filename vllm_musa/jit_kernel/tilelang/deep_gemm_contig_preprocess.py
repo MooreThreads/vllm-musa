@@ -236,7 +236,7 @@ def _count_prefix_topk_single_block_kernel(max_experts: int, max_block_m: int):
                     prefix[tid] = T.int32(0)
             T.sync_threads()
 
-            for offset in T.serial((scan_size.bit_length() - 1)):
+            for offset in T.serial(scan_size.bit_length() - 1):
                 step = 1 << offset
                 addend = T.int32(0)
                 if tid < scan_size and tid >= step:
@@ -386,7 +386,7 @@ def _prefix_counts_tree_kernel(max_experts: int, max_block_m: int):
                     prefix[tid] = T.int32(0)
             T.sync_threads()
 
-            for offset in T.serial((scan_size.bit_length() - 1)):
+            for offset in T.serial(scan_size.bit_length() - 1):
                 step = 1 << offset
                 addend = T.int32(0)
                 if tid < scan_size and tid >= step:

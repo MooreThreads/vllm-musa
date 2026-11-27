@@ -1033,8 +1033,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         batch_size = metadata.schedule_batch_size or metadata.num_decodes
         assert self.dcp_world_size == 1
         logger.info_once(
-            "MUSA FA3: refreshing draft decode metadata inside the draft "
-            "decode graph."
+            "MUSA FA3: refreshing draft decode metadata inside the draft decode graph."
         )
 
         buf = self._cu_seqlens_k_buffer
@@ -1150,9 +1149,9 @@ class FlashAttentionImpl(AttentionImpl):
 
         self.sinks = sinks
         if self.sinks is not None:
-            assert (
-                flash_attn_supports_sinks()
-            ), "Sinks are only supported in FlashAttention 3"
+            assert flash_attn_supports_sinks(), (
+                "Sinks are only supported in FlashAttention 3"
+            )
             assert self.sinks.shape[0] == num_heads, (
                 "Sinks must have the same number of heads as the number of "
                 "heads in the layer"
@@ -1213,9 +1212,9 @@ class FlashAttentionImpl(AttentionImpl):
         reject_per_sequence_causal(attn_metadata)
 
         assert output is not None, "Output tensor must be provided."
-        assert (
-            self.vllm_flash_attn_version is not None
-        ), "FlashAttention version not detected."
+        assert self.vllm_flash_attn_version is not None, (
+            "FlashAttention version not detected."
+        )
 
         if output_scale is not None or output_block_scale is not None:
             raise NotImplementedError(
@@ -1604,9 +1603,9 @@ class FlashAttentionImpl(AttentionImpl):
         v_descale: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # ==================== MUSA ADAPTATION ====================
-        assert (
-            self.vllm_flash_attn_version is not None
-        ), "FlashAttention version not detected."
+        assert self.vllm_flash_attn_version is not None, (
+            "FlashAttention version not detected."
+        )
         if attn_metadata.dcp_context_kv_lens is None:
             raise RuntimeError("DCP metadata is missing dcp_context_kv_lens.")
         if attn_metadata.max_dcp_context_kv_len is None:
@@ -1993,9 +1992,9 @@ class FlashAttentionImpl(AttentionImpl):
             attn_metadata: Encoder attention metadata
             layer: The attention layer
         """
-        assert (
-            self.vllm_flash_attn_version is not None
-        ), "FlashAttention version not detected."
+        assert self.vllm_flash_attn_version is not None, (
+            "FlashAttention version not detected."
+        )
 
         # For encoder attention, process FP8 quantization if needed
         if self.kv_cache_dtype.startswith("fp8"):

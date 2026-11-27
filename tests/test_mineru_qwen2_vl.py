@@ -10,17 +10,23 @@ from vllm_musa.optimization_contract import (
     ModelRole,
     OptimizationFeature,
     resolve_optimization_contract,
+    rotary,
 )
-from vllm_musa.optimization_contract import rotary
 
 
 def _raw_config():
     return SimpleNamespace(
-        model_type="qwen2_vl", architectures=["Qwen2VLForConditionalGeneration"],
+        model_type="qwen2_vl",
+        architectures=["Qwen2VLForConditionalGeneration"],
         text_config=SimpleNamespace(
-            model_type="qwen2_vl", hidden_size=896, intermediate_size=4864,
-            num_hidden_layers=24, num_attention_heads=14, num_key_value_heads=2,
-            head_dim=64, rope_scaling={"mrope_section": [8, 12, 12]},
+            model_type="qwen2_vl",
+            hidden_size=896,
+            intermediate_size=4864,
+            num_hidden_layers=24,
+            num_attention_heads=14,
+            num_key_value_heads=2,
+            head_dim=64,
+            rope_scaling={"mrope_section": [8, 12, 12]},
         ),
         vision_config=SimpleNamespace(embed_dim=1280, depth=32, num_heads=16),
     )
@@ -30,8 +36,11 @@ def _vllm_config(raw=None, normalized_text=None, *, tp=1):
     raw = raw or _raw_config()
     return SimpleNamespace(
         model_config=SimpleNamespace(
-            hf_config=raw, hf_text_config=normalized_text or raw.text_config,
-            architectures=raw.architectures, dtype="bfloat16", enforce_eager=True,
+            hf_config=raw,
+            hf_text_config=normalized_text or raw.text_config,
+            architectures=raw.architectures,
+            dtype="bfloat16",
+            enforce_eager=True,
         ),
         parallel_config=SimpleNamespace(
             tensor_parallel_size=tp, pipeline_parallel_size=1

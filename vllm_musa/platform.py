@@ -33,9 +33,8 @@ else:
 
 import pymtml as pynvml
 
-from vllm_musa.optimization_contract import ModelFamily
+from vllm_musa.optimization_contract import ModelFamily, resolve_optimization_contract
 from vllm_musa.optimization_contract import policy as contract_policy
-from vllm_musa.optimization_contract import resolve_optimization_contract
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
@@ -104,8 +103,7 @@ def register_attention_backends() -> None:
     register_backend(
         AttentionBackendEnum.TURBOQUANT,
         class_path=(
-            "vllm_musa.v1.attention.backends.turboquant."
-            "MUSATurboQuantAttentionBackend"
+            "vllm_musa.v1.attention.backends.turboquant.MUSATurboQuantAttentionBackend"
         ),
     )
     tree_attn_backend = getattr(AttentionBackendEnum, "TREE_ATTN", None)
@@ -896,7 +894,9 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def get_device_communicator_cls(cls) -> str:
-        return "vllm.distributed.device_communicators.cuda_communicator.CudaCommunicator"  # noqa
+        return (
+            "vllm.distributed.device_communicators.cuda_communicator.CudaCommunicator"  # noqa
+        )
 
     @classmethod
     def supports_fp8(cls) -> bool:

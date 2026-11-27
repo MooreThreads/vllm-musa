@@ -227,7 +227,7 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
         rows = gate_up.numel() // gate_up.shape[-1] if gate_up.dim() > 0 else 0
         params = self._get_layer_params(layer)
         if not (
-            0 < rows
+            rows > 0
             and gate_up.dtype == torch.bfloat16
             and gate_up.is_contiguous()
             and gate_up.shape[-1] == 2 * params.weight.shape[1]

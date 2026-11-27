@@ -34,7 +34,17 @@ BLOCK_M = 16
 # included, use the eager limit, past which the block GEMM runs up to
 # fp8_block_bf16.MIN_ROWS.
 _ENTRY_KEYS = frozenset(
-    "n k split block_n num_warps unroll tile_m min_rows max_rows".split()
+    [
+        "n",
+        "k",
+        "split",
+        "block_n",
+        "num_warps",
+        "unroll",
+        "tile_m",
+        "min_rows",
+        "max_rows",
+    ]
 )
 _MODES = frozenset({"capture", "eager"})
 

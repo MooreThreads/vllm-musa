@@ -226,9 +226,9 @@ def apply(
     # always-selected slot, so extend the routing by a single column here.
     folded_shared = getattr(layer, "_musa_shared_folded", False)
     if folded_shared:
-        assert (
-            shared_experts is None and shared_experts_input is None
-        ), "folded shared expert expects shared_experts=None"
+        assert shared_experts is None and shared_experts_input is None, (
+            "folded shared expert expects shared_experts=None"
+        )
         # The Qwen3.5 runner may fuse the routed and shared gate weights
         # before routing. In that case the MUSA top-k kernel already returns
         # the extra shared column; appending it again would create a duplicate

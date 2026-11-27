@@ -541,7 +541,7 @@ def test_series_numbering_rows_reports_duplicate_and_gap(ms):
         (
             "series numbering",
             "non-contiguous",
-            "expected 0001..0004, missing 0003 " "(numbers present: 0001, 0002, 0004)",
+            "expected 0001..0004, missing 0003 (numbers present: 0001, 0002, 0004)",
         ),
     ]
 
@@ -1080,8 +1080,7 @@ def test_verify_series_gate_precedes_the_divergence_summary_and_ends_in_a_verdic
     assert "… 1 more" in out  # truncation is marked, not silent
     assert "empty ident name" in out  # the row detail survives verify
     assert printed[-1] == (
-        "=== musa_sync verify: FAIL "
-        "(divergence=0, series-format=11, numbering=0) ==="
+        "=== musa_sync verify: FAIL (divergence=0, series-format=11, numbering=0) ==="
     )
 
 
@@ -1195,9 +1194,9 @@ def test_check_series_replay_accepts_a_relative_repo_path(
 
     assert ms.main(["check-series", "--repo", "upstream"]) == 0
     capsys.readouterr()
-    assert (
-        ms.main(["check-series", "--repo", "upstream", "--replay"]) == 0
-    ), capsys.readouterr().out
+    assert ms.main(["check-series", "--repo", "upstream", "--replay"]) == 0, (
+        capsys.readouterr().out
+    )
     assert "repo-unusable" not in capsys.readouterr().out
     # --round-trip needs a checkout that HOLDS the series (a different state),
     # so the relative path is exercised here by the replay; the mode's own
@@ -2621,9 +2620,7 @@ def test_bare_diff_with_a_hunk_needs_an_index_line(ms, tmp_path, monkeypatch):
     Mutation: return `b""` again when there is no `diff --git`.
     """
     series = tmp_path / "series"
-    body = (
-        "--- a/value.txt\n" "+++ b/value.txt\n" "@@ -1 +1,2 @@\n" " alpha\n" "+beta\n"
-    )
+    body = "--- a/value.txt\n+++ b/value.txt\n@@ -1 +1,2 @@\n alpha\n+beta\n"
     _write_series(series, "0001-bare-hunk.patch", _mailbox("bare-hunk", body))
     monkeypatch.setattr(ms, "SERIES_DIR", series)
 

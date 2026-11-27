@@ -47,9 +47,9 @@ class TestCustomOpsRuntimePatches:
         _load_patch_module(patch_file).apply()
 
         assert vllm_ops.rms_norm is _shared.musa_safe_rms_norm
-        assert getattr(vllm_ops.rms_norm, "_musa_safe_rms_norm") is True
+        assert vllm_ops.rms_norm._musa_safe_rms_norm is True
         assert vllm_ops.rotary_embedding is _shared.musa_safe_rotary_embedding
-        assert getattr(vllm_ops.rotary_embedding, "_musa_safe_rotary_embedding") is True
+        assert vllm_ops.rotary_embedding._musa_safe_rotary_embedding is True
 
     def test_static_fp8_fallback_is_registered_on_vllm_custom_ops(self, monkeypatch):
         import vllm
@@ -71,7 +71,7 @@ class TestCustomOpsRuntimePatches:
         )
         patch_module.apply()
 
-        assert getattr(vllm_ops.scaled_fp8_quant, "_musa_static_fp8_fallback")
+        assert vllm_ops.scaled_fp8_quant._musa_static_fp8_fallback
         assert vllm_ops.scaled_fp8_quant(torch.ones((1, 1))) is delegated
 
         values = torch.tensor([[2.0, 4.0], [4.0, 4.0]])
@@ -1583,7 +1583,7 @@ class TestObjectPatchPhase:
             mod = _load_patch_module(patch_file)
             if mod is not None and callable(getattr(mod, "apply", None)):
                 found[module_name] = patch_file.name
-        assert self._OBJECT_PATCH_MODULES <= set(found), (
+        assert set(found) >= self._OBJECT_PATCH_MODULES, (
             f"object-patch modules missing apply(): "
             f"{self._OBJECT_PATCH_MODULES - set(found)}"
         )
@@ -1631,7 +1631,7 @@ class TestObjectPatchPhase:
         r2 = apply_object_patches(force=True)
         assert isinstance(r1, list) and isinstance(r2, list)
         applied_mods = {e["module"] for e in r1}
-        assert self._OBJECT_PATCH_MODULES <= applied_mods, applied_mods
+        assert applied_mods >= self._OBJECT_PATCH_MODULES, applied_mods
         for e in r1 + r2:
             assert {"module", "file", "status"} <= set(e), e
             assert e["status"] in {"applied", "error"}, e

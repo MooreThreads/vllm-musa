@@ -1281,8 +1281,7 @@ def _mhc_pre_deepgemm_big_fuse_run(
     hidden_size = residual.shape[-1]
     if hc_mult != 4:
         raise NotImplementedError(
-            f"MHC pre DeepGEMM big-fuse provider only supports hc_mult=4, "
-            f"got {hc_mult}"
+            f"MHC pre DeepGEMM big-fuse provider only supports hc_mult=4, got {hc_mult}"
         )
 
     hc_mult2 = hc_mult * hc_mult
@@ -1399,7 +1398,10 @@ _MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS = 256
 def _mhc_pre_decode_norm_fuse_split_k(num_tokens: int, hc_hidden_size: int) -> int:
     # The generic table drops to split-K 8 above 128 tokens, which is slower for
     # the fused reduction than 16.
-    if hc_hidden_size == 16384 and 64 < num_tokens <= _MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS:
+    if (
+        hc_hidden_size == 16384
+        and 64 < num_tokens <= _MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS
+    ):
         return 16
     return _get_mhc_pre_deepgemm_split_k(num_tokens, hc_hidden_size)
 

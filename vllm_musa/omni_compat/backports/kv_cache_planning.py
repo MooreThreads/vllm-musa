@@ -49,9 +49,9 @@ __all__ = ["get_global_kv_cache_groups", "get_kv_cache_configs"]
 
 
 def get_global_kv_cache_groups(
-    vllm_config: "VllmConfig",
-    kv_cache_specs: list[dict[str, "KVCacheSpec"]],
-) -> list["KVCacheGroupSpec"]:
+    vllm_config: VllmConfig,
+    kv_cache_specs: list[dict[str, KVCacheSpec]],
+) -> list[KVCacheGroupSpec]:
     """Group the layers of the whole model (all workers' specs merged).
 
     Mirrors the prefix of the pinned ``get_kv_cache_configs``: merge every
@@ -86,11 +86,11 @@ def get_global_kv_cache_groups(
 
 
 def get_kv_cache_configs(
-    vllm_config: "VllmConfig",
-    kv_cache_specs: list[dict[str, "KVCacheSpec"]],
+    vllm_config: VllmConfig,
+    kv_cache_specs: list[dict[str, KVCacheSpec]],
     available_memory: list[int],
-    global_kv_cache_groups: list["KVCacheGroupSpec"] | None = None,
-) -> list["KVCacheConfig"]:
+    global_kv_cache_groups: list[KVCacheGroupSpec] | None = None,
+) -> list[KVCacheConfig]:
     """The pinned planner, accepting 0.33's fourth argument and recomputing it.
 
     ``global_kv_cache_groups`` is accepted for signature compatibility and

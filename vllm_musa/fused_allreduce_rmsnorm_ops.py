@@ -12,9 +12,9 @@ all-reduced tensor for the residual path.
 from __future__ import annotations
 
 import torch
+from vllm.logger import init_logger
 from vllm.utils.torch_utils import direct_register_custom_op
 
-from vllm.logger import init_logger
 from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (
     get_musa_jit_custom_allreduce_comm,
 )
@@ -58,11 +58,11 @@ def _musa_fused_allreduce_residual_rms_norm_impl(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Runtime implementation: use the registered MUSA JIT residual fused kernel."""
     comm = get_musa_jit_custom_allreduce_comm(comm_id)
-    result = comm.fused_allreduce_residual_rmsnorm(
-        input, residual, weight, float(eps)
-    )
+    result = comm.fused_allreduce_residual_rmsnorm(input, residual, weight, float(eps))
     if result is None:
-        reason_fn = getattr(comm, "reject_fused_allreduce_residual_rmsnorm_reason", None)
+        reason_fn = getattr(
+            comm, "reject_fused_allreduce_residual_rmsnorm_reason", None
+        )
         reason = (
             reason_fn(input, residual, weight)
             if callable(reason_fn)
@@ -89,7 +89,9 @@ def _musa_fused_allreduce_residual_rms_norm_no_raw_impl(
         input, residual, weight, float(eps)
     )
     if result is None:
-        reason_fn = getattr(comm, "reject_fused_allreduce_residual_rmsnorm_reason", None)
+        reason_fn = getattr(
+            comm, "reject_fused_allreduce_residual_rmsnorm_reason", None
+        )
         reason = (
             reason_fn(input, residual, weight)
             if callable(reason_fn)
@@ -148,9 +150,7 @@ except RuntimeError as exc:
     # The module can be imported more than once in plugin-heavy processes.
     if "musa_fused_allreduce_residual_rms_norm" not in str(exc):
         raise
-    logger.debug(
-        "MUSA fused allreduce-residual-rmsnorm custom op already registered"
-    )
+    logger.debug("MUSA fused allreduce-residual-rmsnorm custom op already registered")
 
 
 try:

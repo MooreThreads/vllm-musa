@@ -51,7 +51,7 @@ import ast
 import json
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCHEMA = 3
@@ -469,7 +469,7 @@ def _typeerror_guarded_lines(tree: ast.Module) -> set[int]:
         try:
             return get_rope(**new_kwargs)
         except TypeError:
-            return get_rope(rotary_dim=..., base=...)   # older vLLM
+            return get_rope(rotary_dim=..., base=...)  # older vLLM
 
     Both calls are deliberate, and the second one not fitting the pin is the
     point of writing it, so neither is a break. Without this the audit reports
@@ -1282,7 +1282,7 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(
                 {
                     "schema": SCHEMA,
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                     "omni_root": str(OMNI_ROOT),
                     "vllm_root": str(pin_root),
                     "vllm_version": pin.version,

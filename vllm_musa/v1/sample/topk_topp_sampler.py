@@ -415,7 +415,7 @@ def should_defer_min_p_processor(
 
 
 def get_processor_min_p(processor: Any) -> torch.Tensor:
-    min_p = getattr(processor, "min_p")
+    min_p = processor.min_p
     return _squeeze_filter_tensor(min_p)
 
 

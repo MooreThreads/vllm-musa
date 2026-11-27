@@ -81,7 +81,9 @@ def _rows_tile(n: int, k: int, rows: int) -> tuple[int, int, int, int] | None:
         return (
             (2, 8, 1024, 8)
             if rows <= 8
-            else (2, 8, 512, 4) if rows <= 16 else (4, 8, 512, 4)
+            else (2, 8, 512, 4)
+            if rows <= 16
+            else (4, 8, 512, 4)
         )
     if (n, k) == (1792, 5120) and rows >= 4 and rows != 5:
         return (4, 8, 512, 4) if 6 <= rows <= 8 else (2, 8, 512, 4)

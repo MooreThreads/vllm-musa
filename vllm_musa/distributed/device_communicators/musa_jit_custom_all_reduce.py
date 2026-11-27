@@ -1000,8 +1000,7 @@ class _MusaJitCustomAllreduceImpl:
         ]
         if failures:
             raise RuntimeError(
-                "MUSA custom AR graph staging capture failed across ranks: "
-                f"{failures}"
+                f"MUSA custom AR graph staging capture failed across ranks: {failures}"
             )
         ledgers = [payload["ledger"] for payload in gathered if payload is not None]
         if any(ledger != self._graph_staging_ledger for ledger in ledgers):

@@ -31,7 +31,6 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 _HERE = Path(__file__).resolve().parent
 _SERIES_DIR = _HERE / "series"
@@ -61,22 +60,22 @@ class DivSpec:
     path: (
         str  # repo-relative: the .patch (cat 1/2/3/4b), tripwire (4a), or source (5/6)
     )
-    upstream_path: Optional[str] = None  # the vllm path this targets / the seam owner
+    upstream_path: str | None = None  # the vllm path this targets / the seam owner
     apply_phase: str = "pre-install"  # one of VALID_PHASES
     required: bool = True
-    version_range: Optional[str] = None
-    removal_condition: Optional[str] = None
+    version_range: str | None = None
+    removal_condition: str | None = None
     intent: str = ""
     after: tuple = ()  # ordering deps by id (e.g. eagle after parallel_state)
     upstream_commits: tuple = ()  # series/upstream/ entries: the cherry-picked shas
 
     def __post_init__(self):
-        assert (
-            self.category in VALID_CATEGORIES
-        ), f"{self.id}: bad category {self.category!r}"
-        assert (
-            self.apply_phase in VALID_PHASES
-        ), f"{self.id}: bad apply_phase {self.apply_phase!r}"
+        assert self.category in VALID_CATEGORIES, (
+            f"{self.id}: bad category {self.category!r}"
+        )
+        assert self.apply_phase in VALID_PHASES, (
+            f"{self.id}: bad apply_phase {self.apply_phase!r}"
+        )
 
 
 # series/upstream/ holds the upstream vLLM commits the pin predates, applied
@@ -94,7 +93,7 @@ class UpstreamPick:
     """What a series entry's commit message says about upstream vLLM."""
 
     commits: tuple = ()  # shas of its "(cherry picked from commit ...)" lines
-    pr: Optional[str] = None  # the "(#N)" its subject ends in
+    pr: str | None = None  # the "(#N)" its subject ends in
 
 
 def _mailbox_message(text: str) -> tuple:
@@ -559,7 +558,7 @@ def entries_for_phase(phase: str) -> list[DivSpec]:
     return [e for e in ENTRIES if e.apply_phase == phase]
 
 
-def series_apply_order(phase: Optional[str] = None) -> list[Path]:
+def series_apply_order(phase: str | None = None) -> list[Path]:
     """Absolute ``.patch`` paths for the build-applied diff categories (1/2/3/4b),
     in apply order — the ``order`` list to hand to ``build_apply.apply_patch_series``.
 

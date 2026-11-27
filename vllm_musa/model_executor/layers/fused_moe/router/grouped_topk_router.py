@@ -378,7 +378,7 @@ def _can_use_musa_tilelang_grouped_topk(
         and gating_output.dim() == 2
         and hidden_states.shape[0] == gating_output.shape[0]
         and gating_output.dtype in (torch.float16, torch.bfloat16, torch.float32)
-        and 0 < num_expert_group
+        and num_expert_group > 0
         and 0 < topk_group <= num_expert_group
         and gating_output.shape[1] % num_expert_group == 0
         and 0 < topk <= topk_group * (gating_output.shape[1] // num_expert_group)

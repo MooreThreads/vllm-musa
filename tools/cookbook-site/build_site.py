@@ -46,7 +46,7 @@ import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 try:
@@ -461,10 +461,8 @@ def build_timestamp() -> str:
     """Reproducible build stamp: honour SOURCE_DATE_EPOCH when it is set."""
     epoch = os.environ.get("SOURCE_DATE_EPOCH")
     if epoch and epoch.isdigit():
-        return datetime.fromtimestamp(int(epoch), timezone.utc).strftime(
-            "%Y-%m-%d %H:%M UTC"
-        )
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        return datetime.fromtimestamp(int(epoch), UTC).strftime("%Y-%m-%d %H:%M UTC")
+    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def esc(text: str) -> str:
@@ -555,7 +553,7 @@ def vendor_label(key: str) -> str:
     return VENDOR_LABELS.get(key, key.replace("-", " ").title())
 
 
-def nav_html(page: str, meta: "SiteMeta", vendors: list[str]) -> str:
+def nav_html(page: str, meta: SiteMeta, vendors: list[str]) -> str:
     items = [
         ("index.html", "Recipes"),
         ("getting-started.html", "Getting started"),
@@ -579,7 +577,7 @@ def nav_html(page: str, meta: "SiteMeta", vendors: list[str]) -> str:
       <span class="brand-text">{esc(meta.name)}</span>
     </a>
     <nav class="nav" aria-label="Main">
-      {''.join(links)}
+      {"".join(links)}
       <div class="menu">
         <button class="nav-link menu-button" type="button" aria-haspopup="true" aria-expanded="false">Vendors<span aria-hidden="true">▾</span></button>
         <div class="menu-items" role="menu">{vendor_items}</div>
@@ -764,7 +762,7 @@ def render_index(recipes: list[Recipe], meta: SiteMeta, vendors: list[str]) -> s
     cards = "\n".join(card(recipe, page) for recipe in recipes)
     body = f"""<main class="wrap">
   <section class="hero">
-    <p class="eyebrow">{esc(meta.hardware)}{(' · ' + esc(meta.version)) if meta.version else ''}</p>
+    <p class="eyebrow">{esc(meta.hardware)}{(" · " + esc(meta.version)) if meta.version else ""}</p>
     <h1>{esc(meta.name)}</h1>
     <p class="hero-sub">{esc(meta.tagline)}</p>
     <div class="hero-actions">
@@ -838,7 +836,7 @@ def render_vendor(
   <section class="page-head">
     <h1>{esc(vendor_label(vendor))}</h1>
     <p class="hero-sub">{esc(blurb or f"{len(recipes)} serving recipes for {vendor_label(vendor)} on S5000.")}</p>
-    <p class="hero-meta">{len(recipes)} recipe{'s' if len(recipes) != 1 else ''}</p>
+    <p class="hero-meta">{len(recipes)} recipe{"s" if len(recipes) != 1 else ""}</p>
   </section>
   <div class="grid">
 {cards}
@@ -959,7 +957,7 @@ def render_recipe(
         <h2 class="aside-title">At a glance</h2>
         {glance_html(recipe)}
       </div>
-      {f'<button class="primary-btn copy-command" type="button" id="copy-command">Copy launch command</button>' if has_command else ''}
+      {'<button class="primary-btn copy-command" type="button" id="copy-command">Copy launch command</button>' if has_command else ""}
       <div class="aside-card">
         <h2 class="aside-title">On this page</h2>
         <nav class="toc">{toc_html(recipe.toc) or "<p class='muted'>No sections</p>"}</nav>

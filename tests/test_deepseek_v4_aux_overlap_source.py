@@ -3,9 +3,11 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-PATCH = ROOT / "vllm_musa/patches/series/0017-MUSA-vllm.models.deepseek_v4.nvidia.model.patch"
+PATCH = (
+    ROOT
+    / "vllm_musa/patches/series/0017-MUSA-vllm.models.deepseek_v4.nvidia.model.patch"
+)
 
 
 def test_deepseek_v4_aux_overlap_is_not_runtime_env_gated() -> None:

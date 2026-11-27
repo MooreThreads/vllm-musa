@@ -7,19 +7,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 COMM = ROOT / (
-    "vllm_musa/distributed/device_communicators/"
-    "musa_jit_custom_all_reduce.py"
+    "vllm_musa/distributed/device_communicators/musa_jit_custom_all_reduce.py"
 )
 LAUNCHER = ROOT / "vllm_musa/jit_kernel/csrc/allreduce.py"
-KERNEL = ROOT / (
-    "vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu"
-)
+KERNEL = ROOT / ("vllm_musa/jit_kernel/csrc/distributed/custom_all_reduce.mu")
 ENVIRON = ROOT / "vllm_musa/utils/environ.py"
 FUSED_OPS = ROOT / "vllm_musa/fused_allreduce_rmsnorm_ops.py"
 FUSION_PASS = ROOT / "vllm_musa/_inductor/musa_allreduce_rms_fusion.py"
 PASS_MANAGER_PATCH = ROOT / (
-    "vllm_musa/patches/series/"
-    "0003-MUSA-vllm.compilation.passes.pass_manager.patch"
+    "vllm_musa/patches/series/0003-MUSA-vllm.compilation.passes.pass_manager.patch"
 )
 
 
@@ -74,9 +70,7 @@ def _isolated_fusion_helpers(torch_namespace: object, fx_namespace: object) -> t
     assert {method.name for method in methods} == helper_names
     for method in methods:
         method.returns = None
-        arguments = (
-            method.args.posonlyargs + method.args.args + method.args.kwonlyargs
-        )
+        arguments = method.args.posonlyargs + method.args.args + method.args.kwonlyargs
         for argument in arguments:
             argument.annotation = None
         if method.args.vararg is not None:
@@ -95,7 +89,11 @@ def _isolated_fusion_helpers(torch_namespace: object, fx_namespace: object) -> t
     helper_class.end_lineno = fusion_class.end_lineno
     helper_class.end_col_offset = fusion_class.end_col_offset
     module = ast.fix_missing_locations(ast.Module(body=[helper_class], type_ignores=[]))
-    namespace = {"torch": torch_namespace, "fx": fx_namespace, "FakeTensor": _FakeTensor}
+    namespace = {
+        "torch": torch_namespace,
+        "fx": fx_namespace,
+        "FakeTensor": _FakeTensor,
+    }
     exec(compile(module, str(FUSION_PASS), "exec"), namespace)
     return namespace["_IsolatedFusionHelpers"]
 
@@ -159,9 +157,7 @@ class _FakeNode:
         self.meta = {} if value is _MISSING else {"val": value}
 
 
-def _fake_fusion_namespaces() -> tuple[
-    object, object, object, object, object, object
-]:
+def _fake_fusion_namespaces() -> tuple[object, object, object, object, object, object]:
     tensor_overload = object()
     scalar_overload = object()
     addmm_overload = object()
@@ -298,7 +294,9 @@ def test_python_registered_path_uses_shared_graph_lifecycle() -> None:
     slot_source = _python_function_source(
         comm_source, "_graph_rank_data_for_input", comm_class
     )
-    assert "slot = self._next_graph_slot + len(self._pending_graph_inputs)" in slot_source
+    assert (
+        "slot = self._next_graph_slot + len(self._pending_graph_inputs)" in slot_source
+    )
     assert "self._pending_graph_inputs.append(tensor)" in slot_source
     assert "return self.graph_rank_data[slot]" in slot_source
 
@@ -374,9 +372,7 @@ def test_fused_kernel_copy_is_cpu_rank_data_only() -> None:
         rank_data_block, first_block_end = _cpp_braced_block(
             function_source, "if (rank_data_on_cpu)"
         )
-        second_guard = function_source.index(
-            "if (rank_data_on_cpu)", first_block_end
-        )
+        second_guard = function_source.index("if (rank_data_on_cpu)", first_block_end)
         copy_block, _ = _cpp_braced_block(
             function_source, "if (rank_data_on_cpu)", first_block_end
         )
@@ -398,12 +394,11 @@ def test_tp2_specialized_fast_paths_preserve_vllm_abis() -> None:
     assert "hidden == 2048 && rows <= 128" in source
     assert "load_weight_scalar<WT>" in source
     assert "if constexpr (WriteReduced)" in source
-    assert source.count(
-        'TVM_FFI_ICHECK(shot == 1 || shot == 2) << "shot must be 1 or 2";'
-    ) == 3
-    assert source.count(
-        "if (shot == 1) {\n    if constexpr (nranks == 2)"
-    ) == 3
+    assert (
+        source.count('TVM_FFI_ICHECK(shot == 1 || shot == 2) << "shot must be 1 or 2";')
+        == 3
+    )
+    assert source.count("if (shot == 1) {\n    if constexpr (nranks == 2)") == 3
 
 
 def test_fused_ops_reuse_the_lifecycle_managed_jit_registry() -> None:
@@ -443,18 +438,14 @@ def test_manual_add_rewrite_accepts_only_tensor_overload_with_unit_alpha() -> No
     lhs = _FakeNode(op="placeholder")
     rhs = _FakeNode(op="placeholder")
 
-    assert helpers._is_add_node(
-        _FakeNode(target=tensor_overload, args=(lhs, rhs))
-    )
+    assert helpers._is_add_node(_FakeNode(target=tensor_overload, args=(lhs, rhs)))
     assert helpers._is_add_node(
         _FakeNode(target=tensor_overload, args=(lhs, rhs), kwargs={"alpha": 1.0})
     )
     assert not helpers._is_add_node(
         _FakeNode(target=tensor_overload, args=(lhs, rhs), kwargs={"alpha": 2})
     )
-    assert not helpers._is_add_node(
-        _FakeNode(target=scalar_overload, args=(lhs, 1))
-    )
+    assert not helpers._is_add_node(_FakeNode(target=scalar_overload, args=(lhs, 1)))
     assert not helpers._is_add_node(
         _FakeNode(target=addmm_overload, args=(lhs, rhs, lhs))
     )
@@ -545,9 +536,7 @@ def test_fusion_compile_range_respects_jit_comm_byte_limit() -> None:
     ) = _fake_fusion_namespaces()
     helpers = _isolated_fusion_helpers(torch_namespace, fx_namespace)()
     max_size = 512 * 1024 * 1024
-    helpers.max_token_num = helpers._max_fusable_tokens(
-        20_000, max_size, 16_384, 2
-    )
+    helpers.max_token_num = helpers._max_fusable_tokens(20_000, max_size, 16_384, 2)
     assert helpers.max_token_num == 16_384
     helpers.disabled = False
     compile_range = type("_FakeRange", (), {"end": 16_384})()
@@ -588,13 +577,11 @@ def test_base_all_gather_and_indirect_graph_abis_are_retained() -> None:
     )
     assert "dispatch_all_gather_world_size" in all_gather
     assert "dispatch_world_size_indirect" in graph_registered
-    assert (
-        ".vllm_musa_custom_ar_launch_all_gather("
-        in _python_function_source(launcher_source, "launch_all_gather")
+    assert ".vllm_musa_custom_ar_launch_all_gather(" in _python_function_source(
+        launcher_source, "launch_all_gather"
     )
-    assert (
-        ".vllm_musa_custom_ar_launch_graph_registered("
-        in _python_function_source(launcher_source, "launch_graph_registered")
+    assert ".vllm_musa_custom_ar_launch_graph_registered(" in _python_function_source(
+        launcher_source, "launch_graph_registered"
     )
     for function_name in (
         "vllm_musa_custom_ar_launch_all_gather",
@@ -606,10 +593,7 @@ def test_base_all_gather_and_indirect_graph_abis_are_retained() -> None:
 def test_no_raw_one_shot_matches_raw_dtype_rounding_order() -> None:
     source = KERNEL.read_text()
     assert "const T reduced_value = from_float<T>(acc[i]);" in source
-    assert (
-        "to_float(reduced_value) + to_float(residual_pack.data[i])"
-        in source
-    )
+    assert "to_float(reduced_value) + to_float(residual_pack.data[i])" in source
 
 
 def test_tp4_rows64_two_shot_uses_bounded_block_count() -> None:
@@ -618,10 +602,7 @@ def test_tp4_rows64_two_shot_uses_bounded_block_count() -> None:
     assert "if constexpr (nranks == 4)" in kernel_source
     assert "if (rows == 64 && hidden == 2048)" in kernel_source
     assert (
-        kernel_source.count(
-            "fused_ar_rmsnorm_2shot_blocks<nranks>(rows, hidden)"
-        )
-        == 3
+        kernel_source.count("fused_ar_rmsnorm_2shot_blocks<nranks>(rows, hidden)") == 3
     )
 
 

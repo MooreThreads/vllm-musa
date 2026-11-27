@@ -79,7 +79,7 @@ def _wraps_the_bridge(obj: object) -> bool:
 
 def _bridge():
     def compute_mm_prefix_ranges(
-        mm_features_per_req: "Sequence[Sequence[MultiModalFeatureSpec]]",
+        mm_features_per_req: Sequence[Sequence[MultiModalFeatureSpec]],
         sliding_window: int | None = None,
         clamp_sliding_window: bool = False,
         span_pad: int = 0,

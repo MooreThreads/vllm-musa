@@ -7,12 +7,12 @@ import pytest
 pytest.importorskip("torchada")
 
 import torch  # noqa: E402
-
-import vllm_musa.optimization_contract as optimization_contract  # noqa: E402
 from vllm.config import VllmConfig, set_current_vllm_config  # noqa: E402
 from vllm.model_executor.layers.rotary_embedding.common import (  # noqa: E402
     ApplyRotaryEmb,
 )
+
+import vllm_musa.optimization_contract as optimization_contract  # noqa: E402
 from vllm_musa.optimization_contract import OptimizationFeature  # noqa: E402
 from vllm_musa.optimization_contract.rotary import (  # noqa: E402
     MusaVisionApplyRotaryEmb,
@@ -56,7 +56,9 @@ def test_ovis_replacement_is_block_local_and_shares_one_cache() -> None:
     assert _install(visual)
     adapters = [block.attn.apply_rotary_emb for block in visual.blocks]
     assert all(isinstance(adapter, MusaVisionApplyRotaryEmb) for adapter in adapters)
-    assert all(adapter.positions_cache is adapters[0].positions_cache for adapter in adapters)
+    assert all(
+        adapter.positions_cache is adapters[0].positions_cache for adapter in adapters
+    )
     assert all(adapter.inplace and adapter.flatten for adapter in adapters)
     assert all(adapter.required_bf16_neox_shape == (64, 32) for adapter in adapters)
     assert all(

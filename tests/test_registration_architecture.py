@@ -205,9 +205,9 @@ def test_compat_adapter_uses_explicit_idempotent_install_hooks(rel_path: str) ->
     for stmt in tree.body:
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
-                assert not isinstance(
-                    target, ast.Attribute
-                ), f"{rel_path}:{stmt.lineno} mutates {ast.unparse(target)} at import time"
+                assert not isinstance(target, ast.Attribute), (
+                    f"{rel_path}:{stmt.lineno} mutates {ast.unparse(target)} at import time"
+                )
         elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
             callee = ast.unparse(stmt.value.func)
             assert not callee.endswith(
@@ -225,9 +225,9 @@ def test_all_compat_adapters_are_wired_into_package_registrars() -> None:
 
     for rel_path in MODEL_EXECUTOR_ADAPTER_MODULES:
         mod_stem = Path(rel_path).stem
-        assert (
-            f", {mod_stem})" in me_src
-        ), f"{rel_path} is not wired into register_model_executor_adapters()"
+        assert f", {mod_stem})" in me_src, (
+            f"{rel_path} is not wired into register_model_executor_adapters()"
+        )
 
     v1_expected_entries = (
         '("mla.common", mla_common)',

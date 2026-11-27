@@ -746,8 +746,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
 
 
 logger.info(
-    "Registered MusaQwenGatedDeltaNetAttention as the Qwen3.5 GDN OOT "
-    "pluggable layer."
+    "Registered MusaQwenGatedDeltaNetAttention as the Qwen3.5 GDN OOT pluggable layer."
 )
 
 

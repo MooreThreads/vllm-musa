@@ -256,12 +256,12 @@ def _patch_tilelang_musa_wrapper() -> bool:
                 self.device_mod = device_mod
                 self.host_mod = host_mod
 
-            assert (
-                len(self.device_mod.functions) >= 1
-            ), "Device module should have at least one function."
-            assert (
-                len(self.host_mod.functions) == 1
-            ), "Only support one function in host module."
+            assert len(self.device_mod.functions) >= 1, (
+                "Device module should have at least one function."
+            )
+            assert len(self.host_mod.functions) == 1, (
+                "Only support one function in host module."
+            )
 
             block_info_map = {}
             grid_info_map = {}
