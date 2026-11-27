@@ -3,7 +3,6 @@ from pathlib import Path
 
 from vllm_musa.custom_op_modules import CUSTOM_OP_MODULES
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = ROOT / "vllm_musa"
 

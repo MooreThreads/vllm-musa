@@ -10,7 +10,9 @@ torch = pytest.importorskip("torch")
 if getattr(torch.version, "musa", None) is None:
     pytest.skip("Requires MUSA", allow_module_level=True)
 
-from tests.test_deepseek_v41_optimization_contract import (
+# Imported only after the module-level skips above: the skip must run before
+# the helper module pulls in vLLM.
+from tests.test_deepseek_v41_optimization_contract import (  # noqa: E402
     _v41_flash_config,
     _v41_w4afp8_config,
 )

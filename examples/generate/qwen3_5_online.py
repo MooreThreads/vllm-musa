@@ -19,7 +19,11 @@ replace the model ID with a local path to skip the Hugging Face download):
         --no-enable-prefix-caching \\
         --no-enable-chunked-prefill \\
         --attention-config '{"backend":"FLASH_ATTN"}' \\
-        --compilation-config '{"mode":"NONE","cudagraph_mode":"FULL_DECODE_ONLY","cudagraph_capture_sizes":[4,8,12,16]}' \\
+        --compilation-config '{
+            "mode":"NONE",
+            "cudagraph_mode":"FULL_DECODE_ONLY",
+            "cudagraph_capture_sizes":[4,8,12,16]
+        }' \\
         --speculative-config '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
 
 Then run:

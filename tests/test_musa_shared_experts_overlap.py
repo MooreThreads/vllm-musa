@@ -4,10 +4,10 @@ import ast
 import contextlib
 import importlib.util
 import sys
+from collections.abc import Callable
 from enum import IntEnum
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Callable
 from unittest.mock import Mock
 
 import pytest

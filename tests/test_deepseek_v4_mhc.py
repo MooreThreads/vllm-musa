@@ -4,7 +4,6 @@
 
 import ast
 from pathlib import Path
-from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,7 +19,7 @@ def _function_node(tree: ast.AST, name: str) -> ast.FunctionDef:
     raise AssertionError(f"function {name!r} not found")
 
 
-def _call_name(node: ast.AST) -> Optional[str]:
+def _call_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):

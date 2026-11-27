@@ -251,10 +251,9 @@ def test_capture_resets_state_when_registration_fails(monkeypatch):
         raise RuntimeError("registration failed")
 
     monkeypatch.setattr(impl, "_register_graph_buffers", fail_registration)
-    with pytest.raises(RuntimeError, match="registration failed"):
-        with impl.capture():
-            assert impl._IS_CAPTURING is True
-            impl._pending_graph_inputs.append(torch.empty(1))
+    with pytest.raises(RuntimeError, match="registration failed"), impl.capture():
+        assert impl._IS_CAPTURING is True
+        impl._pending_graph_inputs.append(torch.empty(1))
     assert impl._IS_CAPTURING is False
 
 
@@ -561,9 +560,7 @@ def test_graph_staging_multi_capture_preserves_disjoint_arena_state(
     with impl.capture():
         assert impl._graph_staging_data_offset == 1280
         assert impl._graph_staging_meta_offset == 2560
-        assert impl._graph_staging_ledger == [
-            (5, 1, "allreduce", 1, 2, 3, 4, 5)
-        ]
+        assert impl._graph_staging_ledger == [(5, 1, "allreduce", 1, 2, 3, 4, 5)]
         assert impl._graph_staging_cpu_refs == [first_ref]
         impl._graph_staging_data_offset += 256
         impl._graph_staging_meta_offset += 512

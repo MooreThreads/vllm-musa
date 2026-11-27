@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ctypes
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -409,14 +409,10 @@ def _make_shared_buffer(
         return _SharedBuffer(pointers, opened_ipc_ptrs)
     except Exception:
         for ptr in opened_ipc_ptrs:
-            try:
+            with suppress(Exception):
                 lib.ipc_close_mem_handle(ctypes.c_void_p(ptr))
-            except Exception:
-                pass
-        try:
+        with suppress(Exception):
             lib.free(pointer)
-        except Exception:
-            pass
         raise
 
 
@@ -539,27 +535,19 @@ class _MusaJitCustomAllreduceImpl:
         except Exception:
             logger.exception("MUSA JIT custom allreduce initialization failed.")
             if self.meta_opened_ipc_ptrs:
-                try:
+                with suppress(Exception):
                     _close_ipc_handles(self.meta_opened_ipc_ptrs)
-                except Exception:
-                    pass
             if self.buffer_opened_ipc_ptrs:
-                try:
+                with suppress(Exception):
                     _close_ipc_handles(self.buffer_opened_ipc_ptrs)
-                except Exception:
-                    pass
             if self.meta_ptrs:
-                try:
+                with suppress(Exception):
                     _free_own_shared_buffer(self.meta_ptrs, group=group, rank=self.rank)
-                except Exception:
-                    pass
             if self.buffer_ptrs:
-                try:
+                with suppress(Exception):
                     _free_own_shared_buffer(
                         self.buffer_ptrs, group=group, rank=self.rank
                     )
-                except Exception:
-                    pass
             self.meta_ptrs = []
             self.meta_opened_ipc_ptrs = []
             self.buffer_ptrs = []
@@ -952,10 +940,10 @@ class _MusaJitCustomAllreduceImpl:
             != expected_meta_total
         ):
             return (
-                "graph staging arena totals differ from descriptor manifest: "
-                f"data={self._graph_staging_data_offset - self._graph_staging_data_start}"
-                f"/{expected_data_total}, "
-                f"meta={self._graph_staging_meta_offset - self._graph_staging_meta_start}"
+                "graph staging arena totals differ from descriptor manifest: data="
+                f"{self._graph_staging_data_offset - self._graph_staging_data_start}"
+                f"/{expected_data_total}, meta="
+                f"{self._graph_staging_meta_offset - self._graph_staging_meta_start}"
                 f"/{expected_meta_total}"
             )
         return None
@@ -1000,8 +988,7 @@ class _MusaJitCustomAllreduceImpl:
         ]
         if failures:
             raise RuntimeError(
-                "MUSA custom AR graph staging capture failed across ranks: "
-                f"{failures}"
+                f"MUSA custom AR graph staging capture failed across ranks: {failures}"
             )
         ledgers = [payload["ledger"] for payload in gathered if payload is not None]
         if any(ledger != self._graph_staging_ledger for ledger in ledgers):
@@ -1242,7 +1229,10 @@ class _MusaJitCustomAllreduceImpl:
             return f"dim mismatch: input_dim={inp.dim()} weight_dim={weight.dim()}"
         hidden_size = inp.shape[-1]
         if hidden_size <= 0 or hidden_size != weight.numel():
-            return f"hidden/weight mismatch: hidden={hidden_size} weight_numel={weight.numel()}"
+            return (
+                f"hidden/weight mismatch: hidden={hidden_size} "
+                f"weight_numel={weight.numel()}"
+            )
         if hidden_size % 8 != 0 or hidden_size > 32768:
             return f"unsupported hidden size: hidden={hidden_size}"
         if inp.dtype not in (torch.float16, torch.bfloat16):
@@ -1753,10 +1743,8 @@ class _MusaJitCustomAllreduceImpl:
         self.disabled = True
 
     def __del__(self) -> None:
-        try:
+        with suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
 
 class MusaJitCustomAllreduce:
@@ -1932,10 +1920,8 @@ class MusaJitCustomAllreduce:
             self._jit_comm = None
 
     def __del__(self) -> None:
-        try:
+        with suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
 
 def maybe_musa_jit_logits_all_gather(

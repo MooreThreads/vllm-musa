@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""TileLang's on-disk kernel cache keys on str(target), which must carry the device arch."""
+"""TileLang's on-disk kernel cache keys on str(target), which must carry the
+device arch."""
 
 import pytest
 

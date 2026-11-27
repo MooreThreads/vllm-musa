@@ -14,10 +14,7 @@ from .types import (
 
 def _is_glm5_dsa(model: ModelSignature) -> bool:
     architectures = set(model.outer_architectures or model.architectures)
-    return (
-        "GlmMoeDsaForCausalLM" in architectures
-        or model.model_type == "glm_moe_dsa"
-    )
+    return "GlmMoeDsaForCausalLM" in architectures or model.model_type == "glm_moe_dsa"
 
 
 def resolve_glm_contract(

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -15,9 +14,15 @@ def test_musa_keeps_dsv4_on_mrv1_by_default() -> None:
     assert "MUSA_DEFAULT_MRV1_ARCHITECTURES" in source
     assert 'is_musa = getattr(current_platform, "is_musa", None)' in source
     assert "on_musa = callable(is_musa) and is_musa()" in source
-    assert "needs_v2 = on_musa and bool(self._get_v1_model_runner_unsupported_features())" in source
+    assert (
+        "needs_v2 = on_musa and bool(self._get_v1_model_runner_unsupported_features())"
+        in source
+    )
     assert "if model_config is not None and on_musa and not needs_v2:" in source
-    assert "if any(arch in MUSA_DEFAULT_MRV1_ARCHITECTURES for arch in architectures):" in source
+    assert (
+        "if any(arch in MUSA_DEFAULT_MRV1_ARCHITECTURES for arch in architectures):"
+        in source
+    )
     branch_start = source.index(
         "if any(arch in MUSA_DEFAULT_MRV1_ARCHITECTURES for arch in architectures):"
     )

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
-try:
+with contextlib.suppress(ModuleNotFoundError):
     __import__("torchada")
-except ModuleNotFoundError:
-    pass
 
 import torch
 

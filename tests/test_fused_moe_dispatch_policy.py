@@ -106,7 +106,11 @@ def test_mp48_dsv4_native_gemv_boundary_and_shape_isolation():
                 else MusaFusedMoeBackend.UPSTREAM
             )
             assert backend == expected
-        for override in ({"top_k": 8}, {"local_experts": 128}, {"expert_parallel": True}):
+        for override in (
+            {"top_k": 8},
+            {"local_experts": 128},
+            {"expert_parallel": True},
+        ):
             unrelated = _shape(**{**shape.__dict__, **override})
             assert thresholds_for_shape(unrelated).source == "uncalibrated-shape"
 

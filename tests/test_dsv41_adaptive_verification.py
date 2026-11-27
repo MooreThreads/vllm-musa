@@ -39,8 +39,8 @@ def test_series_profiles_adaptive_costs_only_in_the_real_capture() -> None:
     text = CAPTURE_PATCH.read_text()
     assert "-                    if self.adaptive_verification is not None:\n" in text
     assert (
-        "+                    if self.adaptive_verification is not None and not profile_only:\n"
-        in text
+        "+                    if self.adaptive_verification is not None and not "
+        "profile_only:\n" in text
     )
 
 

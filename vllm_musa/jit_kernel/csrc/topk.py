@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 from vllm.utils.torch_utils import direct_register_custom_op
 
@@ -38,8 +36,8 @@ def _topk_softmax_impl(
     gating_output: torch.Tensor,
     renormalize: bool = False,
     moe_softcapping: float = 0.0,
-    correction_bias: Optional[torch.Tensor] = None,
-    shared_expert_gate_output: Optional[torch.Tensor] = None,
+    correction_bias: torch.Tensor | None = None,
+    shared_expert_gate_output: torch.Tensor | None = None,
     num_fused_shared_experts: int = 0,
 ) -> None:
     has_correction_bias = correction_bias is not None
@@ -48,9 +46,7 @@ def _topk_softmax_impl(
         shared_expert_gate_output is not None and num_fused_shared_experts > 0
     )
     shared_arg = (
-        shared_expert_gate_output
-        if has_shared_experts
-        else topk_weights.reshape(-1)
+        shared_expert_gate_output if has_shared_experts else topk_weights.reshape(-1)
     )
     _call_topk_kernel(
         "sgl_musa_topk_softmax",
@@ -72,8 +68,8 @@ def _topk_sigmoid_impl(
     topk_ids: torch.Tensor,
     gating_output: torch.Tensor,
     renormalize: bool = False,
-    correction_bias: Optional[torch.Tensor] = None,
-    shared_expert_gate_output: Optional[torch.Tensor] = None,
+    correction_bias: torch.Tensor | None = None,
+    shared_expert_gate_output: torch.Tensor | None = None,
     num_fused_shared_experts: int = 0,
 ) -> None:
     has_correction_bias = correction_bias is not None
@@ -82,9 +78,7 @@ def _topk_sigmoid_impl(
         shared_expert_gate_output is not None and num_fused_shared_experts > 0
     )
     shared_arg = (
-        shared_expert_gate_output
-        if has_shared_experts
-        else topk_weights.reshape(-1)
+        shared_expert_gate_output if has_shared_experts else topk_weights.reshape(-1)
     )
     _call_topk_kernel(
         "sgl_musa_topk_sigmoid",
@@ -114,9 +108,7 @@ def _topk_softmax_custom(
 ) -> None:
     bias_arg = correction_bias if has_correction_bias else topk_weights.reshape(-1)
     shared_arg = (
-        shared_expert_gate_output
-        if has_shared_experts
-        else topk_weights.reshape(-1)
+        shared_expert_gate_output if has_shared_experts else topk_weights.reshape(-1)
     )
     _call_topk_kernel(
         "sgl_musa_topk_softmax",
@@ -161,9 +153,7 @@ def _topk_sigmoid_custom(
 ) -> None:
     bias_arg = correction_bias if has_correction_bias else topk_weights.reshape(-1)
     shared_arg = (
-        shared_expert_gate_output
-        if has_shared_experts
-        else topk_weights.reshape(-1)
+        shared_expert_gate_output if has_shared_experts else topk_weights.reshape(-1)
     )
     _call_topk_kernel(
         "sgl_musa_topk_sigmoid",
@@ -214,8 +204,8 @@ def topk_softmax(
     gating_output: torch.Tensor,
     renormalize: bool = False,
     moe_softcapping: float = 0.0,
-    correction_bias: Optional[torch.Tensor] = None,
-    shared_expert_gate_output: Optional[torch.Tensor] = None,
+    correction_bias: torch.Tensor | None = None,
+    shared_expert_gate_output: torch.Tensor | None = None,
     num_fused_shared_experts: int = 0,
 ) -> None:
     """sgl_kernel-compatible top-k softmax entry point."""
@@ -225,9 +215,7 @@ def topk_softmax(
         shared_expert_gate_output is not None and num_fused_shared_experts > 0
     )
     shared_arg = (
-        shared_expert_gate_output
-        if has_shared_experts
-        else topk_weights.reshape(-1)
+        shared_expert_gate_output if has_shared_experts else topk_weights.reshape(-1)
     )
     torch.ops.vllm.musa_topk_softmax(
         topk_weights,
@@ -248,8 +236,8 @@ def topk_sigmoid(
     topk_ids: torch.Tensor,
     gating_output: torch.Tensor,
     renormalize: bool = False,
-    correction_bias: Optional[torch.Tensor] = None,
-    shared_expert_gate_output: Optional[torch.Tensor] = None,
+    correction_bias: torch.Tensor | None = None,
+    shared_expert_gate_output: torch.Tensor | None = None,
     num_fused_shared_experts: int = 0,
 ) -> None:
     has_correction_bias = correction_bias is not None
@@ -258,9 +246,7 @@ def topk_sigmoid(
         shared_expert_gate_output is not None and num_fused_shared_experts > 0
     )
     shared_arg = (
-        shared_expert_gate_output
-        if has_shared_experts
-        else topk_weights.reshape(-1)
+        shared_expert_gate_output if has_shared_experts else topk_weights.reshape(-1)
     )
     torch.ops.vllm.musa_topk_sigmoid(
         topk_weights,

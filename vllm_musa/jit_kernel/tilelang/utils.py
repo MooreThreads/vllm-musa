@@ -73,8 +73,7 @@ def layout_strides(
 ) -> tuple[int, int, int, int]:
     if tensor.dim() not in (positions_ndim + 1, positions_ndim + 2):
         raise ValueError(
-            "tensor must have shape [..., hidden_size] "
-            "or [..., num_heads, head_size]"
+            "tensor must have shape [..., hidden_size] or [..., num_heads, head_size]"
         )
 
     batch_stride = tensor.stride(0) if positions_ndim == 2 else 0

@@ -123,9 +123,7 @@ def test_qwen35_cache_out_matches_no_cache_across_page_boundaries(
     q_weight = torch.randn((head_dim,), device=device, dtype=torch.bfloat16)
     k_weight = torch.randn((head_dim,), device=device, dtype=torch.bfloat16)
     angles = torch.randn((128, rot_dim // 2), device=device, dtype=torch.float32)
-    cos_sin_cache = torch.cat((angles.cos(), angles.sin()), dim=-1).to(
-        torch.bfloat16
-    )
+    cos_sin_cache = torch.cat((angles.cos(), angles.sin()), dim=-1).to(torch.bfloat16)
     sentinel = -9.0
     block_size = 64
     interleaved_storage = torch.full(

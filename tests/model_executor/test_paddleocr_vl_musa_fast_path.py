@@ -22,12 +22,17 @@ def _config():
     return SimpleNamespace(
         model_type="paddleocr_vl",
         vision_config=SimpleNamespace(
-            hidden_size=1152, num_hidden_layers=27,
-            num_attention_heads=16, patch_size=14, image_size=384,
+            hidden_size=1152,
+            num_hidden_layers=27,
+            num_attention_heads=16,
+            patch_size=14,
+            image_size=384,
         ),
         text_config=SimpleNamespace(
-            hidden_size=1024, num_attention_heads=16,
-            num_key_value_heads=2, rope_parameters={"mrope_section": [16, 24, 24]},
+            hidden_size=1024,
+            num_attention_heads=16,
+            num_key_value_heads=2,
+            rope_parameters={"mrope_section": [16, 24, 24]},
         ),
     )
 

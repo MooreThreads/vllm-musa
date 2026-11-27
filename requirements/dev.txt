@@ -1,9 +1,7 @@
 pytest
 pytest-asyncio
 pytest-cov
-ruff
+ruff==0.15.1
 mypy
-isort
-black
 build
 twine

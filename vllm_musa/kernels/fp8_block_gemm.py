@@ -107,7 +107,8 @@ _MEASURED_CONFIGS = {
 def fp8_block_scaled_mm_config(
     m: int, n: int, k: int
 ) -> tuple[int, int, int, int, int] | None:
-    """Measured launch config for an M x N x K problem, or None to keep the generic GEMM."""
+    """Measured launch config for an M x N x K problem, or None to keep the
+    generic GEMM."""
     for max_m, config in _MEASURED_CONFIGS.get((n, k), ()):
         if max_m is None or m <= max_m:
             return config
@@ -120,7 +121,8 @@ def fp8_block_scaled_mm_supported(
     weight: torch.Tensor,
     weight_scale: torch.Tensor,
 ) -> bool:
-    """Whether the scales tile K and N in 16/32/64-wide groups and the shape has a config."""
+    """Whether the scales tile K and N in 16/32/64-wide groups and the shape has a
+    config."""
     if (
         a.dim() != 2
         or weight.dim() != 2
@@ -158,7 +160,8 @@ def fp8_block_scaled_mm(
     weight_scale: torch.Tensor,
     out_dtype: torch.dtype,
 ) -> torch.Tensor:
-    """``dequant(a) @ dequant(weight).T`` with per-group activation and weight scales."""
+    """``dequant(a) @ dequant(weight).T`` with per-group activation and weight
+    scales."""
     m, k = a.shape
     n = weight.shape[0]
     group_k = triton.cdiv(k, weight_scale.shape[1])

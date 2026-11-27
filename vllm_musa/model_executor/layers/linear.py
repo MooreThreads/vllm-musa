@@ -6,6 +6,7 @@ from vllm.distributed import tensor_model_parallel_all_reduce
 from vllm.model_executor.layers.linear import RowParallelLinear
 from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
 
+
 def _deepgemm_block_fp8(quant_method) -> bool:
     # MUSA: the DeepGemm block-FP8 kernel writes the GEMM result into a caller
     # buffer, so out_proj/o_proj can skip the output-buffer copy at tp=1.

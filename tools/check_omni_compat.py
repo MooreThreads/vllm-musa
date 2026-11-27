@@ -51,7 +51,7 @@ import ast
 import json
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCHEMA = 3
@@ -469,7 +469,7 @@ def _typeerror_guarded_lines(tree: ast.Module) -> set[int]:
         try:
             return get_rope(**new_kwargs)
         except TypeError:
-            return get_rope(rotary_dim=..., base=...)   # older vLLM
+            return get_rope(rotary_dim=..., base=...)  # older vLLM
 
     Both calls are deliberate, and the second one not fitting the pin is the
     point of writing it, so neither is a break. Without this the audit reports
@@ -997,30 +997,26 @@ def audit_staleness(pin: VllmIndex, table, target: VllmIndex | None = None) -> d
         if not _version_ok(entry.applies_to, pin.version):
             continue
         reason = None
-        if entry.kind in (table.RELOCATION, table.BACKPORT):
-            if pin.has_module(entry.module):
-                reason = f"the pin provides {entry.module}"
-        elif entry.kind == table.ADAPTER:
+        if entry.kind in (table.RELOCATION, table.BACKPORT) and pin.has_module(
+            entry.module
+        ):
+            reason = f"the pin provides {entry.module}"
+        elif entry.kind == table.ADAPTER and target is not None:
             # An adapter is stale when the pin already has the shape Omni calls,
             # which needs the vLLM Omni targets to compare against. Two of the
             # three adapter cases are additive -- the pin does not have the
             # symbol at all -- so "absent from the pin" is the adapter working,
             # not a stale entry. At runtime _PatchingLoader catches the rest: an
             # adapter whose apply() patches nothing fails the import.
-            if target is not None:
-                matched = []
-                for name in entry.names:
-                    qualname = f"{entry.module}.{name}"
-                    pin_sig = pin.signatures.get(qualname)
-                    target_sig = target.signatures.get(qualname)
-                    if pin_sig is not None and target_sig is not None:
-                        matched.append(
-                            pin_sig["positional"] == target_sig["positional"]
-                        )
-                if matched and all(matched):
-                    reason = (
-                        f"the pin's {entry.module} already matches the targeted vLLM"
-                    )
+            matched = []
+            for name in entry.names:
+                qualname = f"{entry.module}.{name}"
+                pin_sig = pin.signatures.get(qualname)
+                target_sig = target.signatures.get(qualname)
+                if pin_sig is not None and target_sig is not None:
+                    matched.append(pin_sig["positional"] == target_sig["positional"])
+            if matched and all(matched):
+                reason = f"the pin's {entry.module} already matches the targeted vLLM"
         record = {
             "module": entry.module,
             "kind": entry.kind,
@@ -1149,12 +1145,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     for record in imports["shimmed"]:
         print(
-            f"  SHIMMED  {record['module']}.{record['name']} <- {record['shim']['kind']} ({record['omni_file']})"
+            f"  SHIMMED  {record['module']}.{record['name']} <- "
+            f"{record['shim']['kind']} ({record['omni_file']})"
         )
     for record in imports["unshimmed"]:
         mark = "TYPING " if record["type_checking"] else "MISSING"
         print(
-            f"  {mark}  {record['module']}.{record['name']} ({record['omni_file']}:{record['lineno']})"
+            f"  {mark}  {record['module']}.{record['name']} "
+            f"({record['omni_file']}:{record['lineno']})"
         )
 
     target: VllmIndex | None = None
@@ -1164,23 +1162,27 @@ def main(argv: list[str] | None = None) -> int:
     attribute_uses = collect_module_attribute_uses(OMNI_ROOT)
     attributes = audit_module_attributes(attribute_uses, pin, table)
     print(
-        f"[attrs]     {attributes['status']}: {attributes['checked']} module attributes used, "
+        f"[attrs]     {attributes['status']}: {attributes['checked']} module "
+        f"attributes used, "
         f"{len(attributes['shimmed'])} shimmed, {len(attributes['missing'])} missing"
     )
     for record in attributes["shimmed"]:
         kind = record["shim"].get("kind")
         print(
-            f"  SHIMMED  {record['module']}.{record['attr']} <- {kind} ({record['omni_file']})"
+            f"  SHIMMED  {record['module']}.{record['attr']} <- {kind} "
+            f"({record['omni_file']})"
         )
     for record in attributes["missing"]:
         print(
-            f"  MISSING  {record['module']}.{record['attr']} ({record['omni_file']}:{record['lineno']})"
+            f"  MISSING  {record['module']}.{record['attr']} "
+            f"({record['omni_file']}:{record['lineno']})"
         )
 
     calls = audit_calls(omni_imports, pin, table, OMNI_ROOT)
     print(
         f"[calls]     {calls['status']}: {calls['calls']} calls to "
-        f"{calls['symbols']} pinned symbols, {len(calls['offences'])} the pin cannot accept, "
+        f"{calls['symbols']} pinned symbols, "
+        f"{len(calls['offences'])} the pin cannot accept, "
         f"{len(calls['declared_stale'])} declared stale in Omni"
     )
     for record in calls["declared_stale"]:
@@ -1200,19 +1202,22 @@ def main(argv: list[str] | None = None) -> int:
 
     staleness = audit_staleness(pin, table, target)
     print(
-        f"[staleness] {staleness['status']}: {len(staleness['active'])} entries still needed, "
+        f"[staleness] {staleness['status']}: {len(staleness['active'])} entries "
+        f"still needed, "
         f"{len(staleness['stale'])} stale"
     )
     for record in staleness["stale"]:
         print(
-            f"  STALE  {record['module']} ({record['kind']}): {record['why']} -- {record['remove_when']}"
+            f"  STALE  {record['module']} ({record['kind']}): {record['why']} "
+            f"-- {record['remove_when']}"
         )
 
     semantics = {"status": "skipped", "reason": "no --target-vllm"}
     if target is not None:
         semantics = audit_semantics(omni_imports, pin, target, table, OMNI_ROOT)
         print(
-            f"[semantics] {semantics['status']}: {semantics['compared']} symbols compared, "
+            f"[semantics] {semantics['status']}: {semantics['compared']} symbols "
+            f"compared, "
             f"{semantics['breaks']} breaking, {semantics['meaning']} changed meaning, "
             f"{semantics['latent']} latent"
         )
@@ -1242,7 +1247,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"           {call['omni_file']}:{call['lineno']}{extra}")
     else:
         print(
-            "[semantics] skipped: pass --target-vllm to diff signatures against the vLLM Omni targets"
+            "[semantics] skipped: pass --target-vllm to diff signatures against the "
+            "vLLM Omni targets"
         )
 
     unsupported = [
@@ -1282,7 +1288,7 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(
                 {
                     "schema": SCHEMA,
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                     "omni_root": str(OMNI_ROOT),
                     "vllm_root": str(pin_root),
                     "vllm_version": pin.version,

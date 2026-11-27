@@ -108,12 +108,11 @@ def _extract_added_python_block(patch_path: Path, anchor: str, stop_line: str) -
         else:
             if line.startswith("@@ ") or line.startswith("diff --git "):
                 break
-            if line.startswith("+") and not line.startswith("+++"):
-                content = line[1:]
-                if stop_line and content.startswith(stop_line):
-                    break
-                collected.append(content)
-            elif line.startswith(" "):
+            if (
+                line.startswith("+")
+                and not line.startswith("+++")
+                or line.startswith(" ")
+            ):
                 content = line[1:]
                 if stop_line and content.startswith(stop_line):
                     break
@@ -363,9 +362,8 @@ def test_initialize_cudagraph_keys_passes_full_mode_for_wrapped_eagle3() -> None
     recorded: list[tuple[_FakeCUDAGraphMode, int]] = []
     dispatcher = SimpleNamespace(
         uniform_decode_query_len=4,
-        initialize_cudagraph_keys=lambda mode, uniform_decode_query_len=1: recorded.append(
-            (mode, uniform_decode_query_len)
-        ),
+        initialize_cudagraph_keys=lambda mode,
+        uniform_decode_query_len=1: recorded.append((mode, uniform_decode_query_len)),
     )
 
     # Wrapped Eagle3 passes FULL_AND_PIECEWISE through with target_qdl=4
@@ -392,7 +390,7 @@ def test_initialize_cudagraph_keys_passes_full_mode_for_wrapped_eagle3() -> None
 
 
 def test_draft_qdl1_capture_sizes_match_target_full_capture_ceiling() -> None:
-    """Verify 0026's draft qdl=1 key calculation never exceeds captured target_num_reqs."""
+    """Verify 0026 draft qdl=1 keys never exceed captured target_num_reqs."""
     # Default vllm serve: max_num_seqs=256, K=3 (target_qdl=4), max_capture=512
     capture_sizes = [4, 8, 16, 24, 32, 64, 128, 256, 512]
     max_num_seqs = 256
@@ -429,11 +427,13 @@ def test_draft_qdl1_capture_sizes_match_target_full_capture_ceiling() -> None:
     # Target's max_cudagraph_capture_size=512 only visits up to 512 // 4 = 128 reqs!
     assert max(draft_sizes) == 128
     assert 256 not in draft_sizes
-    assert _FakeBatchDescriptor(num_tokens=4, num_reqs=4, uniform=True) in (
-        disp.cudagraph_keys[_FakeCUDAGraphMode.FULL]
+    assert (
+        _FakeBatchDescriptor(num_tokens=4, num_reqs=4, uniform=True)
+        in (disp.cudagraph_keys[_FakeCUDAGraphMode.FULL])
     )
-    assert _FakeBatchDescriptor(num_tokens=128, num_reqs=128, uniform=True) in (
-        disp.cudagraph_keys[_FakeCUDAGraphMode.FULL]
+    assert (
+        _FakeBatchDescriptor(num_tokens=128, num_reqs=128, uniform=True)
+        in (disp.cudagraph_keys[_FakeCUDAGraphMode.FULL])
     )
 
 
@@ -539,7 +539,7 @@ def test_prepare_decode_step_attn_metadata_pads_and_preserves_static_ptrs() -> N
 
 
 def test_mrv2_padded_is_prefilling_for_full_cudagraph_spec_decode() -> None:
-    """Verify MRV2 DefaultModelState + MUSA FA3/TreeAttn pad is_prefilling on FULL graphs."""
+    """Verify MRV2 DefaultModelState and FA3/TreeAttn pad is_prefilling on FULL."""
     patch_txt = PATCH_0035.read_text(encoding="utf-8")
     assert "vllm/v1/worker/gpu/model_states/default.py" in patch_txt
     assert "input_batch.prefill_runs_as_decode_np is not None" in patch_txt
@@ -573,7 +573,7 @@ def test_mrv2_padded_is_prefilling_for_full_cudagraph_spec_decode() -> None:
 
 
 def test_patch_0028_does_not_force_synthetic_mode_in_rejection_sampler() -> None:
-    """Ensure patch 0028 leaves synthetic_conditional_rates=None when synthetic_mode=False."""
+    """Ensure patch 0028 keeps synthetic_conditional_rates=None by default."""
     patch_0028 = SERIES_DIR / "0028-MUSA-apply-rejection-sampling-constraints.patch"
     txt = patch_0028.read_text(encoding="utf-8")
     assert "if synthetic_conditional_rates is None:" not in txt, (
@@ -603,4 +603,3 @@ def test_dummy_run_skips_already_captured_full_cudagraph_mid_capture() -> None:
     p30 = PATCH_0030.read_text(encoding="utf-8")
     assert "self.model.concrete_cudagraph_entries.get(batch_desc)" in p30
     assert "existing_entry is not None and existing_entry.cudagraph is not None" in p30
-

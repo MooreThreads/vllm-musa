@@ -9,7 +9,8 @@ Six categories:
   3  CSRC-FILE  MUSA-owned whole-file rewrite (diff vs upstream)   (build, pre-compile)
   4a MOD-COPY   genuine modified-copy module (drift-tripwire only) (runtime, none)
   4b MOD-COPY   single-method rebind → build-applied diff          (build, pre-install)
-  5  NEW-MOD    genuinely-new MUSA module/csrc (tracked source)    (runtime / direct compile)
+  5  NEW-MOD    genuinely-new MUSA module/csrc (tracked source)    (runtime /
+                                                                    direct compile)
   6  RUNTIME-OBJ live-object monkey patch (def apply())            (runtime)
 
 **Plain Python, stdlib-only** (``dataclasses`` + ``pathlib``) so it can be loaded
@@ -25,13 +26,13 @@ MDM phases; ``musa_sync`` and the census doc both read ENTRIES.
 # annotations a @dataclass whose fields are string annotations makes dataclasses
 # look up ``sys.modules[cls.__module__]`` — which is absent when this file is
 # loaded BY PATH at build time (setup.py / musa_sync), raising AttributeError.
-# Real annotations + ``typing.Optional`` (not ``X | None``) keep both the 3.9
-# floor and the by-path load working.
+# Real annotations (which the ``X | None`` form still is) keep the by-path load
+# working; only string annotations break it.
+import contextlib
 import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 _HERE = Path(__file__).resolve().parent
 _SERIES_DIR = _HERE / "series"
@@ -61,22 +62,22 @@ class DivSpec:
     path: (
         str  # repo-relative: the .patch (cat 1/2/3/4b), tripwire (4a), or source (5/6)
     )
-    upstream_path: Optional[str] = None  # the vllm path this targets / the seam owner
+    upstream_path: str | None = None  # the vllm path this targets / the seam owner
     apply_phase: str = "pre-install"  # one of VALID_PHASES
     required: bool = True
-    version_range: Optional[str] = None
-    removal_condition: Optional[str] = None
+    version_range: str | None = None
+    removal_condition: str | None = None
     intent: str = ""
     after: tuple = ()  # ordering deps by id (e.g. eagle after parallel_state)
     upstream_commits: tuple = ()  # series/upstream/ entries: the cherry-picked shas
 
     def __post_init__(self):
-        assert (
-            self.category in VALID_CATEGORIES
-        ), f"{self.id}: bad category {self.category!r}"
-        assert (
-            self.apply_phase in VALID_PHASES
-        ), f"{self.id}: bad apply_phase {self.apply_phase!r}"
+        assert self.category in VALID_CATEGORIES, (
+            f"{self.id}: bad category {self.category!r}"
+        )
+        assert self.apply_phase in VALID_PHASES, (
+            f"{self.id}: bad apply_phase {self.apply_phase!r}"
+        )
 
 
 # series/upstream/ holds the upstream vLLM commits the pin predates, applied
@@ -94,7 +95,7 @@ class UpstreamPick:
     """What a series entry's commit message says about upstream vLLM."""
 
     commits: tuple = ()  # shas of its "(cherry picked from commit ...)" lines
-    pr: Optional[str] = None  # the "(#N)" its subject ends in
+    pr: str | None = None  # the "(#N)" its subject ends in
 
 
 def _mailbox_message(text: str) -> tuple:
@@ -117,10 +118,8 @@ def _mailbox_message(text: str) -> tuple:
                 subject += cont
             break
     if "=?" in subject:
-        try:
+        with contextlib.suppress(ValueError, LookupError, UnicodeError):
             subject = str(make_header(decode_header(subject)))
-        except (ValueError, LookupError, UnicodeError):
-            pass
     if subject.startswith("[PATCH] "):
         subject = subject[len("[PATCH] ") :]
     body = []
@@ -307,7 +306,9 @@ _CAT6: list[DivSpec] = [
         upstream_path=None,
         apply_phase="runtime",
         required=False,
-        intent="mark torch-wrap Tensor methods AOT-cache safe on torch 2.9 (compile cache)",
+        intent=(
+            "mark torch-wrap Tensor methods AOT-cache safe on torch 2.9 (compile cache)"
+        ),
     ),
     DivSpec(
         id="vllm__compilation__backends",
@@ -559,7 +560,7 @@ def entries_for_phase(phase: str) -> list[DivSpec]:
     return [e for e in ENTRIES if e.apply_phase == phase]
 
 
-def series_apply_order(phase: Optional[str] = None) -> list[Path]:
+def series_apply_order(phase: str | None = None) -> list[Path]:
     """Absolute ``.patch`` paths for the build-applied diff categories (1/2/3/4b),
     in apply order — the ``order`` list to hand to ``build_apply.apply_patch_series``.
 

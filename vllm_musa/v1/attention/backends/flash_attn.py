@@ -1042,8 +1042,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         batch_size = metadata.schedule_batch_size or metadata.num_decodes
         assert self.dcp_world_size == 1
         logger.info_once(
-            "MUSA FA3: refreshing draft decode metadata inside the draft "
-            "decode graph."
+            "MUSA FA3: refreshing draft decode metadata inside the draft decode graph."
         )
 
         buf = self._cu_seqlens_k_buffer
@@ -1159,9 +1158,9 @@ class FlashAttentionImpl(AttentionImpl):
 
         self.sinks = sinks
         if self.sinks is not None:
-            assert (
-                flash_attn_supports_sinks()
-            ), "Sinks are only supported in FlashAttention 3"
+            assert flash_attn_supports_sinks(), (
+                "Sinks are only supported in FlashAttention 3"
+            )
             assert self.sinks.shape[0] == num_heads, (
                 "Sinks must have the same number of heads as the number of "
                 "heads in the layer"
@@ -1222,9 +1221,9 @@ class FlashAttentionImpl(AttentionImpl):
         reject_per_sequence_causal(attn_metadata)
 
         assert output is not None, "Output tensor must be provided."
-        assert (
-            self.vllm_flash_attn_version is not None
-        ), "FlashAttention version not detected."
+        assert self.vllm_flash_attn_version is not None, (
+            "FlashAttention version not detected."
+        )
 
         if output_scale is not None or output_block_scale is not None:
             raise NotImplementedError(
@@ -1323,8 +1322,9 @@ class FlashAttentionImpl(AttentionImpl):
                 )
 
                 if use_decode_fast_path:
-                    # MUSA branch 1/4 - pure decode batch (no prefill, 1 query token per
-                    # seq): whole batch attends through the paged KV cache decode kernel.
+                    # MUSA branch 1/4 - pure decode batch (no prefill, 1 query
+                    # token per seq): whole batch attends through the paged KV
+                    # cache decode kernel.
                     decode_descale_shape = (num_decodes, self.num_kv_heads)
                     decode_output = flash_attn_with_kvcache(
                         q=query[:num_decode_tokens].view(
@@ -1355,9 +1355,10 @@ class FlashAttentionImpl(AttentionImpl):
                     and not attn_metadata.use_cascade
                     and self._mubin_prefill_ok
                 ):
-                    # MUSA branch 2/4 - pure prefill with no cached prefix: attend the
-                    # contiguous new K/V (no block_table/seqused_k) so mate routes to the
-                    # fast mubin varlen_causal TCE kernel, not the slow paged FmhaFwd.
+                    # MUSA branch 2/4 - pure prefill with no cached prefix:
+                    # attend the contiguous new K/V (no block_table/seqused_k) so
+                    # mate routes to the fast mubin varlen_causal TCE kernel, not
+                    # the slow paged FmhaFwd.
                     flash_attn_varlen_func(
                         q=query[:num_actual_tokens].view(
                             -1, self.num_heads, self.head_size
@@ -1393,12 +1394,13 @@ class FlashAttentionImpl(AttentionImpl):
                     and attn_metadata.decode_query_start_loc is not None
                     and attn_metadata.prefill_query_start_loc is not None
                 ):
-                    # MUSA branch 3/4 - mixed decode+prefill step: split the query into
-                    # [decode | prefill] (decode tokens come first). Attend decode tokens through the
-                    # paged KV cache and the no-prefix prefill tokens against their
-                    # contiguous new K/V (no block_table) so mate routes prefill to the
-                    # mubin TCE kernel instead of the slow paged FmhaFwd used for the
-                    # whole batch when decode and prefill share a step.
+                    # MUSA branch 3/4 - mixed decode+prefill step: split the query
+                    # into [decode | prefill] (decode tokens come first). Attend
+                    # decode tokens through the paged KV cache and the no-prefix
+                    # prefill tokens against their contiguous new K/V (no
+                    # block_table) so mate routes prefill to the mubin TCE kernel
+                    # instead of the slow paged FmhaFwd used for the whole batch
+                    # when decode and prefill share a step.
                     decode_descale_shape = (num_decodes, self.num_kv_heads)
                     # MUSA: no scheduler_metadata here. It is built for the full
                     # num_reqs (decode+prefill) layout and does not match this
@@ -1445,11 +1447,12 @@ class FlashAttentionImpl(AttentionImpl):
                         num_splits=attn_metadata.max_num_splits,
                     )
                 else:
-                    # MUSA branch 4/4 - paged fallback for every other case: cascade
-                    # attention, prefill with a cached prefix (chunked/extend), spec/Eagle
-                    # verify (multiple query tokens per seq), or layers ineligible for the
-                    # mubin fast path (sliding-window/softcap/fp8/sinks). All tokens attend
-                    # through the paged KV cache with the original query_start_loc layout.
+                    # MUSA branch 4/4 - paged fallback for every other case:
+                    # cascade attention, prefill with a cached prefix
+                    # (chunked/extend), spec/Eagle verify (multiple query tokens per
+                    # seq), or layers ineligible for the mubin fast path
+                    # (sliding-window/softcap/fp8/sinks). All tokens attend through
+                    # the paged KV cache with the original query_start_loc layout.
                     use_fused_kv_verify = (
                         num_decodes > 0
                         and num_prefills == 0
@@ -1613,9 +1616,9 @@ class FlashAttentionImpl(AttentionImpl):
         v_descale: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # ==================== MUSA ADAPTATION ====================
-        assert (
-            self.vllm_flash_attn_version is not None
-        ), "FlashAttention version not detected."
+        assert self.vllm_flash_attn_version is not None, (
+            "FlashAttention version not detected."
+        )
         if attn_metadata.dcp_context_kv_lens is None:
             raise RuntimeError("DCP metadata is missing dcp_context_kv_lens.")
         if attn_metadata.max_dcp_context_kv_len is None:
@@ -2000,9 +2003,9 @@ class FlashAttentionImpl(AttentionImpl):
             attn_metadata: Encoder attention metadata
             layer: The attention layer
         """
-        assert (
-            self.vllm_flash_attn_version is not None
-        ), "FlashAttention version not detected."
+        assert self.vllm_flash_attn_version is not None, (
+            "FlashAttention version not detected."
+        )
 
         # For encoder attention, process FP8 quantization if needed
         if self.kv_cache_dtype.startswith("fp8"):

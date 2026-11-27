@@ -1,12 +1,14 @@
 """Append a folded shared expert's routing column in one kernel.
 
-The routed topk output is (tokens, top_k); a folded shared expert rides the grouped GEMM as one
-extra always-selected slot, so the routing needs one more column carrying
-`sigmoid(shared_gate(x))` and the shared expert's id. Done with tensor ops that is a
-sigmoid + zeros_like + add + 2 cats per MoE layer; this writes all of it in a single pass.
+The routed topk output is (tokens, top_k); a folded shared expert rides the
+grouped GEMM as one extra always-selected slot, so the routing needs one more
+column carrying `sigmoid(shared_gate(x))` and the shared expert's id. Done with
+tensor ops that is a sigmoid + zeros_like + add + 2 cats per MoE layer; this
+writes all of it in a single pass.
 
-The shared weight stays out of any renormalization (the routed weights are already normalized
-among themselves when the caller runs this), matching the reference implementation.
+The shared weight stays out of any renormalization (the routed weights are
+already normalized among themselves when the caller runs this), matching the
+reference implementation.
 """
 
 import torch
@@ -38,9 +40,7 @@ def _extend_topk_with_shared_kernel(
     tl.store(out_i + offs, i, mask=mask)
 
     logit = tl.load(shared_logits_ptr + token).to(tl.float32)
-    shared_w = (1.0 / (1.0 + tl.exp(-logit))).to(
-        shared_logits_ptr.dtype.element_ty
-    )
+    shared_w = (1.0 / (1.0 + tl.exp(-logit))).to(shared_logits_ptr.dtype.element_ty)
     tl.store(out_w + top_k, shared_w.to(out_w.dtype.element_ty))
     tl.store(out_i + top_k, shared_expert_id)
 

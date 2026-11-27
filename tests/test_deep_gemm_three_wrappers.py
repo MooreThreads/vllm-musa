@@ -7,11 +7,13 @@ import inspect
 from typing import Any
 
 import pytest
-import torchada  # noqa: F401
+
+# isort: off
+import torchada  # noqa: F401  # must patch before torch ecosystem imports
 import torch
 
+# isort: on
 from vllm.utils import deep_gemm
-
 
 GROUPED_WRAPPERS = (
     ("m_grouped_fp8_gemm_nt_contiguous", "_grouped_impl"),
@@ -35,7 +37,9 @@ def test_grouped_wrappers_omit_ue8m0_on_musa(
     monkeypatch.setattr(deep_gemm, impl_name, implementation)
     monkeypatch.setattr(deep_gemm.current_platform, "is_musa", lambda: True)
 
-    assert getattr(deep_gemm, name)("operand", caller_keyword="value") == "provider-result"
+    assert (
+        getattr(deep_gemm, name)("operand", caller_keyword="value") == "provider-result"
+    )
     assert received == {
         "args": ("operand",),
         "kwargs": {"caller_keyword": "value"},
@@ -110,7 +114,9 @@ requires_musa = pytest.mark.skipif(
 def _random_fp8_operands(experts: int, tokens: int) -> tuple[Any, ...]:
     device = "musa"
     k = n = 128
-    activations = torch.randn(experts * tokens, k, device=device).to(torch.float8_e4m3fn)
+    activations = torch.randn(experts * tokens, k, device=device).to(
+        torch.float8_e4m3fn
+    )
     activation_scales = torch.ones(experts * tokens, 1, device=device)
     weights = torch.randn(experts, n, k, device=device).to(torch.float8_e4m3fn)
     weight_scales = torch.ones(experts, 1, 1, device=device)
@@ -142,27 +148,39 @@ def _assert_production_reference(actual: torch.Tensor, reference: torch.Tensor) 
     actual_f = actual.float()
     reference_f = reference.float()
     assert torch.isfinite(actual_f).all()
-    relative_l2 = torch.linalg.vector_norm(actual_f - reference_f) / torch.linalg.vector_norm(reference_f)
-    cosine = torch.nn.functional.cosine_similarity(actual_f.flatten(), reference_f.flatten(), dim=0)
+    relative_l2 = torch.linalg.vector_norm(
+        actual_f - reference_f
+    ) / torch.linalg.vector_norm(reference_f)
+    cosine = torch.nn.functional.cosine_similarity(
+        actual_f.flatten(), reference_f.flatten(), dim=0
+    )
     assert relative_l2 < 0.005
     assert cosine > 0.999
 
 
 @requires_musa
 @pytest.mark.parametrize("name", GROUPED_WRAPPERS[:2], ids=lambda item: item[0])
-def test_grouped_wrapper_matches_production_dequant_reference(name: tuple[str, str]) -> None:
+def test_grouped_wrapper_matches_production_dequant_reference(
+    name: tuple[str, str],
+) -> None:
     """Numerical reference uses actual groupwise scales, not unit-scale FP8."""
     provider = pytest.importorskip("deep_gemm")
     torch.manual_seed(100004)
     experts, tokens = 2, 128
-    fp8_a, scale_a, fp8_b, scale_b, dequant_a, dequant_b = _production_groupwise_operands(experts, tokens)
-    indices = torch.repeat_interleave(torch.arange(experts, device="musa", dtype=torch.int32), tokens)
+    fp8_a, scale_a, fp8_b, scale_b, dequant_a, dequant_b = (
+        _production_groupwise_operands(experts, tokens)
+    )
+    indices = torch.repeat_interleave(
+        torch.arange(experts, device="musa", dtype=torch.int32), tokens
+    )
     expected = torch.empty((experts * tokens, 128), device="musa", dtype=torch.float32)
     for expert in range(experts):
         rows = indices == expert
         expected[rows] = dequant_a[rows] @ dequant_b[expert].t()
     actual = torch.zeros_like(expected, dtype=torch.bfloat16)
-    getattr(provider, name[0])((fp8_a, scale_a), (fp8_b, scale_b), actual, indices, (1, 128, 128))
+    getattr(provider, name[0])(
+        (fp8_a, scale_a), (fp8_b, scale_b), actual, indices, (1, 128, 128)
+    )
     torch.musa.synchronize()
     _assert_production_reference(actual, expected)
 
@@ -173,17 +191,25 @@ def test_masked_wrapper_matches_production_dequant_reference() -> None:
     provider = pytest.importorskip("deep_gemm")
     torch.manual_seed(100005)
     experts, tokens = 2, 128
-    fp8_a, scale_a, fp8_b, scale_b, dequant_a, dequant_b = _production_groupwise_operands(experts, tokens)
+    fp8_a, scale_a, fp8_b, scale_b, dequant_a, dequant_b = (
+        _production_groupwise_operands(experts, tokens)
+    )
     counts = torch.tensor([128, 64], device="musa", dtype=torch.int32)
     actual = torch.zeros((experts, tokens, 128), device="musa", dtype=torch.bfloat16)
     provider.fp8_m_grouped_gemm_nt_masked(
         (fp8_a.reshape(experts, tokens, 128), scale_a.reshape(experts, tokens, 1)),
-        (fp8_b, scale_b), actual, counts, tokens, (1, 128, 128)
+        (fp8_b, scale_b),
+        actual,
+        counts,
+        tokens,
+        (1, 128, 128),
     )
-    expected = torch.cat((
-        dequant_a[:128] @ dequant_b[0].t(),
-        dequant_a[128:192] @ dequant_b[1].t(),
-    ))
+    expected = torch.cat(
+        (
+            dequant_a[:128] @ dequant_b[0].t(),
+            dequant_a[128:192] @ dequant_b[1].t(),
+        )
+    )
     observed = torch.cat((actual[0, :128], actual[1, :64]))
     torch.musa.synchronize()
     _assert_production_reference(observed, expected)
@@ -192,9 +218,7 @@ def test_masked_wrapper_matches_production_dequant_reference() -> None:
 
 @requires_musa
 @pytest.mark.parametrize("name", GROUPED_WRAPPERS[:2], ids=lambda item: item[0])
-@pytest.mark.parametrize(
-    ("experts", "tokens"), ((2, 1), (8, 129), (8, 512), (256, 1))
-)
+@pytest.mark.parametrize(("experts", "tokens"), ((2, 1), (8, 129), (8, 512), (256, 1)))
 def test_grouped_wrapper_random_fp8_matrix_is_finite_and_deterministic(
     name: tuple[str, str], experts: int, tokens: int
 ) -> None:

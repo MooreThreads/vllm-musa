@@ -1,6 +1,5 @@
 import logging
 from functools import cache
-from typing import Optional, Union
 
 import torch
 
@@ -74,13 +73,12 @@ def musa_fused_gemv(
     out_shape = x.shape[:-1] + (
         qweight.shape[0] if not use_swigelu else qweight.shape[0] // 2,
     )
-    assert not (
-        use_swigelu and use_rms_norm
-    ), "gemv only fused one activation (swigelu or rms_norm)!"
+    assert not (use_swigelu and use_rms_norm), (
+        "gemv only fused one activation (swigelu or rms_norm)!"
+    )
 
-    if use_rms_norm:
-        if gamma is None:
-            assert False, "rms_norm gamm is None!"
+    if use_rms_norm and gamma is None:
+        raise AssertionError("rms_norm gamm is None!")
 
     # fp8 grouped matmul
     if qweight.dtype == torch.float8_e4m3fn:
@@ -89,9 +87,9 @@ def musa_fused_gemv(
         # x_scales: [m, k / 128]
         # qweight: [n / 128, k / 128]
         # assert x_scales is not None, "FP8 grouped matmul x scales is None!"
-        assert (
-            qweight.dtype == torch.float8_e4m3fn
-        ), "FP8 grouped matmul weight only support float8_e4m3fn!"
+        assert qweight.dtype == torch.float8_e4m3fn, (
+            "FP8 grouped matmul weight only support float8_e4m3fn!"
+        )
         assert qweight_scales is not None, "FP8 grouped matmul weight scales is None!"
         if output is None:
             output = torch.empty(out_shape, device=x.device, dtype=torch.bfloat16)
@@ -117,9 +115,9 @@ def musa_fused_gemv(
     elif qweight_scales is not None:
         # qweight: [out, in/8]
         # scales: [out, in / group_size]
-        assert (
-            x.dtype == torch.bfloat16 or x.dtype == torch.float16
-        ), "W4A16 gemv only support bfloat16 or float16!"
+        assert x.dtype == torch.bfloat16 or x.dtype == torch.float16, (
+            "W4A16 gemv only support bfloat16 or float16!"
+        )
         use_int4_w4a16 = True
         out_shape = x.shape[:-1] + (
             qweight.shape[0] if not use_swigelu else qweight.shape[0] // 2,
@@ -197,7 +195,7 @@ def _to_tensor_scalar_tuple(x):
         return (None, x)
 
 
-def _musa_device_index(device: torch.device) -> Optional[int]:
+def _musa_device_index(device: torch.device) -> int | None:
     """Resolve a logical MUSA device index without changing the current device."""
     try:
         device_id = device.index
@@ -231,7 +229,7 @@ def _is_validated_musa_device(device: torch.device) -> bool:
 
 
 def _is_supported_musa_generator(
-    generator: Optional[torch.Generator], device: torch.device
+    generator: torch.Generator | None, device: torch.device
 ) -> bool:
     """Check that a seeded generator belongs to the sampled MUSA device."""
     if generator is None:
@@ -253,10 +251,10 @@ def _is_supported_musa_generator(
 
 def _can_use_chunked_min_p_sampler(
     probs: torch.Tensor,
-    indices: Optional[torch.Tensor],
-    maybe_min_p_arr: Optional[torch.Tensor],
+    indices: torch.Tensor | None,
+    maybe_min_p_arr: torch.Tensor | None,
     deterministic: bool,
-    generator: Optional[torch.Generator],
+    generator: torch.Generator | None,
 ) -> bool:
     """Gate the chunked min-p kernel to its validated production contract."""
     return (
@@ -292,7 +290,7 @@ def _can_use_chunked_min_p_sampler(
 
 def _top_k_renorm_probs_internal(
     probs: torch.Tensor,
-    maybe_top_k_arr: Optional[torch.Tensor],
+    maybe_top_k_arr: torch.Tensor | None,
     top_k_val: int,
 ) -> torch.Tensor:
     probs = probs.float()
@@ -323,7 +321,7 @@ def _top_k_renorm_probs_internal(
 
 def top_k_renorm_probs(
     probs: torch.Tensor,
-    top_k: Union[torch.Tensor, int],
+    top_k: torch.Tensor | int,
 ) -> torch.Tensor:
     return _top_k_renorm_probs_internal(probs, *_to_tensor_scalar_tuple(top_k))
 
@@ -352,9 +350,7 @@ def _per_row_top_k_applies(logits: torch.Tensor, top_k: torch.Tensor) -> bool:
     )
 
 
-def _can_use_native_top_k_mask(
-    logits: torch.Tensor, top_k: Union[int, torch.Tensor]
-) -> bool:
+def _can_use_native_top_k_mask(logits: torch.Tensor, top_k: int | torch.Tensor) -> bool:
     """Whether the native logits-domain radix top-k mask applies."""
     if not _supports_native_mask(logits):
         return False
@@ -368,8 +364,8 @@ def _can_use_native_top_k_mask(
 
 
 def top_k_mask_logits(
-    logits: torch.Tensor, top_k: Union[int, torch.Tensor]
-) -> Optional[torch.Tensor]:
+    logits: torch.Tensor, top_k: int | torch.Tensor
+) -> torch.Tensor | None:
     """Mask ``logits`` to its top-k values in place, without a softmax pass.
 
     ``top_k`` may be a scalar or a per-row int tensor, so mixed k recipes in one
@@ -393,8 +389,8 @@ def top_k_mask_logits(
 
 def _can_use_native_top_p_mask(
     logits: torch.Tensor,
-    top_p: Union[float, torch.Tensor],
-    top_k: Optional[Union[int, torch.Tensor]],
+    top_p: float | torch.Tensor,
+    top_k: int | torch.Tensor | None,
 ) -> bool:
     """Whether the fused native logits-domain top-k/top-p mask applies."""
     if not _supports_native_mask(logits):
@@ -418,9 +414,9 @@ def _can_use_native_top_p_mask(
 
 def top_p_mask_logits(
     logits: torch.Tensor,
-    top_p: Union[float, torch.Tensor],
-    top_k: Optional[Union[int, torch.Tensor]] = None,
-) -> Optional[torch.Tensor]:
+    top_p: float | torch.Tensor,
+    top_k: int | torch.Tensor | None = None,
+) -> torch.Tensor | None:
     """Apply top-k then top-p to ``logits`` in place without sorting a row.
 
     The kernel resolves the k-th largest key by counting radix, then the top-p
@@ -463,7 +459,7 @@ def _can_mask_logits_with_radix_top_k(logits: torch.Tensor, top_k: int) -> bool:
     )
 
 
-def top_k_mask_logits_radix(logits: torch.Tensor, top_k: int) -> Optional[torch.Tensor]:
+def top_k_mask_logits_radix(logits: torch.Tensor, top_k: int) -> torch.Tensor | None:
     """Mask ``logits`` to its uniform top-k set without ``torch.topk``.
 
     The radix renormalization resolves the k-th largest probability, so the same
@@ -484,7 +480,7 @@ def top_k_mask_logits_radix(logits: torch.Tensor, top_k: int) -> Optional[torch.
 
 def _top_p_renorm_probs_internal(
     probs: torch.Tensor,
-    maybe_top_p_arr: Optional[torch.Tensor],
+    maybe_top_p_arr: torch.Tensor | None,
     top_p_val: float,
 ) -> torch.Tensor:
     probs = probs.float()
@@ -498,18 +494,18 @@ def _top_p_renorm_probs_internal(
 
 def top_p_renorm_probs(
     probs: torch.Tensor,
-    top_p: Union[torch.Tensor, float],
+    top_p: torch.Tensor | float,
 ) -> torch.Tensor:
     return _top_p_renorm_probs_internal(probs, *_to_tensor_scalar_tuple(top_p))
 
 
 def _top_p_sampling_from_probs_internal(
     probs: torch.Tensor,
-    indices: Optional[torch.Tensor],
-    maybe_top_p_arr: Optional[torch.Tensor],
+    indices: torch.Tensor | None,
+    maybe_top_p_arr: torch.Tensor | None,
     top_p_val: float,
     deterministic: bool,
-    generator: Optional[torch.Generator],
+    generator: torch.Generator | None,
 ) -> torch.Tensor:
     device = probs.device
     probs = probs.float()
@@ -529,10 +525,10 @@ def _top_p_sampling_from_probs_internal(
 
 def top_p_sampling_from_probs(
     probs: torch.Tensor,
-    top_p: Union[torch.Tensor, float],
-    indices: Optional[torch.Tensor] = None,
+    top_p: torch.Tensor | float,
+    indices: torch.Tensor | None = None,
     deterministic: bool = True,
-    generator: Optional[torch.Generator] = None,
+    generator: torch.Generator | None = None,
     check_nan: bool = False,
 ) -> torch.Tensor:
     if check_nan and torch.any(torch.isnan(probs)):
@@ -544,13 +540,13 @@ def top_p_sampling_from_probs(
 
 def _top_k_top_p_sampling_from_probs_internal(
     probs: torch.Tensor,
-    indices: Optional[torch.Tensor],
-    maybe_top_k_arr: Optional[torch.Tensor],
+    indices: torch.Tensor | None,
+    maybe_top_k_arr: torch.Tensor | None,
     top_k_val: int,
-    maybe_top_p_arr: Optional[torch.Tensor],
+    maybe_top_p_arr: torch.Tensor | None,
     top_p_val: float,
     deterministic: bool,
-    generator: Optional[torch.Generator],
+    generator: torch.Generator | None,
 ) -> torch.Tensor:
     device = probs.device
     probs = probs.float()
@@ -573,12 +569,12 @@ def _top_k_top_p_sampling_from_probs_internal(
 
 def top_k_top_p_sampling_from_probs(
     probs: torch.Tensor,
-    top_k: Union[torch.Tensor, int],
-    top_p: Union[torch.Tensor, float],
-    indices: Optional[torch.Tensor] = None,
+    top_k: torch.Tensor | int,
+    top_p: torch.Tensor | float,
+    indices: torch.Tensor | None = None,
     filter_apply_order: str = "top_k_first",
     deterministic: bool = True,
-    generator: Optional[torch.Generator] = None,
+    generator: torch.Generator | None = None,
     check_nan: bool = False,
 ) -> torch.Tensor:
     if filter_apply_order == "top_k_first":
@@ -607,11 +603,11 @@ def top_k_top_p_sampling_from_probs(
 
 def _min_p_sampling_from_probs_internal(
     probs: torch.Tensor,
-    indices: Optional[torch.Tensor],
-    maybe_min_p_arr: Optional[torch.Tensor],
+    indices: torch.Tensor | None,
+    maybe_min_p_arr: torch.Tensor | None,
     min_p_val: float,
     deterministic: bool,
-    generator: Optional[torch.Generator],
+    generator: torch.Generator | None,
 ) -> torch.Tensor:
     device = probs.device
     input_probs = probs
@@ -645,10 +641,10 @@ def _min_p_sampling_from_probs_internal(
 
 def min_p_sampling_from_probs(
     probs: torch.Tensor,
-    min_p: Union[torch.Tensor, float],
-    indices: Optional[torch.Tensor] = None,
+    min_p: torch.Tensor | float,
+    indices: torch.Tensor | None = None,
     deterministic: bool = True,
-    generator: Optional[torch.Generator] = None,
+    generator: torch.Generator | None = None,
     check_nan: bool = False,
 ) -> torch.Tensor:
     if check_nan and torch.any(torch.isnan(probs)):
@@ -779,9 +775,9 @@ def deepseek_v4_sparse_compress_cache(
     token_stride: int,
     scale_dim: int,
     quant_block: int,
-    kv_states: Optional[torch.Tensor] = None,
-    score_states: Optional[torch.Tensor] = None,
-    ape: Optional[torch.Tensor] = None,
+    kv_states: torch.Tensor | None = None,
+    score_states: torch.Tensor | None = None,
+    ape: torch.Tensor | None = None,
 ) -> None:
     return torch.ops._C_musa_ops.deepseek_v4_sparse_compress_cache(
         state_cache,

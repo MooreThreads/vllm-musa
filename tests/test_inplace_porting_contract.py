@@ -131,9 +131,9 @@ def test_musa_image_caps_huggingface_hub():
     verifier = (ROOT / "docker" / "verify_installed_dependencies.py").read_text()
     pinned = (ROOT / "requirements" / "common.txt").read_text()
     assert "huggingface_hub>=1.31.0,<2.0" in pinned, "the pin belongs in requirements/"
-    assert (
-        "huggingface_hub>=1.31.0" not in dockerfile
-    ), "no version belongs in the Dockerfile"
+    assert "huggingface_hub>=1.31.0" not in dockerfile, (
+        "no version belongs in the Dockerfile"
+    )
     assert "RUN python docker/verify_installed_dependencies.py" in dockerfile
     for module in ("transformers", "huggingface_hub"):
         assert f'"{module}"' in verifier, module
@@ -397,7 +397,7 @@ def test_musa_image_provenance_labels_are_derived_from_source():
 
     assert "git rev-parse HEAD" in build_script
     assert (
-        "git describe --tags --exact-match 2>/dev/null || " "git branch --show-current"
+        "git describe --tags --exact-match 2>/dev/null || git branch --show-current"
     ) in build_script
     assert 'awk -F= \'$1 == "VLLM_TAG"' in build_script
     for name in ("VLLM_MUSA_COMMIT", "VLLM_MUSA_REF", "VLLM_TAG"):

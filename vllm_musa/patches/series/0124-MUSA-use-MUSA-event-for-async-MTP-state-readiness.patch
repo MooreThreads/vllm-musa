@@ -9,7 +9,7 @@ Subject: [PATCH] MUSA: use-MUSA-event-for-async-MTP-state-readiness
  2 files changed, 4 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
-index d814613d77..2ac14e7567 100644
+index 9a30288c47..9aec3b122c 100644
 --- a/vllm/v1/spec_decode/llm_base_proposer.py
 +++ b/vllm/v1/spec_decode/llm_base_proposer.py
 @@ -79,6 +79,7 @@ class SpecDecodeBaseProposer:

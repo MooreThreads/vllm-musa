@@ -7,10 +7,10 @@ import argparse
 import json
 
 import torch
-
 from vllm.models.deepseek_v4.common.ops.fused_compress_quant_cache import (
     _fused_kv_compress_norm_rope_insert_sparse_attn,
 )
+
 from vllm_musa import _custom_ops as musa_ops
 from vllm_musa.kernels.deepseek_v4_sparse_compressor import _MAX_DECODE_ROWS
 
@@ -78,9 +78,7 @@ def make_inputs(
         device=device,
     )
     kv_slots = torch.full((capture_rows,), -1, dtype=torch.int64, device=device)
-    kv_slots[:active_rows] = torch.arange(
-        active_rows, dtype=torch.int64, device=device
-    )
+    kv_slots[:active_rows] = torch.arange(active_rows, dtype=torch.int64, device=device)
     return (
         state_cache,
         token_to_req,

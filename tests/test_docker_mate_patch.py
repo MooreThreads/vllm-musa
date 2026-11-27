@@ -75,7 +75,7 @@ def test_rejects_partially_applied_patch(tmp_path, monkeypatch):
     helper = _load_helper()
     site_packages, _target, patch_file = _fixture(
         tmp_path,
-        "enable_mubin = enable_mubin & q.is_musa\n" "enable_mubin &= k.is_musa\n",
+        "enable_mubin = enable_mubin & q.is_musa\nenable_mubin &= k.is_musa\n",
     )
     _fake_distribution(monkeypatch, helper, "0.2.5", site_packages)
 

@@ -4,11 +4,11 @@ Date: Tue, 27 Oct 2026 10:43:05 +0800
 Subject: [PATCH] MUSA: vllm.v1.spec_decode.llm_base_proposer
 
 ---
- vllm/v1/spec_decode/llm_base_proposer.py | 390 ++++++++++++++++++++---
- 1 file changed, 342 insertions(+), 48 deletions(-)
+ vllm/v1/spec_decode/llm_base_proposer.py | 407 ++++++++++++++++++++---
+ 1 file changed, 359 insertions(+), 48 deletions(-)
 
 diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
-index 79be2e8a4d..d814613d77 100644
+index 79be2e8a4d..9a30288c47 100644
 --- a/vllm/v1/spec_decode/llm_base_proposer.py
 +++ b/vllm/v1/spec_decode/llm_base_proposer.py
 @@ -15,13 +15,14 @@ from vllm.config import (
@@ -409,7 +409,7 @@ index 79be2e8a4d..d814613d77 100644
  
          # Find draft layers (attention layers added by draft model)
          all_attn_layers = get_layers_from_vllm_config(
-@@ -1618,22 +1845,59 @@ class SpecDecodeBaseProposer:
+@@ -1618,22 +1845,76 @@ class SpecDecodeBaseProposer:
      def dummy_run(
          self,
          num_tokens: int,
@@ -436,7 +436,11 @@ index 79be2e8a4d..d814613d77 100644
 +        if self.parallel_drafting:
 +            num_fwd_passes = 1
 +        elif is_graph_capturing:
-+            num_fwd_passes = min(self.num_speculative_tokens, 2)
++            num_fwd_passes = (
++                min(self.num_speculative_tokens, 2)
++                if common_attn_metadata is not None
++                else 1
++            )
 +        else:
 +            num_fwd_passes = self.num_speculative_tokens
 +        for fwd_idx in range(num_fwd_passes):
@@ -477,10 +481,23 @@ index 79be2e8a4d..d814613d77 100644
 +                use_cudagraphs=use_cudagraphs,
 +                uniform_decode_query_len=uniform_decode_query_len,
 +            )
++            if (
++                is_graph_capturing
++                and cudagraph_runtime_mode == CUDAGraphMode.FULL
++                and isinstance(self.model, CUDAGraphWrapper)
++            ):
++                # Under TP>=2 graph_capture(), custom all-reduce IPC peer pointers
++                # (graph_rank_data) are registered only when graph_capture exits.
++                # Smaller target decode batches (e.g. B=2, B=1 -> padded draft_bs=4)
++                # map fwd_idx=1 to a BatchDescriptor already captured at B=4;
++                # skip replaying an already-captured FULL graph mid-capture.
++                existing_entry = self.model.concrete_cudagraph_entries.get(batch_desc)
++                if existing_entry is not None and existing_entry.cudagraph is not None:
++                    continue
  
              # Make sure to use EAGLE's own buffer during cudagraph capture.
              if (
-@@ -1645,12 +1909,38 @@ class SpecDecodeBaseProposer:
+@@ -1645,12 +1926,38 @@ class SpecDecodeBaseProposer:
              else:
                  slot_mapping_dict = slot_mappings or {}
  
@@ -520,7 +537,7 @@ index 79be2e8a4d..d814613d77 100644
                  slot_mapping=slot_mapping_dict,
              ):
                  if self.supports_mm_inputs:
-@@ -1771,11 +2061,15 @@ class SpecDecodeBaseProposer:
+@@ -1771,11 +2078,15 @@ class SpecDecodeBaseProposer:
      def _determine_batch_execution_and_padding(
          self,
          num_tokens: int,
@@ -537,7 +554,7 @@ index 79be2e8a4d..d814613d77 100644
          )
          num_tokens_padded = batch_desc.num_tokens
  
-@@ -1810,7 +2104,7 @@ class SpecDecodeBaseProposer:
+@@ -1810,7 +2121,7 @@ class SpecDecodeBaseProposer:
                  assert batch_desc.num_tokens == num_tokens_padded
                  num_tokens_across_dp[dp_rank] = num_tokens_padded
  

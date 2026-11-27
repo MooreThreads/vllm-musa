@@ -16,7 +16,8 @@ def _names(archs) -> str:
 
 
 def built_archs() -> tuple[musa_arch.MusaArch, ...] | None:
-    """The archs setup.py recorded for the native build, or ``None`` without a record."""
+    """The archs setup.py recorded for the native build, or ``None`` without a
+    record."""
     try:
         from vllm_musa._build_info import MUSA_ARCHS
     except ImportError:

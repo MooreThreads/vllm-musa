@@ -87,24 +87,24 @@ def test_real_series_has_exact_coverage():
     "mutation,expected",
     [
         (
-            lambda l, g: l["omissions"].append(copy.deepcopy(l["omissions"][0])),
+            lambda doc, g: doc["omissions"].append(copy.deepcopy(doc["omissions"][0])),
             "duplicate legacy",
         ),
-        (lambda l, g: l["omissions"].clear(), "missing legacy"),
-        (lambda l, g: l["omissions"][0]["owners"].append("9999"), "unknown owner"),
-        (lambda l, g: g["groups"][0]["patches"].append("0001"), "duplicate patch"),
-        (lambda l, g: g["groups"][0]["patches"].pop(), "missing patch"),
-        (lambda l, g: g["groups"][0]["patches"].append("9999"), "unknown patch"),
+        (lambda doc, g: doc["omissions"].clear(), "missing legacy"),
+        (lambda doc, g: doc["omissions"][0]["owners"].append("9999"), "unknown owner"),
+        (lambda doc, g: g["groups"][0]["patches"].append("0001"), "duplicate patch"),
+        (lambda doc, g: g["groups"][0]["patches"].pop(), "missing patch"),
+        (lambda doc, g: g["groups"][0]["patches"].append("9999"), "unknown patch"),
         (
-            lambda l, g: g["groups"][0]["required_checks"].append("not-a-check"),
+            lambda doc, g: g["groups"][0]["required_checks"].append("not-a-check"),
             "unknown check",
         ),
         (
-            lambda l, g: g["groups"][0]["depends_on"].append("missing"),
+            lambda doc, g: g["groups"][0]["depends_on"].append("missing"),
             "unknown dependency",
         ),
         (
-            lambda l, g: l["omissions"][0].update(disposition="passed"),
+            lambda doc, g: doc["omissions"][0].update(disposition="passed"),
             "unknown disposition",
         ),
     ],

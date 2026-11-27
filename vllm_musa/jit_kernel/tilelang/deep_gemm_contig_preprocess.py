@@ -236,7 +236,7 @@ def _count_prefix_topk_single_block_kernel(max_experts: int, max_block_m: int):
                     prefix[tid] = T.int32(0)
             T.sync_threads()
 
-            for offset in T.serial((scan_size.bit_length() - 1)):
+            for offset in T.serial(scan_size.bit_length() - 1):
                 step = 1 << offset
                 addend = T.int32(0)
                 if tid < scan_size and tid >= step:
@@ -386,7 +386,7 @@ def _prefix_counts_tree_kernel(max_experts: int, max_block_m: int):
                     prefix[tid] = T.int32(0)
             T.sync_threads()
 
-            for offset in T.serial((scan_size.bit_length() - 1)):
+            for offset in T.serial(scan_size.bit_length() - 1):
                 step = 1 << offset
                 addend = T.int32(0)
                 if tid < scan_size and tid >= step:
@@ -974,7 +974,8 @@ def _impl_bf16(
     config = _bf16_config(hidden_states.shape[1])
     if config is None:
         raise RuntimeError(
-            f"unsupported TileLang DeepGEMM bf16 preprocess hidden={hidden_states.shape[1]}"
+            "unsupported TileLang DeepGEMM bf16 preprocess hidden="
+            f"{hidden_states.shape[1]}"
         )
     if topk > 16:
         raise RuntimeError(f"unsupported TileLang DeepGEMM bf16 preprocess topk={topk}")

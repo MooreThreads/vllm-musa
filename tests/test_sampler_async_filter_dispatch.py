@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
-import torchada  # noqa: F401
+# isort: off
+import torchada  # noqa: F401  # must patch before torch ecosystem imports
 import torch
+
+# isort: on
 
 from vllm_musa.utils.environ import envs
 from vllm_musa.v1.sample import topk_topp_sampler as sampler
@@ -27,9 +30,7 @@ def test_async_filter_dispatch_uses_tensor_presence(monkeypatch) -> None:
         )
         return expected
 
-    monkeypatch.setattr(
-        sampler._ops, "top_k_top_p_sampling_from_probs", fake_joint
-    )
+    monkeypatch.setattr(sampler._ops, "top_k_top_p_sampling_from_probs", fake_joint)
     actual = sampler.sample_from_probs(probs, top_k, top_p)
 
     assert torch.equal(actual, expected.long())

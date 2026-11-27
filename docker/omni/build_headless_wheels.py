@@ -40,11 +40,14 @@ def _replace_metadata(
     # Update just the two headers and retain every other header and the body.
     header, separator, body = content.partition(b"\n\n")
     lines = header.split(b"\n")
+    headless_requirement = requirement.replace(
+        "opencv-python", "opencv-python-headless", 1
+    )
     for original, replacement in (
         (f"Version: {version}", f"Version: {version}+musa"),
         (
             f"Requires-Dist: {requirement}",
-            f"Requires-Dist: {requirement.replace('opencv-python', 'opencv-python-headless', 1)}",
+            f"Requires-Dist: {headless_requirement}",
         ),
     ):
         before = original.encode("ascii")

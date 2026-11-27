@@ -6,8 +6,8 @@
 Ported from ``vllm/v1/attention/backends/tree_attn.py``. The only
 platform-specific call site is ``reshape_and_cache_flash`` which is
 redirected through ``vllm_musa.v1.attention.backends.fa_utils``. The
-``triton_unified_attention`` Triton kernel is already MUSA-compatible
-via the existing ``vllm_musa.patches.vllm__v1__attention__ops__triton_unified_attention``
+``triton_unified_attention`` Triton kernel is already MUSA-compatible via the
+existing ``vllm_musa.patches.vllm__v1__attention__ops__triton_unified_attention``
 patch, so no further changes are required for the forward path.
 """
 

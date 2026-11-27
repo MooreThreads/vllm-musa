@@ -216,7 +216,8 @@ def rope_kv_insert(
     q_head_padded: int,
     apply_q_norm: bool,
 ) -> torch.Tensor:
-    """The rotated query, padded to ``q_head_padded`` heads; ``kv`` goes to the cache."""
+    """The rotated query, padded to ``q_head_padded`` heads; ``kv`` goes to the
+    cache."""
     num_tokens, in_heads, _ = q.shape
     out_heads = max(q_head_padded, in_heads)
     q_out = q

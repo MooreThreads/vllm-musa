@@ -282,7 +282,7 @@ EXTRA_LINK_ARGS = [
 ]
 
 # `arch` is the host CPU architecture in this file.
-from torchada import arch as musa_arch
+from torchada import arch as musa_arch  # noqa: E402
 
 # MTGPU_TARGET, then TORCH_MUSA_ARCH_LIST, then the visible devices, then mp_31.
 # No device check: a build may target an arch other than the build host's.
@@ -333,8 +333,12 @@ COMPILE_ARGS = {
 # paths compile out on MUSA), and link torch_cpu (the AOTI stable-ABI shims live
 # in libtorch_cpu.so). torchada's include_paths() auto-appends the stable_compat
 # include dir, and its import patches torch_musa's stable::Tensor accessors.
-from torchada.utils.cpp_extension import stable_compat_box_header as _ta_stable_box
-from torchada.utils.cpp_extension import stable_compat_include_dir as _ta_stable_inc
+from torchada.utils.cpp_extension import (  # noqa: E402
+    stable_compat_box_header as _ta_stable_box,
+)
+from torchada.utils.cpp_extension import (  # noqa: E402
+    stable_compat_include_dir as _ta_stable_inc,
+)
 
 _STABLE_BOX_HEADER = _ta_stable_box()
 # Explicitly add torchada's stable_compat include dir (the include_paths()

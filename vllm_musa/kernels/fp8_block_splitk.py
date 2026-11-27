@@ -34,7 +34,17 @@ BLOCK_M = 16
 # included, use the eager limit, past which the block GEMM runs up to
 # fp8_block_bf16.MIN_ROWS.
 _ENTRY_KEYS = frozenset(
-    "n k split block_n num_warps unroll tile_m min_rows max_rows".split()
+    [
+        "n",
+        "k",
+        "split",
+        "block_n",
+        "num_warps",
+        "unroll",
+        "tile_m",
+        "min_rows",
+        "max_rows",
+    ]
 )
 _MODES = frozenset({"capture", "eager"})
 
@@ -170,7 +180,8 @@ def _multiprocessor_count(device_index: int | None) -> int:
 
 
 def _rows(weight: torch.Tensor) -> tuple[tuple | None, int | None]:
-    """The (config, eager max rows) for ``weight`` on its device's multiprocessor count."""
+    """The (config, eager max rows) for ``weight`` on its device's
+    multiprocessor count."""
     shape = tuple(weight.shape)
     if shape in _BINNED_SHAPES:
         mp = _multiprocessor_count(weight.device.index)
@@ -183,7 +194,8 @@ def _rows(weight: torch.Tensor) -> tuple[tuple | None, int | None]:
 def fp8_block_splitk_config(
     weight: torch.Tensor, weight_scale: torch.Tensor, rows: int
 ) -> tuple[int, int, int, int, int, int, int] | None:
-    """Measured config for ``rows`` activation rows, or None when the GEMM does not apply."""
+    """Measured config for ``rows`` activation rows, or None when the GEMM does not
+    apply."""
     if not _ENABLED or weight.dim() != 2:
         return None
     config, eager_max_rows = _rows(weight)

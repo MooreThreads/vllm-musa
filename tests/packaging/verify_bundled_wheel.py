@@ -43,8 +43,13 @@ EXPECTED_ENTRY_POINTS = {
     },
     "vllm.platform_plugins": {"musa": "vllm_musa:musa_platform_plugin"},
     "vllm.general_plugins": {
-        "lora_filesystem_resolver": "vllm.plugins.lora_resolvers.filesystem_resolver:register_filesystem_resolver",
-        "lora_hf_hub_resolver": "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_hub_resolver",
+        "lora_filesystem_resolver": (
+            "vllm.plugins.lora_resolvers.filesystem_resolver:"
+            "register_filesystem_resolver"
+        ),
+        "lora_hf_hub_resolver": (
+            "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_hub_resolver"
+        ),
         "musa_out_of_tree": "vllm_musa:register_out_of_tree",
         "musa_attn_backends": "vllm_musa:register_attn_backends",
     },
@@ -52,7 +57,8 @@ EXPECTED_ENTRY_POINTS = {
 
 
 def _verify_native_modules(wheel: Path, names: set[str]) -> None:
-    # The wheel tag identifies the ABI even when this verifier runs on a different Python.
+    # The wheel tag identifies the ABI even when this verifier runs on a
+    # different Python.
     _, _, _, tags = parse_wheel_filename(wheel.name)
     assert len(tags) == 1, tags
     (tag,) = tags
@@ -68,9 +74,9 @@ def _verify_native_modules(wheel: Path, names: set[str]) -> None:
             for name in names
             if name.startswith(f"{module}.") and name.endswith(".so")
         }
-        assert actual == {
-            expected
-        }, f"{module}: expected {expected}, found {sorted(actual)}"
+        assert actual == {expected}, (
+            f"{module}: expected {expected}, found {sorted(actual)}"
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,7 +121,7 @@ def main() -> None:
         assert dist_info_dir.startswith("vllm_musa-"), dist_info_dir
         record = archive.read(f"{dist_info_dir}/RECORD").decode()
         recorded = {path for path, _, _ in csv.reader(record.splitlines())}
-        assert REQUIRED_FILES <= recorded, sorted(REQUIRED_FILES - recorded)
+        assert recorded >= REQUIRED_FILES, sorted(REQUIRED_FILES - recorded)
 
         metadata = Parser().parsestr(archive.read(f"{dist_info_dir}/METADATA").decode())
         assert canonicalize_name(metadata["Name"]) == "vllm-musa"
@@ -152,9 +158,9 @@ def main() -> None:
         version = re.search(
             r"^__version__ = version = ['\"]([^'\"]+)['\"]", version_module, re.M
         )
-        assert (
-            version and not Version(version[1]).is_devrelease
-        ), "missing vLLM release version"
+        assert version and not Version(version[1]).is_devrelease, (
+            "missing vLLM release version"
+        )
 
         old_metadata_lookups = []
         for name in names:
@@ -169,7 +175,8 @@ def main() -> None:
 
     print(
         f"PASS bundled_wheel wheel={args.wheel.name} "
-        f"files={len(names)} native={len(NATIVE_MODULES)} rust_required={args.require_rust}"
+        f"files={len(names)} native={len(NATIVE_MODULES)} "
+        f"rust_required={args.require_rust}"
     )
 
 

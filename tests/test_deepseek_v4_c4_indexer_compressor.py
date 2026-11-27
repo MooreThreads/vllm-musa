@@ -10,8 +10,8 @@ ROOT = Path(__file__).parents[1]
 KERNEL = ROOT / "csrc/musa/attention/deepseek_v4_c4_indexer_compressor.mu"
 WRAPPER = ROOT / "vllm_musa/kernels/deepseek_v4_c4_indexer_compressor.py"
 SERIES_PATCH = (
-    ROOT
-    / "vllm_musa/patches/series/0133-MUSA-dispatch-DeepSeek-V4-sparse-compressor-to-nativ.patch"
+    ROOT / "vllm_musa/patches/series/"
+    "0133-MUSA-dispatch-DeepSeek-V4-sparse-compressor-to-nativ.patch"
 )
 
 

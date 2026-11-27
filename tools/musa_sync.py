@@ -67,8 +67,9 @@ Subcommands::
         ``.``/``-`` stripped, 52 characters), an ``index`` line whenever the
         entry has a hunk, LF-terminated *structural* lines with a final newline
         (a CR that is content — an added line of a CRLF file — is legitimate),
-        a diff ``git apply --stat`` can parse — the numbering must be unique and contiguous from
-        ``0001`` in each directory, no two entries may share a diff body,
+        a diff ``git apply --stat`` can parse — the numbering must be unique and
+        contiguous from ``0001`` in each directory, no two entries may share a
+        diff body,
         ``upstream/`` must start with a ``git cherry-pick -x`` commit, and a
         MUSA entry must not be one. ``--repo``
         additionally resolves the blobs those ``index`` lines declare to
@@ -122,13 +123,13 @@ import argparse
 import difflib
 import importlib.util
 import re
-from email.header import decode_header, make_header
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
+from email.header import decode_header, make_header
 from pathlib import Path
 from typing import NamedTuple
 
@@ -908,8 +909,17 @@ def _unquote_git_path(raw: bytes) -> str:
                 i = j
                 continue
             out.append(
-                {0x61: 0x07, 0x62: 0x08, 0x74: 0x09, 0x6E: 0x0A, 0x76: 0x0B,
-                 0x66: 0x0C, 0x72: 0x0D, 0x22: 0x22, 0x5C: 0x5C}.get(nxt, nxt)
+                {
+                    0x61: 0x07,
+                    0x62: 0x08,
+                    0x74: 0x09,
+                    0x6E: 0x0A,
+                    0x76: 0x0B,
+                    0x66: 0x0C,
+                    0x72: 0x0D,
+                    0x22: 0x22,
+                    0x5C: 0x5C,
+                }.get(nxt, nxt)
             )
             i += 2
             continue
@@ -951,12 +961,8 @@ def _diff_section_path(section: bytes) -> str | None:
     if head:
         raw = head.group(2)
     else:
-        plus = re.search(
-            rb"(?m)^\+\+\+ (" + token + rb")(?:\t[^\n]*)?\n", section
-        )
-        minus = re.search(
-            rb"(?m)^--- (" + token + rb")(?:\t[^\n]*)?\n", section
-        )
+        plus = re.search(rb"(?m)^\+\+\+ (" + token + rb")(?:\t[^\n]*)?\n", section)
+        minus = re.search(rb"(?m)^--- (" + token + rb")(?:\t[^\n]*)?\n", section)
         if plus is None or minus is None:
             return None
         raw = plus.group(1)
@@ -965,7 +971,7 @@ def _diff_section_path(section: bytes) -> str | None:
     path = _unquote_git_path(raw).rstrip("\r")
     for prefix in ("b/", "a/"):
         if path.startswith(prefix):
-            return path[len(prefix):]
+            return path[len(prefix) :]
     return path
 
 
@@ -1071,7 +1077,9 @@ def _repo_object_types(repo: Path, blobs: list[str]) -> dict[str, str]:
     for blob, line in zip(blobs, r.stdout.splitlines()):
         fields = line.split()
         # `<id> <type> <size>`, or `<id> missing` for an absent object.
-        out[blob] = fields[1] if len(fields) >= 3 and fields[1] != "missing" else "missing"
+        out[blob] = (
+            fields[1] if len(fields) >= 3 and fields[1] != "missing" else "missing"
+        )
     return out
 
 
@@ -1124,9 +1132,7 @@ def _missing_index_blobs(
         exempt_declared.update(
             pre for pre, _post in pairs if not zero(pre) and pre in produced
         )
-        wanted = {
-            pre for pre, _post in pairs if not zero(pre) and pre not in produced
-        }
+        wanted = {pre for pre, _post in pairs if not zero(pre) and pre not in produced}
         if wanted:
             needed[name] = wanted
         produced.update(post for _, post in pairs if not zero(post))
@@ -1144,6 +1150,7 @@ def _missing_index_blobs(
         {blob for wanted in needed.values() for blob in wanted} | exempt_declared
     )
     types = _repo_object_types(repo, queried)
+
     # An exempt id is exempt because an *earlier entry declares* it as its
     # postimage — a declaration, not proof: the series may never produce it (a
     # hand-edited ``index`` line), and the id may not even be a blob id. Where
@@ -1181,9 +1188,7 @@ def _missing_index_blobs(
     return out
 
 
-def _series_entry_problem(
-    text: bytes, unresolved: list[str]
-) -> tuple[str, str] | None:
+def _series_entry_problem(text: bytes, unresolved: list[str]) -> tuple[str, str] | None:
     """The first generation-form problem in one entry, or None when it is a
     canonical ``regen`` fixed point."""
     lines = [line.rstrip(b"\r") for line in text.split(b"\n")[:4]]
@@ -1315,22 +1320,21 @@ def _series_format_rows(
             if problem is None:
                 parsed = _run_git(ROOT, "apply", "--stat", str(patch))
                 if parsed.returncode:
-                    problem = ("corrupt", (parsed.stderr or parsed.stdout).strip()[:100])
+                    problem = (
+                        "corrupt",
+                        (parsed.stderr or parsed.stdout).strip()[:100],
+                    )
             status[name] = problem or ("clean", "")
         rows = [(_safe_name(names[patch]), *status[names[patch]]) for patch in paths]
         if repo and replay:
-            rows = _merge_replay_rows(
-                rows, _replay_rows(Path(repo), paths, texts)
-            )
+            rows = _merge_replay_rows(rows, _replay_rows(Path(repo), paths, texts))
         elif repo and round_trip:
             # Not a replay: `--round-trip` asks whether `regen` reproduces the
             # series from a checkout that already HOLDS it (see
             # `_round_trip_rows`). Replaying here would compare the series with
             # itself — and a checkout that holds the series cannot be replayed
             # into anyway: the entries are already applied.
-            rows = _merge_replay_rows(
-                rows, _round_trip_rows(Path(repo), paths)
-            )
+            rows = _merge_replay_rows(rows, _round_trip_rows(Path(repo), paths))
     except GitMissing as exc:
         return [(str(SERIES_DIR), "git-unavailable", str(exc))]
     except RepoUnusable as exc:
@@ -1407,9 +1411,7 @@ def _series_base(repo: Path, count: int) -> str | None:
     return None
 
 
-def _round_trip_rows(
-    repo: Path, paths: list[Path]
-) -> list[tuple[str, str, str]]:
+def _round_trip_rows(repo: Path, paths: list[Path]) -> list[tuple[str, str, str]]:
     """Entries ``regen`` would rewrite, diffed against the *caller's* repo.
 
     Exactly what ``cmd_regen`` runs (``_format_series``: ``git format-patch
@@ -1539,8 +1541,7 @@ def _round_trip_rows_in(
                 (
                     _safe_name(name),
                     "round-trip-dirty",
-                    "`regen` rewrites this entry: "
-                    f"{_first_diff_line(want, got)}",
+                    f"`regen` rewrites this entry: {_first_diff_line(want, got)}",
                 )
             )
     for regen in generated[len(paths) :]:
@@ -1596,9 +1597,8 @@ def _replay_rows(
             )
         _run_git(clone, "config", "user.email", "musa@local")
         _run_git(clone, "config", "user.name", "musa")
-        applied = 0
         made: dict[str, str | None] = {}
-        for patch in paths:
+        for applied, patch in enumerate(paths):
             name = build_apply.entry_name(patch)
             head_before = _git(clone, "rev-parse", "HEAD").stdout.strip()
             r = _git(clone, "am", "-3", "--keep-non-patch", str(patch))
@@ -1631,7 +1631,6 @@ def _replay_rows(
                         "is the mode for the maintenance state)"
                     )
                 return [(_safe_name(name), "replay-failed", detail)]
-            applied += 1
             made[name] = head_after
         return _unearned_exemption_rows(clone, paths, texts, made) + (
             _build_path_rows(tmp, repo, paths)
@@ -1698,8 +1697,10 @@ def _unearned_exemption_rows(
         at_path = (
             _git(clone, "rev-parse", "--verify", f"{commit}:{path}") if commit else None
         )
-        if at_path is not None and at_path.returncode == 0 and (
-            at_path.stdout.strip() == full.stdout.strip()
+        if (
+            at_path is not None
+            and at_path.returncode == 0
+            and (at_path.stdout.strip() == full.stdout.strip())
         ):
             continue
         rows.append(
@@ -1738,8 +1739,7 @@ def _build_path_rows(
             (
                 str(SERIES_DIR),
                 "repo-unusable",
-                f"cannot clone {repo} for the build-path probe: "
-                f"{_git_first_error(r)}",
+                f"cannot clone {repo} for the build-path probe: {_git_first_error(r)}",
             )
         ]
     for patch in paths:
@@ -1980,7 +1980,9 @@ def _print_series_section(
         if detail:
             print(f"                 {detail}")
     if len(shown) < len(bad):
-        print(f"  … {len(bad) - len(shown)} more (run `check-series` for the full list)")
+        print(
+            f"  … {len(bad) - len(shown)} more (run `check-series` for the full list)"
+        )
     counted = rows if entries is None else entries
     # "clean" counts *entries* that are clean, "need attention" counts every bad
     # row: a series-level row (e.g. a state problem the entries cannot express)
@@ -2399,9 +2401,9 @@ def _format_series(
     them, the commits above the first cherry-pick that change a file those
     commits change. Any other commit above the first cherry-pick is a MUSA
     entry: it shares no file with ``upstream/``, so its patch is the same
-    when it applies before them. Each directory is numbered from 0001, with the canonical
-    author and a fixed ``core.abbrev``, so the ``index`` lines do not depend
-    on how many objects the repository holds.
+    when it applies before them. Each directory is numbered from 0001, with the
+    canonical author and a fixed ``core.abbrev``, so the ``index`` lines do not
+    depend on how many objects the repository holds.
     Returns ``(entries in apply order, error)``.
     """
     split = _split_stack(repo, base)
@@ -3067,17 +3069,26 @@ def cmd_report(args) -> int:
         result = _metadata_result()
         if _metadata_errors(result):
             return 1
-        print(f"Patch metadata: {result.patch_count} patches, "
-              f"{result.group_count} functional groups, "
-              f"{result.omission_count} legacy omissions")
+        print(
+            f"Patch metadata: {result.patch_count} patches, "
+            f"{result.group_count} functional groups, "
+            f"{result.omission_count} legacy omissions"
+        )
         for group in result.groups:
             checks = ", ".join(group["required_checks"])
-            print(f"  {group['id']}: {len(group['patches'])} patches; "
-                  f"required: {checks}")
-        unresolved = [row["legacy_id"] for row in result.lineage
-                      if row["disposition"] in ("unresolved", "performance_opportunity")]
+            print(
+                f"  {group['id']}: {len(group['patches'])} patches; required: {checks}"
+            )
+        unresolved = [
+            row["legacy_id"]
+            for row in result.lineage
+            if row["disposition"] in ("unresolved", "performance_opportunity")
+        ]
         print(f"  unresolved/opportunity: {', '.join(unresolved) or 'none'}")
-        print("  Required checks are not pass claims; MUSA/model validation needs separate evidence.")
+        print(
+            "  Required checks are not pass claims; MUSA/model validation needs "
+            "separate evidence."
+        )
         return 0
     by_cat: dict[str, int] = {}
     for e in manifest.ENTRIES:
@@ -3092,7 +3103,8 @@ def cmd_report(args) -> int:
             )
         return 0
     print(
-        f"MDM manifest: {len(manifest.ENTRIES)} divergences by category {dict(sorted(by_cat.items()))}"
+        f"MDM manifest: {len(manifest.ENTRIES)} divergences by category "
+        f"{dict(sorted(by_cat.items()))}"
     )
     prefix = manifest.UPSTREAM_SUBDIR + "/"
     upstream = [e for e in manifest.ENTRIES if e.id.startswith(prefix)]
@@ -3232,7 +3244,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--doc", action="store_true", help="render the Markdown census table"
     )
     p.add_argument(
-        "--metadata", action="store_true", help="show validated lineage and group requirements"
+        "--metadata",
+        action="store_true",
+        help="show validated lineage and group requirements",
     )
     p.set_defaults(func=cmd_report)
 

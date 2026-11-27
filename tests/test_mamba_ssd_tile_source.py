@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Source contract for the shape-scoped MUSA SSD chunk-scan tile.
 
-The MUSA Triton 3.2 stack pins two tiles: `32x32x32`, one stage, eight warps for the verified
-SSD tuple, and `16x16x32`, one stage, two warps for every other shape. These assertions fail if
-that selection widens to every shape, if the verified tile's warp count moves, or if the small
-tile's configuration drifts.
+The MUSA Triton 3.2 stack pins two tiles: `32x32x32`, one stage, eight warps
+for the verified SSD tuple, and `16x16x32`, one stage, two warps for every
+other shape. These assertions fail if that selection widens to every shape, if
+the verified tile's warp count moves, or if the small tile's configuration
+drifts.
 """
 
 from pathlib import Path
@@ -19,11 +20,12 @@ def _member() -> str:
 
 
 def _body() -> str:
-    """The post-image body: context and added lines, with marker and indentation removed.
+    """The post-image body: context and added lines, with marker and
+    indentation removed.
 
-    In this member the wide tile is an added line and the small tile is a context line of the
-    same hunk, so presence has to be read from the applied body rather than from added lines
-    alone.
+    In this member the wide tile is an added line and the small tile is a
+    context line of the same hunk, so presence has to be read from the applied
+    body rather than from added lines alone.
     """
     lines = []
     for line in _member().splitlines():
@@ -45,8 +47,8 @@ def _removed() -> str:
 
 def test_tile_selection_stays_shape_scoped():
     body, removed = _body(), _removed()
-    # the platform guard: the pruning and the widened key are for MUSA Triton 3.2 only, and
-    # every other stack keeps the upstream autotune key and search
+    # the platform guard: the pruning and the widened key are for MUSA Triton 3.2
+    # only, and every other stack keeps the upstream autotune key and search
     assert "if not is_musa_triton_32():" in body
     assert (
         '"key": ["chunk_size", "hdim", "dstate", "nheads_ngroups_ratio", "IS_CAUSAL"]'

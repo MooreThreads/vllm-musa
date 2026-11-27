@@ -1,4 +1,11 @@
 default_stages: [pre-commit, pre-push, manual]
+# The tree uses 3.12-only syntax (PEP 695 generics), so hooks that parse
+# Python must run on the interpreter `requires-python` pins.
+default_language_version:
+  python: python3.12
+# The lint workflow installs this exact version; declaring it keeps a local
+# run from silently using an older pre-commit.
+minimum_pre_commit_version: 3.7.1
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -6,13 +13,16 @@ repos:
     hooks:
       - id: check-symlinks
       - id: destroyed-symlinks
-      # Series entries are `git format-patch` output: a context line for an
-      # empty source line is a single space, so these hooks would rewrite the
-      # diff. They are byte-pinned by `musa_sync check-series --round-trip`.
+      # Every `*.patch` in the tree is `git format-patch` output that is
+      # applied byte-for-byte: a context line for an empty source line is a
+      # single space, and "\ No newline at end of file" is part of the diff.
+      # These two hooks would rewrite those bytes. The series is pinned by
+      # `musa_sync check-series --round-trip`; the Docker patches are fed to
+      # `git apply` unchanged.
       - id: trailing-whitespace
-        exclude: ^vllm_musa/patches/series/.*\.patch$
+        exclude: \.patch$
       - id: end-of-file-fixer
-        exclude: ^vllm_musa/patches/series/.*\.patch$
+        exclude: \.patch$
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-toml
@@ -23,28 +33,23 @@ repos:
       - id: detect-private-key
       - id: debug-statements
       - id: no-commit-to-branch
-  - repo: https://github.com/PyCQA/isort
-    rev: 7.0.0
-    hooks:
-      - id: isort
+        stages: [pre-commit]
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.1
     hooks:
-      - id: ruff
-        args:
-          - --select=F401,F821
-          - --fix
-        files: ^(vllm_musa/|tests/|examples/)
-        exclude: |
-          (?x)^(
-          .*/__init__\.py$
-          )$
-  - repo: https://github.com/psf/black
-    rev: 26.1.0
+      # `ruff-check` reads `[tool.ruff.lint]` from pyproject.toml (including I
+      # import sorting); `ruff-format` owns formatting.
+      - id: ruff-check
+        args: ['--output-format', 'github', '--fix']
+      - id: ruff-format
+  # Same spelling checker as upstream vLLM; the domain words live in
+  # `[tool.typos]` in pyproject.toml.
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.43.5
     hooks:
-      - id: black
-  - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1
+      - id: typos
+        args: ['--force-exclude']
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
     hooks:
-      - id: codespell
-        args: ['--config', '.codespellrc']
+      - id: actionlint

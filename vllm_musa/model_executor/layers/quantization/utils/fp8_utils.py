@@ -101,7 +101,8 @@ def per_token_group_quant_fp8(
     if current_platform.is_musa():
         if x.dim() != 2:
             raise NotImplementedError(
-                f"MUSA backend currently only supports 2D tensors for per_token_group_fp8_quant. "
+                f"MUSA backend currently only supports 2D tensors for "
+                f"per_token_group_fp8_quant. "
                 f"Got tensor with {x.dim()} dimensions, shape={x.shape}"
             )
         x_kernel = x if x.is_contiguous() else x.contiguous()
@@ -145,7 +146,8 @@ def per_token_group_quant_fp8(
     # TRITON FALLBACK
     # musa currently does not support triton fallback.
     raise NotImplementedError(
-        f"per_token_group_fp8_quant is not supported for platform: {current_platform} or input is not contiguous. "
+        f"per_token_group_fp8_quant is not supported for platform: "
+        f"{current_platform} or input is not contiguous. "
         "MUSA Triton fallback is currently not supported."
     )
 
@@ -310,7 +312,7 @@ def install_hooks() -> None:
     global _HOOKS_INSTALLED
     if _HOOKS_INSTALLED:
         return
-    import vllm.model_executor.layers.quantization.utils.fp8_utils as _upstream_fp8_utils
+    import vllm.model_executor.layers.quantization.utils.fp8_utils as _upstream_fp8_utils  # noqa: E501
 
     _upstream_fp8_utils.deepgemm_post_process_fp8_weight_block = (
         deepgemm_post_process_fp8_weight_block

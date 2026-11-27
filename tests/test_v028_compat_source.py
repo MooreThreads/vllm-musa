@@ -54,8 +54,7 @@ def test_moe_overrides_use_v028_routed_experts_api() -> None:
     assert "layer: FusedMoE" not in fp8_source
     for source in (fp8_source, unquantized_source):
         assert (
-            "from vllm.model_executor.layers.fused_moe.fused_moe import "
-            "fused_experts"
+            "from vllm.model_executor.layers.fused_moe.fused_moe import fused_experts"
         ) in source
 
 
@@ -112,7 +111,7 @@ def test_musa_mla_uses_v028_decode_context_parallel_size() -> None:
     ).read_text()
 
     assert (
-        "self.dcp_world_size: int = " "parallel_config.decode_context_parallel_size"
+        "self.dcp_world_size: int = parallel_config.decode_context_parallel_size"
     ) in source
     assert "self.dcp_world_size: int = -1" not in source
 
@@ -378,9 +377,9 @@ def test_mla_drift_tripwire_matches_its_two_sources() -> None:
 
     shadow = MUSA_MLA_COMMON.relative_to(ROOT).as_posix()
     entries = [entry for entry in tool.manifest.ENTRIES if entry.path == shadow]
-    assert (
-        len(entries) == 1
-    ), f"expected one manifest row for {shadow}, got {len(entries)}"
+    assert len(entries) == 1, (
+        f"expected one manifest row for {shadow}, got {len(entries)}"
+    )
     entry = entries[0]
 
     stored = (MODULE_DRIFT_DIR / f"{entry.id}.diff").read_text()

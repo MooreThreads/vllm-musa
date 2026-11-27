@@ -109,7 +109,7 @@ def _make_musa_scaled_fp8_quant(
             output[rows:].zero_()
         return output, scale
 
-    setattr(musa_scaled_fp8_quant, "_musa_static_fp8_fallback", True)
+    musa_scaled_fp8_quant._musa_static_fp8_fallback = True
     return musa_scaled_fp8_quant
 
 
@@ -121,12 +121,12 @@ def apply() -> None:
 
     current = getattr(vllm_custom_ops, "rms_norm", None)
     if not getattr(current, "_musa_safe_rms_norm", False):
-        setattr(musa_safe_rms_norm, "_musa_safe_rms_norm", True)
+        musa_safe_rms_norm._musa_safe_rms_norm = True
         vllm_custom_ops.rms_norm = musa_safe_rms_norm
 
     current = getattr(vllm_custom_ops, "rotary_embedding", None)
     if not getattr(current, "_musa_safe_rotary_embedding", False):
-        setattr(musa_safe_rotary_embedding, "_musa_safe_rotary_embedding", True)
+        musa_safe_rotary_embedding._musa_safe_rotary_embedding = True
         vllm_custom_ops.rotary_embedding = musa_safe_rotary_embedding
 
     current = getattr(vllm_custom_ops, "scaled_fp8_quant", None)

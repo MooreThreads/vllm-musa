@@ -541,7 +541,7 @@ def test_series_numbering_rows_reports_duplicate_and_gap(ms):
         (
             "series numbering",
             "non-contiguous",
-            "expected 0001..0004, missing 0003 " "(numbers present: 0001, 0002, 0004)",
+            "expected 0001..0004, missing 0003 (numbers present: 0001, 0002, 0004)",
         ),
     ]
 
@@ -1080,8 +1080,7 @@ def test_verify_series_gate_precedes_the_divergence_summary_and_ends_in_a_verdic
     assert "… 1 more" in out  # truncation is marked, not silent
     assert "empty ident name" in out  # the row detail survives verify
     assert printed[-1] == (
-        "=== musa_sync verify: FAIL "
-        "(divergence=0, series-format=11, numbering=0) ==="
+        "=== musa_sync verify: FAIL (divergence=0, series-format=11, numbering=0) ==="
     )
 
 
@@ -1112,9 +1111,10 @@ def test_shipped_series_passes_the_format_gate(ms, capsys):
     out = capsys.readouterr().out
 
     assert rc == 0
-    # The gate's contract is "every shipped entry is clean and the numbering is contiguous",
-    # not a fixed size: derive the count from the directory so that adding a patch to the
-    # series (which regeneration does) does not redden this test.
+    # The gate's contract is "every shipped entry is clean and the numbering is
+    # contiguous", not a fixed size: derive the count from the directory so that
+    # adding a patch to the series (which regeneration does) does not redden this
+    # test.
     series_dir = ROOT / "vllm_musa" / "patches" / "series"
     expected = len(list(series_dir.glob("*.patch"))) + len(
         list((series_dir / "upstream").glob("*.patch"))
@@ -1195,9 +1195,9 @@ def test_check_series_replay_accepts_a_relative_repo_path(
 
     assert ms.main(["check-series", "--repo", "upstream"]) == 0
     capsys.readouterr()
-    assert (
-        ms.main(["check-series", "--repo", "upstream", "--replay"]) == 0
-    ), capsys.readouterr().out
+    assert ms.main(["check-series", "--repo", "upstream", "--replay"]) == 0, (
+        capsys.readouterr().out
+    )
     assert "repo-unusable" not in capsys.readouterr().out
     # --round-trip needs a checkout that HOLDS the series (a different state),
     # so the relative path is exercised here by the replay; the mode's own
@@ -2210,7 +2210,7 @@ def test_different_failure_kinds_on_one_entry_are_both_reported(ms):
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
 def test_series_gate_accepts_subjects_git_itself_slugifies(ms, tmp_path):
-    """The gate's slug rule must agree with the real `git format-patch` on the
+    r"""The gate's slug rule must agree with the real `git format-patch` on the
     subjects that used to be rejected: a trailing '.', runs of '.', an RFC-2047
     encoded non-ASCII subject, and a subject longer than the 52-character cap.
 
@@ -2621,9 +2621,7 @@ def test_bare_diff_with_a_hunk_needs_an_index_line(ms, tmp_path, monkeypatch):
     Mutation: return `b""` again when there is no `diff --git`.
     """
     series = tmp_path / "series"
-    body = (
-        "--- a/value.txt\n" "+++ b/value.txt\n" "@@ -1 +1,2 @@\n" " alpha\n" "+beta\n"
-    )
+    body = "--- a/value.txt\n+++ b/value.txt\n@@ -1 +1,2 @@\n alpha\n+beta\n"
     _write_series(series, "0001-bare-hunk.patch", _mailbox("bare-hunk", body))
     monkeypatch.setattr(ms, "SERIES_DIR", series)
 
@@ -2701,7 +2699,7 @@ def test_replay_accepts_a_new_file_whose_content_already_exists(
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
-def test_postimage_is_checked_against_the_entrys_own_commit(
+def test_postimage_is_checked_against_the_entries_own_commit(
     ms, tmp_path, monkeypatch, capsys
 ):
     """Round 4: reachability was order-blind and therefore gameable.
@@ -3257,7 +3255,8 @@ def test_regen_and_rebase_report_a_verdict_on_the_paths_that_fail(
         _mailbox(
             "bogus",
             "diff --git a/never.txt b/never.txt\nindex 1111111111..2222222222 100644\n"
-            "--- a/never.txt\n+++ b/never.txt\n@@ -1 +1,2 @@\n-nothing here\n+something\n",
+            "--- a/never.txt\n+++ b/never.txt\n@@ -1 +1,2 @@\n"
+            "-nothing here\n+something\n",
         )
     )
     monkeypatch.setattr(ms.manifest, "series_apply_order", lambda: [bogus])

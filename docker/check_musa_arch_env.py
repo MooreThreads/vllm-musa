@@ -70,7 +70,8 @@ def check() -> tuple[list[str], tuple]:
     unsupported = [a for a in target if a not in musa_arch.ARCHS]
     if unsupported:
         problems.append(
-            f"{_names(unsupported)} is not in torchada's arch table {_names(musa_arch.ARCHS)}"
+            f"{_names(unsupported)} is not in torchada's arch table "
+            f"{_names(musa_arch.ARCHS)}"
         )
     return problems, target
 

@@ -8,7 +8,7 @@ import os
 from collections.abc import Callable
 from functools import cache, wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from packaging.version import Version
 
@@ -18,7 +18,6 @@ import torch
 
 # isort: on
 from torchada import arch as musa_arch
-from typing_extensions import ParamSpec
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability, Platform, PlatformEnum
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
@@ -33,9 +32,8 @@ else:
 
 import pymtml as pynvml
 
-from vllm_musa.optimization_contract import ModelFamily
+from vllm_musa.optimization_contract import ModelFamily, resolve_optimization_contract
 from vllm_musa.optimization_contract import policy as contract_policy
-from vllm_musa.optimization_contract import resolve_optimization_contract
 from vllm_musa.tuning import FUSED_ADD_RMSNORM_MIN_ROWS
 
 logger = init_logger(__name__)
@@ -45,10 +43,6 @@ _QWEN3_VL_ARCHITECTURES = {"Qwen3VLForConditionalGeneration"}
 
 def _is_torch_211_or_newer() -> bool:
     return Version(torch.__version__.split("+", 1)[0]) >= Version("2.11")
-
-
-_P = ParamSpec("_P")
-_R = TypeVar("_R")
 
 
 @cache
@@ -72,9 +66,9 @@ def _get_backend_priorities(
         ]
 
 
-def with_mtml_context(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+def with_mtml_context[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
     @wraps(fn)
-    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         pynvml.nvmlInit()
         try:
             return fn(*args, **kwargs)
@@ -104,8 +98,7 @@ def register_attention_backends() -> None:
     register_backend(
         AttentionBackendEnum.TURBOQUANT,
         class_path=(
-            "vllm_musa.v1.attention.backends.turboquant."
-            "MUSATurboQuantAttentionBackend"
+            "vllm_musa.v1.attention.backends.turboquant.MUSATurboQuantAttentionBackend"
         ),
     )
     tree_attn_backend = getattr(AttentionBackendEnum, "TREE_ATTN", None)
@@ -141,9 +134,7 @@ def _will_capture_piecewise_cudagraph(vllm_config: Any) -> bool:
     if getattr(comp, "mode", None) == CompilationMode.NONE:
         return False
     cg_mode = getattr(comp, "cudagraph_mode", None)
-    if cg_mode is not None and not cg_mode.has_piecewise_cudagraphs():
-        return False
-    return True
+    return not (cg_mode is not None and not cg_mode.has_piecewise_cudagraphs())
 
 
 def _should_route_quantized_piecewise_ops_native(vllm_config: Any) -> bool:
@@ -896,7 +887,9 @@ class MUSAPlatformBase(Platform):
 
     @classmethod
     def get_device_communicator_cls(cls) -> str:
-        return "vllm.distributed.device_communicators.cuda_communicator.CudaCommunicator"  # noqa
+        return (
+            "vllm.distributed.device_communicators.cuda_communicator.CudaCommunicator"  # noqa
+        )
 
     @classmethod
     def supports_fp8(cls) -> bool:
@@ -972,9 +965,11 @@ class MtmlMUSAPlatform(MUSAPlatformBase):
     @with_mtml_context
     def get_device_capability(cls, device_id: int = 0) -> DeviceCapability | None:
         try:
-            # XXX (MUSA): CUDA uses physical device ids (cls.device_id_to_physical_device_id(device_id)),
-            # but torch.musa.get_device_capability uses logical device ids when MUSA_VISIBLE_DEVICES is set.
-            # Since pymtml doesn't do remapping, so we can only use device_id here.
+            # XXX (MUSA): CUDA uses physical device ids
+            # (cls.device_id_to_physical_device_id(device_id)), but
+            # torch.musa.get_device_capability uses logical device ids when
+            # MUSA_VISIBLE_DEVICES is set. Since pymtml doesn't do remapping, so
+            # we can only use device_id here.
             handle = pynvml.nvmlDeviceGetHandleByIndex(device_id)
             major, minor = pynvml.nvmlDeviceGetCudaComputeCapability(handle)
             return DeviceCapability(major=major, minor=minor)

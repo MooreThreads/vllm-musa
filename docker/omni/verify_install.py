@@ -101,7 +101,8 @@ def main() -> None:
     ).shape != (2, 2, 3):
         raise SystemExit("OpenCV conversion failed")
     print(
-        f"PASS {args.mode} vllm-omni={dist.version} import={origin} cv2={cv2.__version__}"
+        f"PASS {args.mode} vllm-omni={dist.version} "
+        f"import={origin} cv2={cv2.__version__}"
     )
 
 

@@ -26,10 +26,9 @@ from typing import Any
 import torch
 import torch._inductor.pattern_matcher as pm
 import torch.fx as fx
-from torch._subclasses.fake_tensor import FakeTensor
-from torch._inductor.pattern_matcher import PatternMatcherPass
-
 import vllm.ir.ops
+from torch._inductor.pattern_matcher import PatternMatcherPass
+from torch._subclasses.fake_tensor import FakeTensor
 from vllm.compilation.passes.inductor_pass import enable_fake_mode
 from vllm.compilation.passes.vllm_inductor_pass import (
     VllmInductorPass,
@@ -41,6 +40,7 @@ from vllm.distributed import get_tp_group
 from vllm.distributed.parallel_state import get_tensor_model_parallel_world_size
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
+
 from vllm_musa.fused_allreduce_rmsnorm_ops import (
     musa_fused_allreduce_residual_rms_norm,
     musa_fused_allreduce_residual_rms_norm_no_raw,
@@ -69,18 +69,14 @@ def _rms_input_weight_supported_dtype(match: pm.Match) -> bool:
                 return True
             x, residual, weight = node.args[0], node.args[1], node.args[2]
             variance_size = (
-                node.args[4]
-                if len(node.args) > 4
-                else node.kwargs.get("variance_size")
+                node.args[4] if len(node.args) > 4 else node.kwargs.get("variance_size")
             )
         elif "rms_norm.default" in target:
             if len(node.args) < 2:
                 return True
             x, weight = node.args[0], node.args[1]
             variance_size = (
-                node.args[3]
-                if len(node.args) > 3
-                else node.kwargs.get("variance_size")
+                node.args[3] if len(node.args) > 3 else node.kwargs.get("variance_size")
             )
         else:
             continue
@@ -193,12 +189,14 @@ class MusaAllReduceResidualRMSNormPattern:
         def replacement(
             residual: torch.Tensor, input: torch.Tensor, weight: torch.Tensor
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            rms, residual_output, allreduce_output = musa_fused_allreduce_residual_rms_norm(
-                input,
-                residual,
-                weight,
-                self.epsilon,
-                self.fused_comm_id,
+            rms, residual_output, allreduce_output = (
+                musa_fused_allreduce_residual_rms_norm(
+                    input,
+                    residual,
+                    weight,
+                    self.epsilon,
+                    self.fused_comm_id,
+                )
             )
             return rms, residual_output, allreduce_output
 
@@ -314,8 +312,7 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
         jit_comm_max_size = getattr(jit_comm, "max_size", None)
         if not isinstance(jit_comm_max_size, int) or jit_comm_max_size <= 0:
             logger.warning_once(
-                "MUSA allreduce-rmsnorm fusion disabled: invalid JIT comm "
-                "max_size=%r.",
+                "MUSA allreduce-rmsnorm fusion disabled: invalid JIT comm max_size=%r.",
                 jit_comm_max_size,
             )
             return
@@ -434,13 +431,13 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
 
     @staticmethod
     def _target_name(node: fx.Node) -> str:
-        return str(getattr(node, 'target', ''))
+        return str(getattr(node, "target", ""))
 
     @classmethod
     def _is_musa_car_node(cls, node: fx.Node) -> bool:
         return (
-            node.op == 'call_function'
-            and 'musa_jit_custom_all_reduce' in cls._target_name(node)
+            node.op == "call_function"
+            and "musa_jit_custom_all_reduce" in cls._target_name(node)
         )
 
     @staticmethod
@@ -458,16 +455,16 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
     def _is_rms_norm_node(cls, node: fx.Node) -> bool:
         target = cls._target_name(node)
         return (
-            node.op == 'call_function'
-            and 'rms_norm.default' in target
-            and 'fused_add_rms_norm.default' not in target
+            node.op == "call_function"
+            and "rms_norm.default" in target
+            and "fused_add_rms_norm.default" not in target
         )
 
     @classmethod
     def _is_fused_add_rms_norm_node(cls, node: fx.Node) -> bool:
         return (
-            node.op == 'call_function'
-            and 'fused_add_rms_norm.default' in cls._target_name(node)
+            node.op == "call_function"
+            and "fused_add_rms_norm.default" in cls._target_name(node)
         )
 
     @classmethod
@@ -535,26 +532,16 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                     torch.ops.vllm.musa_fused_allreduce_residual_rms_norm.default,
                     args=(car.args[0], residual, weight, eps, self.comm_id),
                 )
-                fused_rms = graph.call_function(
-                    operator.getitem, args=(fused, 0)
-                )
-                fused_residual = graph.call_function(
-                    operator.getitem, args=(fused, 1)
-                )
-                fused_raw = graph.call_function(
-                    operator.getitem, args=(fused, 2)
-                )
+                fused_rms = graph.call_function(operator.getitem, args=(fused, 0))
+                fused_residual = graph.call_function(operator.getitem, args=(fused, 1))
+                fused_raw = graph.call_function(operator.getitem, args=(fused, 2))
             else:
                 fused = graph.call_function(
                     torch.ops.vllm.musa_fused_allreduce_residual_rms_norm_no_raw.default,
                     args=(car.args[0], residual, weight, eps, self.comm_id),
                 )
-                fused_rms = graph.call_function(
-                    operator.getitem, args=(fused, 0)
-                )
-                fused_residual = graph.call_function(
-                    operator.getitem, args=(fused, 1)
-                )
+                fused_rms = graph.call_function(operator.getitem, args=(fused, 0))
+                fused_residual = graph.call_function(operator.getitem, args=(fused, 1))
                 fused_raw = None
         fused.meta["val"] = out
         fused_rms.meta["val"] = out[0]
@@ -715,30 +702,23 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                 residual, weight, eps, variance_size = fused_add_args
                 if weight is None or eps is None or variance_size is not None:
                     continue
-                if not self._manual_residual_inputs_supported(
-                    car, residual, weight
-                ):
+                if not self._manual_residual_inputs_supported(car, residual, weight):
                     continue
 
                 output_users = list(fused_add.users)
                 output_indices = {
-                    user: self._getitem_index(user, fused_add)
-                    for user in output_users
+                    user: self._getitem_index(user, fused_add) for user in output_users
                 }
                 if not output_users or any(
                     index not in (0, 1) for index in output_indices.values()
                 ):
                     continue
 
-                raw_users = [
-                    user for user in list(car.users) if user is not fused_add
-                ]
+                raw_users = [user for user in list(car.users) if user is not fused_add]
                 use_raw = bool(raw_users)
 
-                fused_rms, fused_residual, fused_raw = (
-                    self._insert_fused_ar_rmsnorm(
-                        graph, fused_add, car, residual, weight, eps, use_raw
-                    )
+                fused_rms, fused_residual, fused_raw = self._insert_fused_ar_rmsnorm(
+                    graph, fused_add, car, residual, weight, eps, use_raw
                 )
 
                 for user, index in output_indices.items():
@@ -787,18 +767,14 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
                 variance_size = self._rms_norm_variance_size(rms)
                 if weight is None or eps is None or variance_size is not None:
                     continue
-                if not self._manual_residual_inputs_supported(
-                    car, residual, weight
-                ):
+                if not self._manual_residual_inputs_supported(car, residual, weight):
                     continue
 
                 raw_users = [user for user in list(car.users) if user is not add]
                 use_raw = bool(raw_users)
 
-                fused_rms, fused_residual, fused_raw = (
-                    self._insert_fused_ar_rmsnorm(
-                        graph, rms, car, residual, weight, eps, use_raw
-                    )
+                fused_rms, fused_residual, fused_raw = self._insert_fused_ar_rmsnorm(
+                    graph, rms, car, residual, weight, eps, use_raw
                 )
 
                 rms.replace_all_uses_with(fused_rms)
@@ -833,8 +809,8 @@ class MusaAllReduceRMSNormFusionPass(VllmPatternMatcherPass):
         if self.disabled:
             return
 
-        manual_no_raw, manual_raw = (
-            self._manual_rewrite_residual_musa_jit_car_rmsnorm(graph)
+        manual_no_raw, manual_raw = self._manual_rewrite_residual_musa_jit_car_rmsnorm(
+            graph
         )
         manual_count = manual_no_raw + manual_raw
         if manual_count:
