@@ -4,11 +4,11 @@ Date: Tue, 27 Oct 2026 10:43:06 +0800
 Subject: [PATCH] MUSA: avoid logits gather collectives on TP
 
 ---
- .../model_executor/layers/logits_processor.py | 84 ++++++++++++++++++-
- 1 file changed, 81 insertions(+), 3 deletions(-)
+ .../model_executor/layers/logits_processor.py | 92 ++++++++++++++++++-
+ 1 file changed, 89 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/model_executor/layers/logits_processor.py b/vllm/model_executor/layers/logits_processor.py
-index 04541212fe..af09aa3a67 100644
+index 04541212fe..c74958b650 100644
 --- a/vllm/model_executor/layers/logits_processor.py
 +++ b/vllm/model_executor/layers/logits_processor.py
 @@ -10,7 +10,10 @@ import torch.nn.functional as F
@@ -22,7 +22,7 @@ index 04541212fe..af09aa3a67 100644
      tensor_model_parallel_gather,
  )
  from vllm.logger import init_logger
-@@ -119,15 +122,82 @@ class LogitsProcessor(PluggableLayer):
+@@ -119,15 +122,90 @@ class LogitsProcessor(PluggableLayer):
                  logits *= self.scale
          return logits
  
@@ -41,17 +41,25 @@ index 04541212fe..af09aa3a67 100644
 +        tp_size = get_tensor_model_parallel_world_size()
 +        if tp_size == 1:
 +            return logits
-+        if tp_size not in (4, 8):
-+            output_dtype = None
-+
-+        use_ipc_gather = (
++        if not (
 +            self.org_vocab_size in (151936, 248320)
-+            and tp_size in (2, 4, 8)
++            and tp_size in (4, 8)
 +            and logits.dtype == torch.bfloat16
 +            and logits.ndim == 2
 +            and 0 < logits.shape[0] <= 64
++        ):
++            output_dtype = None
++
++        elem_size = logits.element_size()
++        pack = 16 // elem_size if 0 < elem_size <= 16 and 16 % elem_size == 0 else 0
++        use_ipc_gather = (
++            tp_size in (2, 4, 8)
++            and logits.dtype in (torch.float16, torch.bfloat16, torch.float32)
++            and logits.ndim == 2
++            and logits.shape[0] > 0
 +            and logits.shape[1] > 0
-+            and logits.shape[1] % 8 == 0
++            and pack > 0
++            and logits.shape[1] % pack == 0
 +            and logits.is_contiguous()
 +            and logits.shape[1] * tp_size >= self.org_vocab_size
 +        )
@@ -107,7 +115,7 @@ index 04541212fe..af09aa3a67 100644
          else:
              # None may be returned for rank > 0
              logits = tensor_model_parallel_gather(logits)
-@@ -191,7 +261,7 @@ class LogitsProcessor(PluggableLayer):
+@@ -191,7 +269,7 @@ class LogitsProcessor(PluggableLayer):
  
          # Gather logits for TP
          if lm_head.tp_size > 1:
@@ -116,7 +124,7 @@ index 04541212fe..af09aa3a67 100644
  
          # Remove paddings in vocab (if any).
          if logits is not None:
-@@ -223,6 +293,14 @@ class LogitsProcessor(PluggableLayer):
+@@ -223,6 +301,14 @@ class LogitsProcessor(PluggableLayer):
          if self.scale != 1.0:
              logits = logits * self.scale
  
