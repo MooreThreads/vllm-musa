@@ -65,7 +65,7 @@ def test_uniform_sampler_metadata_patch_is_active_and_qwen_gated() -> None:
     source = inspect.getsource(InputBatch._make_sampling_metadata)
     assert "uniform_top_k" in source
     assert "uniform_temperature" in source
-    assert "self.vocab_size in (151936, 248320)" in source
+    assert "self.vocab_size in (151936, 152064, 248320)" in source
     assert "candidate_top_k == 50" in source
     assert "self.all_random" in source
     assert "temperature_cpu == np.float32(1.0)" in source

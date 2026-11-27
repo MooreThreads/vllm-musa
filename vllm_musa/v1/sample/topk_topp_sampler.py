@@ -1287,6 +1287,46 @@ def can_use_qwen_v2_unfiltered_gumbel(
     return not np.any(sampler.needs_logits_processing[idx_mapping_np])
 
 
+def can_use_worker_seeded_gumbel(
+    sampler: Any,
+    logits: torch.Tensor,
+    expanded_idx_mapping: torch.Tensor,
+    idx_mapping_np: np.ndarray,
+    pos: torch.Tensor,
+) -> bool:
+    """Gate MRV2 user-seeded requests to batched stateless Gumbel sampling."""
+    if not current_platform.is_musa() or not is_musa_tensor(logits):
+        return False
+    if logits.ndim != 2 or logits.shape[0] <= 0 or logits.stride(-1) != 1:
+        return False
+    if logits.shape[0] != idx_mapping_np.shape[0]:
+        return False
+    if (
+        expanded_idx_mapping.ndim != 1
+        or expanded_idx_mapping.numel() != logits.shape[0]
+        or pos.ndim != 1
+        or pos.numel() != logits.shape[0]
+    ):
+        return False
+    if getattr(sampler, "use_fp64_gumbel", False):
+        return False
+    if getattr(sampler, "logprobs_mode", "raw_logprobs") in (
+        "processed_logits",
+        "processed_logprobs",
+    ):
+        return False
+    sampling_states = getattr(sampler, "sampling_states", None)
+    if sampling_states is None:
+        return False
+    if getattr(getattr(sampling_states, "seeds", None), "gpu", None) is None:
+        return False
+    if getattr(getattr(sampling_states, "temperature", None), "gpu", None) is None:
+        return False
+    if not has_worker_user_seed(sampling_states, idx_mapping_np):
+        return False
+    return not np.any(sampling_states.temperature.np[idx_mapping_np] <= _SAMPLING_EPS)
+
+
 def can_use_worker_seeded_multinomial(
     logits: torch.Tensor,
     logprobs_mode: LogprobsMode,
@@ -1360,11 +1400,80 @@ def sample_worker_logits_seeded_multinomial(
     idx_mapping_np: np.ndarray,
 ) -> torch.Tensor:
     probs = logits.softmax(dim=-1, dtype=torch.float32)
-    generators = {
-        row_idx: sampling_states.musa_generators.get(int(req_idx))
-        for row_idx, req_idx in enumerate(idx_mapping_np)
-    }
+    generators: dict[int, torch.Generator] = {}
+    has_user_seed = getattr(sampling_states, "has_user_seed", None)
+    seeds_np = getattr(getattr(sampling_states, "seeds", None), "np", None)
+    for row_idx, req_idx in enumerate(idx_mapping_np):
+        req_slot = int(req_idx)
+        generator = sampling_states.musa_generators.get(req_slot)
+        if (
+            generator is None
+            and has_user_seed is not None
+            and bool(has_user_seed[req_slot])
+            and seeds_np is not None
+        ):
+            generator = torch.Generator(device=probs.device)
+            generator.manual_seed(int(seeds_np[req_slot]))
+            sampling_states.musa_generators[req_slot] = generator
+        generators[row_idx] = generator
     return sample_probs_seeded_multinomial(probs, generators)
+
+
+def sample_worker_logits_seeded_gumbel(
+    sampler: Any,
+    logits: torch.Tensor,
+    expanded_idx_mapping: torch.Tensor,
+    idx_mapping: torch.Tensor,
+    idx_mapping_np: np.ndarray,
+    pos: torch.Tensor,
+    input_ids: torch.Tensor,
+    expanded_local_pos: torch.Tensor,
+    seq_lens_upper_bound_np: np.ndarray,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Batch MRV2 user-seeded sampling via stateless 32-bit Murmur3 Gumbel-max."""
+    needs_processing = getattr(sampler, "needs_logits_processing", None)
+    if needs_processing is not None and not np.any(needs_processing[idx_mapping_np]):
+        sampled = vllm_worker_sampler.gumbel_sample(
+            logits,
+            expanded_idx_mapping,
+            sampler.sampling_states.temperature.gpu,
+            sampler.sampling_states.seeds.gpu,
+            pos,
+            apply_temperature=False,
+            is_drafting=False,
+            use_fp64=False,
+        )
+        return sampled, logits
+
+    processed_logits = _apply_worker_sampling_params_defer_filters(
+        sampler,
+        logits,
+        expanded_idx_mapping,
+        idx_mapping,
+        idx_mapping_np,
+        pos,
+        input_ids,
+        expanded_local_pos,
+        seq_lens_upper_bound_np,
+    )
+    sampling_logits = _apply_worker_sampling_filters_for_seeded_multinomial(
+        sampler,
+        processed_logits,
+        expanded_idx_mapping,
+        idx_mapping_np,
+        preserve_processed_logits=False,
+    )
+    sampled = vllm_worker_sampler.gumbel_sample(
+        sampling_logits,
+        expanded_idx_mapping,
+        sampler.sampling_states.temperature.gpu,
+        sampler.sampling_states.seeds.gpu,
+        pos,
+        apply_temperature=False,
+        is_drafting=False,
+        use_fp64=False,
+    )
+    return sampled, sampling_logits
 
 
 def sample_worker_logits_qwen_v2_gumbel(
@@ -1436,12 +1545,10 @@ def _sampling_states_add_request(self: Any, req_idx: int, sampling_params: Any) 
     needs_processing = original_add_request(self, req_idx, sampling_params)
     seed = sampling_params.seed
     self.has_user_seed[req_idx] = seed is not None
-    if seed is None:
-        self.musa_generators.pop(req_idx, None)
-    else:
-        generator = torch.Generator(device="musa")
-        generator.manual_seed(seed)
-        self.musa_generators[req_idx] = generator
+    # Evict any cached fallback generator on slot reuse; batched stateless
+    # Gumbel reads ``self.seeds.gpu`` directly and only the multinomial
+    # fallback lazily materializes a ``torch.Generator`` if reached.
+    self.musa_generators.pop(req_idx, None)
     return needs_processing
 
 
@@ -1563,6 +1670,29 @@ def _worker_sample(
             scope="global",
         )
         return sample_worker_logits_qwen_v2_gumbel(
+            self,
+            logits,
+            expanded_idx_mapping,
+            idx_mapping,
+            idx_mapping_np,
+            pos,
+            input_ids,
+            expanded_local_pos,
+            seq_lens_upper_bound_np,
+        )
+
+    if can_use_worker_seeded_gumbel(
+        self,
+        logits,
+        expanded_idx_mapping,
+        idx_mapping_np,
+        pos,
+    ):
+        vllm_topk_topp_sampler.logger.info_once(
+            "Using MUSA batched Gumbel sampling for user-seeded requests.",
+            scope="global",
+        )
+        return sample_worker_logits_seeded_gumbel(
             self,
             logits,
             expanded_idx_mapping,

@@ -18,7 +18,7 @@ def test_qwen_unit_temperature_metadata_gate_is_fail_closed() -> None:
     source = PATCH.read_text()
 
     assert "uniform_temperature: float | None = None" in source
-    assert "self.vocab_size in (151936, 248320)" in source
+    assert "self.vocab_size in (151936, 152064, 248320)" in source
     assert "self.all_random" in source
     assert "num_reqs > 0" in source
     assert "temperature_cpu == np.float32(1.0)" in source
