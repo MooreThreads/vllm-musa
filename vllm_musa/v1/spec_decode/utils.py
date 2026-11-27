@@ -125,6 +125,10 @@ def install_hooks() -> None:
     _upstream_spec_utils.eagle_prepare_next_token_padded_kernel = (
         eagle_prepare_next_token_padded_kernel
     )
+    dispatcher = getattr(_upstream_spec_utils, "_eagle_prepare_next_token_padded", None)
+    if dispatcher is not None and hasattr(dispatcher, "kernel"):
+        dispatcher.kernel = eagle_prepare_next_token_padded_kernel
+        dispatcher.__dict__.pop("_kernel_arg_names", None)
     _upstream_spec_utils.update_num_computed_tokens_for_batch_change = (
         _musa_update_num_computed_tokens_for_batch_change
     )

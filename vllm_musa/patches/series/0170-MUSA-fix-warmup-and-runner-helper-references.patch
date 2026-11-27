@@ -48,10 +48,10 @@ index 808613efac..d199286c0f 100644
                      )
                      schedule_metadata = self.scheduler_metadata_buffer[
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 750a9ef5bb..5e3545c856 100644
+index f971fba42c..5ee02c71ad 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -7318,6 +7318,7 @@ class GPUModelRunner(
+@@ -7339,6 +7339,7 @@ class GPUModelRunner(
              kv_caches = self.initialize_kv_cache_tensors(
                  kv_cache_config,
                  kernel_block_sizes,

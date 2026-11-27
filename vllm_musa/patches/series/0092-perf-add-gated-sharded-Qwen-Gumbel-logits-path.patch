@@ -91,10 +91,10 @@ index a34169b733..e23548c8ef 100644
 +    sampled_values = local_max.gather(dim=-1, index=max_block_idx).view(-1)
 +    return sampled, sampled_values
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index b7fea5a89b..d797caa33a 100644
+index 8c178c8377..9c61424f7c 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -4345,21 +4345,58 @@ class GPUModelRunner(
+@@ -4366,21 +4366,58 @@ class GPUModelRunner(
                          kv_connector_output,
                      )
  

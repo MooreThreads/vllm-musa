@@ -12,7 +12,7 @@ patch, so no further changes are required for the forward path.
 """
 
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import ClassVar
 
 import torch
@@ -27,9 +27,7 @@ from vllm.v1.attention.backend import (
     CommonAttentionMetadata,
     MultipleOf,
 )
-from vllm.v1.attention.backends.utils import (
-    split_decodes_and_prefills,
-)
+from vllm.v1.attention.backends.utils import split_decodes_and_prefills
 from vllm.v1.attention.ops.triton_unified_attention import unified_attention
 from vllm.v1.kv_cache_interface import AttentionSpec
 
@@ -194,9 +192,24 @@ class TreeAttentionMetadataBuilder(AttentionMetadataBuilder[TreeAttentionMetadat
         fast_build: bool = False,
     ) -> TreeAttentionMetadata:
         decode_threshold = self.tree_attn_bias.shape[0]
+        split_attn_metadata = common_attn_metadata
+        is_prefilling = common_attn_metadata.is_prefilling
+        if (
+            is_prefilling is not None
+            and is_prefilling.shape[0] < common_attn_metadata.num_reqs
+        ):
+            padded_is_prefilling = torch.zeros(
+                common_attn_metadata.num_reqs,
+                dtype=is_prefilling.dtype,
+                device=is_prefilling.device,
+            )
+            padded_is_prefilling[: is_prefilling.shape[0]] = is_prefilling
+            split_attn_metadata = replace(
+                common_attn_metadata, is_prefilling=padded_is_prefilling
+            )
         num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens = (
             split_decodes_and_prefills(
-                common_attn_metadata, decode_threshold=decode_threshold
+                split_attn_metadata, decode_threshold=decode_threshold
             )
         )
 
