@@ -80,9 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             "bootstrap module vllm_musa_omni_compat_pth is not importable from it."
         )
         if args.purelib is not None:
-            # An explicit target is the operator's choice and may belong to a
-            # different interpreter, so this
-            # probe cannot be the verdict.
+            # An explicit site directory may belong to another interpreter.
             print(f"warning: {trouble}", file=sys.stderr)
             return 0
         print(

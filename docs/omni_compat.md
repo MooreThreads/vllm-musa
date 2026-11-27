@@ -18,7 +18,7 @@ steps in the image build or in CI:
 | Entry point | When | Invoked by |
 |---|---|---|
 | `tests/test_omni_compat.py` | every PR that touches the shim | `.github/workflows/omni-compat.yml` |
-| `tools/check_omni_compat.py` | image build, before that install and again after | `docker/omni.Dockerfile` |
+| `tools/check_omni_compat.py` | image build, after installing Omni | `docker/omni.Dockerfile` |
 | `python -m vllm_musa.omni_compat install-pth` | image build, before installing Omni | `docker/omni.Dockerfile` |
 | `python -m vllm_musa.omni_compat status` | on demand in a running image | operator |
 | `docker/omni/verify_shim.py` | image build, after everything else | `docker/omni.Dockerfile` |
@@ -30,10 +30,9 @@ prints what the shim actually did, as JSON, in a container that is already up.
 
 Two of them need the installed stack. `verify_shim.py` imports vLLM and the shim
 to check that both are live, and its `--require-omni` form needs a device;
-`status` goes through the `vllm_musa` package. The shim, its bootstrap,
-`check_omni_compat.py` and the test suite are standard library
-only, which is why the suite runs on an interpreter holding nothing but
-`pytest`.
+`status` goes through the `vllm_musa` package. The GitHub Actions job runs the
+shim and wheel repacking tests on a CPU runner with Python, `pytest`,
+`packaging`, and `wheel`.
 
 ## Why a shim, and not version gates in the code
 
@@ -387,15 +386,11 @@ The last is the **producer** of the hint the `apply_top_k_top_p` adapter
 consumes, so the talker path breaks before reaching that adapter: the adapter is
 necessary but not sufficient.
 
-These should not affect a pure-diffusion deployment. The ordering is checked:
-the pure-diffusion return at `api_server.py:1082`, the completion serving at
-:1209 and the token serving at :1321 are all in `omni_init_app_state`, in that
-order, so the return precedes both; `_init_chat_services`, which holds the
-renderer construction, is called later still; and the completion serving is
-additionally behind `if "generate" in supported_tasks`. **What is not checked is
-that the branch is taken at runtime** — the smoke below drives the offline
-`Omni(...)` API, never `api_server`, so no run here has entered that function at
-all.
+Pure diffusion returns from `omni_init_app_state` at `api_server.py:1082`
+before the completion and token serving paths at lines 1209 and 1321.
+`_init_chat_services`, which constructs the renderer, is called later.
+Completion serving also requires `"generate" in supported_tasks`.
+The Qwen-Image-2.1 serving smoke below exercises the pure-diffusion path.
 
 Treat the current PASS as "no *import* or *module-attribute* drift", not "no
 drift". **And a function that keeps its name, arity and annotations while
@@ -435,15 +430,17 @@ the GPU and model arguments for `vllm serve <model> --omni`.
 
 Omni installation constrains the Python packages in the base interpreter's
 `purelib` and `platlib` so Torch, MUSA packages, and NumPy keep their base
-versions. The image uses the base's OpenCV headless provider. The wheel stage
-repacks the two hash-pinned guardrail wheels with their OpenCV requirements
-pointing to that provider. Both targets run `pip check`, verify installed
-package ownership and exercise `cv2` with NumPy.
+versions. The image uses the base's OpenCV headless provider.
+[`headless-upstream.txt`](../docker/omni/headless-upstream.txt) pins the original
+`cosmos-guardrail` and `retinaface-py` PyPI wheels by version and SHA-256.
+The build repacks their dependency metadata to require `opencv-python-headless`
+and gives the repacked wheels a `+musa` version suffix. Both targets run
+`pip check`, verify installed package ownership, and exercise `cv2` with NumPy.
 
 The installed compatibility audit writes `/opt/vllm-omni-compat.json`.
 The runtime shim report is `/opt/vllm-omni-shim-verify.json`. The verifier
-checks the startup hook, invokes the MUSA sampler hook installer after #365,
-and checks adapter survival after the binding. Driverless verification reports
+checks the startup hook and confirms the adapters remain active after the
+MUSA sampler binds its function. Driverless verification reports
 device-dependent skips. Run the strict check on a MUSA device to cover them.
 
 ```bash
@@ -515,10 +512,11 @@ Qwen-Image-2.1 512x512, 8 steps, seed 42, eager: 388688-byte PNG
 express. `apply_top_k_top_p` accepted `has_topp_only_rows` and returned the
 pin's own result for **both** values of the hint.
 
-### Image, on the Python 3.12 / torch 2.13 base
+### Image, on the earlier editable Python 3.12 / torch 2.13 base
 
-Built on a local build of the Python 3.12 / torch 2.13 base (`python 3.12.16`,
-`torch 2.13.0.post1+musa5.2.0`, `vllm 0.32.0`), with vLLM-Omni `e937f1c9e`:
+The editable-base build used Python 3.12.16,
+`torch 2.13.0.post1+musa5.2.0`, vLLM 0.32.0, and Omni `e937f1c9e`.
+These logs record the source-staging workflow from that build.
 
 ```text
 staged /vllm-workspace/vllm_musa/omni_compat
@@ -552,7 +550,7 @@ Two further things that only a build on this base could settle:
   That is correct — `cryptography` was never part of the MUSA foundation — and
   the 181 pins that are still held unchanged.
 
-### Hardware, on the Python 3.12 / torch 2.13 base
+### Hardware, on the same editable-base image
 
 One MTT S5000 (driver 5.2.0-server), the image above loaded
 from the build host with an identical image id:
@@ -595,24 +593,22 @@ guard removed:             verdict fail, exit 1, rebind_exercised true
 That is the control that matters: without the guard the gate catches the
 regression, so a passing gate means something.
 
-### What is still not measured
+### Bundled wheel image
 
-* **`vllm-omni serve`**, which is where the four uncovered drift items above
-  fire and where the pure-diffusion reading would be confirmed or refuted. The
-  smoke drives the offline `Omni(...)` API instead.
+With Omni `e937f1c9e`, the production and editable Omni targets passed
+`pip check`, the installed compatibility audit, and driverless shim
+verification, including sampler rebinding. The production wheel image passed
+`vllm serve <model> --omni --help`. A separate Qwen-Image-2.1 BF16 run on
+one S5000 used `vllm-omni serve <model> --omni` and received HTTP 200 and a
+valid 512×512 PNG from `/v1/images/generations`.
+
+### Remaining validation scope
 
 No equality measurement is owed for `apply_top_k_top_p`: the wrapper forwards
 the same arguments to the same callable and only widens the signature, so its
 result is equal to the unwrapped call by construction, whichever implementation
 is bound.
 
-Not run: any CUDA, ROCm, XPU or NPU build; the Qwen3-Omni and MiniCPM-o talker
-paths the top-k adapter serves (no staged checkpoint that fits one card); a
-multi-card or served-endpoint smoke; the three declared-unsupported paths, which
-are declared precisely because they are not usable on this pin.
-
-The two runs quoted above predate the gate and adapter changes in this branch,
-and their `unsupported: 2` is what they printed -- a third `CAPABILITY` row and
-the `calls` pass were added afterwards, so the counts a rerun prints are 3 and
-one more pass. Nothing in those changes touches the image's serving path, but
-the hardware evidence is for the code as it stood, not as it stands.
+Remaining cases include CUDA, ROCm, XPU, and NPU builds, Qwen3-Omni and
+MiniCPM-o talker paths, and multi-card serving. The historical logs record two
+unsupported capabilities. The current table declares three.

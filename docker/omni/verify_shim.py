@@ -8,10 +8,9 @@ What this proves, in a driverless build:
   only that one runs before Omni's CLI binds the symbols it moved;
 * every ``RELOCATION`` and ``BACKPORT`` module the table declares really does
   import, and really does provide the names Omni imports from it;
-* every ``ADAPTER`` is still applied **after** vllm-musa has installed its own
-  patches over the same modules, which is the ordering that actually breaks --
-  except in a driverless build, where vllm-musa's sampler cannot be imported at
-  all, and the report says so through ``rebind_exercised``;
+* every ``ADAPTER`` is still applied after the MUSA sampler binds its function
+  when the sampler is importable. In driverless mode, a device-dependent
+  failure to import the sampler sets ``rebind_exercised`` to false;
 * the unsupported paths are reported rather than silently absent.
 
 What it deliberately does not prove: that ``import vllm_omni`` succeeds. That
@@ -67,8 +66,7 @@ def _exercise_sampler_rebind(name: str) -> None:
     sampler = importlib.import_module("vllm.v1.sample.ops.topk_topp_sampler")
     musa_sampler = importlib.import_module(name)
     musa_impl = musa_sampler._apply_top_k_top_p
-    # Older images bind the sampler during import. Newer images call this
-    # installer from register_v1_adapters().
+    # Bind the MUSA sampler explicitly if import left it unbound.
     if inspect.unwrap(sampler.apply_top_k_top_p) is not musa_impl:
         musa_sampler.install_hooks()
     if inspect.unwrap(sampler.apply_top_k_top_p) is not musa_impl:
@@ -189,12 +187,7 @@ def main(argv: list[str] | None = None) -> int:
             failures.append(f"{entry.module}: {stale}")
             result["adapted"][entry.module] = "stale (the pin provides it)"
             continue
-        # The marker above only says the adapter *ran*. Ask the adapter what is
-        # adapted right now: the sampler installer rebinds one of these names
-        # after import, and a marker left on the module cannot see that.
-        # When the rebind above was triggered, this is the check that fails
-        # if the adapter does not survive it; when it could not be (driverless),
-        # `rebind_exercised` records that this run did not test survival.
+        # The sampler can replace a binding after the adapter sets its marker.
         adapter = importlib.import_module(
             f"vllm_musa.omni_compat.adapters.{entry.adapter}"
         )
