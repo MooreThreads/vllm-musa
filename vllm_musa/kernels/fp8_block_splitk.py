@@ -89,6 +89,56 @@ _CONFIGS = {(n, k): row[0] for (n, k, mp), row in _ROWS.items() if mp is None}
 _EAGER_MAX_ROWS = {(n, k): row[1] for (n, k, mp), row in _ROWS.items() if mp is None}
 _BINNED_SHAPES = frozenset((n, k) for n, k, mp in _ROWS if mp is not None)
 _ENABLED = os.environ.get("VLLM_MUSA_FP8_SPLITK_MM", "1") != "0"
+_NATIVE_ACT_QUANT = os.environ.get("VLLM_MUSA_FP8_NATIVE_GEMV", "1") != "0"
+# Measured S5000 thresholds where single-pass native.act_quant + QUANT_A=False
+# amortizes the extra kernel launch over per-CTA QUANT_A=True with zero regressions:
+# - Eager pays PyTorch custom-op dispatch (~35 us), winning on wide-K projections
+#   from 24 rows onward (1.16x-1.32x on 5120x15360).
+# - CUDA graphs pay only the captured act_quant kernel (~3.5 us), winning across
+#   all rows of wide-K projections and from 24+ rows on wide-N / K>=4096 shapes
+#   (1.02x-1.34x).
+_EAGER_ACT_QUANT_MIN_K = 8192
+_EAGER_ACT_QUANT_MIN_ROWS = 24
+_EAGER_ACT_QUANT_MIN_N_TILES = 32
+_CAPTURE_ACT_QUANT_WIDE_KN = 500_000
+_CAPTURE_ACT_QUANT_MIN_ROWS = 24
+_CAPTURE_ACT_QUANT_MIN_WORK = 7_000_000
+_CAPTURE_ACT_QUANT_K4096_ELEMS = 122_880
+_CAPTURE_ACT_QUANT_K4096_N_TILES = 24
+
+
+def _can_use_native_act_quant(a: torch.Tensor, n_tiles: int) -> bool:
+    if not _NATIVE_ACT_QUANT:
+        return False
+    m, k = a.shape
+    if torch.cuda.is_current_stream_capturing():
+        profitable = (k * n_tiles >= _CAPTURE_ACT_QUANT_WIDE_KN) or (
+            m >= _CAPTURE_ACT_QUANT_MIN_ROWS
+            and (
+                m * k * n_tiles >= _CAPTURE_ACT_QUANT_MIN_WORK
+                or (
+                    k >= 4096
+                    and m * k >= _CAPTURE_ACT_QUANT_K4096_ELEMS
+                    and n_tiles >= _CAPTURE_ACT_QUANT_K4096_N_TILES
+                )
+            )
+        )
+    else:
+        profitable = (
+            k >= _EAGER_ACT_QUANT_MIN_K
+            and m >= _EAGER_ACT_QUANT_MIN_ROWS
+            and n_tiles >= _EAGER_ACT_QUANT_MIN_N_TILES
+        )
+    if not profitable:
+        return False
+    return (
+        a.device.type == "musa"
+        and a.dtype == torch.bfloat16
+        and a.stride(-1) == 1
+        and k % 32 == 0
+        and a.stride(0) % 8 == 0
+        and a.data_ptr() % 16 == 0
+    )
 
 
 @triton.jit
@@ -243,10 +293,15 @@ def fp8_block_splitk_mm(
     split, block_n, num_warps, unroll, _, _, tile_m = config
     m = a.shape[0]
     n, k = weight.shape
+    n_tiles = triton.cdiv(n, block_n)
+    if a_scale is None and _can_use_native_act_quant(a, n_tiles):
+        from vllm_musa.jit_kernel.csrc import fp8_block_gemv as native
+
+        a, a_scale = native.act_quant(a)
     block_m = _tile_rows(m, tile_m)
     parts = torch.empty((split, m, n), dtype=torch.float32, device=a.device)
     quant = a_scale is None
-    grid = (triton.cdiv(m, block_m), triton.cdiv(n, block_n), split)
+    grid = (triton.cdiv(m, block_m), n_tiles, split)
     _fp8_block_splitk_kernel[grid](
         a,
         a if quant else a_scale,
