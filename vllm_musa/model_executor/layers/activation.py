@@ -6,13 +6,20 @@ import torch.nn.functional as F
 from vllm.model_executor.layers.activation import SiluAndMul, SiluAndMulWithClamp
 from vllm.utils.torch_utils import direct_register_custom_op
 
-from vllm_musa.utils.environ import envs
+from vllm_musa.optimization_contract import (
+    bind_quantized_piecewise_native_route,
+    should_use_native_quantized_piecewise_op,
+)
 
 
 @SiluAndMul.register_oot
 class MusaSiluAndMul(SiluAndMul):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        bind_quantized_piecewise_native_route(self)
+
     def forward_oot(self, x: torch.Tensor) -> torch.Tensor:
-        if envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get():
+        if should_use_native_quantized_piecewise_op(self):
             return self.forward_native(x)
 
         # ==================== MUSA ADAPTATION ====================
@@ -22,8 +29,12 @@ class MusaSiluAndMul(SiluAndMul):
 
 @SiluAndMulWithClamp.register_oot
 class MusaSiluAndMulWithClamp(SiluAndMulWithClamp):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        bind_quantized_piecewise_native_route(self)
+
     def forward_oot(self, x: torch.Tensor) -> torch.Tensor:
-        if envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get():
+        if should_use_native_quantized_piecewise_op(self):
             return self.forward_native(x)
         out = torch.empty(
             x.shape[:-1] + (x.shape[-1] // 2,), dtype=x.dtype, device=x.device

@@ -38,6 +38,22 @@ _DEEPSEEK_V4_MTP_CAR_GRAPH_REQUEST_SIZES = (1, 2, 4, 8, 16)
 _DEEPSEEK_V4_MTP_CAR_GRAPH_BUFFER_BYTES = 512 * 1024 * 1024
 _DEEPSEEK_V4_MTP_CAR_EAGER_ALIGNMENT_BYTES = 4 * 1024 * 1024
 _DEEPSEEK_V4_MTP_CAR_MAX_META_BYTES_PER_SLOT = 16 * 1024
+_NON_FP8_QUANT_METHODS = frozenset(
+    {
+        "awq",
+        "awq_marlin",
+        "bitsandbytes",
+        "experts_int8",
+        "gguf",
+        "gptq",
+        "gptq_marlin",
+        "marlin",
+        "qqq",
+        "smoothquant",
+        "squeezellm",
+        "w8a8_int8",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,3 +331,104 @@ def deepseek_v4_mtp_sparse_prefill_headroom_bytes(vllm_config: Any) -> int:
     if custom_all_reduce_enabled:
         workspace_bytes += _DEEPSEEK_V4_CUSTOM_AR_ALLOCATOR_MARGIN_BYTES
     return workspace_bytes
+
+
+def will_capture_piecewise_cudagraph(vllm_config: Any) -> bool:
+    """Return whether ``vllm_config`` may capture PIECEWISE CUDA graphs."""
+    model_config = getattr(vllm_config, "model_config", None)
+    if getattr(model_config, "enforce_eager", False):
+        return False
+    comp = getattr(vllm_config, "compilation_config", None)
+    if comp is None:
+        return False
+    mode = getattr(comp, "mode", None)
+    if (
+        mode == 0
+        or getattr(mode, "name", None) == "NONE"
+        or (isinstance(mode, str) and mode.strip().upper() == "NONE")
+    ):
+        return False
+    try:
+        from vllm.config.compilation import CompilationMode
+
+        if mode == CompilationMode.NONE:
+            return False
+    except Exception:
+        pass
+    cg_mode = getattr(comp, "cudagraph_mode", None)
+    if cg_mode is not None:
+        has_piecewise = getattr(cg_mode, "has_piecewise_cudagraphs", None)
+        if callable(has_piecewise) and not has_piecewise():
+            return False
+    return True
+
+
+def _quant_config_may_use_fp8(vllm_config: Any) -> bool:
+    quant_config = getattr(vllm_config, "quant_config", None)
+    if quant_config is None:
+        return False
+    get_name = getattr(quant_config, "get_name", None)
+    if callable(get_name):
+        try:
+            method_name = str(get_name() or "").strip().lower()
+        except Exception:
+            method_name = ""
+        if method_name in _NON_FP8_QUANT_METHODS:
+            return False
+    else:
+        model_quant = getattr(
+            getattr(vllm_config, "model_config", None), "quantization", None
+        )
+        if (
+            isinstance(model_quant, str)
+            and model_quant.strip().lower() in _NON_FP8_QUANT_METHODS
+        ):
+            return False
+    return True
+
+
+def should_route_quantized_piecewise_ops_native(vllm_config: Any) -> bool:
+    """Whether the FP8 PIECEWISE CUDAGraph native safety route applies."""
+    if vllm_config is None:
+        return False
+    return _quant_config_may_use_fp8(vllm_config) and will_capture_piecewise_cudagraph(
+        vllm_config
+    )
+
+
+def bind_quantized_piecewise_native_route(
+    owner: Any, vllm_config: Any | None = None
+) -> bool | None:
+    """Bind the per-config quantized PIECEWISE native safety flag onto a layer."""
+    if vllm_config is None:
+        try:
+            from vllm.config import get_current_vllm_config_or_none
+
+            vllm_config = get_current_vllm_config_or_none()
+        except Exception:
+            vllm_config = None
+    route = (
+        should_route_quantized_piecewise_ops_native(vllm_config)
+        if vllm_config is not None
+        else None
+    )
+    owner._musa_quant_piecewise_native = route
+    return route
+
+
+def should_use_native_quantized_piecewise_op(owner: Any) -> bool:
+    """Return whether an FP8-scale-sensitive OOT op should route to native."""
+    from vllm_musa.utils.environ import envs
+
+    if envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.is_set():
+        return envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get()
+    bound = getattr(owner, "_musa_quant_piecewise_native", None)
+    if bound is not None:
+        return bool(bound)
+    try:
+        from vllm.config import get_current_vllm_config_or_none
+
+        vllm_config = get_current_vllm_config_or_none()
+    except Exception:
+        vllm_config = None
+    return should_route_quantized_piecewise_ops_native(vllm_config)

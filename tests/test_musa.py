@@ -213,8 +213,66 @@ class TestMUSAPlatformBase:
         assert not _should_route_quantized_piecewise_ops_native(config)
         config.quant_config = object()
         assert _should_route_quantized_piecewise_ops_native(config)
+        for non_fp8 in ("awq", "awq_marlin", "gptq", "gptq_marlin", "w8a8_int8"):
+            config.quant_config = SimpleNamespace(get_name=lambda n=non_fp8: n)
+            assert not _should_route_quantized_piecewise_ops_native(config)
+        for fp8_like in ("fp8", "compressed-tensors", "modelopt", "quark"):
+            config.quant_config = SimpleNamespace(get_name=lambda n=fp8_like: n)
+            assert _should_route_quantized_piecewise_ops_native(config)
         config.compilation_config.cudagraph_mode = CUDAGraphMode.FULL
         assert not _should_route_quantized_piecewise_ops_native(config)
+
+    def test_quantized_piecewise_route_is_config_scoped_and_preserves_env(
+        self, monkeypatch
+    ):
+        from vllm.config import CUDAGraphMode
+        from vllm.config.compilation import CompilationMode
+
+        from vllm_musa.optimization_contract import (
+            bind_quantized_piecewise_native_route,
+            should_use_native_quantized_piecewise_op,
+        )
+        from vllm_musa.utils.environ import envs
+
+        monkeypatch.delenv(envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.name, raising=False)
+        fp8_piecewise_cfg = SimpleNamespace(
+            model_config=SimpleNamespace(enforce_eager=False),
+            compilation_config=SimpleNamespace(
+                mode=CompilationMode.VLLM_COMPILE,
+                cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
+            ),
+            quant_config=SimpleNamespace(get_name=lambda: "fp8"),
+        )
+        bf16_piecewise_cfg = SimpleNamespace(
+            model_config=SimpleNamespace(enforce_eager=False),
+            compilation_config=SimpleNamespace(
+                mode=CompilationMode.VLLM_COMPILE,
+                cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
+            ),
+            quant_config=None,
+        )
+
+        fp8_layer = SimpleNamespace()
+        bf16_layer = SimpleNamespace()
+        bind_quantized_piecewise_native_route(fp8_layer, fp8_piecewise_cfg)
+        bind_quantized_piecewise_native_route(bf16_layer, bf16_piecewise_cfg)
+
+        # Environment remains unset so MusaRotaryEmbedding and subsequent BF16
+        # configs stay on MUSA kernels while FP8 norm/act/quant layers route native.
+        assert not envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.is_set()
+        assert not envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get()
+        assert should_use_native_quantized_piecewise_op(fp8_layer) is True
+        assert should_use_native_quantized_piecewise_op(bf16_layer) is False
+
+        # Explicit 0/1 overrides remain authoritative and restore on exception.
+        with envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.override(False):
+            assert should_use_native_quantized_piecewise_op(fp8_layer) is False
+        with pytest.raises(RuntimeError, match="boom"):
+            with envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.override(True):
+                assert should_use_native_quantized_piecewise_op(bf16_layer) is True
+                raise RuntimeError("boom")
+        assert not envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.is_set()
+        assert should_use_native_quantized_piecewise_op(bf16_layer) is False
 
     def test_fused_add_profit_boundary_splits_eligible_compile_range(self):
         import torch
