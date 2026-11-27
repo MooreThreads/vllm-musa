@@ -9,8 +9,9 @@ from vllm_musa.jit_kernel.csrc import norm as musa_jit_norm
 from vllm_musa.optimization_contract import (
     OptimizationFeature,
     bind_optimization_contract,
+    bind_quantized_piecewise_native_route,
+    should_use_native_quantized_piecewise_op,
 )
-from vllm_musa.utils.environ import envs
 
 
 def _can_use_musa_jit_rmsnorm(
@@ -44,7 +45,9 @@ class MusaRMSNorm(RMSNorm):
         dtype: torch.dtype | None = None,
     ) -> None:
         super().__init__(hidden_size, eps, var_hidden_size, has_weight, dtype)
-        bind_optimization_contract(self, get_current_vllm_config_or_none())
+        vllm_config = get_current_vllm_config_or_none()
+        bind_optimization_contract(self, vllm_config)
+        bind_quantized_piecewise_native_route(self, vllm_config)
 
     def forward_oot(
         self,
@@ -52,7 +55,7 @@ class MusaRMSNorm(RMSNorm):
         residual: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if (
-            envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get()
+            should_use_native_quantized_piecewise_op(self)
             or self.variance_size_override is not None
         ):
             return self.forward_native(x, residual)
@@ -101,13 +104,17 @@ class MusaRMSNorm(RMSNorm):
 
 @GemmaRMSNorm.register_oot
 class MusaGemmaRMSNorm(GemmaRMSNorm):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        bind_quantized_piecewise_native_route(self, get_current_vllm_config_or_none())
+
     def forward_oot(
         self,
         x: torch.Tensor,
         residual: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if (
-            envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get()
+            should_use_native_quantized_piecewise_op(self)
             or getattr(self, "variance_size_override", None) is not None
         ):
             return self.forward_native(x, residual)

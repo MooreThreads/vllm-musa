@@ -123,34 +123,13 @@ def register_attention_backends() -> None:
 
 
 def _will_capture_piecewise_cudagraph(vllm_config: Any) -> bool:
-    """Whether this config will do PIECEWISE CUDAGraph capture under torch.compile.
-
-    Called from ``check_and_update_config`` (``VllmConfig.__post_init__``), which runs
-    BEFORE vLLM finalizes ``compilation_config.backend``/``mode`` and the
-    ``cudagraph_mode`` default -- so we cannot gate on ``backend == "inductor"`` (unset
-    here). Exclude only the cases that never capture piecewise: ``enforce_eager``,
-    ``mode == NONE``, or an explicitly non-piecewise ``cudagraph_mode``. A ``None``
-    ``cudagraph_mode`` means "not yet defaulted"; the v1 default is FULL_AND_PIECEWISE
-    (piecewise), so None counts as piecewise.
-    """
-    from vllm.config.compilation import CompilationMode
-
-    if getattr(vllm_config.model_config, "enforce_eager", False):
-        return False
-    comp = vllm_config.compilation_config
-    if getattr(comp, "mode", None) == CompilationMode.NONE:
-        return False
-    cg_mode = getattr(comp, "cudagraph_mode", None)
-    if cg_mode is not None and not cg_mode.has_piecewise_cudagraphs():
-        return False
-    return True
+    """Whether this config will do PIECEWISE CUDAGraph capture under torch.compile."""
+    return contract_policy.will_capture_piecewise_cudagraph(vllm_config)
 
 
 def _should_route_quantized_piecewise_ops_native(vllm_config: Any) -> bool:
     """Whether the quantized PIECEWISE correctness route applies to this model."""
-    return getattr(
-        vllm_config, "quant_config", None
-    ) is not None and _will_capture_piecewise_cudagraph(vllm_config)
+    return contract_policy.should_route_quantized_piecewise_ops_native(vllm_config)
 
 
 def _configure_fused_add_rmsnorm_compile_range(
@@ -586,16 +565,16 @@ class MUSAPlatformBase(Platform):
         logger.debug(
             "MUSA custom-op native-routing: quantized_piecewise=%s", route_native
         )
-        # Set the flag process-wide (not on the config): the op forward_oot paths read
-        # this env live and spawn workers inherit os.environ. First-writer-wins (the
-        # is_set() guard) is safe -- the native path is correct in every cudagraph mode,
-        # so an inherited value can never yield wrong output, only the native path.
+        # Keep the FP8 piecewise safety route scoped to vllm_config (bound onto
+        # RMSNorm / SiluAndMul / QuantFP8 layers at construction) instead of
+        # mutating VLLM_MUSA_CUSTOM_OP_USE_NATIVE in os.environ, which would
+        # disable MUSA rotary-embedding kernels on FP8 models and leak across
+        # subsequent BF16 engines in the same process.
         if route_native and not musa_envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.is_set():
-            musa_envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.set(True)
-            logger.info(
+            logger.info_once(
                 "Routing MUSA RMSNorm/SiluAndMul/QuantFP8 to the native "
-                "(Inductor-fused) path: the custom-op kernels corrupt FP8 output "
-                "under piecewise CUDAGraph capture. Set "
+                "(Inductor-fused) path for this config: the custom-op kernels "
+                "corrupt FP8 output under piecewise CUDAGraph capture. Set "
                 "VLLM_MUSA_CUSTOM_OP_USE_NATIVE=0 to force the kernels."
             )
 
@@ -608,9 +587,14 @@ class MUSAPlatformBase(Platform):
         # below that threshold rather than freezing a decision from a symbolic
         # example-value hint. This is shape/dtype based and applies to any model
         # exposing the IR op.
+        native_custom_ops = (
+            musa_envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get()
+            if musa_envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.is_set()
+            else route_native
+        )
         if _configure_fused_add_rmsnorm_compile_range(
             vllm_config,
-            native_custom_ops=musa_envs.VLLM_MUSA_CUSTOM_OP_USE_NATIVE.get(),
+            native_custom_ops=native_custom_ops,
         ):
             logger.info(
                 "Splitting MUSA fused-add RMSNorm compile ranges at %d rows",
