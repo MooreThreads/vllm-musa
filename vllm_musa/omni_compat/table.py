@@ -206,6 +206,56 @@ ENTRIES: tuple[ShimEntry, ...] = (
         ),
     ),
     ShimEntry(
+        module="vllm.v1.worker.gpu.spec_decode.speculator_config",
+        names=("SpeculatorConfig", "register_speculative_method"),
+        kind=BACKPORT,
+        backport="speculator_config",
+        applies_to="<0.34",
+        reason=(
+            "vLLM 0.34 added speculator_config for custom speculative methods, and "
+            "Omni's register_omni_models_to_vllm() registers "
+            "HiggsAudioSpeculatorConfig unconditionally at startup. Recording the "
+            "registration keeps Omni imports working while construction fails "
+            "explicitly on the 0.32 pin."
+        ),
+        remove_when="the pin is >= 0.34, where speculator_config is native.",
+        omni_refs=(
+            "vllm_omni/engine/arg_utils.py",
+            "vllm_omni/model_executor/models/higgs_audio_v3/spec_config.py",
+        ),
+    ),
+    ShimEntry(
+        module="vllm.v1.worker.extensible_kv_cache",
+        names=("ensure_kv_cache_blocks", "num_committable_kv_blocks"),
+        kind=BACKPORT,
+        backport="extensible_kv_cache",
+        applies_to="<0.34",
+        reason=(
+            "vLLM 0.34 extracted KV-cache warmup block budget helpers into "
+            "extensible_kv_cache, which Omni's Triton attention prefill warmup "
+            "imports. On the fixed-allocation 0.32 pin all allocated KV blocks are "
+            "already committed."
+        ),
+        remove_when="the pin is >= 0.34, where extensible_kv_cache is native.",
+        omni_refs=("vllm_omni/worker/triton_attention_warmup.py",),
+    ),
+    ShimEntry(
+        module="vllm.v1.worker.gpu.warmup",
+        names=("_run_step", "_warmup_token_ids"),
+        kind=ADAPTER,
+        adapter="worker_gpu_warmup",
+        applies_to="<0.34",
+        reason=(
+            "vLLM 0.34 factored _run_step and _warmup_token_ids out of the GPU "
+            "worker warmup helpers, and Omni's Triton attention prefill warmup "
+            "imports both from vllm.v1.worker.gpu.warmup."
+        ),
+        remove_when=(
+            "the pin is >= 0.34, where warmup defines _run_step and _warmup_token_ids."
+        ),
+        omni_refs=("vllm_omni/worker/triton_attention_warmup.py",),
+    ),
+    ShimEntry(
         module="vllm.entrypoints.common.cli_args",
         names=(
             "FrontendArgs",

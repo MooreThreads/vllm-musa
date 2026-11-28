@@ -166,6 +166,13 @@ def _make_vllm(root: Path, version: str, *, moved: bool) -> Path:
             return max_num_blocks
         """,
     )
+    _write(
+        pkg / "v1" / "worker" / "gpu" / "warmup.py",
+        """
+        def _warmup_block_counter(model_runner):
+            return lambda num_tokens, spec: num_tokens
+        """,
+    )
 
     if moved:
         # The newer fixture provides these natively, with values the shim must
@@ -247,6 +254,36 @@ def _make_vllm(root: Path, version: str, *, moved: bool) -> Path:
             """
             class DraftLogitsCache:
                 native = True
+            """,
+        )
+        _write(
+            pkg / "v1" / "worker" / "gpu" / "spec_decode" / "speculator_config.py",
+            """
+            class SpeculatorConfig:
+                native = True
+
+            def register_speculative_method(name, config_cls):
+                return ("native", name)
+            """,
+        )
+        _write(
+            pkg / "v1" / "worker" / "extensible_kv_cache.py",
+            """
+            def num_committable_kv_blocks(runner):
+                return "native-blocks"
+
+            def ensure_kv_cache_blocks(runner, num_blocks):
+                return ("native-ensure", num_blocks)
+            """,
+        )
+        _write(
+            pkg / "v1" / "worker" / "gpu" / "warmup.py",
+            """
+            def _run_step(execute, sample, output):
+                return "native-step"
+
+            def _warmup_token_ids(runner, num_tokens):
+                return ["native-tokens", num_tokens]
             """,
         )
     return site
@@ -603,21 +640,116 @@ def test_v034_imports_are_bridged_on_the_pin(pin_site):
     result = _run(
         pin_site,
         """
+        import sys
+        from types import ModuleType, SimpleNamespace
         from vllm.config.utils import CompileFactors
         from vllm.v1.kv_cache_interface import get_block_table_width
+        from vllm.v1.worker.extensible_kv_cache import (
+            ensure_kv_cache_blocks,
+            num_committable_kv_blocks,
+        )
         from vllm.v1.worker.gpu.spec_decode.draft_logits import DraftLogitsCache
+        from vllm.v1.worker.gpu.spec_decode.speculator_config import (
+            SpeculatorConfig,
+            register_speculative_method,
+            registered_speculative_methods,
+        )
+        from vllm.v1.worker.gpu.warmup import _run_step, _warmup_token_ids
+
         result["alias"] = str(CompileFactors)
         result["width"] = get_block_table_width(17, 16)
         try:
             DraftLogitsCache()
         except NotImplementedError as exc:
             result["draft_error"] = str(exc)
+
+        class HiggsAudioSpeculatorConfig(SpeculatorConfig):
+            speculator_class = "vllm_omni.higgs.HiggsAudioSpeculator"
+
+        register_speculative_method("higgs_audio_int8", HiggsAudioSpeculatorConfig)
+        register_speculative_method("higgs_audio_int8", HiggsAudioSpeculatorConfig)
+        result["registered"] = registered_speculative_methods()
+        try:
+            register_speculative_method("higgs_audio_int8", "other.Config")
+        except ValueError as exc:
+            result["duplicate_error"] = str(exc)
+        try:
+            register_speculative_method("bad_method", object)  # type: ignore[arg-type]
+        except TypeError as exc:
+            result["type_error"] = str(exc)
+        try:
+            HiggsAudioSpeculatorConfig()
+        except NotImplementedError as exc:
+            result["spec_error"] = str(exc)
+
+        fixed_runner = SimpleNamespace(
+            kv_cache_config=SimpleNamespace(num_blocks=64),
+            model_config=SimpleNamespace(get_vocab_size=lambda: 5),
+        )
+        ensure_kv_cache_blocks(fixed_runner, 32)
+        result["fixed_blocks"] = num_committable_kv_blocks(fixed_runner)
+        committed = []
+        ext_runner = SimpleNamespace(
+            extensible_kv_cache=SimpleNamespace(
+                warmup_committable_blocks=48,
+                commit=lambda n: committed.append(n),
+            )
+        )
+        ensure_kv_cache_blocks(ext_runner, 20)
+        result["ext_blocks"] = num_committable_kv_blocks(ext_runner)
+        result["committed"] = committed
+        result["token_ids"] = _warmup_token_ids(fixed_runner, 7)
+
+        events = []
+        fake_torch = ModuleType("torch")
+        fake_torch.accelerator = SimpleNamespace(
+            synchronize=lambda: events.append("sync")
+        )
+        sys.modules["torch"] = fake_torch
+        _run_step(
+            lambda out: events.append(("exec", out)),
+            lambda grammar: events.append(("sample", grammar)),
+            "prefill",
+        )
+        _run_step(lambda out: events.append(("exec", out)), None, "cleanup")
+        result["step_events"] = events
         """,
         version=PIN_VERSION,
     )
     assert result["alias"] == "dict[str, object]"
     assert result["width"] == 24
     assert "vLLM >= 0.34" in result["draft_error"]
+    assert result["registered"] == ["higgs_audio_int8"]
+    assert "already registered" in result["duplicate_error"]
+    assert "SpeculatorConfig subclass" in result["type_error"]
+    assert "vLLM >= 0.34" in result["spec_error"]
+    assert result["fixed_blocks"] == 64
+    assert result["ext_blocks"] == 48
+    assert result["committed"] == [20]
+    assert result["token_ids"] == [0, 1, 2, 3, 4, 0, 1]
+    assert result["step_events"] == [
+        ["exec", "prefill"],
+        ["sample", None],
+        "sync",
+        ["exec", "cleanup"],
+        "sync",
+    ]
+
+
+def test_v034_new_imports_fail_without_the_shim(pin_site):
+    for stmt in (
+        "import vllm.v1.worker.gpu.spec_decode.speculator_config",
+        "import vllm.v1.worker.extensible_kv_cache",
+        "from vllm.v1.worker.gpu.warmup import _run_step",
+    ):
+        proc = subprocess.run(
+            [sys.executable, "-c", stmt],
+            capture_output=True,
+            text=True,
+            env={"PYTHONPATH": str(pin_site), "PATH": "/usr/bin:/bin"},
+            timeout=120,
+        )
+        assert proc.returncode != 0, stmt
 
 
 def test_v034_compile_factor_methods_bridge_legacy_hashes(pin_site):
@@ -639,12 +771,21 @@ def test_v034_rows_leave_native_symbols_untouched(next_site):
     result = _run(
         next_site,
         """
+        import vllm.v1.worker.gpu.warmup as warmup_mod
         from vllm.config.model import ModelConfig
         from vllm.v1.kv_cache_interface import get_block_table_width
+        from vllm.v1.worker.extensible_kv_cache import num_committable_kv_blocks
         from vllm.v1.worker.gpu.spec_decode.draft_logits import DraftLogitsCache
+        from vllm.v1.worker.gpu.spec_decode.speculator_config import SpeculatorConfig
+        from vllm.v1.worker.gpu.warmup import _run_step, _warmup_token_ids
         result["model"] = ModelConfig().compile_factors()
         result["width"] = get_block_table_width(1, 1)
         result["native"] = DraftLogitsCache.native
+        result["spec_native"] = SpeculatorConfig.native
+        result["blocks"] = num_committable_kv_blocks(None)
+        result["step"] = _run_step(None, None, None)
+        result["tokens"] = _warmup_token_ids(None, 3)
+        result["warmup_adapted"] = getattr(warmup_mod, "__vllm_musa_adapted__", None)
         result["model_stale"] = ModelConfig.__module__
         """,
         version=V034_VERSION,
@@ -652,6 +793,11 @@ def test_v034_rows_leave_native_symbols_untouched(next_site):
     assert result["model"] == {"native": True}
     assert result["width"] == "native-width"
     assert result["native"] is True
+    assert result["spec_native"] is True
+    assert result["blocks"] == "native-blocks"
+    assert result["step"] == "native-step"
+    assert result["tokens"] == ["native-tokens", 3]
+    assert result["warmup_adapted"] is None
 
 
 def test_a_stale_relocation_fails_loudly(tmp_path, monkeypatch):
