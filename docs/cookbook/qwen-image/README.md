@@ -17,8 +17,8 @@ Back to the [full serving cookbook](../README.md).
 
 ## Choosing a recipe
 
-- **BF16** is the reference. Use it when the output must match what the
-  checkpoint produces elsewhere.
+- **BF16** is the reference precision for the DiT. To compare pixels against
+  a reference generated with eager VAE decoding, omit the VAE compile flag.
 - **FP8** quantizes the DiT's linears at load time from the same BF16 checkpoint
   and serves it faster. It changes the image, sometimes visibly. Use it for
   throughput, not when a pinned prompt and seed must keep reproducing a known
@@ -36,19 +36,37 @@ deploying either one; neither is under a permissive licence.
 
 ## Building the Omni image
 
-All four recipes run in the same image. Build it once from a pinned vLLM-MUSA
-v0.32 base:
+All four performance recipes enable VAE decoder compilation. They require an
+Omni revision containing [vLLM-Omni PR #11061](https://github.com/vllm-project/vllm-omni/pull/11061).
+The validation tables record the previous Omni pin, `31c8986250d`, which
+predates this setting. The new pin and four-mode measurements are pending.
+
+Set `QWEN_IMAGE_OMNI_REF` to the full commit SHA containing the change and
+`VLLM_MUSA_IMAGE` to the pinned vLLM-MUSA v0.32 base image. Build one image
+for all four recipes:
 
 ```bash
-export VLLM_MUSA_IMAGE=<your pinned vLLM-MUSA v0.32 image>
-bash docker/build_omni_image.sh --omni-ref 31c8986250d
+: "${VLLM_MUSA_IMAGE:?Set VLLM_MUSA_IMAGE to the pinned vLLM-MUSA base image}"
+: "${QWEN_IMAGE_OMNI_REF:?Set QWEN_IMAGE_OMNI_REF to the pinned Omni revision}"
+bash docker/build_omni_image.sh --omni-ref "$QWEN_IMAGE_OMNI_REF" \
+  --tag "vllm-omni-musa:$QWEN_IMAGE_OMNI_REF"
 ```
 
-That is the vLLM-Omni revision the four recipes were validated on, and the tag
-follows the ref: `vllm-omni-musa:31c8986250d`. `--tag` overrides it, and
-`--omni-ref origin/main` tracks Omni's main instead, which is usually newer than
-the vLLM commit this branch pins; `docs/omni_compat.md` describes the shim that
-absorbs that drift and how to check it.
+See [Omni compatibility](../../omni_compat.md) for the vLLM compatibility shim.
+
+## Warming up the VAE decoder
+
+After the server is ready, run the selected recipe's **Generating an image**
+command once for every resolution you will benchmark or serve. Match the
+measured request's shape and settings. The examples use CFG 1.0, explicitly
+set 20 steps for the base checkpoint, and use Turbo's bundled eight-step
+schedule. Decode the PNG and confirm its dimensions and prompt content.
+
+The first decode of a new shape can spend significant time compiling. Check
+the server log for `Qwen-Image-2.1: enabled VAE decoder compilation` and check
+that the warmup did not log a compiler failure or eager fallback. Start timing
+after warmup requests complete. For an eager VAE comparison on the same
+image, omit only `--additional-config '{"qwen_image_21_compile_vae_decoder":true}'`.
 
 ## Verify a server
 

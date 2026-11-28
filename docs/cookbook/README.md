@@ -123,16 +123,9 @@ Text-to-image recipes served through vLLM-Omni. See the
 
 These differ from every other recipe here: the server takes `--omni`, requests go
 to `/v1/images/generations`, and the image is built rather than pulled as a
-`vllm-openai` tag. All four run in the same image, built once from a pinned
-vLLM-MUSA v0.32 base:
-
-```bash
-export VLLM_MUSA_IMAGE=<your pinned vLLM-MUSA v0.32 image>
-bash docker/build_omni_image.sh --omni-ref 31c8986250d
-```
-
-That is the vLLM-Omni revision the recipes were validated on; the tag follows the
-ref, so the command above builds `vllm-omni-musa:31c8986250d`.
+`vllm-openai` tag. All four use the same
+[Omni image build](qwen-image/README.md#building-the-omni-image) and
+[VAE warmup procedure](qwen-image/README.md#warming-up-the-vae-decoder).
 
 ## Verify a server
 
