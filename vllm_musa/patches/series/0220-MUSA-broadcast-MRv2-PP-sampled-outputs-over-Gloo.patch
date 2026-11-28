@@ -1,0 +1,374 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 27 Nov 2026 18:19:35 +0800
+Subject: [PATCH] MUSA: broadcast MRv2 PP sampled outputs over Gloo
+
+Back PPHandler.broadcast_group with a sibling Gloo CPU subgroup on MUSA,
+pack sampled tokens and counts into pre-allocated pinned ring buffers, and
+wait on D2H completion via GIL-releasing musaEventSynchronize so cross-step
+feedback collectives neither contend on GPU streams nor stall Python worker
+threads. Join the sender thread and drain pending CPU broadcast handles
+during GPUModelRunner.shutdown().
+---
+ vllm/v1/worker/gpu/model_runner.py |   2 +
+ vllm/v1/worker/gpu/pp_utils.py     | 245 +++++++++++++++++++++++++++--
+ 2 files changed, 234 insertions(+), 13 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 029b413666..b72c13da3f 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -2408,6 +2408,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+     def shutdown(self) -> None:
+         """Release GPU tensors (model weights, KV caches, workspace) so that
+         memory is reclaimable when running in the same process."""
++        if getattr(self, "pp_handler", None) is not None:
++            self.pp_handler.shutdown()
+         torch.accelerator.synchronize()
+         if self.aux_output_connector is not None:
+             self.aux_output_connector.close()
+diff --git a/vllm/v1/worker/gpu/pp_utils.py b/vllm/v1/worker/gpu/pp_utils.py
+index 818d80759a..277bd57770 100644
+--- a/vllm/v1/worker/gpu/pp_utils.py
++++ b/vllm/v1/worker/gpu/pp_utils.py
+@@ -2,29 +2,48 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """Pipeline Parallelism utils for V2 Model Runner."""
+ 
++import ctypes
++import queue
++import threading
+ from collections import deque
+ from dataclasses import dataclass
+ 
+ import numpy as np
+ import torch
++from torch.distributed import ProcessGroup, Work
+ 
+ import vllm.envs as envs
+ from vllm.distributed.parallel_state import get_pp_group
++from vllm.distributed.utils import get_cpu_distributed_timeout_or_none
++from vllm.logger import init_logger
+ from vllm.platforms import current_platform
+ from vllm.sequence import IntermediateTensors
+ from vllm.utils.torch_utils import async_tensor_h2d
+ from vllm.v1.worker.gpu.input_batch import InputBatch
+ 
++logger = init_logger(__name__)
++
++
++def _load_musart_event_sync():
++    for soname in ("libmusart.so", "libmusart.so.2"):
++        try:
++            fn = ctypes.CDLL(soname).musaEventSynchronize
++            fn.argtypes, fn.restype = [ctypes.c_void_p], ctypes.c_int
++            return fn
++        except (OSError, AttributeError):
++            pass
++    return None
++
+ 
+ @dataclass
+ class PendingRecv:
+     """Per-step slot data for a deferred postprocess on the main stream."""
+ 
+-    event: torch.cuda.Event
++    event: torch.cuda.Event | None
+ 
+-    sampled_tokens: torch.Tensor  # [num_reqs, max_sample_len]
+-    num_sampled: torch.Tensor  # [num_reqs]
+-    num_rejected: torch.Tensor  # [num_reqs]
++    sampled_tokens: torch.Tensor | None  # [num_reqs, max_sample_len]
++    num_sampled: torch.Tensor | None  # [num_reqs]
++    num_rejected: torch.Tensor | None  # [num_reqs]
+     idx_mapping: torch.Tensor  # [num_reqs]
+     idx_mapping_np: np.ndarray  # [num_reqs]
+     # Records which rows need a deferred postprocess (bool).
+@@ -33,6 +52,8 @@ class PendingRecv:
+     # detect requests aborted since then.
+     gen_at_receive_np: np.ndarray  # [num_reqs]
+     draft_tokens: torch.Tensor | None = None  # [num_reqs, num_speculative_steps]
++    packed_cpu: torch.Tensor | None = None
++    cpu_works: tuple[Work, ...] = ()
+ 
+ 
+ def compute_need_sampled_mask(input_batch: InputBatch) -> np.ndarray | None:
+@@ -59,7 +80,9 @@ class PPHandler:
+ 
+     Uses a dedicated NCCL communicator (sibling of the PP `device_group`)
+     for the broadcast so it does not serialize on the wire with the
+-    inter-stage hidden-state p2p send/recv ops.
++    inter-stage hidden-state p2p send/recv ops. On MUSA, stages packed
++    feedback over a sibling Gloo CPU subgroup with GIL-releasing event
++    synchronization so collectives do not spin on GPU streams.
+     """
+ 
+     def __init__(
+@@ -91,11 +114,120 @@ class PPHandler:
+         self.req_idx_gen_np = np.zeros(max_num_reqs, dtype=np.int32)
+ 
+         # Dedicated subgroup for the sampled-token broadcast.
+-        self.broadcast_group = get_pp_group().make_sibling_device_group(
+-            group_desc="pp_broadcast"
++        self._use_cpu_broadcast = current_platform.is_musa()
++        self._pin_memory = (
++            self._use_cpu_broadcast and current_platform.is_pin_memory_available()
+         )
++        self._musart_event_sync = (
++            _load_musart_event_sync() if self._use_cpu_broadcast else None
++        )
++        self._send_queue: (
++            queue.SimpleQueue[tuple[torch.cuda.Event, torch.Tensor] | None] | None
++        ) = None
++        self._send_thread: threading.Thread | None = None
++        self._send_exc: BaseException | None = None
++        self._ring_idx = 0
++        self._cpu_ring: list[torch.Tensor] = []
++        if self._use_cpu_broadcast:
++            self.broadcast_group = self._make_cpu_broadcast_group()
++            row_i32 = max_num_reqs * (2 * self.max_sample_len + 2)
++            self._cpu_ring = [
++                torch.empty(
++                    row_i32,
++                    dtype=torch.int32,
++                    device="cpu",
++                    pin_memory=self._pin_memory,
++                )
++                for _ in range(max(8, ring_depth * 3))
++            ]
++            if self.is_last_rank:
++                self._send_queue = queue.SimpleQueue()
++                self._send_thread = threading.Thread(
++                    target=self._cpu_broadcast_loop,
++                    name="vllm-pp-broadcast",
++                    daemon=True,
++                )
++                self._send_thread.start()
++        else:
++            self.broadcast_group = get_pp_group().make_sibling_device_group(
++                group_desc="pp_broadcast"
++            )
+         self.aux_hidden_state_relay_keys: tuple[str, ...] = ()
+ 
++    @staticmethod
++    def _make_cpu_broadcast_group() -> ProcessGroup:
++        pp_group = get_pp_group()
++        cpu_timeout = get_cpu_distributed_timeout_or_none()
++        sibling: ProcessGroup | None = None
++        for ranks in pp_group.group_ranks:
++            pg = torch.distributed.new_group(
++                ranks, backend="gloo", group_desc="pp_broadcast", timeout=cpu_timeout
++            )
++            if pp_group.rank in ranks:
++                sibling = pg
++        assert sibling is not None
++        return sibling
++
++    def _wait_event_gil_free(self, event: torch.cuda.Event) -> None:
++        if (
++            getattr(event.synchronize, "_torchada_gil_free", False) is not True
++            and self._musart_event_sync is not None
++            and (
++                ptr := getattr(event, "musa_event", None)
++                or getattr(event, "cuda_event", None)
++            )
++        ):
++            if rc := self._musart_event_sync(ctypes.c_void_p(ptr)):
++                event.synchronize()
++                raise RuntimeError(f"musaEventSynchronize failed with error {rc}")
++            return
++        event.synchronize()
++
++    def _cpu_broadcast_loop(self) -> None:
++        assert self._send_queue is not None
++        torch.cuda.set_device(self.device)
++        while (item := self._send_queue.get()) is not None:
++            event, cpu_tensor = item
++            try:
++                self._wait_event_gil_free(event)
++                torch.distributed.broadcast(
++                    cpu_tensor, src=self.last_rank, group=self.broadcast_group
++                )
++            except BaseException as exc:
++                self._send_exc = exc
++                logger.exception("PP CPU broadcast worker failed")
++                return
++
++    def _stage_cpu_broadcast(
++        self, src_gpu: torch.Tensor, cpu_buf: torch.Tensor | None = None
++    ) -> None:
++        if self._send_exc is not None:
++            raise RuntimeError("PP CPU broadcast worker failed") from self._send_exc
++        assert self._send_queue is not None
++        if cpu_buf is None:
++            cpu_buf = torch.empty(
++                src_gpu.shape,
++                dtype=src_gpu.dtype,
++                device="cpu",
++                pin_memory=self._pin_memory,
++            )
++        cpu_buf.copy_(src_gpu, non_blocking=self._pin_memory)
++        self._send_queue.put((self.broadcast_stream.record_event(), cpu_buf))
++
++    def shutdown(self) -> None:
++        if self._send_thread is not None and self._send_queue is not None:
++            if self._send_thread.is_alive():
++                self._send_queue.put(None)
++                self._send_thread.join(timeout=10.0)
++            self._send_thread = None
++        while self.queue:
++            if (slot := self.queue.popleft()) is not None:
++                for work in slot.cpu_works:
++                    work.wait()
++        if self._send_exc is not None:
++            exc, self._send_exc = self._send_exc, None
++            raise RuntimeError("PP CPU broadcast worker failed") from exc
++
+     def on_req_idx_freed(self, req_idx: int) -> None:
+         self.req_idx_gen_np[req_idx] += 1
+ 
+@@ -136,6 +268,9 @@ class PPHandler:
+         if slot is None:
+             return None
+ 
++        for work in slot.cpu_works:
++            work.wait()
++
+         # Skip requests which did not need sampled output and/or those already
+         # finished. The post_update kernel skips the -1 entries.
+         freed = self.req_idx_gen_np[slot.idx_mapping_np] != slot.gen_at_receive_np
+@@ -149,7 +284,28 @@ class PPHandler:
+             idx_mapping_np = np.where(exclude_mask, -1, slot.idx_mapping_np)
+             idx_mapping = async_tensor_h2d(idx_mapping_np, device=self.device)
+ 
+-        self.main_stream.wait_event(slot.event)
++        if slot.event is not None:
++            self.main_stream.wait_event(slot.event)
++        if slot.packed_cpu is not None:
++            pkt = async_tensor_h2d(slot.packed_cpu, device=self.device)
++            nr = len(slot.idx_mapping_np)
++            tok_i32 = 2 * nr * self.max_sample_len
++            sampled_tokens = (
++                pkt[:tok_i32].view(torch.int64).view(nr, self.max_sample_len)
++            )
++            num_sampled, num_rejected = pkt[tok_i32 : tok_i32 + nr], pkt[tok_i32 + nr :]
++            if slot.draft_tokens is not None:
++                slot.draft_tokens = async_tensor_h2d(
++                    slot.draft_tokens, device=self.device
++                )
++        else:
++            assert slot.sampled_tokens is not None
++            assert slot.num_sampled is not None
++            assert slot.num_rejected is not None
++            sampled_tokens = slot.sampled_tokens
++            num_sampled = slot.num_sampled
++            num_rejected = slot.num_rejected
++
+         if slot.draft_tokens is not None and draft_tokens_to_update is not None:
+             draft_tokens = slot.draft_tokens
+             draft_idx_mapping = slot.idx_mapping
+@@ -163,9 +319,9 @@ class PPHandler:
+             draft_tokens_to_update[draft_idx_mapping] = draft_tokens
+ 
+         return dict(
+-            sampled_tokens=slot.sampled_tokens,
+-            num_sampled=slot.num_sampled,
+-            num_rejected=slot.num_rejected,
++            sampled_tokens=sampled_tokens,
++            num_sampled=num_sampled,
++            num_rejected=num_rejected,
+             idx_mapping=idx_mapping,
+         )
+ 
+@@ -182,6 +338,10 @@ class PPHandler:
+             # Must record the idx_mapping tensor since it was allocated
+             # on the main stream.
+             input_batch.idx_mapping.record_stream(self.broadcast_stream)
++            if self._use_cpu_broadcast:
++                draft_tokens.record_stream(self.broadcast_stream)
++                self._stage_cpu_broadcast(send)
++                return
+             torch.distributed.broadcast(
+                 send, src=self.last_rank, group=self.broadcast_group
+             )
+@@ -200,6 +360,51 @@ class PPHandler:
+         gen_at_receive_np = self.req_idx_gen_np[input_batch.idx_mapping_np]
+ 
+         num_reqs = input_batch.num_reqs
++        if self._use_cpu_broadcast:
++            slot_idx = self._ring_idx % len(self._cpu_ring)
++            self._ring_idx += 1
++            packed_cpu = self._cpu_ring[slot_idx][
++                : num_reqs * (2 * self.max_sample_len + 2)
++            ]
++            w1 = torch.distributed.broadcast(
++                packed_cpu,
++                src=self.last_rank,
++                group=self.broadcast_group,
++                async_op=True,
++            )
++            assert w1 is not None
++            works = [w1]
++            draft_tokens = None
++            if self.num_speculative_steps > 0:
++                draft_tokens = torch.empty(
++                    (num_reqs, self.num_speculative_steps),
++                    dtype=torch.int64,
++                    device="cpu",
++                    pin_memory=self._pin_memory,
++                )
++                w2 = torch.distributed.broadcast(
++                    draft_tokens,
++                    src=self.last_rank,
++                    group=self.broadcast_group,
++                    async_op=True,
++                )
++                assert w2 is not None
++                works.append(w2)
++            self.queue[-1] = PendingRecv(
++                None,
++                None,
++                None,
++                None,
++                input_batch.idx_mapping,
++                input_batch.idx_mapping_np,
++                need_sampled_mask,
++                gen_at_receive_np,
++                draft_tokens,
++                packed_cpu,
++                tuple(works),
++            )
++            return bool(need_sampled_mask.all())
++
+         with torch.cuda.stream(self.broadcast_stream):
+             self.broadcast_stream.wait_stream(self.main_stream)
+             sampled_tokens = torch.empty(
+@@ -267,6 +472,22 @@ class PPHandler:
+                 sampled_token_ids,
+                 (0, self.max_sample_len - sampled_token_ids.shape[-1]),
+             )
++            for tensor in (sampled_token_ids, num_sampled, num_rejected):
++                tensor.record_stream(self.broadcast_stream)
++            if self._use_cpu_broadcast:
++                packed = torch.cat(
++                    (
++                        send_tokens.contiguous().view(torch.int32).reshape(-1),
++                        num_sampled.reshape(-1),
++                        num_rejected.reshape(-1),
++                    )
++                )
++                slot_idx = self._ring_idx % len(self._cpu_ring)
++                self._ring_idx += 1
++                self._stage_cpu_broadcast(
++                    packed, self._cpu_ring[slot_idx][: packed.numel()]
++                )
++                return
+             torch.distributed.broadcast(
+                 send_tokens.contiguous(),
+                 src=self.last_rank,
+@@ -276,5 +497,3 @@ class PPHandler:
+             torch.distributed.broadcast(
+                 combined, src=self.last_rank, group=self.broadcast_group
+             )
+-            for tensor in (sampled_token_ids, num_sampled, num_rejected):
+-                tensor.record_stream(self.broadcast_stream)

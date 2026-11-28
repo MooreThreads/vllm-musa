@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 27 Nov 2026 18:19:35 +0800
+Subject: [PATCH] MUSA: create a dedicated non-default current stream
+
+Use is_cuda_alike() when initializing the per-thread current stream so MUSA
+creates a non-default stream compatible with graph capture.
+---
+ vllm/utils/torch_utils.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
+index 6d80de8194..b4770a2a1d 100644
+--- a/vllm/utils/torch_utils.py
++++ b/vllm/utils/torch_utils.py
+@@ -837,7 +837,7 @@ def current_stream() -> torch.cuda.Stream:
+         # stream cannot be used for cudagraph capture, see
+         # https://github.com/pytorch/pytorch/blob/42ad9edfb754743fdae3276ade43de000beb4f60/aten/src/ATen/cuda/CUDAGraph.cpp#L77
+         # for more details. Therefore, we create a dedicated stream per process.
+-        if current_platform.is_rocm() or current_platform.is_cuda():
++        if current_platform.is_cuda_alike():
+             # Ensure new stream is ordered w.r.t. replaced stream's work.
+             new_stream = torch.cuda.Stream()
+             new_stream.wait_stream(torch.cuda.current_stream())

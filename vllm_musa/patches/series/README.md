@@ -348,6 +348,9 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0215-MUSA-pad-the-QSA-BLOCK_M-8-wmma-tile-to-16.patch` | v0.32 new/updated | pad the QSA `block_m == 8` tile to 16 so group sizes 5-8 leave the unimplemented MUSA `mthreads_wmma` layout, while 1/2/4 keep their current tiles |
 | `0216-MUSA-carry-shared-indexer-top-k-through-generic-PP.patch` | v0.32 new/updated | carry shared indexer top-k through generic pipeline-parallel transport |
 | `0217-MUSA-bind-draft-token-D2H-copies-per-step.patch` | v0.32 new/updated | retain drafts per request and give each D2H copy its own stream/event, so a non-structured batch cannot erase live drafts and a later step's wait cannot delay an earlier copy; retrieve non-deferred structured-output drafts before the grammar bitmask |
+| `0218-MUSA-select-MCCL-in-the-shared-library-resolver.patch` | v0.32 MUSA communication compatibility | select MCCL in the shared library resolver when no library path is specified |
+| `0219-MUSA-create-a-dedicated-non-default-current-stream.patch` | v0.32 MUSA graph and stream compatibility | create a dedicated non-default current stream on cold lookup via `is_cuda_alike()` |
+| `0220-MUSA-broadcast-MRv2-PP-sampled-outputs-over-Gloo.patch` | v0.32 MUSA V2 pipeline parallelism | back `PPHandler.broadcast_group` with a sibling Gloo CPU subgroup on MUSA and drain pending broadcast work on runner shutdown |
 
 For non-speculative DSV4.1 on Model Runner V2 (DP1, no microbatching),
 the optimization contract fixes the context cutoff at `32768` tokens. All-short batches
@@ -360,7 +363,7 @@ Candidate-only scoring is selected whenever its width is smaller than the dense
 window, and eligible prefill query rows are sharded across TP ranks. These
 decisions do not require environment-variable overrides.
 
-Currently **217 patches** and **2 upstream entries** in `upstream/`.
+Currently **220 patches** and **2 upstream entries** in `upstream/`.
 
 The candidate is rebased onto vllm-musa `a1153f9f` with the same immutable
 vLLM pin. Independent application of upstream's original 58-patch chain and
