@@ -9,13 +9,22 @@ import os
 from typing import Any
 
 import torch
+import torch.nn.functional as F
+import vllm.envs as envs
 from mate.gdn_decode import gated_delta_rule_decode
 from mate.gdn_prefill import chunk_gated_delta_rule
-from vllm.config import CUDAGraphMode
+from vllm.config import (
+    CUDAGraphMode,
+    get_current_vllm_config,  # noqa: F401
+)
 from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
     QwenGatedDeltaNetAttention,
+)
+from vllm.utils.torch_utils import (
+    _encode_layer_name,
+    direct_register_custom_op,
 )
 
 from vllm_musa.optimization_contract import (
@@ -156,6 +165,121 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         self._gdn_cudagraph_capture_sizes = tuple(
             compilation_config.cudagraph_capture_sizes or ()
         )
+        self._lora_enabled = vllm_config.lora_config is not None
+        self._packed_qkvzba_weight: torch.Tensor | None = None
+
+    def process_weights_after_loading(self, act_dtype: torch.dtype) -> None:
+        del act_dtype
+        self._packed_qkvzba_weight = None
+        if (
+            os.environ.get("MUSA_GDN_PACKED_PROJ", "1") == "0"
+            or self.gqa_interleaved_layout
+            or getattr(self, "disable_tp_for_ba_proj", False)
+            or getattr(self, "_lora_enabled", False)
+            or envs.VLLM_BATCH_INVARIANT
+        ):
+            return
+
+        from vllm.model_executor.layers.linear import (
+            MergedColumnParallelLinear,
+            UnquantizedLinearMethod,
+        )
+
+        qkvz_proj = getattr(self, "in_proj_qkvz", None)
+        ba_proj = getattr(self, "in_proj_ba", None)
+        if (
+            type(qkvz_proj) is not MergedColumnParallelLinear
+            or type(ba_proj) is not MergedColumnParallelLinear
+            or type(qkvz_proj.quant_method) is not UnquantizedLinearMethod
+            or type(ba_proj.quant_method) is not UnquantizedLinearMethod
+            or getattr(qkvz_proj, "bias", None) is not None
+            or getattr(ba_proj, "bias", None) is not None
+        ):
+            return
+
+        qkvz_w = getattr(qkvz_proj, "weight", None)
+        ba_w = getattr(ba_proj, "weight", None)
+        expected_qkvz = (self.key_dim * 2 + self.value_dim * 2) // self.tp_size
+        expected_ba = (self.num_v_heads * 2) // self.tp_size
+        if (
+            not isinstance(qkvz_w, torch.Tensor)
+            or not isinstance(ba_w, torch.Tensor)
+            or qkvz_w.ndim != 2
+            or ba_w.ndim != 2
+            or qkvz_w.dtype not in (torch.bfloat16, torch.float16)
+            or ba_w.dtype != qkvz_w.dtype
+            or qkvz_w.device != ba_w.device
+            or qkvz_w.device.type != "musa"
+            or qkvz_w.shape != (expected_qkvz, self.hidden_size)
+            or ba_w.shape != (expected_ba, self.hidden_size)
+            or (expected_ba * ba_w.element_size()) % 16 != 0
+        ):
+            return
+
+        packed = torch.cat((qkvz_w.data, ba_w.data), dim=0).contiguous()
+        qkvz_w.data = packed[:expected_qkvz]
+        ba_w.data = packed[expected_qkvz:]
+        self._packed_qkvzba_weight = packed
+
+    def _get_fp8_dual_stream_params(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, bool] | None:
+        if (
+            os.environ.get("MUSA_GDN_OPAQUE_DUAL_STREAM", "1") == "0"
+            or getattr(self, "_lora_enabled", False)
+            or envs.VLLM_BATCH_INVARIANT
+        ):
+            return None
+
+        from vllm.model_executor.layers.linear import (
+            MergedColumnParallelLinear,
+            UnquantizedLinearMethod,
+        )
+
+        from vllm_musa.model_executor.kernels.linear.scaled_mm.deep_gemm import (
+            MUSADeepGemmFp8BlockScaledMMKernel,
+        )
+
+        qkvz_proj = getattr(self, "in_proj_qkvz", None)
+        ba_proj = getattr(self, "in_proj_ba", None)
+        if (
+            type(qkvz_proj) is not MergedColumnParallelLinear
+            or type(ba_proj) is not MergedColumnParallelLinear
+            or getattr(qkvz_proj, "bias", None) is not None
+            or getattr(ba_proj, "bias", None) is not None
+            or type(getattr(ba_proj, "quant_method", None))
+            is not UnquantizedLinearMethod
+        ):
+            return None
+
+        fp8_kernel = getattr(
+            getattr(qkvz_proj, "quant_method", None), "fp8_linear", None
+        )
+        if not isinstance(fp8_kernel, MUSADeepGemmFp8BlockScaledMMKernel):
+            return None
+
+        params = fp8_kernel._get_layer_params(qkvz_proj)
+        qkvz_w = params.weight
+        qkvz_ws = (
+            params.weight_scale_inv
+            if params.weight_scale_inv is not None
+            else params.weight_scale
+        )
+        ba_w = getattr(ba_proj, "weight", None)
+        if (
+            not isinstance(qkvz_w, torch.Tensor)
+            or not isinstance(qkvz_ws, torch.Tensor)
+            or not isinstance(ba_w, torch.Tensor)
+            or ba_w.ndim != 2
+        ):
+            return None
+        return (
+            qkvz_w,
+            qkvz_ws,
+            ba_w,
+            int(fp8_kernel.weight_group_shape.col),
+            bool(fp8_kernel.use_deep_gemm_e8m0),
+        )
 
     def _forward_input_projections(
         self,
@@ -216,32 +340,62 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         if self.gqa_interleaved_layout:
             return super().forward_cuda(hidden_states)
 
-        from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
-            _encode_layer_name,
-        )
-
         num_tokens = hidden_states.size(0)
-        mixed_qkvz, ba = self._forward_input_projections(hidden_states)
-
         qkv_size = (self.key_dim * 2 + self.value_dim) // self.tp_size
-        mixed_qkv = mixed_qkvz[:, :qkv_size]
+        packed_weight = getattr(self, "_packed_qkvzba_weight", None)
 
-        if getattr(self, "disable_tp_for_ba_proj", False) and self.tp_size > 1:
-            z = mixed_qkvz[:, qkv_size:].reshape(num_tokens, -1, self.head_v_dim)
-            b, a = self.split_ba(ba)
-            b = b.contiguous()
-            a = a.contiguous()
-        else:
-            from vllm_musa.jit_kernel.tilelang.gdn_fused_proj import fused_zba
+        if (
+            packed_weight is not None
+            and packed_weight.device == hidden_states.device
+            and not envs.VLLM_BATCH_INVARIANT
+        ):
+            from vllm_musa.jit_kernel.tilelang.gdn_fused_proj import fused_zba_packed
 
-            z, b, a = fused_zba(
-                mixed_qkvz,
-                ba,
+            mixed_qkvzba = F.linear(hidden_states, packed_weight)
+            mixed_qkv = mixed_qkvzba[:, :qkv_size]
+            z, b, a = fused_zba_packed(
+                mixed_qkvzba,
                 self.num_k_heads // self.tp_size,
                 self.num_v_heads // self.tp_size,
                 self.head_k_dim,
                 self.head_v_dim,
             )
+        else:
+            fp8_dual_params = self._get_fp8_dual_stream_params()
+            if (
+                fp8_dual_params is not None
+                and fp8_dual_params[0].device == hidden_states.device
+            ):
+                qkvz_w, qkvz_ws, ba_w, group_size, use_e8m0 = fp8_dual_params
+                mixed_qkvz, ba = torch.ops.vllm.musa_gdn_fp8_qkvz_bf16_ba_proj(
+                    hidden_states,
+                    qkvz_w,
+                    qkvz_ws,
+                    ba_w,
+                    group_size,
+                    use_e8m0,
+                )
+            else:
+                mixed_qkvz, ba = self._forward_input_projections(hidden_states)
+
+            mixed_qkv = mixed_qkvz[:, :qkv_size]
+
+            if getattr(self, "disable_tp_for_ba_proj", False) and self.tp_size > 1:
+                z = mixed_qkvz[:, qkv_size:].reshape(num_tokens, -1, self.head_v_dim)
+                b, a = self.split_ba(ba)
+                b = b.contiguous()
+                a = a.contiguous()
+            else:
+                from vllm_musa.jit_kernel.tilelang.gdn_fused_proj import fused_zba
+
+                z, b, a = fused_zba(
+                    mixed_qkvz,
+                    ba,
+                    self.num_k_heads // self.tp_size,
+                    self.num_v_heads // self.tp_size,
+                    self.head_k_dim,
+                    self.head_v_dim,
+                )
 
         core_attn_out = _allocate_gdn_output(
             (num_tokens, self.num_v_heads // self.tp_size, self.head_v_dim),
@@ -345,7 +499,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         # and casts the result back.  The MUSA kernel accepts those dtypes
         # directly; keep the upstream path as a structural fallback.
         mixed_qkv_tilelang = None
-        if self._musa_enable_tilelang_causal_conv:
+        if getattr(self, "_musa_enable_tilelang_causal_conv", False):
             mixed_qkv_tilelang = musa_tilelang_causal_conv1d_update(
                 mixed_qkv,
                 conv_state,
@@ -743,6 +897,81 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             core_attn_out[:num_actual_tokens] = merged_out.squeeze(0)
         elif not wrote_in_place:
             core_attn_out[:num_actual_tokens] = core_attn_out_non_spec.squeeze(0)
+
+
+def _musa_gdn_fp8_qkvz_bf16_ba_proj_impl(
+    hidden_states: torch.Tensor,
+    qkvz_weight: torch.Tensor,
+    qkvz_weight_scale: torch.Tensor,
+    ba_weight: torch.Tensor,
+    group_size: int,
+    use_deep_gemm_e8m0: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    from vllm_musa.model_executor.kernels.linear.scaled_mm.deep_gemm import run_deepgemm
+
+    num_tokens = hidden_states.size(0)
+    h2d = hidden_states.view(-1, hidden_states.size(-1))
+    if 0 < num_tokens < _GDN_DUAL_STREAM_TOKEN_THRESHOLD:
+        is_capturing = _is_current_stream_capturing()
+        alt_stream = _get_gdn_input_projection_stream(create=not is_capturing)
+        if alt_stream is not None and is_capturing:
+            current_stream = torch.musa.current_stream(device=hidden_states.device)
+            ba = torch.empty(
+                (num_tokens, ba_weight.size(0)),
+                dtype=ba_weight.dtype,
+                device=hidden_states.device,
+            )
+            alt_stream.wait_stream(current_stream)
+            mixed_qkvz = run_deepgemm(
+                h2d,
+                qkvz_weight,
+                qkvz_weight_scale,
+                group_size,
+                use_deep_gemm_e8m0,
+            )
+            with torch.musa.stream(alt_stream):
+                torch.mm(h2d, ba_weight.t(), out=ba)
+            current_stream.wait_stream(alt_stream)
+            return mixed_qkvz, ba
+
+    mixed_qkvz = run_deepgemm(
+        h2d,
+        qkvz_weight,
+        qkvz_weight_scale,
+        group_size,
+        use_deep_gemm_e8m0,
+    )
+    ba = F.linear(h2d, ba_weight)
+    return mixed_qkvz, ba
+
+
+def _musa_gdn_fp8_qkvz_bf16_ba_proj_fake(
+    hidden_states: torch.Tensor,
+    qkvz_weight: torch.Tensor,
+    qkvz_weight_scale: torch.Tensor,
+    ba_weight: torch.Tensor,
+    group_size: int,
+    use_deep_gemm_e8m0: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    del qkvz_weight_scale, group_size, use_deep_gemm_e8m0
+    num_tokens = hidden_states.size(0)
+    return (
+        hidden_states.new_empty(
+            (num_tokens, qkvz_weight.size(0)),
+            dtype=torch.bfloat16,
+        ),
+        hidden_states.new_empty(
+            (num_tokens, ba_weight.size(0)),
+            dtype=ba_weight.dtype,
+        ),
+    )
+
+
+direct_register_custom_op(
+    op_name="musa_gdn_fp8_qkvz_bf16_ba_proj",
+    op_func=_musa_gdn_fp8_qkvz_bf16_ba_proj_impl,
+    fake_impl=_musa_gdn_fp8_qkvz_bf16_ba_proj_fake,
+)
 
 
 logger.info(
