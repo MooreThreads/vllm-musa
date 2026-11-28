@@ -37,7 +37,7 @@ for _key, _value in (
     if hasattr(tilelang.PassConfigKey, _key):
         _PASS_CONFIGS[getattr(tilelang.PassConfigKey, _key)] = _value
 
-__all__ = ["fused_zba"]
+__all__ = ["fused_zba", "fused_zba_packed"]
 
 
 @functools.lru_cache(maxsize=32)
@@ -183,6 +183,140 @@ def fused_zba(
     return torch.ops.vllm.musa_fused_zba(
         mixed_qkvz,
         mixed_ba,
+        num_heads_qk,
+        num_heads_v,
+        head_qk,
+        head_v,
+    )
+
+
+@functools.lru_cache(maxsize=32)
+@tilelang.jit(
+    target="musa",
+    pass_configs=_PASS_CONFIGS,
+    compile_flags=MUSA_COMPILE_FLAGS,
+)
+def _fused_zba_packed_kernel(
+    num_heads_qk: int,
+    num_heads_v: int,
+    head_qk: int,
+    head_v: int,
+    input_dtype: str,
+    block_elems: int,
+):
+    m = T.dynamic("m")
+    total_q = num_heads_qk * head_qk
+    total_v = num_heads_v * head_v
+    qkv_dim = total_q * 2 + total_v
+    total_qkvz = qkv_dim + total_v
+    total_ba = num_heads_v * 2
+    total_qkvzba = total_qkvz + total_ba
+    v_blocks = T.ceildiv(total_v, block_elems)
+    ba_blocks = T.ceildiv(total_ba, block_elems)
+
+    @T.prim_func
+    def zba_packed_contiguous(
+        z: T.Tensor((m, num_heads_v, head_v), input_dtype),
+        b: T.Tensor((m, num_heads_v), input_dtype),
+        a: T.Tensor((m, num_heads_v), input_dtype),
+        mixed_qkvzba: T.Tensor((m, total_qkvzba), input_dtype),
+    ):
+        with T.Kernel(m, threads=block_elems) as row:
+            for block in T.serial(v_blocks):
+                for i in T.Parallel(block_elems):
+                    offset = block * block_elems + i
+                    if offset < total_v:
+                        z[row, offset // head_v, offset % head_v] = mixed_qkvzba[
+                            row, qkv_dim + offset
+                        ]
+
+            for block in T.serial(ba_blocks):
+                for i in T.Parallel(block_elems):
+                    offset = block * block_elems + i
+                    if offset < num_heads_v:
+                        b[row, offset] = mixed_qkvzba[row, total_qkvz + offset]
+                    ba_offset = offset + num_heads_v
+                    if ba_offset < total_ba:
+                        a[row, offset] = mixed_qkvzba[row, total_qkvz + ba_offset]
+
+    return zba_packed_contiguous
+
+
+_fused_zba_packed_kernel.mode = "lazy"
+
+
+def _fused_zba_packed_impl(
+    mixed_qkvzba: torch.Tensor,
+    num_heads_qk: int,
+    num_heads_v: int,
+    head_qk: int,
+    head_v: int,
+) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor]":
+    """Split contiguous z/b/a out of packed [q, k, v, z, b, a] in one kernel."""
+    m = mixed_qkvzba.shape[0]
+    z = torch.empty(
+        (m, num_heads_v, head_v),
+        dtype=mixed_qkvzba.dtype,
+        device=mixed_qkvzba.device,
+    )
+    b = torch.empty(
+        (m, num_heads_v),
+        dtype=mixed_qkvzba.dtype,
+        device=mixed_qkvzba.device,
+    )
+    a = torch.empty_like(b)
+    if m == 0:
+        return z, b, a
+    kernel = _fused_zba_packed_kernel(
+        num_heads_qk,
+        num_heads_v,
+        head_qk,
+        head_v,
+        tilelang_dtype(mixed_qkvzba.dtype),
+        _block_elems(num_heads_v * head_v),
+    )
+    kernel(z, b, a, mixed_qkvzba.contiguous())
+    return z, b, a
+
+
+def _fused_zba_packed_fake(
+    mixed_qkvzba: torch.Tensor,
+    num_heads_qk: int,
+    num_heads_v: int,
+    head_qk: int,
+    head_v: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    del num_heads_qk, head_qk
+    m = mixed_qkvzba.shape[0]
+    z = torch.empty(
+        (m, num_heads_v, head_v),
+        dtype=mixed_qkvzba.dtype,
+        device=mixed_qkvzba.device,
+    )
+    b = torch.empty(
+        (m, num_heads_v),
+        dtype=mixed_qkvzba.dtype,
+        device=mixed_qkvzba.device,
+    )
+    return z, b, torch.empty_like(b)
+
+
+direct_register_custom_op(
+    "musa_fused_zba_packed",
+    _fused_zba_packed_impl,
+    fake_impl=_fused_zba_packed_fake,
+)
+
+
+def fused_zba_packed(
+    mixed_qkvzba: torch.Tensor,
+    num_heads_qk: int,
+    num_heads_v: int,
+    head_qk: int,
+    head_v: int,
+) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor]":
+    return torch.ops.vllm.musa_fused_zba_packed(
+        mixed_qkvzba,
         num_heads_qk,
         num_heads_v,
         head_qk,
