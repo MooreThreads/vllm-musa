@@ -526,12 +526,6 @@ _SHADOW_MODULES = [
     ),
     (
         "5",
-        "vllm_musa/v1/worker/pp_handler.py",
-        "vllm/v1/worker/gpu/pp_utils.py",
-        "Order MCCL feedback and activations for non-speculative MRv2 PP2",
-    ),
-    (
-        "5",
         "vllm_musa/worker.py",
         None,
         "new MUSA module (no upstream same-path; MTGPUWorker)",
