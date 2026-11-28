@@ -245,6 +245,7 @@ per row against `vllm_musa/patches/series/` on `v0.32.0-dev`:
 | `vllm/v1/attention/backends/utils.py` (adapter's host) | patched by `0164`, which adds `get_kv_cache_layout`/`set_kv_cache_layout` -- different names, and the adapter only adds one |
 | `vllm/config/vllm.py` (capability row) | patched by `0110` and `0172`, neither of which touches `adjust_dcp_kv_cache_interleave_size` |
 | `vllm/v1/worker/gpu/dp_utils.py` (capability row) | untouched |
+| `vllm/v1/worker/gpu/warmup.py` (adapter's host) | untouched |
 
 Worth re-running when the series grows, which is why it is a table and not a
 sentence. The series edits sources before the build, so a collision there would
