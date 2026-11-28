@@ -46,16 +46,21 @@ def test_tp1_logits_skip_collectives(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "org_vocab_size,shard_size", [(151936, 75968), (248320, 124160)]
+    "org_vocab_size,shape,dtype",
+    [
+        (151936, (1, 75968), torch.bfloat16),
+        (248320, (1, 124160), torch.bfloat16),
+        (152064, (8, 76032), torch.bfloat16),
+        (129280, (16, 64640), torch.bfloat16),
+        (102400, (4, 51200), torch.float16),
+        (32000, (4, 16000), torch.float32),
+        (248320, (128, 124160), torch.bfloat16),
+    ],
 )
-def test_qwen_bf16_logits_use_ipc_gather(monkeypatch, org_vocab_size, shard_size):
+def test_supported_tp_logits_use_ipc_gather(monkeypatch, org_vocab_size, shape, dtype):
     _patch_tp(monkeypatch)
-    local_logits = (
-        torch.arange(shard_size, dtype=torch.int32)
-        .to(torch.bfloat16)
-        .view(1, shard_size)
-    )
-    gathered = torch.empty((1, shard_size * 2), dtype=torch.bfloat16)
+    local_logits = torch.zeros(shape, dtype=dtype)
+    gathered = torch.empty((shape[0], shape[1] * 2), dtype=dtype)
     calls = []
 
     def gather(input_tensor, dim, output_dtype=None):
@@ -151,26 +156,62 @@ def test_transformed_qwen_logits_keep_same_dtype_ipc_output(
 
 
 @pytest.mark.parametrize(
+    "org_vocab_size,rows,shard_size,dtype",
+    [
+        (152064, 4, 38016, torch.bfloat16),
+        (129280, 4, 32320, torch.bfloat16),
+        (248320, 65, 62080, torch.bfloat16),
+        (151936, 4, 37984, torch.float16),
+        (151936, 4, 37984, torch.float32),
+    ],
+)
+def test_non_small_qwen_bf16_logits_keep_same_dtype_ipc_output(
+    monkeypatch, org_vocab_size, rows, shard_size, dtype
+):
+    _patch_tp(monkeypatch, world_size=4)
+    local_logits = torch.empty((rows, shard_size), dtype=dtype)
+    gathered = torch.empty((rows, shard_size * 4), dtype=dtype)
+    output_dtypes = []
+
+    def gather(input_tensor, dim, output_dtype=None):
+        output_dtypes.append(output_dtype)
+        return gathered
+
+    monkeypatch.setattr(custom_ar, "maybe_musa_jit_logits_all_gather", gather)
+    processor = _processor(org_vocab_size)
+    monkeypatch.setattr(processor, "_use_musa_logits_all_reduce", lambda: True)
+
+    output = processor._gather_logits(local_logits, SimpleNamespace())
+
+    assert output is gathered
+    assert output_dtypes == [None]
+
+
+@pytest.mark.parametrize(
     "org_vocab_size,shape,dtype",
     [
-        (32000, (4, 16000), torch.bfloat16),
-        (248320, (65, 124160), torch.bfloat16),
-        (248320, (4, 124160), torch.float32),
+        (32000, (4, 15996), torch.bfloat16),
+        (32000, (4, 15998), torch.float32),
+        (248320, (4, 124160), torch.float64),
+        (248320, (2, 2, 124160), torch.bfloat16),
     ],
 )
 def test_unsupported_logits_preserve_all_reduce_fallback(
     monkeypatch, org_vocab_size, shape, dtype
 ):
     _patch_tp(monkeypatch)
-    local_logits = (
-        torch.arange(shape[0] * shape[1], dtype=torch.int32).to(dtype).view(shape)
-    )
+    numel = 1
+    for dim_size in shape:
+        numel *= dim_size
+    local_logits = torch.arange(numel, dtype=torch.int32).to(dtype).view(shape)
     fallback_inputs = []
 
     monkeypatch.setattr(
         custom_ar,
         "maybe_musa_jit_logits_all_gather",
-        lambda input_tensor, dim: pytest.fail("IPC gather gate must not run"),
+        lambda input_tensor, dim, output_dtype=None: pytest.fail(
+            "IPC gather gate must not run"
+        ),
     )
 
     def all_reduce(input_tensor):
@@ -188,6 +229,26 @@ def test_unsupported_logits_preserve_all_reduce_fallback(
     assert torch.equal(output[..., : shape[-1]], local_logits)
     assert torch.count_nonzero(output[..., shape[-1] :]).item() == 0
     assert len(fallback_inputs) == 1
+
+
+def test_ipc_gather_declining_falls_back_to_all_reduce(monkeypatch):
+    _patch_tp(monkeypatch, world_size=2, rank=1)
+    local_logits = torch.arange(64, dtype=torch.int32).to(torch.bfloat16).view(2, 32)
+    monkeypatch.setattr(
+        custom_ar,
+        "maybe_musa_jit_logits_all_gather",
+        lambda input_tensor, dim, output_dtype=None: None,
+    )
+    monkeypatch.setattr(
+        logits_processor,
+        "tensor_model_parallel_all_reduce",
+        lambda input_tensor: input_tensor,
+    )
+
+    output = _processor(64)._musa_all_reduce_logits(local_logits, SimpleNamespace())
+
+    assert output.shape == (2, 64)
+    assert torch.equal(output[:, 32:64], local_logits)
 
 
 def test_tp6_logits_preserve_all_reduce_fallback(monkeypatch):

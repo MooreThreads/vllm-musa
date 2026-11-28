@@ -56,13 +56,51 @@ def test_custom_all_gather_gate_accepts_only_last_dim_packed_2d():
     assert not impl.should_custom_all_gather(accepted, -1)
 
 
-def test_custom_all_gather_gate_rejects_non_musa_tensor():
+def test_custom_all_gather_gate_rejects_non_musa_tensor(monkeypatch):
     impl = _impl()
     del impl._is_communicator_tensor
 
     assert not impl.should_custom_all_gather(
         torch.empty((4, 32), dtype=torch.bfloat16), -1
     )
+
+    impl.device = torch.device("musa")
+    monkeypatch.setattr(
+        torch,
+        "musa",
+        SimpleNamespace(current_device=lambda: 0),
+        raising=False,
+    )
+    fake_musa_inp = SimpleNamespace(device=torch.device("musa:0"))
+    assert impl._is_communicator_tensor(fake_musa_inp)
+    fake_other_inp = SimpleNamespace(device=torch.device("musa:1"))
+    assert not impl._is_communicator_tensor(fake_other_inp)
+
+
+def test_custom_all_gather_uses_eager_staging_reserve_when_arena_enabled(monkeypatch):
+    impl = _impl()
+    impl._use_graph_staging_arena = True
+    impl._graph_staging_eager_reserve_bytes = 256 * 1024
+    input_tensor = torch.arange(128, dtype=torch.bfloat16).view(4, 32)
+    captured = {}
+
+    def launch_all_gather(
+        rank_data,
+        signals,
+        inp,
+        out,
+        self_signal_ptr,
+        self_buffer_ptr,
+        max_size_bytes,
+        rank,
+        world_size,
+    ):
+        captured["max_size_bytes"] = max_size_bytes
+
+    monkeypatch.setattr(custom_ar.jit_ar, "launch_all_gather", launch_all_gather)
+    impl._custom_all_gather_impl(input_tensor)
+
+    assert captured["max_size_bytes"] == 256 * 1024
 
 
 def test_custom_all_gather_launches_with_last_dim_concatenated(monkeypatch):

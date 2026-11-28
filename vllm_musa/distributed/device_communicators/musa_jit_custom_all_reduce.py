@@ -507,6 +507,14 @@ class _MusaJitCustomAllreduceImpl:
         elif isinstance(device, str):
             device = torch.device(device)
         assert isinstance(device, torch.device)
+        if device.type == "musa" and device.index is None:
+            current_index = (
+                torch.musa.current_device()
+                if hasattr(torch, "musa")
+                and callable(getattr(torch.musa, "current_device", None))
+                else 0
+            )
+            device = torch.device("musa", current_index)
         self.device = device
 
         self.rank = dist.get_rank(group=group)
@@ -1202,7 +1210,15 @@ class _MusaJitCustomAllreduceImpl:
         )
 
     def _is_communicator_tensor(self, inp: torch.Tensor) -> bool:
-        return inp.device.type == "musa" and inp.device.index == self.device.index
+        if inp.device.type != "musa":
+            return False
+        expected_index = self.device.index
+        if expected_index is None:
+            if hasattr(torch, "musa") and callable(
+                getattr(torch.musa, "current_device", None)
+            ):
+                expected_index = torch.musa.current_device()
+        return inp.device.index == expected_index
 
     def _is_default_stream(self, inp: torch.Tensor) -> bool:
         try:
@@ -1423,6 +1439,11 @@ class _MusaJitCustomAllreduceImpl:
             dtype=output_dtype if output_dtype is not None else input.dtype,
             device=input.device,
         )
+        max_size_bytes = (
+            self._graph_staging_eager_reserve_bytes
+            if getattr(self, "_use_graph_staging_arena", False)
+            else self.max_size
+        )
         jit_ar.launch_all_gather(
             self.buffer_rank_data,
             self.signal_ptrs_cpu,
@@ -1430,7 +1451,7 @@ class _MusaJitCustomAllreduceImpl:
             out,
             self.meta_ptrs[self.rank],
             self.buffer_ptrs[self.rank],
-            self.max_size,
+            max_size_bytes,
             self.rank,
             self.world_size,
         )
